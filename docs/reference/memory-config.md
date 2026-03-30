@@ -306,6 +306,23 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under
 | `limits.maxInjectedChars` | `number` | --      | Clamp total injected chars |
 | `limits.timeoutMs`        | `number` | `4000`  | Search timeout             |
 
+### Post-search hook
+
+Run an external command after each `memory_search` to enrich, re-rank, or
+filter results before they reach the agent.
+
+| Key                  | Type     | Default | Description                                                |
+| -------------------- | -------- | ------- | ---------------------------------------------------------- |
+| `postSearchCommand`  | `string` | --      | Shell command; receives JSON on stdin, returns JSON on stdout |
+| `postSearchTimeoutMs`| `number` | `10000` | Timeout in ms (values below 1 are clamped to 1)            |
+
+OpenClaw writes `{ query, results, sessionKey, agentId }` to the command's
+stdin and reads back `{ results: MemorySearchResult[] }` from stdout. Each
+item in the returned array must include `path` (string), `score` (number),
+`snippet` (string), `source` (string), `startLine` (number), and `endLine`
+(number). If the command fails, times out, or returns an unexpected shape,
+the original results are used unchanged (graceful degradation).
+
 ### Scope
 
 Controls which sessions can receive QMD search results. Same schema as
@@ -348,6 +365,9 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
       includeDefaultMemory: true,
       update: { interval: "5m", debounceMs: 15000 },
       limits: { maxResults: 6, timeoutMs: 4000 },
+      // Optional: enrich results via external script
+      postSearchCommand: "~/bin/my-reranker",
+      postSearchTimeoutMs: 5000,
       scope: {
         default: "deny",
         rules: [{ action: "allow", match: { chatType: "direct" } }],

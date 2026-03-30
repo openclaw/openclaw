@@ -21,6 +21,10 @@ export type MemoryQmdConfig = {
   update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
+  /** Shell command to run after memory_search completes; receives JSON on stdin, must return JSON with a `results` array. */
+  postSearchCommand?: string;
+  /** Timeout in milliseconds for postSearchCommand (default 10000). */
+  postSearchTimeoutMs?: number;
 };
 
 export type MemoryQmdMcporterConfig = {

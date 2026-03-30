@@ -109,6 +109,8 @@ const MemoryQmdSchema = z
     update: MemoryQmdUpdateSchema.optional(),
     limits: MemoryQmdLimitsSchema.optional(),
     scope: SessionSendPolicySchema.optional(),
+    postSearchCommand: z.string().optional(),
+    postSearchTimeoutMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 

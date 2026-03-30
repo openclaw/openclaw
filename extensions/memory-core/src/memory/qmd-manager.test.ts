@@ -98,6 +98,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...actual,
     spawn: vi.fn(),
+    exec: vi.fn(),
   };
 });
 
@@ -106,7 +107,7 @@ vi.mock("chokidar", () => ({
   watch: watchMock,
 }));
 
-import { spawn as mockedSpawn } from "node:child_process";
+import { exec as mockedExec, spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   requireNodeSqlite,
@@ -115,6 +116,7 @@ import {
 import { QmdMemoryManager } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
+const execMock = mockedExec as unknown as Mock;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
@@ -166,6 +168,17 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
     watchMock.mockClear();
+    execMock.mockClear();
+    execMock.mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        queueMicrotask(() => cb(null, JSON.stringify({ results: [] }), ""));
+        return { stdin: { on: () => {}, write: () => {}, end: () => {} } };
+      },
+    );
     logWarnMock.mockClear();
     logDebugMock.mockClear();
     logInfoMock.mockClear();
@@ -3759,6 +3772,254 @@ describe("QmdMemoryManager", () => {
           await manager.close();
         }
       }
+    });
+  });
+
+  describe("postSearchCommand", () => {
+    const baseResult = {
+      path: "MEMORY.md",
+      startLine: 1,
+      endLine: 1,
+      score: 0.9,
+      snippet: "@@ -1,1\noriginal",
+      source: "memory" as const,
+    };
+
+    function cfgWithPostSearch(postSearchCommand: string, postSearchTimeoutMs?: number) {
+      return {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            ...(postSearchTimeoutMs !== undefined && { postSearchTimeoutMs }),
+            postSearchCommand,
+          },
+        },
+      } as OpenClawConfig;
+    }
+
+    function mockSearchReturning(docId: string) {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search" || args[0] === "query" || args[0] === "vsearch") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(
+            child,
+            "stdout",
+            JSON.stringify([{ docid: docId, score: 0.9, snippet: "@@ -1,1\noriginal" }]),
+          );
+          return child;
+        }
+        return createMockChild();
+      });
+    }
+
+    function withDocDb(manager: QmdMemoryManager, docId: string) {
+      const inner = manager as unknown as {
+        db: { prepare: (q: string) => { all: (arg: unknown) => unknown }; close: () => void };
+      };
+      inner.db = {
+        prepare: () => ({
+          all: (arg: unknown) => {
+            if (typeof arg === "string" && arg.startsWith(docId)) {
+              return [{ collection: "workspace-main", path: "MEMORY.md" }];
+            }
+            return [];
+          },
+        }),
+        close: () => {},
+      };
+    }
+
+    it("is a no-op when postSearchCommand is not configured", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", "[]");
+          return child;
+        }
+        return createMockChild();
+      });
+
+      const { manager } = await createManager();
+      await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+      expect(execMock).not.toHaveBeenCalled();
+      await manager.close();
+    });
+
+    it("calls postSearchCommand and returns enriched results", async () => {
+      const docId = "doc-abc";
+      mockSearchReturning(docId);
+      const enrichedResult = {
+        path: "enriched.md",
+        startLine: 5,
+        endLine: 10,
+        score: 0.99,
+        snippet: "@@ -5,6\nenriched",
+        source: "memory" as const,
+      };
+      execMock.mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: Error | null, stdout: string, stderr: string) => void,
+        ) => {
+          queueMicrotask(() => cb(null, JSON.stringify({ results: [enrichedResult] }), ""));
+          return { stdin: { on: () => {}, write: () => {}, end: () => {} } };
+        },
+      );
+
+      const { manager } = await createManager({ mode: "full", cfg: cfgWithPostSearch("my-hook") });
+      withDocDb(manager, docId);
+
+      const results = await manager.search("test query", {
+        sessionKey: "agent:main:slack:dm:u123",
+      });
+      expect(execMock).toHaveBeenCalledOnce();
+      expect(execMock.mock.calls[0][0]).toBe("my-hook");
+      expect(results).toEqual([enrichedResult]);
+      await manager.close();
+    });
+
+    it("returns original results when postSearchCommand fails (graceful degradation)", async () => {
+      const docId = "doc-fail";
+      mockSearchReturning(docId);
+      execMock.mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: Error | null, stdout: string, stderr: string) => void,
+        ) => {
+          queueMicrotask(() => cb(new Error("command not found"), "", "command not found"));
+          return { stdin: { on: () => {}, write: () => {}, end: () => {} } };
+        },
+      );
+
+      const { manager } = await createManager({ mode: "full", cfg: cfgWithPostSearch("bad-hook") });
+      withDocDb(manager, docId);
+
+      const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+      expect(results).toEqual([baseResult]);
+      expect(logDebugMock).toHaveBeenCalledWith(
+        expect.stringContaining("postSearchCommand failed"),
+      );
+      await manager.close();
+    });
+
+    it("returns original results when postSearchCommand returns invalid JSON", async () => {
+      const docId = "doc-badjson";
+      mockSearchReturning(docId);
+      execMock.mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: Error | null, stdout: string, stderr: string) => void,
+        ) => {
+          queueMicrotask(() => cb(null, "not json", ""));
+          return { stdin: { on: () => {}, write: () => {}, end: () => {} } };
+        },
+      );
+
+      const { manager } = await createManager({
+        mode: "full",
+        cfg: cfgWithPostSearch("bad-json-hook"),
+      });
+      withDocDb(manager, docId);
+
+      const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+      expect(results).toEqual([baseResult]);
+      expect(logDebugMock).toHaveBeenCalledWith(
+        expect.stringContaining("postSearchCommand failed"),
+      );
+      await manager.close();
+    });
+
+    it("returns original results when output has no results array", async () => {
+      const docId = "doc-noresults";
+      mockSearchReturning(docId);
+      execMock.mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: Error | null, stdout: string, stderr: string) => void,
+        ) => {
+          queueMicrotask(() => cb(null, JSON.stringify({ other: "stuff" }), ""));
+          return { stdin: { on: () => {}, write: () => {}, end: () => {} } };
+        },
+      );
+
+      const { manager } = await createManager({
+        mode: "full",
+        cfg: cfgWithPostSearch("no-results-hook"),
+      });
+      withDocDb(manager, docId);
+
+      const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+      expect(results).toEqual([baseResult]);
+      expect(logDebugMock).toHaveBeenCalledWith(
+        expect.stringContaining("postSearchCommand returned unexpected shape"),
+      );
+      await manager.close();
+    });
+
+    it("returns original results when items have missing required fields", async () => {
+      const docId = "doc-badshape";
+      mockSearchReturning(docId);
+      execMock.mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: Error | null, stdout: string, stderr: string) => void,
+        ) => {
+          // Missing 'endLine' field
+          queueMicrotask(() =>
+            cb(
+              null,
+              JSON.stringify({
+                results: [
+                  { path: "x.md", score: 0.5, snippet: "s", source: "memory", startLine: 1 },
+                ],
+              }),
+              "",
+            ),
+          );
+          return { stdin: { on: () => {}, write: () => {}, end: () => {} } };
+        },
+      );
+
+      const { manager } = await createManager({
+        mode: "full",
+        cfg: cfgWithPostSearch("bad-shape-hook"),
+      });
+      withDocDb(manager, docId);
+
+      const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+      expect(results).toEqual([baseResult]);
+      expect(logDebugMock).toHaveBeenCalledWith(
+        expect.stringContaining("postSearchCommand returned results with invalid item shape"),
+      );
+      await manager.close();
+    });
+
+    it("passes configured timeout to exec and enforces minimum of 1ms", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", "[]");
+          return child;
+        }
+        return createMockChild();
+      });
+
+      // postSearchTimeoutMs: 0 should be clamped to 1 via Math.max
+      const { manager } = await createManager({ cfg: cfgWithPostSearch("my-hook", 0) });
+      await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+      expect(execMock).toHaveBeenCalledOnce();
+      const opts = execMock.mock.calls[0][1] as { timeout?: number };
+      expect(opts.timeout).toBeGreaterThanOrEqual(1);
+      await manager.close();
     });
   });
 });

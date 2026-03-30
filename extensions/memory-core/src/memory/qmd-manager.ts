@@ -1,3 +1,4 @@
+import { exec } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -998,7 +999,8 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
-    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
+    const enriched = await this.runPostSearchHook(trimmed, results, opts);
+    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(enriched, limit));
   }
 
   async sync(params?: {
@@ -2336,6 +2338,84 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     }
     return diversified;
+  }
+
+  private execWithStdin(
+    command: string,
+    stdin: string,
+    timeoutMs: number,
+  ): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const child = exec(
+        command,
+        { maxBuffer: 1024 * 1024, timeout: timeoutMs },
+        (err, stdout, stderr) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve({ stdout, stderr });
+        },
+      );
+      child.stdin?.on("error", () => {
+        // Ignore write errors (e.g. EPIPE when the command exits before reading stdin).
+      });
+      child.stdin?.write(stdin);
+      child.stdin?.end();
+    });
+  }
+
+  private async runPostSearchHook(
+    query: string,
+    results: MemorySearchResult[],
+    opts?: { sessionKey?: string },
+  ): Promise<MemorySearchResult[]> {
+    const command = this.qmd.postSearchCommand;
+    if (!command) {
+      return results;
+    }
+    const payload = JSON.stringify({
+      query,
+      results,
+      sessionKey: opts?.sessionKey,
+      agentId: this.agentId,
+    });
+    try {
+      const { stdout } = await this.execWithStdin(command, payload, this.qmd.postSearchTimeoutMs);
+      const parsed: unknown = JSON.parse(stdout);
+      if (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        "results" in parsed &&
+        Array.isArray((parsed as { results: unknown }).results)
+      ) {
+        const raw = (parsed as { results: unknown[] }).results;
+        if (
+          !raw.every(
+            (v) =>
+              v !== null &&
+              typeof v === "object" &&
+              typeof (v as Record<string, unknown>).path === "string" &&
+              typeof (v as Record<string, unknown>).score === "number" &&
+              typeof (v as Record<string, unknown>).snippet === "string" &&
+              typeof (v as Record<string, unknown>).source === "string" &&
+              typeof (v as Record<string, unknown>).startLine === "number" &&
+              typeof (v as Record<string, unknown>).endLine === "number",
+          )
+        ) {
+          log.debug(
+            "postSearchCommand returned results with invalid item shape; using original results",
+          );
+          return results;
+        }
+        return raw as MemorySearchResult[];
+      }
+      log.debug("postSearchCommand returned unexpected shape; using original results");
+      return results;
+    } catch (err) {
+      log.debug(`postSearchCommand failed: ${String(err)}; using original results`);
+      return results;
+    }
   }
 
   private shouldSkipUpdate(force?: boolean): boolean {
