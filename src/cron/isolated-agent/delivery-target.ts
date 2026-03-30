@@ -145,7 +145,11 @@ export async function resolveDeliveryTarget(
       mode,
       error:
         channelResolutionError ??
-        new Error("Channel is required when delivery.channel=last has no previous channel."),
+        new Error(
+          'Channel is required when delivery.channel=last has no previous channel. ' +
+            'Isolated cron sessions have no prior message context. ' +
+            'Set an explicit delivery channel with `openclaw cron edit <id> --delivery-channel <channel>`.',
+        ),
     };
   }
 
