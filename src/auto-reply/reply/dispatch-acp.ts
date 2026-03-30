@@ -99,9 +99,12 @@ async function resolveAcpAttachments(
       });
     } catch (error) {
       if (isMediaUnderstandingSkipError(error) && error.reason === "maxBytes") {
-        logVerbose(`dispatch-acp: skipping attachment ${attachment.path} (${error.message})`);
+        logVerbose(`dispatch-acp: skipping attachment #${attachment.index + 1} (maxBytes)`);
       } else {
-        logVerbose(`dispatch-acp: failed to read attachment ${attachment.path}: ${String(error)}`);
+        const errorName = error instanceof Error ? error.name : typeof error;
+        logVerbose(
+          `dispatch-acp: failed to read attachment #${attachment.index + 1} (${errorName})`,
+        );
       }
       // Skip unreadable files. Text content should still be delivered.
     }
