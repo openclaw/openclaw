@@ -231,14 +231,26 @@ function fromSessionBindingInput(params: {
   return record;
 }
 
+/**
+ * Restores the previous binding into the in-memory map after an unbind.
+ * Caller is responsible for calling persistBindingsSafely() afterward.
+ */
 function maybeRestorePreviousThreadBinding(params: {
   accountId: string;
   key: string;
   removed: TelegramThreadBindingRecord;
 }): void {
-  const prev = params.removed.metadata?.previousBinding as
-    | { targetSessionKey: string; targetKind: string; metadata?: Record<string, unknown> }
-    | undefined;
+  const raw = params.removed.metadata?.previousBinding;
+  const prev =
+    raw != null &&
+    typeof raw === "object" &&
+    typeof (raw as Record<string, unknown>).targetSessionKey === "string"
+      ? (raw as {
+          targetSessionKey: string;
+          targetKind: string;
+          metadata?: Record<string, unknown>;
+        })
+      : undefined;
   if (!prev?.targetSessionKey) {
     return;
   }
@@ -246,7 +258,7 @@ function maybeRestorePreviousThreadBinding(params: {
   const restored: TelegramThreadBindingRecord = {
     accountId: params.accountId,
     conversationId: params.removed.conversationId,
-    targetKind: prev.targetKind === "subagent" ? "subagent" : "acp",
+    targetKind: toTelegramTargetKind(prev.targetKind === "subagent" ? "subagent" : "session"),
     targetSessionKey: prev.targetSessionKey,
     boundAt: now,
     lastActivityAt: now,

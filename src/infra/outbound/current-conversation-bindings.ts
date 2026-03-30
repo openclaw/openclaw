@@ -114,8 +114,9 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
     return record;
   }
   bindingsByConversationKey.delete(key);
+  maybeRestorePreviousBinding(key, record);
   void enqueuePersist();
-  return null;
+  return bindingsByConversationKey.get(key) ?? null;
 }
 
 function resolveChannelSupportsCurrentConversationBinding(channel: string): boolean {
@@ -240,17 +241,25 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
 }
 
 function maybeRestorePreviousBinding(key: string, removed: SessionBindingRecord): void {
-  const prev = removed.metadata?.previousBinding as
-    | { targetSessionKey: string; targetKind: string; metadata?: Record<string, unknown> }
-    | undefined;
+  const raw = removed.metadata?.previousBinding;
+  const prev =
+    raw != null &&
+    typeof raw === "object" &&
+    typeof (raw as Record<string, unknown>).targetSessionKey === "string"
+      ? (raw as {
+          targetSessionKey: string;
+          targetKind: string;
+          metadata?: Record<string, unknown>;
+        })
+      : undefined;
   if (!prev?.targetSessionKey) {
     return;
   }
   const now = Date.now();
   bindingsByConversationKey.set(key, {
-    bindingId: removed.bindingId,
+    bindingId: buildBindingId(removed.conversation),
     targetSessionKey: prev.targetSessionKey,
-    targetKind: (prev.targetKind as SessionBindingRecord["targetKind"]) ?? "session",
+    targetKind: prev.targetKind === "subagent" ? "subagent" : "session",
     conversation: removed.conversation,
     status: "active",
     boundAt: now,
