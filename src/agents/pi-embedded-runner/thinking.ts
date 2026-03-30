@@ -51,3 +51,43 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   }
   return touched ? out : messages;
 }
+
+/**
+ * Strip `thinkingSignature` from `type: "thinking"` content blocks without
+ * removing the blocks themselves.
+ *
+ * This prevents pi-ai's `convertResponsesMessages` from replaying reasoning
+ * items (which some providers like Azure OpenAI reject) while preserving the
+ * thinking text for display.
+ *
+ * Returns the original array reference when nothing was changed.
+ */
+export function stripThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!isAssistantMessageWithContent(msg)) {
+      out.push(msg);
+      continue;
+    }
+    const nextContent: AssistantContentBlock[] = [];
+    let changed = false;
+    for (const block of msg.content) {
+      const b = block as { type?: unknown; thinkingSignature?: unknown };
+      if (b && typeof b === "object" && b.type === "thinking" && b.thinkingSignature) {
+        touched = true;
+        changed = true;
+        const { thinkingSignature: _, ...rest } = b as Record<string, unknown>;
+        nextContent.push(rest as AssistantContentBlock);
+        continue;
+      }
+      nextContent.push(block);
+    }
+    if (!changed) {
+      out.push(msg);
+      continue;
+    }
+    out.push({ ...msg, content: nextContent });
+  }
+  return touched ? out : messages;
+}
