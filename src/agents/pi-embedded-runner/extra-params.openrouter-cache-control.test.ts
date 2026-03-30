@@ -1,8 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { applyExtraParamsToAgent } from "./extra-params.js";
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 type StreamPayload = {
   messages: Array<{
@@ -12,22 +10,23 @@ type StreamPayload = {
 };
 
 function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    options?.onPayload?.(payload);
-    return createAssistantMessageEventStream();
-  };
-  const agent = { streamFn: baseStreamFn };
-
-  applyExtraParamsToAgent(agent, undefined, "openrouter", modelId);
-
-  const model = {
-    api: "openai-completions",
-    provider: "openrouter",
-    id: modelId,
-  } as Model<"openai-completions">;
-  const context: Context = { messages: [] };
-
-  void agent.streamFn?.(model, context, {});
+  runExtraParamsCase({
+    cfg: {
+      plugins: {
+        entries: {
+          openrouter: {
+            enabled: true,
+          },
+        },
+      },
+    },
+    model: {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: modelId,
+    } as Model<"openai-completions">,
+    payload,
+  });
 }
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {

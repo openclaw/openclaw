@@ -1,15 +1,39 @@
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { loadConfig, type OpenClawConfig } from "../../config/config.js";
+import {
+  getRuntimeConfig,
+  readSourceConfigSnapshotForWrite,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-export async function loadModelsConfig(params: {
+export type LoadedModelsConfig = {
+  sourceConfig: OpenClawConfig;
+  resolvedConfig: OpenClawConfig;
+  diagnostics: string[];
+};
+
+async function loadSourceConfigSnapshot(fallback: OpenClawConfig): Promise<OpenClawConfig> {
+  try {
+    const { snapshot } = await readSourceConfigSnapshotForWrite();
+    if (snapshot.valid) {
+      return snapshot.sourceConfig;
+    }
+  } catch {
+    // Fall back to runtime-loaded config if source snapshot cannot be read.
+  }
+  return fallback;
+}
+
+export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
-}): Promise<OpenClawConfig> {
-  const loadedRaw = loadConfig();
+}): Promise<LoadedModelsConfig> {
+  const runtimeConfig = getRuntimeConfig();
+  const sourceConfig = await loadSourceConfigSnapshot(runtimeConfig);
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-    config: loadedRaw,
+    config: runtimeConfig,
     commandName: params.commandName,
     targetIds: getModelsCommandSecretTargetIds(),
   });
@@ -18,5 +42,17 @@ export async function loadModelsConfig(params: {
       params.runtime.log(`[secrets] ${entry}`);
     }
   }
-  return resolvedConfig;
+  setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+  return {
+    sourceConfig,
+    resolvedConfig,
+    diagnostics,
+  };
+}
+
+export async function loadModelsConfig(params: {
+  commandName: string;
+  runtime?: RuntimeEnv;
+}): Promise<OpenClawConfig> {
+  return (await loadModelsConfigWithSource(params)).resolvedConfig;
 }

@@ -6,11 +6,16 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
-import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
+import { loadConfig as loadConfigFromIo } from "../config/io.js";
+import {
+  resolveConfigPath as resolveConfigPathFromPaths,
+  resolveGatewayPort as resolveGatewayPortFromPaths,
+  resolveStateDir as resolveStateDirFromPaths,
+} from "../config/paths.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
+import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -18,15 +23,27 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
-import { GatewayClient } from "./client.js";
-import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
+import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import {
+  buildGatewayConnectionDetailsWithResolvers,
+  type GatewayConnectionDetails,
+} from "./connection-details.js";
+import {
+  GatewaySecretRefUnavailableError,
+  resolveGatewayCredentialsFromConfig,
+  trimToUndefined,
+  type GatewayCredentialMode,
+  type GatewayCredentialPrecedence,
+  type GatewayRemoteCredentialFallback,
+  type GatewayRemoteCredentialPrecedence,
+} from "./credentials.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
+export type { GatewayConnectionDetails };
 
 type CallGatewayBaseOptions = {
   url?: string;
@@ -66,13 +83,114 @@ export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
 
-export type GatewayConnectionDetails = {
-  url: string;
-  urlSource: string;
-  bindDetail?: string;
-  remoteFallbackNote?: string;
-  message: string;
+const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
+const defaultGatewayCallDeps = {
+  createGatewayClient: defaultCreateGatewayClient,
+  loadConfig,
+  loadOrCreateDeviceIdentity,
+  resolveGatewayPort,
+  resolveConfigPath,
+  resolveStateDir,
+  loadGatewayTlsRuntime,
 };
+const gatewayCallDeps = {
+  ...defaultGatewayCallDeps,
+};
+
+function loadGatewayConfig(): OpenClawConfig {
+  const loadConfigFn =
+    typeof gatewayCallDeps.loadConfig === "function"
+      ? gatewayCallDeps.loadConfig
+      : typeof defaultGatewayCallDeps.loadConfig === "function"
+        ? defaultGatewayCallDeps.loadConfig
+        : loadConfigFromIo;
+  return loadConfigFn();
+}
+
+function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
+  const resolveStateDirFn =
+    typeof gatewayCallDeps.resolveStateDir === "function"
+      ? gatewayCallDeps.resolveStateDir
+      : resolveStateDirFromPaths;
+  return resolveStateDirFn(env);
+}
+
+function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
+  const resolveConfigPathFn =
+    typeof gatewayCallDeps.resolveConfigPath === "function"
+      ? gatewayCallDeps.resolveConfigPath
+      : resolveConfigPathFromPaths;
+  return resolveConfigPathFn(env, resolveGatewayStateDir(env));
+}
+
+function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
+  const resolveGatewayPortFn =
+    typeof gatewayCallDeps.resolveGatewayPort === "function"
+      ? gatewayCallDeps.resolveGatewayPort
+      : resolveGatewayPortFromPaths;
+  return resolveGatewayPortFn(config, env);
+}
+
+export function buildGatewayConnectionDetails(
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    urlSource?: "cli" | "env";
+  } = {},
+): GatewayConnectionDetails {
+  return buildGatewayConnectionDetailsWithResolvers(options, {
+    loadConfig: () => loadGatewayConfig(),
+    resolveConfigPath: (env) => resolveGatewayConfigPath(env),
+    resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
+  });
+}
+
+export const __testing = {
+  setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
+    gatewayCallDeps.createGatewayClient =
+      deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
+    gatewayCallDeps.loadConfig = deps?.loadConfig ?? defaultGatewayCallDeps.loadConfig;
+    gatewayCallDeps.loadOrCreateDeviceIdentity =
+      deps?.loadOrCreateDeviceIdentity ?? defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
+    gatewayCallDeps.resolveGatewayPort =
+      deps?.resolveGatewayPort ?? defaultGatewayCallDeps.resolveGatewayPort;
+    gatewayCallDeps.resolveConfigPath =
+      deps?.resolveConfigPath ?? defaultGatewayCallDeps.resolveConfigPath;
+    gatewayCallDeps.resolveStateDir =
+      deps?.resolveStateDir ?? defaultGatewayCallDeps.resolveStateDir;
+    gatewayCallDeps.loadGatewayTlsRuntime =
+      deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
+  },
+  setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void {
+    gatewayCallDeps.createGatewayClient =
+      createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
+  },
+  resetDepsForTests(): void {
+    gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
+    gatewayCallDeps.loadConfig = defaultGatewayCallDeps.loadConfig;
+    gatewayCallDeps.loadOrCreateDeviceIdentity = defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
+    gatewayCallDeps.resolveGatewayPort = defaultGatewayCallDeps.resolveGatewayPort;
+    gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
+    gatewayCallDeps.resolveStateDir = defaultGatewayCallDeps.resolveStateDir;
+    gatewayCallDeps.loadGatewayTlsRuntime = defaultGatewayCallDeps.loadGatewayTlsRuntime;
+  },
+};
+
+function resolveDeviceIdentityForGatewayCall(): ReturnType<
+  typeof loadOrCreateDeviceIdentity
+> | null {
+  // Shared-auth local calls should still stay device-bound so operator scopes
+  // remain available for detail RPCs such as status / system-presence /
+  // last-heartbeat.
+  try {
+    return gatewayCallDeps.loadOrCreateDeviceIdentity();
+  } catch {
+    // Read-only or restricted environments should still be able to call the
+    // gateway with token/password auth without crashing before the RPC.
+    return null;
+  }
+}
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -127,97 +245,6 @@ export function ensureExplicitGatewayAuth(params: {
   throw new Error(message);
 }
 
-export function buildGatewayConnectionDetails(
-  options: {
-    config?: OpenClawConfig;
-    url?: string;
-    configPath?: string;
-    urlSource?: "cli" | "env";
-  } = {},
-): GatewayConnectionDetails {
-  const config = options.config ?? loadConfig();
-  const configPath =
-    options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
-  const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const tlsEnabled = config.gateway?.tls?.enabled === true;
-  const localPort = resolveGatewayPort(config);
-  const bindMode = config.gateway?.bind ?? "loopback";
-  const scheme = tlsEnabled ? "wss" : "ws";
-  // Self-connections should always target loopback; bind mode only controls listener exposure.
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
-  const cliUrlOverride =
-    typeof options.url === "string" && options.url.trim().length > 0
-      ? options.url.trim()
-      : undefined;
-  const envUrlOverride = cliUrlOverride
-    ? undefined
-    : (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
-      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL));
-  const urlOverride = cliUrlOverride ?? envUrlOverride;
-  const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
-  const urlSourceHint =
-    options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || localUrl;
-  const urlSource = urlOverride
-    ? urlSourceHint === "env"
-      ? "env OPENCLAW_GATEWAY_URL"
-      : "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
-  const remoteFallbackNote = remoteMisconfigured
-    ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
-    : undefined;
-
-  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
-  // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
-  // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
-  // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
-    throw new Error(
-      [
-        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
-        "Both credentials and chat data would be exposed to network interception.",
-        `Source: ${urlSource}`,
-        `Config: ${configPath}`,
-        "Fix: Use wss:// for remote gateway URLs.",
-        "Safe remote access defaults:",
-        "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
-        "- or use Tailscale Serve/Funnel for HTTPS remote access",
-        allowPrivateWs
-          ? undefined
-          : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
-        "Doctor: openclaw doctor --fix",
-        "Docs: https://docs.openclaw.ai/gateway/remote",
-      ].join("\n"),
-    );
-  }
-
-  const message = [
-    `Gateway target: ${url}`,
-    `Source: ${urlSource}`,
-    `Config: ${configPath}`,
-    bindDetail,
-    remoteFallbackNote,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  return {
-    url,
-    urlSource,
-    bindDetail,
-    remoteFallbackNote,
-    message,
-  };
-}
-
 type GatewayRemoteSettings = {
   url?: string;
   token?: string;
@@ -234,25 +261,14 @@ type ResolvedGatewayCallContext = {
   urlOverrideSource?: "cli" | "env";
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
+  modeOverride?: GatewayCredentialMode;
+  localTokenPrecedence?: GatewayCredentialPrecedence;
+  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
+  remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
+  remoteTokenFallback?: GatewayRemoteCredentialFallback;
+  remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
-
-function trimToUndefined(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
-}
-
-function readGatewayPasswordEnv(env: NodeJS.ProcessEnv): string | undefined {
-  return (
-    trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD)
-  );
-}
 
 function resolveGatewayCallTimeout(timeoutValue: unknown): {
   timeoutMs: number;
@@ -265,9 +281,8 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 }
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
-  const config = opts.config ?? loadConfig();
-  const configPath =
-    opts.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
+  const config = opts.config ?? loadGatewayConfig();
+  const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
@@ -275,8 +290,7 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
   const cliUrlOverride = trimToUndefined(opts.url);
   const envUrlOverride = cliUrlOverride
     ? undefined
-    : (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
-      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL));
+    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
@@ -312,23 +326,19 @@ async function resolveGatewaySecretInputString(params: {
   path: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
-  const defaults = params.config.secrets?.defaults;
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    defaults,
-  });
-  if (!ref) {
-    return trimToUndefined(params.value);
-  }
-  const resolved = await resolveSecretRefValues([ref], {
+  const value = await resolveSecretInputString({
     config: params.config,
+    value: params.value,
     env: params.env,
+    normalize: trimToUndefined,
+    onResolveRefError: () => {
+      throw new GatewaySecretRefUnavailableError(params.path);
+    },
   });
-  const resolvedValue = trimToUndefined(resolved.get(secretRefKey(ref)));
-  if (!resolvedValue) {
+  if (!value) {
     throw new Error(`${params.path} resolved to an empty or non-string value.`);
   }
-  return resolvedValue;
+  return value;
 }
 
 async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): Promise<{
@@ -351,166 +361,351 @@ async function resolveGatewayCredentialsWithEnv(
       password: context.explicitAuth.password,
     };
   }
-  if (context.urlOverride) {
-    return resolveGatewayCredentialsFromConfig({
-      cfg: context.config,
-      env,
-      explicitAuth: context.explicitAuth,
-      urlOverride: context.urlOverride,
-      urlOverrideSource: context.urlOverrideSource,
-      remotePasswordPrecedence: "env-first",
-    });
-  }
+  return resolveGatewayCredentialsFromConfigWithSecretInputs({ context, env });
+}
 
-  let resolvedConfig = context.config;
-  const envToken = readGatewayTokenEnv(env);
-  const envPassword = readGatewayPasswordEnv(env);
-  const defaults = context.config.secrets?.defaults;
-  const auth = context.config.gateway?.auth;
-  const remoteConfig = context.config.gateway?.remote;
-  const authMode = auth?.mode;
-  const localToken = trimToUndefined(auth?.token);
-  const remoteToken = trimToUndefined(remoteConfig?.token);
-  const remoteTokenConfigured = hasConfiguredSecretInput(remoteConfig?.token, defaults);
-  const tokenCanWin = Boolean(envToken || localToken || remoteToken || remoteTokenConfigured);
-  const remotePasswordConfigured =
-    context.isRemoteMode && hasConfiguredSecretInput(remoteConfig?.password, defaults);
-  const localPasswordRef = resolveSecretInputRef({ value: auth?.password, defaults }).ref;
-  const localPasswordCanWinInLocalMode =
-    authMode === "password" ||
-    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
-  const localTokenCanWinInLocalMode =
-    authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
-  const localPasswordCanWinInRemoteMode = !remotePasswordConfigured && !tokenCanWin;
-  const shouldResolveLocalPassword =
-    Boolean(auth) &&
-    !envPassword &&
-    Boolean(localPasswordRef) &&
-    (context.isRemoteMode ? localPasswordCanWinInRemoteMode : localPasswordCanWinInLocalMode);
-  if (shouldResolveLocalPassword) {
-    resolvedConfig = structuredClone(context.config);
-    const resolvedPassword = await resolveGatewaySecretInputString({
-      config: resolvedConfig,
-      value: resolvedConfig.gateway?.auth?.password,
-      path: "gateway.auth.password",
-      env,
-    });
-    if (resolvedConfig.gateway?.auth) {
-      resolvedConfig.gateway.auth.password = resolvedPassword;
-    }
-  }
-  const remote = context.isRemoteMode ? resolvedConfig.gateway?.remote : undefined;
-  const resolvedDefaults = resolvedConfig.secrets?.defaults;
-  if (remote) {
-    const localToken = trimToUndefined(resolvedConfig.gateway?.auth?.token);
-    const localPassword = trimToUndefined(resolvedConfig.gateway?.auth?.password);
-    const passwordCanWinBeforeRemoteTokenResolution = Boolean(
-      envPassword || localPassword || trimToUndefined(remote.password),
-    );
-    const remoteTokenRef = resolveSecretInputRef({
-      value: remote.token,
-      defaults: resolvedDefaults,
-    }).ref;
-    if (!passwordCanWinBeforeRemoteTokenResolution && !envToken && !localToken && remoteTokenRef) {
-      remote.token = await resolveGatewaySecretInputString({
-        config: resolvedConfig,
-        value: remote.token,
-        path: "gateway.remote.token",
-        env,
-      });
-    }
+type SupportedGatewaySecretInputPath =
+  | "gateway.auth.token"
+  | "gateway.auth.password"
+  | "gateway.remote.token"
+  | "gateway.remote.password";
 
-    const tokenCanWin = Boolean(envToken || localToken || trimToUndefined(remote.token));
-    const remotePasswordRef = resolveSecretInputRef({
-      value: remote.password,
-      defaults: resolvedDefaults,
-    }).ref;
-    if (!tokenCanWin && !envPassword && !localPassword && remotePasswordRef) {
-      remote.password = await resolveGatewaySecretInputString({
-        config: resolvedConfig,
-        value: remote.password,
-        path: "gateway.remote.password",
-        env,
-      });
-    }
+const ALL_GATEWAY_SECRET_INPUT_PATHS: SupportedGatewaySecretInputPath[] = [
+  "gateway.auth.token",
+  "gateway.auth.password",
+  "gateway.remote.token",
+  "gateway.remote.password",
+];
+
+function isSupportedGatewaySecretInputPath(path: string): path is SupportedGatewaySecretInputPath {
+  return (
+    path === "gateway.auth.token" ||
+    path === "gateway.auth.password" ||
+    path === "gateway.remote.token" ||
+    path === "gateway.remote.password"
+  );
+}
+
+function readGatewaySecretInputValue(
+  config: OpenClawConfig,
+  path: SupportedGatewaySecretInputPath,
+): unknown {
+  if (path === "gateway.auth.token") {
+    return config.gateway?.auth?.token;
   }
-  const localModeRemote = !context.isRemoteMode ? resolvedConfig.gateway?.remote : undefined;
-  if (localModeRemote) {
-    const localToken = trimToUndefined(resolvedConfig.gateway?.auth?.token);
-    const localPassword = trimToUndefined(resolvedConfig.gateway?.auth?.password);
-    const localModePasswordSourceConfigured = Boolean(
-      envPassword || localPassword || trimToUndefined(localModeRemote.password),
-    );
-    const passwordCanWinBeforeRemoteTokenResolution =
-      localPasswordCanWinInLocalMode && localModePasswordSourceConfigured;
-    const remoteTokenRef = resolveSecretInputRef({
-      value: localModeRemote.token,
-      defaults: resolvedDefaults,
-    }).ref;
-    if (
-      localTokenCanWinInLocalMode &&
-      !passwordCanWinBeforeRemoteTokenResolution &&
-      !envToken &&
-      !localToken &&
-      remoteTokenRef
-    ) {
-      localModeRemote.token = await resolveGatewaySecretInputString({
-        config: resolvedConfig,
-        value: localModeRemote.token,
-        path: "gateway.remote.token",
-        env,
-      });
-    }
-    const tokenCanWin = Boolean(envToken || localToken || trimToUndefined(localModeRemote.token));
-    const remotePasswordRef = resolveSecretInputRef({
-      value: localModeRemote.password,
-      defaults: resolvedDefaults,
-    }).ref;
-    if (
-      !tokenCanWin &&
-      !envPassword &&
-      !localPassword &&
-      remotePasswordRef &&
-      localPasswordCanWinInLocalMode
-    ) {
-      localModeRemote.password = await resolveGatewaySecretInputString({
-        config: resolvedConfig,
-        value: localModeRemote.password,
-        path: "gateway.remote.password",
-        env,
-      });
-    }
+  if (path === "gateway.auth.password") {
+    return config.gateway?.auth?.password;
   }
-  return resolveGatewayCredentialsFromConfig({
-    cfg: resolvedConfig,
+  if (path === "gateway.remote.token") {
+    return config.gateway?.remote?.token;
+  }
+  return config.gateway?.remote?.password;
+}
+
+function hasConfiguredGatewaySecretRef(
+  config: OpenClawConfig,
+  path: SupportedGatewaySecretInputPath,
+): boolean {
+  return Boolean(
+    resolveSecretInputRef({
+      value: readGatewaySecretInputValue(config, path),
+      defaults: config.secrets?.defaults,
+    }).ref,
+  );
+}
+
+function resolveGatewayCredentialsFromConfigOptions(params: {
+  context: ResolvedGatewayCallContext;
+  env: NodeJS.ProcessEnv;
+  cfg: OpenClawConfig;
+}) {
+  const { context, env, cfg } = params;
+  return {
+    cfg,
     env,
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
     urlOverrideSource: context.urlOverrideSource,
-    remotePasswordPrecedence: "env-first",
+    modeOverride: context.modeOverride,
+    localTokenPrecedence: context.localTokenPrecedence,
+    localPasswordPrecedence: context.localPasswordPrecedence,
+    remoteTokenPrecedence: context.remoteTokenPrecedence,
+    remotePasswordPrecedence: context.remotePasswordPrecedence ?? "env-first", // pragma: allowlist secret
+    remoteTokenFallback: context.remoteTokenFallback,
+    remotePasswordFallback: context.remotePasswordFallback,
+  } as const;
+}
+
+function isTokenGatewaySecretInputPath(path: SupportedGatewaySecretInputPath): boolean {
+  return path === "gateway.auth.token" || path === "gateway.remote.token";
+}
+
+function localAuthModeAllowsGatewaySecretInputPath(params: {
+  authMode: string | undefined;
+  path: SupportedGatewaySecretInputPath;
+}): boolean {
+  const { authMode, path } = params;
+  if (authMode === "none" || authMode === "trusted-proxy") {
+    return false;
+  }
+  if (authMode === "token") {
+    return isTokenGatewaySecretInputPath(path);
+  }
+  if (authMode === "password") {
+    return !isTokenGatewaySecretInputPath(path);
+  }
+  return true;
+}
+
+function gatewaySecretInputPathCanWin(params: {
+  context: ResolvedGatewayCallContext;
+  env: NodeJS.ProcessEnv;
+  config: OpenClawConfig;
+  path: SupportedGatewaySecretInputPath;
+}): boolean {
+  if (!hasConfiguredGatewaySecretRef(params.config, params.path)) {
+    return false;
+  }
+  const mode: GatewayCredentialMode =
+    params.context.modeOverride ?? (params.config.gateway?.mode === "remote" ? "remote" : "local");
+  if (
+    mode === "local" &&
+    !localAuthModeAllowsGatewaySecretInputPath({
+      authMode: params.config.gateway?.auth?.mode,
+      path: params.path,
+    })
+  ) {
+    return false;
+  }
+  const sentinel = `__OPENCLAW_GATEWAY_SECRET_REF_PROBE_${params.path.replaceAll(".", "_")}__`;
+  const probeConfig = structuredClone(params.config);
+  for (const candidatePath of ALL_GATEWAY_SECRET_INPUT_PATHS) {
+    if (!hasConfiguredGatewaySecretRef(probeConfig, candidatePath)) {
+      continue;
+    }
+    assignResolvedGatewaySecretInput({
+      config: probeConfig,
+      path: candidatePath,
+      value: undefined,
+    });
+  }
+  assignResolvedGatewaySecretInput({
+    config: probeConfig,
+    path: params.path,
+    value: sentinel,
   });
+  try {
+    const resolved = resolveGatewayCredentialsFromConfig(
+      resolveGatewayCredentialsFromConfigOptions({
+        context: params.context,
+        env: params.env,
+        cfg: probeConfig,
+      }),
+    );
+    const tokenCanWin = resolved.token === sentinel && !resolved.password;
+    const passwordCanWin = resolved.password === sentinel && !resolved.token;
+    return tokenCanWin || passwordCanWin;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveConfiguredGatewaySecretInput(params: {
+  config: OpenClawConfig;
+  path: SupportedGatewaySecretInputPath;
+  env: NodeJS.ProcessEnv;
+}): Promise<string | undefined> {
+  const { config, path, env } = params;
+  if (path === "gateway.auth.token") {
+    return resolveGatewaySecretInputString({
+      config,
+      value: config.gateway?.auth?.token,
+      path,
+      env,
+    });
+  }
+  if (path === "gateway.auth.password") {
+    return resolveGatewaySecretInputString({
+      config,
+      value: config.gateway?.auth?.password,
+      path,
+      env,
+    });
+  }
+  if (path === "gateway.remote.token") {
+    return resolveGatewaySecretInputString({
+      config,
+      value: config.gateway?.remote?.token,
+      path,
+      env,
+    });
+  }
+  return resolveGatewaySecretInputString({
+    config,
+    value: config.gateway?.remote?.password,
+    path,
+    env,
+  });
+}
+
+function assignResolvedGatewaySecretInput(params: {
+  config: OpenClawConfig;
+  path: SupportedGatewaySecretInputPath;
+  value: string | undefined;
+}): void {
+  const { config, path, value } = params;
+  if (path === "gateway.auth.token") {
+    if (config.gateway?.auth) {
+      config.gateway.auth.token = value;
+    }
+    return;
+  }
+  if (path === "gateway.auth.password") {
+    if (config.gateway?.auth) {
+      config.gateway.auth.password = value;
+    }
+    return;
+  }
+  if (path === "gateway.remote.token") {
+    if (config.gateway?.remote) {
+      config.gateway.remote.token = value;
+    }
+    return;
+  }
+  if (config.gateway?.remote) {
+    config.gateway.remote.password = value;
+  }
+}
+
+async function resolvePreferredGatewaySecretInputs(params: {
+  context: ResolvedGatewayCallContext;
+  env: NodeJS.ProcessEnv;
+  config: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  let nextConfig = params.config;
+  for (const path of ALL_GATEWAY_SECRET_INPUT_PATHS) {
+    if (
+      !gatewaySecretInputPathCanWin({
+        context: params.context,
+        env: params.env,
+        config: nextConfig,
+        path,
+      })
+    ) {
+      continue;
+    }
+    if (nextConfig === params.config) {
+      nextConfig = structuredClone(params.config);
+    }
+    try {
+      const resolvedValue = await resolveConfiguredGatewaySecretInput({
+        config: nextConfig,
+        path,
+        env: params.env,
+      });
+      assignResolvedGatewaySecretInput({
+        config: nextConfig,
+        path,
+        value: resolvedValue,
+      });
+    } catch {
+      // Keep scanning candidate paths so unresolved higher-priority refs do not
+      // prevent valid fallback refs from being considered.
+      continue;
+    }
+  }
+  return nextConfig;
+}
+
+async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
+  context: ResolvedGatewayCallContext;
+  env: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string }> {
+  let resolvedConfig = await resolvePreferredGatewaySecretInputs({
+    context: params.context,
+    env: params.env,
+    config: params.context.config,
+  });
+  const resolvedPaths = new Set<SupportedGatewaySecretInputPath>();
+  for (;;) {
+    try {
+      return resolveGatewayCredentialsFromConfig(
+        resolveGatewayCredentialsFromConfigOptions({
+          context: params.context,
+          env: params.env,
+          cfg: resolvedConfig,
+        }),
+      );
+    } catch (error) {
+      if (!(error instanceof GatewaySecretRefUnavailableError)) {
+        throw error;
+      }
+      const path = error.path;
+      if (!isSupportedGatewaySecretInputPath(path) || resolvedPaths.has(path)) {
+        throw error;
+      }
+      if (resolvedConfig === params.context.config) {
+        resolvedConfig = structuredClone(params.context.config);
+      }
+      const resolvedValue = await resolveConfiguredGatewaySecretInput({
+        config: resolvedConfig,
+        path,
+        env: params.env,
+      });
+      assignResolvedGatewaySecretInput({
+        config: resolvedConfig,
+        path,
+        value: resolvedValue,
+      });
+      resolvedPaths.add(path);
+    }
+  }
 }
 
 export async function resolveGatewayCredentialsWithSecretInputs(params: {
   config: OpenClawConfig;
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
   env?: NodeJS.ProcessEnv;
+  modeOverride?: GatewayCredentialMode;
+  localTokenPrecedence?: GatewayCredentialPrecedence;
+  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
+  remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
+  remoteTokenFallback?: GatewayRemoteCredentialFallback;
+  remotePasswordFallback?: GatewayRemoteCredentialFallback;
 }): Promise<{ token?: string; password?: string }> {
+  const modeOverride = params.modeOverride;
+  const isRemoteMode = modeOverride
+    ? modeOverride === "remote"
+    : params.config.gateway?.mode === "remote";
+  const remoteFromConfig =
+    params.config.gateway?.mode === "remote"
+      ? (params.config.gateway?.remote as GatewayRemoteSettings | undefined)
+      : undefined;
+  const remoteFromOverride =
+    modeOverride === "remote"
+      ? (params.config.gateway?.remote as GatewayRemoteSettings | undefined)
+      : undefined;
   const context: ResolvedGatewayCallContext = {
     config: params.config,
-    configPath: resolveConfigPath(process.env, resolveStateDir(process.env)),
-    isRemoteMode: params.config.gateway?.mode === "remote",
-    remote:
-      params.config.gateway?.mode === "remote"
-        ? (params.config.gateway?.remote as GatewayRemoteSettings | undefined)
-        : undefined,
+    configPath: resolveGatewayConfigPath(process.env),
+    isRemoteMode,
+    remote: remoteFromOverride ?? remoteFromConfig,
     urlOverride: trimToUndefined(params.urlOverride),
-    remoteUrl:
-      params.config.gateway?.mode === "remote"
-        ? trimToUndefined((params.config.gateway?.remote as GatewayRemoteSettings | undefined)?.url)
-        : undefined,
+    urlOverrideSource: params.urlOverrideSource,
+    remoteUrl: isRemoteMode
+      ? trimToUndefined((params.config.gateway?.remote as GatewayRemoteSettings | undefined)?.url)
+      : undefined,
     explicitAuth: resolveExplicitGatewayAuth(params.explicitAuth),
+    modeOverride,
+    localTokenPrecedence: params.localTokenPrecedence,
+    localPasswordPrecedence: params.localPasswordPrecedence,
+    remoteTokenPrecedence: params.remoteTokenPrecedence,
+    remotePasswordPrecedence: params.remotePasswordPrecedence,
+    remoteTokenFallback: params.remoteTokenFallback,
+    remotePasswordFallback: params.remotePasswordFallback,
   };
   return resolveGatewayCredentialsWithEnv(context, params.env ?? process.env);
 }
@@ -527,7 +722,7 @@ async function resolveGatewayTlsFingerprint(params: {
     !context.remoteUrl &&
     url.startsWith("wss://");
   const tlsRuntime = useLocalTls
-    ? await loadGatewayTlsRuntime(context.config.gateway?.tls)
+    ? await gatewayCallDeps.loadGatewayTlsRuntime(context.config.gateway?.tls)
     : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
@@ -621,7 +816,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       }
     };
 
-    const client = new GatewayClient({
+    const client = gatewayCallDeps.createGatewayClient({
       url,
       token,
       password,
@@ -634,7 +829,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: loadOrCreateDeviceIdentity(),
+      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
@@ -646,6 +841,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           });
           const result = await client.request<T>(opts.method, opts.params, {
             expectFinal: opts.expectFinal,
+            timeoutMs: opts.timeoutMs,
           });
           ignoreClose = true;
           stop(undefined, result);

@@ -1,25 +1,24 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   normalizeProviderId,
-  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { ReplyPayload } from "../types.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
   type ProviderInfo,
-} from "../../telegram/model-buttons.js";
-import type { ReplyPayload } from "../types.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+} from "./commands-models.telegram.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -29,17 +28,21 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
+  /** Map from provider/model to human-readable display name (when different from model ID). */
+  modelNames: Map<string, string>;
 };
 
 /**
  * Build provider/model data from config and catalog.
  * Exported for reuse by callback handlers.
  */
-export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<ModelsProviderData> {
-  const resolvedDefault = resolveConfiguredModelRef({
+export async function buildModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): Promise<ModelsProviderData> {
+  const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    agentId,
   });
 
   const catalog = await loadModelCatalog({ config: cfg });
@@ -48,6 +51,7 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
+    agentId,
   });
 
   const aliasIndex = buildModelAliasIndex({
@@ -117,7 +121,16 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
 
   const providers = [...byProvider.keys()].toSorted();
 
-  return { byProvider, providers, resolvedDefault };
+  // Build a provider-scoped model display-name map so surfaces can show
+  // human-readable names without colliding across providers that share IDs.
+  const modelNames = new Map<string, string>();
+  for (const entry of catalog) {
+    if (entry.name && entry.name !== entry.id) {
+      modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
+    }
+  }
+
+  return { byProvider, providers, resolvedDefault, modelNames };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {
@@ -220,6 +233,7 @@ export async function resolveModelsCommandReply(params: {
   commandBodyNormalized: string;
   surface?: string;
   currentModel?: string;
+  agentId?: string;
   agentDir?: string;
   sessionEntry?: SessionEntry;
 }): Promise<ReplyPayload | null> {
@@ -231,7 +245,10 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg);
+  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+    params.cfg,
+    params.agentId,
+  );
   const isTelegram = params.surface === "telegram";
 
   // Provider list (no provider specified)
@@ -307,6 +324,7 @@ export async function resolveModelsCommandReply(params: {
       currentPage: safePage,
       totalPages,
       pageSize: telegramPageSize,
+      modelNames,
     });
 
     const text = formatModelsAvailableHeader({
@@ -386,6 +404,7 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     commandBodyNormalized,
     surface: params.ctx.Surface,
     currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+    agentId: modelsAgentId,
     agentDir: modelsAgentDir,
     sessionEntry: params.sessionEntry,
   });

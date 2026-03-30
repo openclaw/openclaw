@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BROWSER_BRIDGES } from "./browser-bridges.js";
-import { ensureSandboxBrowser } from "./browser.js";
-import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
+
+let BROWSER_BRIDGES: Map<string, unknown>;
+let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
+let resetNoVncObserverTokensForTests: typeof import("./novnc-auth.js").resetNoVncObserverTokensForTests;
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -45,9 +46,17 @@ vi.mock("../../browser/bridge-server.js", () => ({
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
 
+async function loadFreshBrowserModulesForTest() {
+  vi.resetModules();
+  ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
+  ({ ensureSandboxBrowser } = await import("./browser.js"));
+  ({ resetNoVncObserverTokensForTests } = await import("./novnc-auth.js"));
+}
+
 function buildConfig(enableNoVnc: boolean): SandboxConfig {
   return {
     mode: "all",
+    backend: "docker",
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
@@ -60,6 +69,12 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       network: "none",
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
+    },
+    ssh: {
+      command: "ssh",
+      workspaceRoot: "/tmp/openclaw-sandboxes",
+      strictHostKeyChecking: true,
+      updateHostKeys: true,
     },
     browser: {
       enabled: true,
@@ -87,7 +102,8 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
 }
 
 describe("ensureSandboxBrowser create args", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshBrowserModulesForTest();
     BROWSER_BRIDGES.clear();
     resetNoVncObserverTokensForTests();
     dockerMocks.dockerContainerState.mockClear();

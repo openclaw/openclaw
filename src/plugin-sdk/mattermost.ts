@@ -1,5 +1,5 @@
-// Narrow plugin-sdk surface for the bundled mattermost plugin.
-// Keep this list additive and scoped to symbols used under extensions/mattermost.
+// Private helper surface for the bundled mattermost plugin.
+// Keep this list additive and scoped to the bundled Mattermost surface.
 
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
@@ -15,22 +15,34 @@ export type { ChatType } from "../channels/chat-type.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveAllowlistMatchSimple } from "../channels/plugins/allowlist-match.js";
+export { normalizeProviderId } from "../agents/model-selection.js";
+export {
+  buildModelsProviderData,
+  type ModelsProviderData,
+} from "../auto-reply/reply/commands-models.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
-export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-types.js";
 export {
-  promptAccountId,
+  buildSingleChannelSecretPromptState,
   promptSingleChannelSecretInput,
-} from "../channels/plugins/onboarding/helpers.js";
+  runSingleChannelSecretStep,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
+  createSetupInputPresenceValidator,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export { createAccountStatusSink } from "./channel-lifecycle.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type {
   BaseProbeResult,
   ChannelAccountSnapshot,
@@ -40,22 +52,16 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "../config/types.js";
-export type { SecretInput } from "../config/types.secrets.js";
-export {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "../config/types.secrets.js";
 export {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
@@ -64,7 +70,9 @@ export {
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
 export { createDedupeCache } from "../infra/dedupe.js";
+export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 export { rawDataToString } from "../infra/ws.js";
+export { isLoopbackHost, isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -81,7 +89,10 @@ export {
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
+export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
+export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
+export { createChannelPairingController } from "./channel-pairing.js";
+export { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";

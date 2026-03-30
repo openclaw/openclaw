@@ -1,9 +1,8 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-  SecretInput,
-} from "openclaw/plugin-sdk/mattermost";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
+import type { SecretInput } from "./secret-input.js";
+
+export type MattermostReplyToMode = "off" | "first" | "all";
+export type MattermostChatTypeKey = "direct" | "channel" | "group";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
@@ -54,6 +53,14 @@ export type MattermostAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Controls whether channel and group replies are sent as thread replies.
+   * - "off" (default): only thread-reply when incoming message is already a thread reply
+   * - "first": reply in a thread under the triggering message
+   * - "all": always reply in a thread; uses existing thread root or starts a new thread under the message
+   * Direct messages always behave as "off".
+   */
+  replyToMode?: MattermostReplyToMode;
   /** Action toggles for this account. */
   actions?: {
     /** Enable message reaction actions. Default: true. */
@@ -73,6 +80,24 @@ export type MattermostAccountConfig = {
   interactions?: {
     /** External base URL used for Mattermost interaction callbacks. */
     callbackBaseUrl?: string;
+    /**
+     * IP/CIDR allowlist for callback request sources when Mattermost reaches the gateway
+     * over a non-loopback path. Keep this narrow to the Mattermost server or trusted ingress.
+     */
+    allowedSourceIps?: string[];
+  };
+  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
+  allowPrivateNetwork?: boolean;
+  /** Retry configuration for DM channel creation */
+  dmChannelRetry?: {
+    /** Maximum number of retry attempts (default: 3) */
+    maxRetries?: number;
+    /** Initial delay in milliseconds before first retry (default: 1000) */
+    initialDelayMs?: number;
+    /** Maximum delay in milliseconds between retries (default: 10000) */
+    maxDelayMs?: number;
+    /** Timeout for each individual request in milliseconds (default: 30000) */
+    timeoutMs?: number;
   };
 };
 

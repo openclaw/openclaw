@@ -3,15 +3,22 @@ import {
   resolveCommandResolutionFromArgv,
   type CommandResolution,
 } from "./exec-command-resolution.js";
+export { DEFAULT_SAFE_BINS } from "./exec-safe-bin-policy.js";
 
 export {
-  DEFAULT_SAFE_BINS,
   matchAllowlist,
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
+  resolveApprovalAuditCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetResolution,
+  resolvePolicyAllowlistCandidatePath,
+  resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetResolution,
   type CommandResolution,
+  type ExecutableResolution,
   type ExecArgvToken,
 } from "./exec-command-resolution.js";
 
@@ -57,6 +64,17 @@ function isDoubleQuoteEscape(next: string | undefined): next is string {
 
 function isEscapedLineContinuation(next: string | undefined): next is string {
   return next === "\n" || next === "\r";
+}
+
+function isShellCommentStart(source: string, index: number): boolean {
+  if (source[index] !== "#") {
+    return false;
+  }
+  if (index === 0) {
+    return true;
+  }
+  const prev = source[index - 1];
+  return Boolean(prev && /\s/.test(prev));
 }
 
 function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
@@ -245,6 +263,9 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       buf += ch;
       emptySegment = false;
       continue;
+    }
+    if (isShellCommentStart(command, i)) {
+      break;
     }
 
     if ((ch === "\n" || ch === "\r") && pendingHeredocs.length > 0) {
@@ -501,6 +522,9 @@ export function splitCommandChainWithOperators(command: string): ShellChainPart[
       buf += ch;
       continue;
     }
+    if (isShellCommentStart(command, i)) {
+      break;
+    }
 
     if (ch === "&" && next === "&") {
       if (!pushPart("&&")) {
@@ -648,8 +672,9 @@ export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[]
     return null;
   }
   const argv = [...baseArgv];
+  const execution = segment.resolution?.execution;
   const resolvedExecutable =
-    segment.resolution?.resolvedRealPath?.trim() ?? segment.resolution?.resolvedPath?.trim() ?? "";
+    execution?.resolvedRealPath?.trim() ?? execution?.resolvedPath?.trim() ?? "";
   if (resolvedExecutable) {
     argv[0] = resolvedExecutable;
   }
@@ -672,7 +697,7 @@ function renderSafeBinSegmentArgv(segment: ExecCommandSegment): string | null {
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | null)[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | "skillPrelude" | null)[];
   platform?: string | null;
 }): { ok: boolean; command?: string; reason?: string } {
   if (params.segments.length !== params.segmentSatisfiedBy.length) {

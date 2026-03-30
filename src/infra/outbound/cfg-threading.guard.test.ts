@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { bundledPluginFile } from "../../../test/helpers/bundled-plugin-paths.js";
 
 const thisFilePath = fileURLToPath(import.meta.url);
 const thisDir = path.dirname(thisFilePath);
@@ -48,7 +49,7 @@ function listExtensionFiles(): {
       continue;
     }
     const source = readFileSync(channelPath, "utf8");
-    if (source.includes("outbound:")) {
+    if (/\boutbound\s*:\s*\{/.test(source)) {
       inlineChannelEntrypoints.push(toPosix(path.join("extensions", entry.name, "src/channel.ts")));
     }
   }
@@ -57,6 +58,15 @@ function listExtensionFiles(): {
     adapterEntrypoints: adapterEntrypoints.toSorted(),
     inlineChannelEntrypoints: inlineChannelEntrypoints.toSorted(),
   };
+}
+
+function listHighRiskRuntimeCfgFiles(): string[] {
+  return [
+    bundledPluginFile("telegram", "src/action-runtime.ts"),
+    bundledPluginFile("discord", "src/monitor/reply-delivery.ts"),
+    bundledPluginFile("discord", "src/monitor/thread-bindings.discord-api.ts"),
+    bundledPluginFile("discord", "src/monitor/thread-bindings.manager.ts"),
+  ];
 }
 
 function extractOutboundBlock(source: string, file: string): string {
@@ -174,6 +184,14 @@ describe("outbound cfg-threading guard", () => {
       expect(outboundBlock, `${file} outbound block must not call loadConfig`).not.toMatch(
         loadConfigPattern,
       );
+    }
+  });
+
+  it("keeps high-risk runtime delivery paths free of loadConfig calls", () => {
+    const runtimeFiles = listHighRiskRuntimeCfgFiles();
+    for (const file of runtimeFiles) {
+      const source = readRepoFile(file);
+      expect(source, `${file} must not call loadConfig`).not.toMatch(loadConfigPattern);
     }
   });
 });

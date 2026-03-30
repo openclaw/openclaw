@@ -1,18 +1,21 @@
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { normalizeSupportedLanguageHint } from "./language-hints.js";
+import { ensurePierreThemesRegistered } from "./pierre-themes.js";
 import type {
   DiffInput,
   DiffRenderOptions,
+  DiffRenderTarget,
   DiffViewerOptions,
   DiffViewerPayload,
   RenderedDiffDocument,
 } from "./types.js";
-import { VIEWER_LOADER_PATH } from "./viewer-assets.js";
 
 const DEFAULT_FILE_NAME = "diff.txt";
 const MAX_PATCH_FILE_COUNT = 128;
 const MAX_PATCH_TOTAL_LINES = 120_000;
+const VIEWER_LOADER_DOCUMENT_PATH = "../../assets/viewer.js";
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
@@ -41,12 +44,16 @@ function buildDiffTitle(input: DiffInput): string {
   return "Patch diff";
 }
 
-function resolveBeforeAfterFileName(input: Extract<DiffInput, { kind: "before_after" }>): string {
+function resolveBeforeAfterFileName(params: {
+  input: Extract<DiffInput, { kind: "before_after" }>;
+  lang?: SupportedLanguages;
+}): string {
+  const { input, lang } = params;
   if (input.path?.trim()) {
     return input.path.trim();
   }
-  if (input.lang?.trim()) {
-    return `diff.${input.lang.trim().replace(/^\.+/, "")}`;
+  if (lang && lang !== "text") {
+    return `diff.${lang.replace(/^\.+/, "")}`;
   }
   return DEFAULT_FILE_NAME;
 }
@@ -150,19 +157,26 @@ function buildImageRenderOptions(options: DiffRenderOptions): DiffRenderOptions 
   };
 }
 
-function buildRenderVariants(options: DiffRenderOptions): {
-  viewerOptions: DiffViewerOptions;
-  imageOptions: DiffViewerOptions;
-} {
-  return {
-    viewerOptions: buildDiffOptions(options),
-    imageOptions: buildDiffOptions(buildImageRenderOptions(options)),
-  };
+function shouldRenderViewer(target: DiffRenderTarget): boolean {
+  return target === "viewer" || target === "both";
 }
 
-function normalizeSupportedLanguage(value?: string): SupportedLanguages | undefined {
-  const normalized = value?.trim();
-  return normalized ? (normalized as SupportedLanguages) : undefined;
+function shouldRenderImage(target: DiffRenderTarget): boolean {
+  return target === "image" || target === "both";
+}
+
+function buildRenderVariants(params: { options: DiffRenderOptions; target: DiffRenderTarget }): {
+  viewerOptions?: DiffViewerOptions;
+  imageOptions?: DiffViewerOptions;
+} {
+  return {
+    ...(shouldRenderViewer(params.target)
+      ? { viewerOptions: buildDiffOptions(params.options) }
+      : {}),
+    ...(shouldRenderImage(params.target)
+      ? { imageOptions: buildDiffOptions(buildImageRenderOptions(params.options)) }
+      : {}),
+  };
 }
 
 function buildPayloadLanguages(payload: {
@@ -195,14 +209,6 @@ function renderDiffCard(payload: DiffViewerPayload): string {
   </section>`;
 }
 
-function renderStaticDiffCard(prerenderedHTML: string): string {
-  return `<section class="oc-diff-card">
-    <diffs-container class="oc-diff-host" data-openclaw-diff-host>
-      <template shadowrootmode="open">${prerenderedHTML}</template>
-    </diffs-container>
-  </section>`;
-}
-
 function buildHtmlDocument(params: {
   title: string;
   bodyHtml: string;
@@ -211,7 +217,7 @@ function buildHtmlDocument(params: {
   runtimeMode: "viewer" | "image";
 }): string {
   return `<!doctype html>
-<html lang="en"${params.runtimeMode === "image" ? ' data-openclaw-diffs-ready="true"' : ""}>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -303,46 +309,47 @@ function buildHtmlDocument(params: {
         ${params.bodyHtml}
       </div>
     </main>
-    ${params.runtimeMode === "viewer" ? `<script type="module" src="${VIEWER_LOADER_PATH}"></script>` : ""}
+    <script type="module" src="${VIEWER_LOADER_DOCUMENT_PATH}"></script>
   </body>
 </html>`;
 }
 
 type RenderedSection = {
-  viewer: string;
-  image: string;
+  viewer?: string;
+  image?: string;
 };
 
 function buildRenderedSection(params: {
-  viewerPrerenderedHtml: string;
-  imagePrerenderedHtml: string;
-  payload: Omit<DiffViewerPayload, "prerenderedHTML">;
+  viewerPayload?: DiffViewerPayload;
+  imagePayload?: DiffViewerPayload;
 }): RenderedSection {
   return {
-    viewer: renderDiffCard({
-      prerenderedHTML: params.viewerPrerenderedHtml,
-      ...params.payload,
-    }),
-    image: renderStaticDiffCard(params.imagePrerenderedHtml),
+    ...(params.viewerPayload ? { viewer: renderDiffCard(params.viewerPayload) } : {}),
+    ...(params.imagePayload ? { image: renderDiffCard(params.imagePayload) } : {}),
   };
 }
 
 function buildRenderedBodies(sections: ReadonlyArray<RenderedSection>): {
-  viewerBodyHtml: string;
-  imageBodyHtml: string;
+  viewerBodyHtml?: string;
+  imageBodyHtml?: string;
 } {
+  const viewerSections = sections.flatMap((section) => (section.viewer ? [section.viewer] : []));
+  const imageSections = sections.flatMap((section) => (section.image ? [section.image] : []));
   return {
-    viewerBodyHtml: sections.map((section) => section.viewer).join("\n"),
-    imageBodyHtml: sections.map((section) => section.image).join("\n"),
+    ...(viewerSections.length > 0 ? { viewerBodyHtml: viewerSections.join("\n") } : {}),
+    ...(imageSections.length > 0 ? { imageBodyHtml: imageSections.join("\n") } : {}),
   };
 }
 
 async function renderBeforeAfterDiff(
   input: Extract<DiffInput, { kind: "before_after" }>,
   options: DiffRenderOptions,
-): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
-  const fileName = resolveBeforeAfterFileName(input);
-  const lang = normalizeSupportedLanguage(input.lang);
+  target: DiffRenderTarget,
+): Promise<{ viewerBodyHtml?: string; imageBodyHtml?: string; fileCount: number }> {
+  ensurePierreThemesRegistered();
+
+  const lang = await normalizeSupportedLanguageHint(input.lang);
+  const fileName = resolveBeforeAfterFileName({ input, lang });
   const oldFile: FileContents = {
     name: fileName,
     contents: input.before,
@@ -353,31 +360,52 @@ async function renderBeforeAfterDiff(
     contents: input.after,
     ...(lang ? { lang } : {}),
   };
-  const { viewerOptions, imageOptions } = buildRenderVariants(options);
+  const { viewerOptions, imageOptions } = buildRenderVariants({ options, target });
   const [viewerResult, imageResult] = await Promise.all([
-    preloadMultiFileDiff({
-      oldFile,
-      newFile,
-      options: viewerOptions,
-    }),
-    preloadMultiFileDiff({
-      oldFile,
-      newFile,
-      options: imageOptions,
-    }),
+    viewerOptions
+      ? preloadMultiFileDiffWithFallback({
+          oldFile,
+          newFile,
+          options: viewerOptions,
+        })
+      : Promise.resolve(undefined),
+    imageOptions
+      ? preloadMultiFileDiffWithFallback({
+          oldFile,
+          newFile,
+          options: imageOptions,
+        })
+      : Promise.resolve(undefined),
   ]);
   const section = buildRenderedSection({
-    viewerPrerenderedHtml: viewerResult.prerenderedHTML,
-    imagePrerenderedHtml: imageResult.prerenderedHTML,
-    payload: {
-      oldFile: viewerResult.oldFile,
-      newFile: viewerResult.newFile,
-      options: viewerOptions,
-      langs: buildPayloadLanguages({
-        oldFile: viewerResult.oldFile,
-        newFile: viewerResult.newFile,
-      }),
-    },
+    ...(viewerResult && viewerOptions
+      ? {
+          viewerPayload: {
+            prerenderedHTML: viewerResult.prerenderedHTML,
+            oldFile: viewerResult.oldFile,
+            newFile: viewerResult.newFile,
+            options: viewerOptions,
+            langs: buildPayloadLanguages({
+              oldFile: viewerResult.oldFile,
+              newFile: viewerResult.newFile,
+            }),
+          },
+        }
+      : {}),
+    ...(imageResult && imageOptions
+      ? {
+          imagePayload: {
+            prerenderedHTML: imageResult.prerenderedHTML,
+            oldFile: imageResult.oldFile,
+            newFile: imageResult.newFile,
+            options: imageOptions,
+            langs: buildPayloadLanguages({
+              oldFile: imageResult.oldFile,
+              newFile: imageResult.newFile,
+            }),
+          },
+        }
+      : {}),
   });
 
   return {
@@ -389,7 +417,10 @@ async function renderBeforeAfterDiff(
 async function renderPatchDiff(
   input: Extract<DiffInput, { kind: "patch" }>,
   options: DiffRenderOptions,
-): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
+  target: DiffRenderTarget,
+): Promise<{ viewerBodyHtml?: string; imageBodyHtml?: string; fileCount: number }> {
+  ensurePierreThemesRegistered();
+
   const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
     throw new Error("Patch input did not contain any file diffs.");
@@ -406,28 +437,45 @@ async function renderPatchDiff(
     throw new Error(`Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`);
   }
 
-  const { viewerOptions, imageOptions } = buildRenderVariants(options);
+  const { viewerOptions, imageOptions } = buildRenderVariants({ options, target });
   const sections = await Promise.all(
     files.map(async (fileDiff) => {
       const [viewerResult, imageResult] = await Promise.all([
-        preloadFileDiff({
-          fileDiff,
-          options: viewerOptions,
-        }),
-        preloadFileDiff({
-          fileDiff,
-          options: imageOptions,
-        }),
+        viewerOptions
+          ? preloadFileDiffWithFallback({
+              fileDiff,
+              options: viewerOptions,
+            })
+          : Promise.resolve(undefined),
+        imageOptions
+          ? preloadFileDiffWithFallback({
+              fileDiff,
+              options: imageOptions,
+            })
+          : Promise.resolve(undefined),
       ]);
 
       return buildRenderedSection({
-        viewerPrerenderedHtml: viewerResult.prerenderedHTML,
-        imagePrerenderedHtml: imageResult.prerenderedHTML,
-        payload: {
-          fileDiff: viewerResult.fileDiff,
-          options: viewerOptions,
-          langs: buildPayloadLanguages({ fileDiff: viewerResult.fileDiff }),
-        },
+        ...(viewerResult && viewerOptions
+          ? {
+              viewerPayload: {
+                prerenderedHTML: viewerResult.prerenderedHTML,
+                fileDiff: viewerResult.fileDiff,
+                options: viewerOptions,
+                langs: buildPayloadLanguages({ fileDiff: viewerResult.fileDiff }),
+              },
+            }
+          : {}),
+        ...(imageResult && imageOptions
+          ? {
+              imagePayload: {
+                prerenderedHTML: imageResult.prerenderedHTML,
+                fileDiff: imageResult.fileDiff,
+                options: imageOptions,
+                langs: buildPayloadLanguages({ fileDiff: imageResult.fileDiff }),
+              },
+            }
+          : {}),
       });
     }),
   );
@@ -441,30 +489,85 @@ async function renderPatchDiff(
 export async function renderDiffDocument(
   input: DiffInput,
   options: DiffRenderOptions,
+  target: DiffRenderTarget = "both",
 ): Promise<RenderedDiffDocument> {
   const title = buildDiffTitle(input);
   const rendered =
     input.kind === "before_after"
-      ? await renderBeforeAfterDiff(input, options)
-      : await renderPatchDiff(input, options);
+      ? await renderBeforeAfterDiff(input, options, target)
+      : await renderPatchDiff(input, options, target);
 
   return {
-    html: buildHtmlDocument({
-      title,
-      bodyHtml: rendered.viewerBodyHtml,
-      theme: options.presentation.theme,
-      imageMaxWidth: options.image.maxWidth,
-      runtimeMode: "viewer",
-    }),
-    imageHtml: buildHtmlDocument({
-      title,
-      bodyHtml: rendered.imageBodyHtml,
-      theme: options.presentation.theme,
-      imageMaxWidth: options.image.maxWidth,
-      runtimeMode: "image",
-    }),
+    ...(rendered.viewerBodyHtml
+      ? {
+          html: buildHtmlDocument({
+            title,
+            bodyHtml: rendered.viewerBodyHtml,
+            theme: options.presentation.theme,
+            imageMaxWidth: options.image.maxWidth,
+            runtimeMode: "viewer",
+          }),
+        }
+      : {}),
+    ...(rendered.imageBodyHtml
+      ? {
+          imageHtml: buildHtmlDocument({
+            title,
+            bodyHtml: rendered.imageBodyHtml,
+            theme: options.presentation.theme,
+            imageMaxWidth: options.image.maxWidth,
+            runtimeMode: "image",
+          }),
+        }
+      : {}),
     title,
     fileCount: rendered.fileCount,
     inputKind: input.kind,
   };
+}
+
+type PreloadedFileDiffResult = Awaited<ReturnType<typeof preloadFileDiff>>;
+type PreloadedMultiFileDiffResult = Awaited<ReturnType<typeof preloadMultiFileDiff>>;
+
+function shouldFallbackToClientHydration(error: unknown): boolean {
+  return (
+    error instanceof TypeError &&
+    error.message.includes('needs an import attribute of "type: json"')
+  );
+}
+
+async function preloadFileDiffWithFallback(params: {
+  fileDiff: FileDiffMetadata;
+  options: DiffViewerOptions;
+}): Promise<PreloadedFileDiffResult> {
+  try {
+    return await preloadFileDiff(params);
+  } catch (error) {
+    if (!shouldFallbackToClientHydration(error)) {
+      throw error;
+    }
+    return {
+      fileDiff: params.fileDiff,
+      prerenderedHTML: "",
+    };
+  }
+}
+
+async function preloadMultiFileDiffWithFallback(params: {
+  oldFile: FileContents;
+  newFile: FileContents;
+  options: DiffViewerOptions;
+}): Promise<PreloadedMultiFileDiffResult> {
+  try {
+    return await preloadMultiFileDiff(params);
+  } catch (error) {
+    if (!shouldFallbackToClientHydration(error)) {
+      throw error;
+    }
+    return {
+      oldFile: params.oldFile,
+      newFile: params.newFile,
+      prerenderedHTML: "",
+    };
+  }
 }

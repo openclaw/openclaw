@@ -5,7 +5,7 @@
 .chat-thinking {
   margin-bottom: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
@@ -13,7 +13,7 @@
   line-height: 1.4;
 }
 
-:root[data-theme="light"] .chat-thinking {
+:root[data-theme-mode="light"] .chat-thinking {
   border-color: rgba(16, 24, 40, 0.25);
   background: rgba(16, 24, 40, 0.04);
 }
@@ -56,17 +56,30 @@
   font-size: 0.9em;
 }
 
+.chat-text :where(.markdown-inline-image) {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  margin-top: 0.75em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  object-fit: contain;
+}
+
 .chat-text :where(:not(pre) > code) {
   background: rgba(0, 0, 0, 0.15);
   padding: 0.15em 0.4em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow-wrap: normal;
   word-break: keep-all;
 }
 
 .chat-text :where(pre) {
   background: rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   overflow-x: auto;
 }
@@ -97,24 +110,24 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
-:root[data-theme="light"] .chat-text :where(blockquote) {
+:root[data-theme-mode="light"] .chat-text :where(blockquote) {
   background: rgba(0, 0, 0, 0.03);
 }
 
-:root[data-theme="light"] .chat-text :where(blockquote blockquote) {
+:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote) {
   background: rgba(0, 0, 0, 0.05);
 }
 
-:root[data-theme="light"] .chat-text :where(blockquote blockquote blockquote) {
+:root[data-theme-mode="light"] .chat-text :where(blockquote blockquote blockquote) {
   background: rgba(0, 0, 0, 0.04);
 }
 
-:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
+:root[data-theme-mode="light"] .chat-text :where(:not(pre) > code) {
   background: rgba(0, 0, 0, 0.08);
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
-:root[data-theme="light"] .chat-text :where(pre) {
+:root[data-theme-mode="light"] .chat-text :where(pre) {
   background: rgba(0, 0, 0, 0.05);
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
@@ -143,4 +156,21 @@
   border-right: 3px solid var(--border);
   padding-left: 0;
   padding-right: 1em;
+}
+
+@media (max-width: 640px) {
+  .chat-text :where(pre) {
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+  }
+
+  .chat-text :where(.markdown-inline-image) {
+    max-width: 100%;
+    max-height: 240px;
+  }
+
+  .chat-text :where(blockquote) {
+    padding: 6px 10px;
+  }
 }
