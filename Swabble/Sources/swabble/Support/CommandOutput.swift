@@ -1,5 +1,11 @@
 import Foundation
 
+private let commandISO8601Formatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
 enum CommandOutputFormat: String {
     case text
     case json
@@ -23,9 +29,7 @@ func encodeJSONOutput<T: Encodable>(_ value: T) -> String {
 
 func isoTimestamp(_ date: Date?) -> String? {
     guard let date else { return nil }
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.string(from: date)
+    return commandISO8601Formatter.string(from: date)
 }
 
 func textTimestamp(_ date: Date?) -> String {

@@ -293,7 +293,8 @@ private func parseControlSocketResponse(_ data: Data) -> ControlSocketResponse? 
 
     var contentType = "application/json"
     if let contentTypeLine = lines.first(where: { $0.hasPrefix("CONTENT-TYPE ") }) {
-        contentType = String(contentType.dropFirst("CONTENT-TYPE ".count))
+        contentType = String(contentTypeLine.dropFirst("CONTENT-TYPE ".count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     let body = sections.dropFirst().joined(separator: "\n\n")
