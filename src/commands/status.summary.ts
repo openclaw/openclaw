@@ -16,6 +16,9 @@ import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.typ
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+let taskRegistryMaintenanceModulePromise:
+  | Promise<typeof import("../tasks/task-registry.maintenance.js")>
+  | undefined;
 
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
@@ -35,6 +38,11 @@ const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
 function loadConfigIoModule() {
   configIoModulePromise ??= import("../config/io.js");
   return configIoModulePromise;
+}
+
+function loadTaskRegistryMaintenanceModule() {
+  taskRegistryMaintenanceModulePromise ??= import("../tasks/task-registry.maintenance.js");
+  return taskRegistryMaintenanceModulePromise;
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -136,6 +144,7 @@ export async function getStatusSummary(
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  const tasks = (await loadTaskRegistryMaintenanceModule()).getInspectableTaskRegistrySummary();
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -263,6 +272,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    tasks,
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,

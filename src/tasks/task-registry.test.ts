@@ -11,6 +11,7 @@ import {
   createTaskRecord,
   findTaskByRunId,
   getTaskById,
+  getTaskRegistrySummary,
   listTaskRecords,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
@@ -137,6 +138,60 @@ describe("task-registry", () => {
         runtime: "acp",
         status: "succeeded",
         endedAt: 250,
+      });
+    });
+  });
+
+  it("summarizes task pressure by status and runtime", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-summary-acp",
+        task: "Investigate issue",
+        status: "queued",
+        deliveryStatus: "pending",
+      });
+      createTaskRecord({
+        runtime: "cron",
+        requesterSessionKey: "",
+        runId: "run-summary-cron",
+        task: "Daily digest",
+        status: "running",
+        deliveryStatus: "not_applicable",
+      });
+      createTaskRecord({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-summary-subagent",
+        task: "Write patch",
+        status: "timed_out",
+        deliveryStatus: "session_queued",
+      });
+
+      expect(getTaskRegistrySummary()).toEqual({
+        total: 3,
+        active: 2,
+        terminal: 1,
+        failures: 1,
+        byStatus: {
+          queued: 1,
+          running: 1,
+          succeeded: 0,
+          failed: 0,
+          timed_out: 1,
+          cancelled: 0,
+          lost: 0,
+        },
+        byRuntime: {
+          subagent: 1,
+          acp: 1,
+          cli: 0,
+          cron: 1,
+        },
       });
     });
   });
