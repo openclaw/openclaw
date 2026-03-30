@@ -8,3 +8,4 @@ export { makeProxyFetch } from "./src/proxy.js";
 export { telegramOutbound } from "./src/outbound-adapter.js";
 export { setTelegramRuntime } from "./src/runtime.js";
 export { sendMessageTelegram, sendPollTelegram, type TelegramApiOverride } from "./src/send.js";
+export { resetTelegramThreadBindingsForTests } from "./src/thread-bindings.js";
