@@ -31,45 +31,59 @@ function createMockUsage(input: number, output: number) {
 
 let streamCallCount = 0;
 let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
+let forceStopOnly = false;
+
+const getOrCreateSessionMcpRuntimeMock = vi.fn(async () => ({
+  sessionId: "bundle-mcp-runtime",
+  sessionKey: "agent:test:bundle-mcp-e2e",
+  workspaceDir: "/tmp",
+  configFingerprint: "test",
+  createdAt: Date.now(),
+  lastUsedAt: Date.now(),
+  markUsed: () => {},
+  getCatalog: async () => ({
+    version: 1,
+    generatedAt: Date.now(),
+    servers: {},
+    tools: [],
+  }),
+  callTool: async () => ({
+    content: [{ type: "text", text: "FROM-BUNDLE" }],
+  }),
+  dispose: async () => {},
+}));
+
+const materializeBundleMcpToolsForRunMock = vi.fn(async () => ({
+  tools: [
+    {
+      name: "bundleProbe__bundle_probe",
+      label: "bundle_probe",
+      description: "Bundle MCP probe",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        content: [{ type: "text", text: "FROM-BUNDLE" }],
+        details: {
+          mcpServer: "bundleProbe",
+          mcpTool: "bundle_probe",
+        },
+      }),
+    },
+  ],
+  dispose: async () => {},
+}));
+
+const createBundleLspToolRuntimeMock = vi.fn(async () => ({
+  tools: [],
+  dispose: async () => {},
+}));
 
 vi.mock("./pi-bundle-mcp-tools.js", () => ({
-  getOrCreateSessionMcpRuntime: async () => ({
-    sessionId: "bundle-mcp-runtime",
-    sessionKey: "agent:test:bundle-mcp-e2e",
-    workspaceDir: "/tmp",
-    configFingerprint: "test",
-    createdAt: Date.now(),
-    lastUsedAt: Date.now(),
-    markUsed: () => {},
-    getCatalog: async () => ({
-      version: 1,
-      generatedAt: Date.now(),
-      servers: {},
-      tools: [],
-    }),
-    callTool: async () => ({
-      content: [{ type: "text", text: "FROM-BUNDLE" }],
-    }),
-    dispose: async () => {},
-  }),
-  materializeBundleMcpToolsForRun: async () => ({
-    tools: [
-      {
-        name: "bundleProbe__bundle_probe",
-        label: "bundle_probe",
-        description: "Bundle MCP probe",
-        parameters: { type: "object", properties: {} },
-        execute: async () => ({
-          content: [{ type: "text", text: "FROM-BUNDLE" }],
-          details: {
-            mcpServer: "bundleProbe",
-            mcpTool: "bundle_probe",
-          },
-        }),
-      },
-    ],
-    dispose: async () => {},
-  }),
+  getOrCreateSessionMcpRuntime: getOrCreateSessionMcpRuntimeMock,
+  materializeBundleMcpToolsForRun: materializeBundleMcpToolsForRunMock,
+}));
+
+vi.mock("./pi-bundle-lsp-runtime.js", () => ({
+  createBundleLspToolRuntime: createBundleLspToolRuntimeMock,
 }));
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -111,12 +125,18 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
     ...actual,
     complete: async (model: { api: string; provider: string; id: string }) => {
       streamCallCount += 1;
+      if (forceStopOnly) {
+        return buildStopMessage(model, "TOOLS DISABLED OK");
+      }
       return streamCallCount === 1
         ? buildToolUseMessage(model)
         : buildStopMessage(model, "BUNDLE MCP OK FROM-BUNDLE");
     },
     completeSimple: async (model: { api: string; provider: string; id: string }) => {
       streamCallCount += 1;
+      if (forceStopOnly) {
+        return buildStopMessage(model, "TOOLS DISABLED OK");
+      }
       return streamCallCount === 1
         ? buildToolUseMessage(model)
         : buildStopMessage(model, "BUNDLE MCP OK FROM-BUNDLE");
@@ -130,6 +150,15 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
       observedContexts.push(messages);
       const stream = actual.createAssistantMessageEventStream();
       queueMicrotask(() => {
+        if (forceStopOnly) {
+          stream.push({
+            type: "done",
+            reason: "stop",
+            message: buildStopMessage(model, "TOOLS DISABLED OK"),
+          });
+          stream.end();
+          return;
+        }
         if (streamCallCount === 1) {
           stream.push({
             type: "done",
@@ -249,6 +278,48 @@ describe("runEmbeddedPiAgent bundle MCP e2e", () => {
           : [],
       );
       expect(toolResultText.some((text) => text.includes("FROM-BUNDLE"))).toBe(true);
+    },
+  );
+
+  it(
+    "does not materialize bundled MCP or LSP runtimes when disableTools is true",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      streamCallCount = 0;
+      observedContexts = [];
+      forceStopOnly = true;
+      getOrCreateSessionMcpRuntimeMock.mockClear();
+      materializeBundleMcpToolsForRunMock.mockClear();
+      createBundleLspToolRuntimeMock.mockClear();
+
+      const sessionFile = path.join(workspaceDir, "session-bundle-mcp-disabled.jsonl");
+      const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-bundle-mcp"]);
+
+      try {
+        const result = await runEmbeddedPiAgent({
+          sessionId: "bundle-mcp-disabled",
+          sessionKey: "agent:test:bundle-mcp-disabled",
+          sessionFile,
+          workspaceDir,
+          config: cfg,
+          prompt: "Do not use built-in tools.",
+          provider: "openai",
+          model: "mock-bundle-mcp",
+          timeoutMs: 30_000,
+          agentDir,
+          runId: "run-bundle-mcp-disabled",
+          enqueue: immediateEnqueue,
+          disableTools: true,
+        });
+
+        expect(result.payloads?.[0]?.text).toContain("TOOLS DISABLED OK");
+        expect(streamCallCount).toBe(1);
+        expect(getOrCreateSessionMcpRuntimeMock).not.toHaveBeenCalled();
+        expect(materializeBundleMcpToolsForRunMock).not.toHaveBeenCalled();
+        expect(createBundleLspToolRuntimeMock).not.toHaveBeenCalled();
+      } finally {
+        forceStopOnly = false;
+      }
     },
   );
 });
