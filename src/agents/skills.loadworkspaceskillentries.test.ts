@@ -175,4 +175,28 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "skips symlinked SKILL.md even when the target stays inside the workspace root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const targetDir = path.join(workspaceDir, "safe-target");
+      await writeSkill({
+        dir: targetDir,
+        name: "symlink-target",
+        description: "Target skill",
+      });
+
+      const skillDir = path.join(workspaceDir, "skills", "symlinked");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.symlink(path.join(targetDir, "SKILL.md"), path.join(skillDir, "SKILL.md"));
+
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
+    },
+  );
 });
