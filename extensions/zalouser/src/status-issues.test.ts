@@ -3,41 +3,41 @@ import { expectOpenDmPolicyConfigIssue } from "../../../test/helpers/plugins/sta
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
 describe("collectZalouserStatusIssues", () => {
-  it("flags missing auth when configured is false", () => {
-    const issues = collectZalouserStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        configured: false,
-        lastError: "not authenticated",
-      },
-    ]);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.kind).toBe("auth");
-    expect(issues[0]?.message).toMatch(/Not authenticated/i);
-  });
+	it("flags missing auth when configured is false", () => {
+		const issues = collectZalouserStatusIssues([
+			{
+				accountId: "default",
+				enabled: true,
+				configured: false,
+				lastError: "not authenticated",
+			},
+		]);
+		expect(issues).toHaveLength(1);
+		expect(issues[0]?.kind).toBe("auth");
+		expect(issues[0]?.message).toMatch(/Not authenticated/i);
+	});
 
-  it("warns when dmPolicy is open", () => {
-    expectOpenDmPolicyConfigIssue({
-      collectIssues: collectZalouserStatusIssues,
-      account: {
-        accountId: "default",
-        enabled: true,
-        configured: true,
-        dmPolicy: "open",
-      },
-    });
-  });
+	it("warns when dmPolicy is open", () => {
+		expectOpenDmPolicyConfigIssue({
+			collectIssues: collectZalouserStatusIssues,
+			account: {
+				accountId: "default",
+				enabled: true,
+				configured: true,
+				dmPolicy: "open",
+			},
+		});
+	});
 
-  it("skips disabled accounts", () => {
-    const issues = collectZalouserStatusIssues([
-      {
-        accountId: "default",
-        enabled: false,
-        configured: false,
-        lastError: "not authenticated",
-      },
-    ]);
-    expect(issues).toHaveLength(0);
-  });
+	it("skips disabled accounts", () => {
+		const issues = collectZalouserStatusIssues([
+			{
+				accountId: "default",
+				enabled: false,
+				configured: false,
+				lastError: "not authenticated",
+			},
+		]);
+		expect(issues).toHaveLength(0);
+	});
 });

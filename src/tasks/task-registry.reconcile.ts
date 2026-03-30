@@ -1,5 +1,5 @@
 export {
-  reconcileInspectableTasks,
-  reconcileTaskLookupToken,
-  reconcileTaskRecordForOperatorInspection,
+	reconcileInspectableTasks,
+	reconcileTaskLookupToken,
+	reconcileTaskRecordForOperatorInspection,
 } from "./task-registry.maintenance.js";

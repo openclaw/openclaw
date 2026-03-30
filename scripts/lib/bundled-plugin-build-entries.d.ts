@@ -1,19 +1,21 @@
 export type BundledPluginBuildEntry = {
-  id: string;
-  hasPackageJson: boolean;
-  packageJson: unknown;
-  sourceEntries: string[];
+	id: string;
+	hasPackageJson: boolean;
+	packageJson: unknown;
+	sourceEntries: string[];
 };
 
 export type BundledPluginBuildEntryParams = {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
+	cwd?: string;
+	env?: NodeJS.ProcessEnv;
 };
 
 export function collectBundledPluginBuildEntries(
-  params?: BundledPluginBuildEntryParams,
+	params?: BundledPluginBuildEntryParams,
 ): BundledPluginBuildEntry[];
 export function listBundledPluginBuildEntries(
-  params?: BundledPluginBuildEntryParams,
+	params?: BundledPluginBuildEntryParams,
 ): Record<string, string>;
-export function listBundledPluginPackArtifacts(params?: BundledPluginBuildEntryParams): string[];
+export function listBundledPluginPackArtifacts(
+	params?: BundledPluginBuildEntryParams,
+): string[];

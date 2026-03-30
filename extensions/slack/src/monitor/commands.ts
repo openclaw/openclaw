@@ -5,31 +5,33 @@ import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime
  * normalized text. Use in both prepare and debounce gate for consistency.
  */
 export function stripSlackMentionsForCommandDetection(text: string): string {
-  return (text ?? "")
-    .replace(/<@[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+	return (text ?? "")
+		.replace(/<@[^>]+>/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 export function normalizeSlackSlashCommandName(raw: string) {
-  return raw.replace(/^\/+/, "");
+	return raw.replace(/^\/+/, "");
 }
 
 export function resolveSlackSlashCommandConfig(
-  raw?: SlackSlashCommandConfig,
+	raw?: SlackSlashCommandConfig,
 ): Required<SlackSlashCommandConfig> {
-  const normalizedName = normalizeSlackSlashCommandName(raw?.name?.trim() || "openclaw");
-  const name = normalizedName || "openclaw";
-  return {
-    enabled: raw?.enabled === true,
-    name,
-    sessionPrefix: raw?.sessionPrefix?.trim() || "slack:slash",
-    ephemeral: raw?.ephemeral !== false,
-  };
+	const normalizedName = normalizeSlackSlashCommandName(
+		raw?.name?.trim() || "openclaw",
+	);
+	const name = normalizedName || "openclaw";
+	return {
+		enabled: raw?.enabled === true,
+		name,
+		sessionPrefix: raw?.sessionPrefix?.trim() || "slack:slash",
+		ephemeral: raw?.ephemeral !== false,
+	};
 }
 
 export function buildSlackSlashCommandMatcher(name: string) {
-  const normalized = normalizeSlackSlashCommandName(name);
-  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^/?${escaped}$`);
+	const normalized = normalizeSlackSlashCommandName(name);
+	const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`^/?${escaped}$`);
 }

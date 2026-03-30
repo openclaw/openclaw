@@ -14,25 +14,25 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Root } from "./root.js";
 import { classMap } from "lit/directives/class-map.js";
-import { ResolvedColumn } from "../types/types";
 import { styleMap } from "lit/directives/style-map.js";
+import type { ResolvedColumn } from "../types/types";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
 
 @customElement("a2ui-column")
 export class Column extends Root {
-  @property({ reflect: true, type: String })
-  accessor alignment: ResolvedColumn["alignment"] = "stretch";
+	@property({ reflect: true, type: String })
+	accessor alignment: ResolvedColumn["alignment"] = "stretch";
 
-  @property({ reflect: true, type: String })
-  accessor distribution: ResolvedColumn["distribution"] = "start";
+	@property({ reflect: true, type: String })
+	accessor distribution: ResolvedColumn["distribution"] = "start";
 
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       * {
         box-sizing: border-box;
       }
@@ -89,16 +89,18 @@ export class Column extends Root {
         justify-content: space-evenly;
       }
     `,
-  ];
+	];
 
-  render() {
-    return html`<section
+	render() {
+		return html`<section
       class=${classMap(this.theme.components.Column)}
-      style=${this.theme.additionalStyles?.Column
-        ? styleMap(this.theme.additionalStyles?.Column)
-        : nothing}
+      style=${
+				this.theme.additionalStyles?.Column
+					? styleMap(this.theme.additionalStyles?.Column)
+					: nothing
+			}
     >
       <slot></slot>
     </section>`;
-  }
+	}
 }

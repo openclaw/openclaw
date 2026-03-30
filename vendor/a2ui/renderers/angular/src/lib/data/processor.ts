@@ -14,34 +14,36 @@
  limitations under the License.
  */
 
-import { Data, Types } from '@a2ui/lit/0.8';
-import { Injectable } from '@angular/core';
-import { firstValueFrom, Subject } from 'rxjs';
+import { Data, type Types } from "@a2ui/lit/0.8";
+import { Injectable } from "@angular/core";
+import { firstValueFrom, Subject } from "rxjs";
 
 export interface DispatchedEvent {
-  message: Types.A2UIClientEventMessage;
-  completion: Subject<Types.ServerToClientMessage[]>;
+	message: Types.A2UIClientEventMessage;
+	completion: Subject<Types.ServerToClientMessage[]>;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class MessageProcessor extends Data.A2uiMessageProcessor {
-  readonly events = new Subject<DispatchedEvent>();
+	readonly events = new Subject<DispatchedEvent>();
 
-  override setData(
-    node: Types.AnyComponentNode,
-    relativePath: string,
-    value: Types.DataValue,
-    surfaceId?: Types.SurfaceID | null,
-  ) {
-    // Override setData to convert from optional inputs (which can be null)
-    // to undefined so that this correctly falls back to the default value for
-    // surfaceId.
-    return super.setData(node, relativePath, value, surfaceId ?? undefined);
-  }
+	override setData(
+		node: Types.AnyComponentNode,
+		relativePath: string,
+		value: Types.DataValue,
+		surfaceId?: Types.SurfaceID | null,
+	) {
+		// Override setData to convert from optional inputs (which can be null)
+		// to undefined so that this correctly falls back to the default value for
+		// surfaceId.
+		return super.setData(node, relativePath, value, surfaceId ?? undefined);
+	}
 
-  dispatch(message: Types.A2UIClientEventMessage): Promise<Types.ServerToClientMessage[]> {
-    const completion = new Subject<Types.ServerToClientMessage[]>();
-    this.events.next({ message, completion });
-    return firstValueFrom(completion);
-  }
+	dispatch(
+		message: Types.A2UIClientEventMessage,
+	): Promise<Types.ServerToClientMessage[]> {
+		const completion = new Subject<Types.ServerToClientMessage[]>();
+		this.events.next({ message, completion });
+		return firstValueFrom(completion);
+	}
 }

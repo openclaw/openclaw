@@ -14,18 +14,18 @@
  limitations under the License.
  */
 
-import { Component, input } from '@angular/core';
-import { Types } from '@a2ui/lit/0.8';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Renderer } from '../rendering/renderer';
+import type { Types } from "@a2ui/lit/0.8";
+import { Component, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
+import { Renderer } from "../rendering/renderer";
 
 @Component({
-  selector: 'a2ui-list',
-  imports: [Renderer],
-  host: {
-    '[attr.direction]': 'direction()',
-  },
-  styles: `
+	selector: "a2ui-list",
+	imports: [Renderer],
+	host: {
+		"[attr.direction]": "direction()",
+	},
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -50,7 +50,7 @@ import { Renderer } from '../rendering/renderer';
       }
     }
   `,
-  template: `
+	template: `
     <section [class]="theme.components.List" [style]="theme.additionalStyles?.List">
       @for (child of component().properties.children; track child) {
         <ng-container a2ui-renderer [surfaceId]="surfaceId()!" [component]="child" />
@@ -59,5 +59,5 @@ import { Renderer } from '../rendering/renderer';
   `,
 })
 export class List extends DynamicComponent<Types.ListNode> {
-  readonly direction = input<'vertical' | 'horizontal'>('vertical');
+	readonly direction = input<"vertical" | "horizontal">("vertical");
 }

@@ -1,6 +1,6 @@
 import { describePluginRegistrationContract } from "../../test/helpers/plugins/plugin-registration-contract.js";
 
 describePluginRegistrationContract({
-  pluginId: "duckduckgo",
-  webSearchProviderIds: ["duckduckgo"],
+	pluginId: "duckduckgo",
+	webSearchProviderIds: ["duckduckgo"],
 });

@@ -14,52 +14,52 @@
  limitations under the License.
  */
 
-import { SchemaMatcher, ValidationResult } from "./schema_matcher";
+import { SchemaMatcher, type ValidationResult } from "./schema_matcher";
 
 export class BasicSchemaMatcher extends SchemaMatcher {
-  constructor(
-    public propertyPath: string,
-    public propertyValue?: any,
-  ) {
-    super();
-  }
+	constructor(
+		public propertyPath: string,
+		public propertyValue?: any,
+	) {
+		super();
+	}
 
-  validate(schema: any): ValidationResult {
-    if (!schema) {
-      const result: ValidationResult = {
-        success: false,
-        error: "Schema is undefined.",
-      };
-      return result;
-    }
+	validate(schema: any): ValidationResult {
+		if (!schema) {
+			const result: ValidationResult = {
+				success: false,
+				error: "Schema is undefined.",
+			};
+			return result;
+		}
 
-    const pathParts = this.propertyPath.split(".");
-    let actualValue = schema;
-    for (const part of pathParts) {
-      if (actualValue && typeof actualValue === "object") {
-        actualValue = actualValue[part];
-      } else {
-        actualValue = undefined;
-        break;
-      }
-    }
+		const pathParts = this.propertyPath.split(".");
+		let actualValue = schema;
+		for (const part of pathParts) {
+			if (actualValue && typeof actualValue === "object") {
+				actualValue = actualValue[part];
+			} else {
+				actualValue = undefined;
+				break;
+			}
+		}
 
-    if (actualValue === undefined) {
-      const error = `Failed to find property '${this.propertyPath}'.`;
-      return { success: false, error };
-    }
+		if (actualValue === undefined) {
+			const error = `Failed to find property '${this.propertyPath}'.`;
+			return { success: false, error };
+		}
 
-    if (this.propertyValue !== undefined) {
-      if (JSON.stringify(actualValue) !== JSON.stringify(this.propertyValue)) {
-        const error = `Property '${
-          this.propertyPath
-        }' has value '${JSON.stringify(
-          actualValue,
-        )}', but expected '${JSON.stringify(this.propertyValue)}'.`;
-        return { success: false, error };
-      }
-    }
+		if (this.propertyValue !== undefined) {
+			if (JSON.stringify(actualValue) !== JSON.stringify(this.propertyValue)) {
+				const error = `Property '${
+					this.propertyPath
+				}' has value '${JSON.stringify(
+					actualValue,
+				)}', but expected '${JSON.stringify(this.propertyValue)}'.`;
+				return { success: false, error };
+			}
+		}
 
-    return { success: true };
-  }
+		return { success: true };
+	}
 }

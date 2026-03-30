@@ -6,92 +6,107 @@ import { createFilesystemPublicSurfaceScope } from "../../scripts/lib/ts-topolog
 import { main } from "../../scripts/ts-topology.ts";
 import { createCapturedIo } from "../helpers/captured-io.js";
 
-const repoRoot = path.join(process.cwd(), "test", "fixtures", "ts-topology", "basic");
+const repoRoot = path.join(
+	process.cwd(),
+	"test",
+	"fixtures",
+	"ts-topology",
+	"basic",
+);
 
 function buildFixtureScope() {
-  return createFilesystemPublicSurfaceScope(repoRoot, {
-    id: "custom",
-    entrypointRoot: "src/public",
-    importPrefix: "fixture-sdk",
-  });
+	return createFilesystemPublicSurfaceScope(repoRoot, {
+		id: "custom",
+		entrypointRoot: "src/public",
+		importPrefix: "fixture-sdk",
+	});
 }
 
 describe("ts-topology", () => {
-  it("collapses canonical symbols exported by multiple public subpaths", () => {
-    const envelope = analyzeTopology({
-      repoRoot,
-      scope: buildFixtureScope(),
-      report: "public-surface-usage",
-    });
-    const sharedThing = envelope.records.find((record) =>
-      record.exportNames.includes("sharedThing"),
-    );
+	it("collapses canonical symbols exported by multiple public subpaths", () => {
+		const envelope = analyzeTopology({
+			repoRoot,
+			scope: buildFixtureScope(),
+			report: "public-surface-usage",
+		});
+		const sharedThing = envelope.records.find((record) =>
+			record.exportNames.includes("sharedThing"),
+		);
 
-    expect(sharedThing).toMatchObject({
-      declarationPath: "src/lib/shared.ts",
-      declarationLine: 1,
-      productionExtensions: ["alpha", "beta"],
-      productionPackages: ["src"],
-      productionOwners: ["extension:alpha", "extension:beta", "src"],
-    });
-    expect(sharedThing?.publicSpecifiers).toEqual(["fixture-sdk", "fixture-sdk/extra"]);
-  });
+		expect(sharedThing).toMatchObject({
+			declarationPath: "src/lib/shared.ts",
+			declarationLine: 1,
+			productionExtensions: ["alpha", "beta"],
+			productionPackages: ["src"],
+			productionOwners: ["extension:alpha", "extension:beta", "src"],
+		});
+		expect(sharedThing?.publicSpecifiers).toEqual([
+			"fixture-sdk",
+			"fixture-sdk/extra",
+		]);
+	});
 
-  it("counts renamed imports, namespace imports, type-only imports, and test-only consumers", () => {
-    const envelope = analyzeTopology({
-      repoRoot,
-      scope: buildFixtureScope(),
-      report: "public-surface-usage",
-    });
-    const aliasedThing = envelope.records.find((record) =>
-      record.exportNames.includes("aliasedThing"),
-    );
-    const sharedType = envelope.records.find((record) => record.exportNames.includes("SharedType"));
-    const testOnlyThing = envelope.records.find((record) =>
-      record.exportNames.includes("testOnlyThing"),
-    );
+	it("counts renamed imports, namespace imports, type-only imports, and test-only consumers", () => {
+		const envelope = analyzeTopology({
+			repoRoot,
+			scope: buildFixtureScope(),
+			report: "public-surface-usage",
+		});
+		const aliasedThing = envelope.records.find((record) =>
+			record.exportNames.includes("aliasedThing"),
+		);
+		const sharedType = envelope.records.find((record) =>
+			record.exportNames.includes("SharedType"),
+		);
+		const testOnlyThing = envelope.records.find((record) =>
+			record.exportNames.includes("testOnlyThing"),
+		);
 
-    expect(aliasedThing?.productionRefCount).toBe(1);
-    expect(sharedType).toMatchObject({
-      isTypeOnlyCandidate: true,
-      productionExtensions: ["alpha", "beta"],
-      productionRefCount: 2,
-    });
-    expect(testOnlyThing).toMatchObject({
-      productionRefCount: 0,
-      testRefCount: 1,
-      testConsumers: ["tests/public.test.ts"],
-    });
-  });
+		expect(aliasedThing?.productionRefCount).toBe(1);
+		expect(sharedType).toMatchObject({
+			isTypeOnlyCandidate: true,
+			productionExtensions: ["alpha", "beta"],
+			productionRefCount: 2,
+		});
+		expect(testOnlyThing).toMatchObject({
+			productionRefCount: 0,
+			testRefCount: 1,
+			testConsumers: ["tests/public.test.ts"],
+		});
+	});
 
-  it("surfaces single-owner shared and unused reports correctly", () => {
-    const singleOwner = analyzeTopology({
-      repoRoot,
-      scope: buildFixtureScope(),
-      report: "single-owner-shared",
-    });
-    const unused = analyzeTopology({
-      repoRoot,
-      scope: buildFixtureScope(),
-      report: "unused-public-surface",
-    });
+	it("surfaces single-owner shared and unused reports correctly", () => {
+		const singleOwner = analyzeTopology({
+			repoRoot,
+			scope: buildFixtureScope(),
+			report: "single-owner-shared",
+		});
+		const unused = analyzeTopology({
+			repoRoot,
+			scope: buildFixtureScope(),
+			report: "unused-public-surface",
+		});
 
-    expect(singleOwner.records.map((record) => record.exportNames[0])).toContain(
-      "singleOwnerHelper",
-    );
-    expect(singleOwner.records.map((record) => record.exportNames[0])).not.toContain("sharedThing");
-    expect(unused.records.map((record) => record.exportNames[0])).toEqual(["unusedThing"]);
-  });
+		expect(
+			singleOwner.records.map((record) => record.exportNames[0]),
+		).toContain("singleOwnerHelper");
+		expect(
+			singleOwner.records.map((record) => record.exportNames[0]),
+		).not.toContain("sharedThing");
+		expect(unused.records.map((record) => record.exportNames[0])).toEqual([
+			"unusedThing",
+		]);
+	});
 
-  it("renders stable text summaries for the public-surface report", () => {
-    const envelope = analyzeTopology({
-      repoRoot,
-      scope: buildFixtureScope(),
-      report: "public-surface-usage",
-      limit: 3,
-    });
+	it("renders stable text summaries for the public-surface report", () => {
+		const envelope = analyzeTopology({
+			repoRoot,
+			scope: buildFixtureScope(),
+			report: "public-surface-usage",
+			limit: 3,
+		});
 
-    expect(renderTextReport(envelope, 3)).toMatchInlineSnapshot(`
+		expect(renderTextReport(envelope, 3)).toMatchInlineSnapshot(`
       "Scope: custom
       Public exports analyzed: 6
       Production-used exports: 4
@@ -105,43 +120,45 @@ describe("ts-topology", () => {
       Top 1 duplicated public exports:
       - fixture-sdk:sharedThing via fixture-sdk, fixture-sdk/extra (src/lib/shared.ts:1)"
     `);
-  });
+	});
 
-  it("emits stable JSON and filtered report output through the CLI", async () => {
-    const captured = createCapturedIo();
-    const jsonExit = await main(
-      [
-        "--scope=custom",
-        "--entrypoint-root=src/public",
-        "--import-prefix=fixture-sdk",
-        "--repo-root=test/fixtures/ts-topology/basic",
-        "--report=single-owner-shared",
-        "--json",
-      ],
-      captured.io,
-    );
+	it("emits stable JSON and filtered report output through the CLI", async () => {
+		const captured = createCapturedIo();
+		const jsonExit = await main(
+			[
+				"--scope=custom",
+				"--entrypoint-root=src/public",
+				"--import-prefix=fixture-sdk",
+				"--repo-root=test/fixtures/ts-topology/basic",
+				"--report=single-owner-shared",
+				"--json",
+			],
+			captured.io,
+		);
 
-    expect(jsonExit).toBe(0);
-    const payload = JSON.parse(captured.readStdout());
-    expect(payload.report).toBe("single-owner-shared");
-    expect(
-      payload.records.map((record: { exportNames: string[] }) => record.exportNames[0]),
-    ).toEqual(["aliasedThing", "singleOwnerHelper"]);
+		expect(jsonExit).toBe(0);
+		const payload = JSON.parse(captured.readStdout());
+		expect(payload.report).toBe("single-owner-shared");
+		expect(
+			payload.records.map(
+				(record: { exportNames: string[] }) => record.exportNames[0],
+			),
+		).toEqual(["aliasedThing", "singleOwnerHelper"]);
 
-    const textCaptured = createCapturedIo();
-    const textExit = await main(
-      [
-        "--scope=custom",
-        "--entrypoint-root=src/public",
-        "--import-prefix=fixture-sdk",
-        "--repo-root=test/fixtures/ts-topology/basic",
-        "--report=consumer-topology",
-        "--limit=2",
-      ],
-      textCaptured.io,
-    );
-    expect(textExit).toBe(0);
-    expect(textCaptured.readStdout()).toMatchInlineSnapshot(`
+		const textCaptured = createCapturedIo();
+		const textExit = await main(
+			[
+				"--scope=custom",
+				"--entrypoint-root=src/public",
+				"--import-prefix=fixture-sdk",
+				"--repo-root=test/fixtures/ts-topology/basic",
+				"--report=consumer-topology",
+				"--limit=2",
+			],
+			textCaptured.io,
+		);
+		expect(textExit).toBe(0);
+		expect(textCaptured.readStdout()).toMatchInlineSnapshot(`
       "Scope: custom
       Records with consumers: 5
       
@@ -150,5 +167,5 @@ describe("ts-topology", () => {
       - fixture-sdk:SharedType prod=2 test=0 internal=0
       "
     `);
-  });
+	});
 });

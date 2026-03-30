@@ -14,37 +14,37 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Root } from "./root.js";
-import { NumberValue, StringValue } from "../types/primitives";
-import { ResolvedTextField } from "../types/types.js";
-import { A2uiMessageProcessor } from "../data/model-processor.js";
 import { classMap } from "lit/directives/class-map.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { A2uiMessageProcessor } from "../data/model-processor.js";
+import type { NumberValue, StringValue } from "../types/primitives";
+import type { ResolvedTextField } from "../types/types.js";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
-import { extractNumberValue, extractStringValue } from "./utils/utils.js";
+import { extractNumberValue } from "./utils/utils.js";
 
 @customElement("a2ui-slider")
 export class Slider extends Root {
-  @property()
-  accessor value: NumberValue | null = null;
+	@property()
+	accessor value: NumberValue | null = null;
 
-  @property()
-  accessor minValue = 0;
+	@property()
+	accessor minValue = 0;
 
-  @property()
-  accessor maxValue = 0;
+	@property()
+	accessor maxValue = 0;
 
-  @property()
-  accessor label: StringValue | null = null;
+	@property()
+	accessor label: StringValue | null = null;
 
-  @property()
-  accessor inputType: ResolvedTextField["type"] | null = null;
+	@property()
+	accessor inputType: ResolvedTextField["type"] | null = null;
 
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       * {
         box-sizing: border-box;
       }
@@ -62,31 +62,31 @@ export class Slider extends Root {
       .description {
       }
     `,
-  ];
+	];
 
-  #setBoundValue(value: string) {
-    if (!this.value || !this.processor) {
-      return;
-    }
+	#setBoundValue(value: string) {
+		if (!this.value || !this.processor) {
+			return;
+		}
 
-    if (!("path" in this.value)) {
-      return;
-    }
+		if (!("path" in this.value)) {
+			return;
+		}
 
-    if (!this.value.path) {
-      return;
-    }
+		if (!this.value.path) {
+			return;
+		}
 
-    this.processor.setData(
-      this.component,
-      this.value.path,
-      value,
-      this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID
-    );
-  }
+		this.processor.setData(
+			this.component,
+			this.value.path,
+			value,
+			this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID,
+		);
+	}
 
-  #renderField(value: string | number) {
-    return html`<section
+	#renderField(value: string | number) {
+		return html`<section
       class=${classMap(this.theme.components.Slider.container)}
     >
       <label class=${classMap(this.theme.components.Slider.label)} for="data">
@@ -95,16 +95,18 @@ export class Slider extends Root {
       <input
         autocomplete="off"
         class=${classMap(this.theme.components.Slider.element)}
-        style=${this.theme.additionalStyles?.Slider
-          ? styleMap(this.theme.additionalStyles?.Slider)
-          : nothing}
+        style=${
+					this.theme.additionalStyles?.Slider
+						? styleMap(this.theme.additionalStyles?.Slider)
+						: nothing
+				}
         @input=${(evt: Event) => {
-          if (!(evt.target instanceof HTMLInputElement)) {
-            return;
-          }
+					if (!(evt.target instanceof HTMLInputElement)) {
+						return;
+					}
 
-          this.#setBoundValue(evt.target.value);
-        }}
+					this.#setBoundValue(evt.target.value);
+				}}
         id="data"
         name="data"
         .value=${value}
@@ -113,47 +115,49 @@ export class Slider extends Root {
         max=${this.maxValue ?? "0"}
       />
       <span class=${classMap(this.theme.components.Slider.label)}
-        >${this.value
-          ? extractNumberValue(
-              this.value,
-              this.component,
-              this.processor,
-              this.surfaceId
-            )
-          : "0"}</span
+        >${
+					this.value
+						? extractNumberValue(
+								this.value,
+								this.component,
+								this.processor,
+								this.surfaceId,
+							)
+						: "0"
+				}</span
       >
     </section>`;
-  }
+	}
 
-  render() {
-    if (this.value && typeof this.value === "object") {
-      if ("literalNumber" in this.value && this.value.literalNumber) {
-        return this.#renderField(this.value.literalNumber);
-      } else if ("literal" in this.value && this.value.literal !== undefined) {
-        return this.#renderField(this.value.literal);
-      } else if (this.value && "path" in this.value && this.value.path) {
-        if (!this.processor || !this.component) {
-          return html`(no processor)`;
-        }
+	render() {
+		if (this.value && typeof this.value === "object") {
+			if ("literalNumber" in this.value && this.value.literalNumber) {
+				return this.#renderField(this.value.literalNumber);
+			} else if ("literal" in this.value && this.value.literal !== undefined) {
+				return this.#renderField(this.value.literal);
+			} else if (this.value && "path" in this.value && this.value.path) {
+				if (!this.processor || !this.component) {
+					return html`(no processor)`;
+				}
 
-        const textValue = this.processor.getData(
-          this.component,
-          this.value.path,
-          this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID
-        );
+				const textValue = this.processor.getData(
+					this.component,
+					this.value.path,
+					this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID,
+				);
 
-        if (textValue === null) {
-          return html`Invalid value`;
-        }
+				if (textValue === null) {
+					return html`Invalid value`;
+				}
 
-        if (typeof textValue !== "string" && typeof textValue !== "number") {
-          return html`Invalid value`;
-        }
+				if (typeof textValue !== "string" && typeof textValue !== "number") {
+					return html`Invalid value`;
+				}
 
-        return this.#renderField(textValue);
-      }
-    }
+				return this.#renderField(textValue);
+			}
+		}
 
-    return nothing;
-  }
+		return nothing;
+	}
 }

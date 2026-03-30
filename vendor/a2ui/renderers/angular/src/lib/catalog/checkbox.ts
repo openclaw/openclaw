@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-import { Component, computed, input } from '@angular/core';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Primitives } from '@a2ui/lit/0.8';
+import type { Primitives } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: 'a2ui-checkbox',
-  template: `
+	selector: "a2ui-checkbox",
+	template: `
     <section
       [class]="theme.components.CheckBox.container"
       [style]="theme.additionalStyles?.CheckBox"
@@ -39,7 +39,7 @@ import { Primitives } from '@a2ui/lit/0.8';
       }}</label>
     </section>
   `,
-  styles: `
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -54,20 +54,29 @@ import { Primitives } from '@a2ui/lit/0.8';
   `,
 })
 export class Checkbox extends DynamicComponent {
-  readonly value = input.required<Primitives.BooleanValue | null>();
-  readonly label = input.required<Primitives.StringValue | null>();
+	readonly value = input.required<Primitives.BooleanValue | null>();
+	readonly label = input.required<Primitives.StringValue | null>();
 
-  protected inputChecked = computed(() => super.resolvePrimitive(this.value()) ?? false);
-  protected resolvedLabel = computed(() => super.resolvePrimitive(this.label()));
-  protected inputId = super.getUniqueId('a2ui-checkbox');
+	protected inputChecked = computed(
+		() => super.resolvePrimitive(this.value()) ?? false,
+	);
+	protected resolvedLabel = computed(() =>
+		super.resolvePrimitive(this.label()),
+	);
+	protected inputId = super.getUniqueId("a2ui-checkbox");
 
-  protected handleChange(event: Event) {
-    const path = this.value()?.path;
+	protected handleChange(event: Event) {
+		const path = this.value()?.path;
 
-    if (!(event.target instanceof HTMLInputElement) || !path) {
-      return;
-    }
+		if (!(event.target instanceof HTMLInputElement) || !path) {
+			return;
+		}
 
-    this.processor.setData(this.component(), path, event.target.checked, this.surfaceId());
-  }
+		this.processor.setData(
+			this.component(),
+			path,
+			event.target.checked,
+			this.surfaceId(),
+		);
+	}
 }

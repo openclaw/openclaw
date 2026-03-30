@@ -147,10 +147,10 @@ export const type = `
   /** Weights **/
 
   ${new Array(9)
-    .fill(0)
-    .map((_, idx) => {
-      const weight = (idx + 1) * 100;
-      return `.typography-w-${weight} { font-weight: ${weight}; }`;
-    })
-    .join("\n")}
+		.fill(0)
+		.map((_, idx) => {
+			const weight = (idx + 1) * 100;
+			return `.typography-w-${weight} { font-weight: ${weight}; }`;
+		})
+		.join("\n")}
 `;

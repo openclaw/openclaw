@@ -1,36 +1,36 @@
 import {
-  applyWindowsSpawnProgramPolicy,
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgramCandidate,
+	applyWindowsSpawnProgramPolicy,
+	materializeWindowsSpawnProgram,
+	resolveWindowsSpawnProgramCandidate,
 } from "../runtime-api.js";
 
 type SpawnTarget = {
-  command: string;
-  argv: string[];
-  windowsHide?: boolean;
+	command: string;
+	argv: string[];
+	windowsHide?: boolean;
 };
 
 export function resolveWindowsLobsterSpawn(
-  execPath: string,
-  argv: string[],
-  env: NodeJS.ProcessEnv,
+	execPath: string,
+	argv: string[],
+	env: NodeJS.ProcessEnv,
 ): SpawnTarget {
-  const candidate = resolveWindowsSpawnProgramCandidate({
-    command: execPath,
-    env,
-    packageName: "lobster",
-  });
-  const program = applyWindowsSpawnProgramPolicy({
-    candidate,
-    allowShellFallback: false,
-  });
-  const resolved = materializeWindowsSpawnProgram(program, argv);
-  if (resolved.shell) {
-    throw new Error("lobster wrapper resolved to shell fallback unexpectedly");
-  }
-  return {
-    command: resolved.command,
-    argv: resolved.argv,
-    windowsHide: resolved.windowsHide,
-  };
+	const candidate = resolveWindowsSpawnProgramCandidate({
+		command: execPath,
+		env,
+		packageName: "lobster",
+	});
+	const program = applyWindowsSpawnProgramPolicy({
+		candidate,
+		allowShellFallback: false,
+	});
+	const resolved = materializeWindowsSpawnProgram(program, argv);
+	if (resolved.shell) {
+		throw new Error("lobster wrapper resolved to shell fallback unexpectedly");
+	}
+	return {
+		command: resolved.command,
+		argv: resolved.argv,
+		windowsHide: resolved.windowsHide,
+	};
 }

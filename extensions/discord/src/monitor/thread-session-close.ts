@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/config-runtime";
+import {
+	resolveStorePath,
+	updateSessionStore,
+} from "openclaw/plugin-sdk/config-runtime";
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}
@@ -11,52 +14,54 @@ import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/config
  * any on-disk transcript history.
  */
 export async function closeDiscordThreadSessions(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  threadId: string;
+	cfg: OpenClawConfig;
+	accountId: string;
+	threadId: string;
 }): Promise<number> {
-  const { cfg, accountId, threadId } = params;
+	const { cfg, accountId, threadId } = params;
 
-  const normalizedThreadId = threadId.trim().toLowerCase();
-  if (!normalizedThreadId) {
-    return 0;
-  }
+	const normalizedThreadId = threadId.trim().toLowerCase();
+	if (!normalizedThreadId) {
+		return 0;
+	}
 
-  // Match when the threadId appears as a complete colon-separated segment.
-  // e.g. "999" must be followed by ":" (middle) or end-of-string (final).
-  // Using a regex avoids false-positives where one snowflake is a prefix of
-  // another (e.g. searching for "999" must not match ":99900").
-  //
-  // Session key shapes:
-  //   agent:<agentId>:discord:channel:<threadId>
-  //   agent:<agentId>:discord:channel:<parentId>:thread:<threadId>
-  const segmentRe = new RegExp(`:${normalizedThreadId}(?::|$)`, "i");
+	// Match when the threadId appears as a complete colon-separated segment.
+	// e.g. "999" must be followed by ":" (middle) or end-of-string (final).
+	// Using a regex avoids false-positives where one snowflake is a prefix of
+	// another (e.g. searching for "999" must not match ":99900").
+	//
+	// Session key shapes:
+	//   agent:<agentId>:discord:channel:<threadId>
+	//   agent:<agentId>:discord:channel:<parentId>:thread:<threadId>
+	const segmentRe = new RegExp(`:${normalizedThreadId}(?::|$)`, "i");
 
-  function sessionKeyContainsThreadId(key: string): boolean {
-    return segmentRe.test(key);
-  }
+	function sessionKeyContainsThreadId(key: string): boolean {
+		return segmentRe.test(key);
+	}
 
-  // Resolve the store file. We pass `accountId` as `agentId` here to mirror
-  // how other Discord subsystems resolve their per-account sessions stores.
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: accountId });
+	// Resolve the store file. We pass `accountId` as `agentId` here to mirror
+	// how other Discord subsystems resolve their per-account sessions stores.
+	const storePath = resolveStorePath(cfg.session?.store, {
+		agentId: accountId,
+	});
 
-  let resetCount = 0;
+	let resetCount = 0;
 
-  await updateSessionStore(storePath, (store) => {
-    for (const [key, entry] of Object.entries(store)) {
-      if (!entry || !sessionKeyContainsThreadId(key)) {
-        continue;
-      }
-      if (entry.updatedAt === 0) {
-        continue;
-      }
-      // Setting updatedAt to 0 signals that this session is stale.
-      // evaluateSessionFreshness will create a new session on the next message.
-      entry.updatedAt = 0;
-      resetCount += 1;
-    }
-    return resetCount;
-  });
+	await updateSessionStore(storePath, (store) => {
+		for (const [key, entry] of Object.entries(store)) {
+			if (!entry || !sessionKeyContainsThreadId(key)) {
+				continue;
+			}
+			if (entry.updatedAt === 0) {
+				continue;
+			}
+			// Setting updatedAt to 0 signals that this session is stale.
+			// evaluateSessionFreshness will create a new session on the next message.
+			entry.updatedAt = 0;
+			resetCount += 1;
+		}
+		return resetCount;
+	});
 
-  return resetCount;
+	return resetCount;
 }

@@ -15,78 +15,78 @@
  */
 
 import { A2uiMessageProcessor } from "../../data/model-processor.js";
-import { NumberValue, type StringValue } from "../../types/primitives.js";
-import { type AnyComponentNode } from "../../types/types.js";
+import type { NumberValue, StringValue } from "../../types/primitives.js";
+import type { AnyComponentNode } from "../../types/types.js";
 
 export function extractStringValue(
-  val: StringValue | null,
-  component: AnyComponentNode | null,
-  processor: A2uiMessageProcessor | null,
-  surfaceId: string | null
+	val: StringValue | null,
+	component: AnyComponentNode | null,
+	processor: A2uiMessageProcessor | null,
+	surfaceId: string | null,
 ): string {
-  if (val !== null && typeof val === "object") {
-    if ("literalString" in val) {
-      return val.literalString ?? "";
-    } else if ("literal" in val && val.literal !== undefined) {
-      return val.literal ?? "";
-    } else if (val && "path" in val && val.path) {
-      if (!processor || !component) {
-        return "(no model)";
-      }
+	if (val !== null && typeof val === "object") {
+		if ("literalString" in val) {
+			return val.literalString ?? "";
+		} else if ("literal" in val && val.literal !== undefined) {
+			return val.literal ?? "";
+		} else if (val && "path" in val && val.path) {
+			if (!processor || !component) {
+				return "(no model)";
+			}
 
-      const textValue = processor.getData(
-        component,
-        val.path,
-        surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID
-      );
+			const textValue = processor.getData(
+				component,
+				val.path,
+				surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID,
+			);
 
-      if (textValue === null || typeof textValue !== "string") {
-        return "";
-      }
+			if (textValue === null || typeof textValue !== "string") {
+				return "";
+			}
 
-      return textValue;
-    }
-  }
+			return textValue;
+		}
+	}
 
-  return "";
+	return "";
 }
 
 export function extractNumberValue(
-  val: NumberValue | null,
-  component: AnyComponentNode | null,
-  processor: A2uiMessageProcessor | null,
-  surfaceId: string | null
+	val: NumberValue | null,
+	component: AnyComponentNode | null,
+	processor: A2uiMessageProcessor | null,
+	surfaceId: string | null,
 ): number {
-  if (val !== null && typeof val === "object") {
-    if ("literalNumber" in val) {
-      return val.literalNumber ?? 0;
-    } else if ("literal" in val && val.literal !== undefined) {
-      return val.literal ?? 0;
-    } else if (val && "path" in val && val.path) {
-      if (!processor || !component) {
-        return -1;
-      }
+	if (val !== null && typeof val === "object") {
+		if ("literalNumber" in val) {
+			return val.literalNumber ?? 0;
+		} else if ("literal" in val && val.literal !== undefined) {
+			return val.literal ?? 0;
+		} else if (val && "path" in val && val.path) {
+			if (!processor || !component) {
+				return -1;
+			}
 
-      let numberValue = processor.getData(
-        component,
-        val.path,
-        surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID
-      );
+			let numberValue = processor.getData(
+				component,
+				val.path,
+				surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID,
+			);
 
-      if (typeof numberValue === "string") {
-        numberValue = Number.parseInt(numberValue, 10);
-        if (Number.isNaN(numberValue)) {
-          numberValue = null;
-        }
-      }
+			if (typeof numberValue === "string") {
+				numberValue = Number.parseInt(numberValue, 10);
+				if (Number.isNaN(numberValue)) {
+					numberValue = null;
+				}
+			}
 
-      if (numberValue === null || typeof numberValue !== "number") {
-        return -1;
-      }
+			if (numberValue === null || typeof numberValue !== "number") {
+				return -1;
+			}
 
-      return numberValue;
-    }
-  }
+			return numberValue;
+		}
+	}
 
-  return 0;
+	return 0;
 }

@@ -7,10 +7,10 @@ import { agentLogoUrl } from "./agents-utils.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 
 export function renderLoginGate(state: AppViewState) {
-  const basePath = normalizeBasePath(state.basePath ?? "");
-  const faviconSrc = agentLogoUrl(basePath);
+	const basePath = normalizeBasePath(state.basePath ?? "");
+	const faviconSrc = agentLogoUrl(basePath);
 
-  return html`
+	return html`
     <div class="login-gate">
       <div class="login-gate__card">
         <div class="login-gate__header">
@@ -24,9 +24,9 @@ export function renderLoginGate(state: AppViewState) {
             <input
               .value=${state.settings.gatewayUrl}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                state.applySettings({ ...state.settings, gatewayUrl: v });
-              }}
+								const v = (e.target as HTMLInputElement).value;
+								state.applySettings({ ...state.settings, gatewayUrl: v });
+							}}
               placeholder="ws://127.0.0.1:18789"
             />
           </label>
@@ -39,15 +39,15 @@ export function renderLoginGate(state: AppViewState) {
                 spellcheck="false"
                 .value=${state.settings.token}
                 @input=${(e: Event) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  state.applySettings({ ...state.settings, token: v });
-                }}
+									const v = (e.target as HTMLInputElement).value;
+									state.applySettings({ ...state.settings, token: v });
+								}}
                 placeholder="OPENCLAW_GATEWAY_TOKEN (${t("login.passwordPlaceholder")})"
                 @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
-                    state.connect();
-                  }
-                }}
+									if (e.key === "Enter") {
+										state.connect();
+									}
+								}}
               />
               <button
                 type="button"
@@ -56,8 +56,8 @@ export function renderLoginGate(state: AppViewState) {
                 aria-label="Toggle token visibility"
                 aria-pressed=${state.loginShowGatewayToken}
                 @click=${() => {
-                  state.loginShowGatewayToken = !state.loginShowGatewayToken;
-                }}
+									state.loginShowGatewayToken = !state.loginShowGatewayToken;
+								}}
               >
                 ${state.loginShowGatewayToken ? icons.eye : icons.eyeOff}
               </button>
@@ -72,15 +72,15 @@ export function renderLoginGate(state: AppViewState) {
                 spellcheck="false"
                 .value=${state.password}
                 @input=${(e: Event) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  state.password = v;
-                }}
+									const v = (e.target as HTMLInputElement).value;
+									state.password = v;
+								}}
                 placeholder="${t("login.passwordPlaceholder")}"
                 @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "Enter") {
-                    state.connect();
-                  }
-                }}
+									if (e.key === "Enter") {
+										state.connect();
+									}
+								}}
               />
               <button
                 type="button"
@@ -89,8 +89,9 @@ export function renderLoginGate(state: AppViewState) {
                 aria-label="Toggle password visibility"
                 aria-pressed=${state.loginShowGatewayPassword}
                 @click=${() => {
-                  state.loginShowGatewayPassword = !state.loginShowGatewayPassword;
-                }}
+									state.loginShowGatewayPassword =
+										!state.loginShowGatewayPassword;
+								}}
               >
                 ${state.loginShowGatewayPassword ? icons.eye : icons.eyeOff}
               </button>
@@ -100,11 +101,13 @@ export function renderLoginGate(state: AppViewState) {
             ${t("common.connect")}
           </button>
         </div>
-        ${state.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${
+					state.lastError
+						? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${state.lastError}</div>
             </div>`
-          : ""}
+						: ""
+				}
         <div class="login-gate__help">
           <div class="login-gate__help-title">${t("overview.connection.title")}</div>
           <ol class="login-gate__steps">

@@ -3,10 +3,10 @@ import path from "node:path";
 import { buildSecretRefCredentialMatrix } from "../src/secrets/credential-matrix.js";
 
 const outputPath = path.join(
-  process.cwd(),
-  "docs",
-  "reference",
-  "secretref-user-supplied-credentials-matrix.json",
+	process.cwd(),
+	"docs",
+	"reference",
+	"secretref-user-supplied-credentials-matrix.json",
 );
 
 const matrix = buildSecretRefCredentialMatrix();

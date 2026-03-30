@@ -6,6 +6,6 @@ export * from "./src/monitor.js";
 export * from "./src/outbound-session.js";
 export * from "./src/probe.js";
 export * from "./src/reaction-level.js";
-export * from "./src/send-reactions.js";
 export * from "./src/send.js";
+export * from "./src/send-reactions.js";
 export { normalizeSignalAccountInput } from "./src/setup-core.js";

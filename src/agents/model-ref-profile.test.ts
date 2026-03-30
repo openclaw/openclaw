@@ -2,68 +2,80 @@ import { describe, expect, it } from "vitest";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
 describe("splitTrailingAuthProfile", () => {
-  it("returns trimmed model when no profile suffix exists", () => {
-    expect(splitTrailingAuthProfile(" openai/gpt-5 ")).toEqual({
-      model: "openai/gpt-5",
-    });
-  });
+	it("returns trimmed model when no profile suffix exists", () => {
+		expect(splitTrailingAuthProfile(" openai/gpt-5 ")).toEqual({
+			model: "openai/gpt-5",
+		});
+	});
 
-  it("splits trailing @profile suffix", () => {
-    expect(splitTrailingAuthProfile("openai/gpt-5@work")).toEqual({
-      model: "openai/gpt-5",
-      profile: "work",
-    });
-  });
+	it("splits trailing @profile suffix", () => {
+		expect(splitTrailingAuthProfile("openai/gpt-5@work")).toEqual({
+			model: "openai/gpt-5",
+			profile: "work",
+		});
+	});
 
-  it("keeps @-prefixed path segments in model ids", () => {
-    expect(splitTrailingAuthProfile("openai/@cf/openai/gpt-oss-20b")).toEqual({
-      model: "openai/@cf/openai/gpt-oss-20b",
-    });
-  });
+	it("keeps @-prefixed path segments in model ids", () => {
+		expect(splitTrailingAuthProfile("openai/@cf/openai/gpt-oss-20b")).toEqual({
+			model: "openai/@cf/openai/gpt-oss-20b",
+		});
+	});
 
-  it("supports trailing profile override after @-prefixed path segments", () => {
-    expect(splitTrailingAuthProfile("openai/@cf/openai/gpt-oss-20b@cf:default")).toEqual({
-      model: "openai/@cf/openai/gpt-oss-20b",
-      profile: "cf:default",
-    });
-  });
+	it("supports trailing profile override after @-prefixed path segments", () => {
+		expect(
+			splitTrailingAuthProfile("openai/@cf/openai/gpt-oss-20b@cf:default"),
+		).toEqual({
+			model: "openai/@cf/openai/gpt-oss-20b",
+			profile: "cf:default",
+		});
+	});
 
-  it("keeps openrouter preset paths without profile override", () => {
-    expect(splitTrailingAuthProfile("openrouter/@preset/kimi-2-5")).toEqual({
-      model: "openrouter/@preset/kimi-2-5",
-    });
-  });
+	it("keeps openrouter preset paths without profile override", () => {
+		expect(splitTrailingAuthProfile("openrouter/@preset/kimi-2-5")).toEqual({
+			model: "openrouter/@preset/kimi-2-5",
+		});
+	});
 
-  it("supports openrouter preset profile overrides", () => {
-    expect(splitTrailingAuthProfile("openrouter/@preset/kimi-2-5@work")).toEqual({
-      model: "openrouter/@preset/kimi-2-5",
-      profile: "work",
-    });
-  });
+	it("supports openrouter preset profile overrides", () => {
+		expect(
+			splitTrailingAuthProfile("openrouter/@preset/kimi-2-5@work"),
+		).toEqual({
+			model: "openrouter/@preset/kimi-2-5",
+			profile: "work",
+		});
+	});
 
-  it("does not split when suffix after @ contains slash", () => {
-    expect(splitTrailingAuthProfile("provider/foo@bar/baz")).toEqual({
-      model: "provider/foo@bar/baz",
-    });
-  });
+	it("does not split when suffix after @ contains slash", () => {
+		expect(splitTrailingAuthProfile("provider/foo@bar/baz")).toEqual({
+			model: "provider/foo@bar/baz",
+		});
+	});
 
-  it("uses first @ after last slash for email-based auth profiles", () => {
-    expect(splitTrailingAuthProfile("flash@google-gemini-cli:test@gmail.com")).toEqual({
-      model: "flash",
-      profile: "google-gemini-cli:test@gmail.com",
-    });
-  });
+	it("uses first @ after last slash for email-based auth profiles", () => {
+		expect(
+			splitTrailingAuthProfile("flash@google-gemini-cli:test@gmail.com"),
+		).toEqual({
+			model: "flash",
+			profile: "google-gemini-cli:test@gmail.com",
+		});
+	});
 
-  it("keeps @YYYYMMDD version suffixes in model ids", () => {
-    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001")).toEqual({
-      model: "custom/vertex-ai_claude-haiku-4-5@20251001",
-    });
-  });
+	it("keeps @YYYYMMDD version suffixes in model ids", () => {
+		expect(
+			splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001"),
+		).toEqual({
+			model: "custom/vertex-ai_claude-haiku-4-5@20251001",
+		});
+	});
 
-  it("supports auth profiles after @YYYYMMDD version suffixes", () => {
-    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001@work")).toEqual({
-      model: "custom/vertex-ai_claude-haiku-4-5@20251001",
-      profile: "work",
-    });
-  });
+	it("supports auth profiles after @YYYYMMDD version suffixes", () => {
+		expect(
+			splitTrailingAuthProfile(
+				"custom/vertex-ai_claude-haiku-4-5@20251001@work",
+			),
+		).toEqual({
+			model: "custom/vertex-ai_claude-haiku-4-5@20251001",
+			profile: "work",
+		});
+	});
 });

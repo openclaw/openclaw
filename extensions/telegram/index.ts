@@ -7,9 +7,9 @@ export { telegramPlugin } from "./src/channel.js";
 export { setTelegramRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: "telegram",
-  name: "Telegram",
-  description: "Telegram channel plugin",
-  plugin: telegramPlugin as ChannelPlugin,
-  setRuntime: setTelegramRuntime,
+	id: "telegram",
+	name: "Telegram",
+	description: "Telegram channel plugin",
+	plugin: telegramPlugin as ChannelPlugin,
+	setRuntime: setTelegramRuntime,
 });

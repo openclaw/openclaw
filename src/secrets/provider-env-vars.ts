@@ -1,18 +1,18 @@
 import { BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES } from "../plugins/bundled-provider-auth-env-vars.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
-  chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
-  voyage: ["VOYAGE_API_KEY"],
-  groq: ["GROQ_API_KEY"],
-  deepgram: ["DEEPGRAM_API_KEY"],
-  cerebras: ["CEREBRAS_API_KEY"],
-  litellm: ["LITELLM_API_KEY"],
+	chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
+	voyage: ["VOYAGE_API_KEY"],
+	groq: ["GROQ_API_KEY"],
+	deepgram: ["DEEPGRAM_API_KEY"],
+	cerebras: ["CEREBRAS_API_KEY"],
+	litellm: ["LITELLM_API_KEY"],
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
-  anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
-  chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
-  "minimax-cn": ["MINIMAX_API_KEY"],
+	anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+	chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
+	"minimax-cn": ["MINIMAX_API_KEY"],
 } as const;
 
 /**
@@ -22,9 +22,12 @@ const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
  * `resolveEnvApiKey()`. Bundled providers source this from plugin manifest
  * metadata so auth probes do not need to load plugin runtime.
  */
-export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]> = {
-  ...BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
-  ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<
+	string,
+	readonly string[]
+> = {
+	...BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+	...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
 };
 
 /**
@@ -37,60 +40,60 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]>
  * overrides where generic onboarding wants a different preferred env var.
  */
 export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
-  ...PROVIDER_AUTH_ENV_VAR_CANDIDATES,
-  ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
+	...PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+	...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
 };
 
 export function getProviderEnvVars(providerId: string): string[] {
-  const envVars = Object.hasOwn(PROVIDER_ENV_VARS, providerId)
-    ? PROVIDER_ENV_VARS[providerId]
-    : undefined;
-  return Array.isArray(envVars) ? [...envVars] : [];
+	const envVars = Object.hasOwn(PROVIDER_ENV_VARS, providerId)
+		? PROVIDER_ENV_VARS[providerId]
+		: undefined;
+	return Array.isArray(envVars) ? [...envVars] : [];
 }
 
 const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY"] as const;
 
 const KNOWN_SECRET_ENV_VARS = [
-  ...new Set(Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys)),
+	...new Set(Object.values(PROVIDER_ENV_VARS).flat()),
 ];
 
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
 const KNOWN_PROVIDER_AUTH_ENV_VARS = [
-  ...new Set([
-    ...Object.values(PROVIDER_AUTH_ENV_VAR_CANDIDATES).flatMap((keys) => keys),
-    ...KNOWN_SECRET_ENV_VARS,
-    ...EXTRA_PROVIDER_AUTH_ENV_VARS,
-  ]),
+	...new Set([
+		...Object.values(PROVIDER_AUTH_ENV_VAR_CANDIDATES).flat(),
+		...KNOWN_SECRET_ENV_VARS,
+		...EXTRA_PROVIDER_AUTH_ENV_VARS,
+	]),
 ];
 
 export function listKnownProviderAuthEnvVarNames(): string[] {
-  return [...KNOWN_PROVIDER_AUTH_ENV_VARS];
+	return [...KNOWN_PROVIDER_AUTH_ENV_VARS];
 }
 
 export function listKnownSecretEnvVarNames(): string[] {
-  return [...KNOWN_SECRET_ENV_VARS];
+	return [...KNOWN_SECRET_ENV_VARS];
 }
 
 export function omitEnvKeysCaseInsensitive(
-  baseEnv: NodeJS.ProcessEnv,
-  keys: Iterable<string>,
+	baseEnv: NodeJS.ProcessEnv,
+	keys: Iterable<string>,
 ): NodeJS.ProcessEnv {
-  const env = { ...baseEnv };
-  const denied = new Set<string>();
-  for (const key of keys) {
-    const normalizedKey = key.trim();
-    if (normalizedKey) {
-      denied.add(normalizedKey.toUpperCase());
-    }
-  }
-  if (denied.size === 0) {
-    return env;
-  }
-  for (const actualKey of Object.keys(env)) {
-    if (denied.has(actualKey.toUpperCase())) {
-      delete env[actualKey];
-    }
-  }
-  return env;
+	const env = { ...baseEnv };
+	const denied = new Set<string>();
+	for (const key of keys) {
+		const normalizedKey = key.trim();
+		if (normalizedKey) {
+			denied.add(normalizedKey.toUpperCase());
+		}
+	}
+	if (denied.size === 0) {
+		return env;
+	}
+	for (const actualKey of Object.keys(env)) {
+		if (denied.has(actualKey.toUpperCase())) {
+			delete env[actualKey];
+		}
+	}
+	return env;
 }

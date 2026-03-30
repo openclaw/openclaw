@@ -6,52 +6,75 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 import type {
-  PluginHookSessionContext,
-  PluginHookSessionEndEvent,
-  PluginHookSessionStartEvent,
+	PluginHookSessionContext,
+	PluginHookSessionEndEvent,
+	PluginHookSessionStartEvent,
 } from "./types.js";
 
 async function expectSessionHookCall(params: {
-  hookName: "session_start" | "session_end";
-  event: PluginHookSessionStartEvent | PluginHookSessionEndEvent;
-  sessionCtx: PluginHookSessionContext & { sessionKey: string; agentId: string };
+	hookName: "session_start" | "session_end";
+	event: PluginHookSessionStartEvent | PluginHookSessionEndEvent;
+	sessionCtx: PluginHookSessionContext & {
+		sessionKey: string;
+		agentId: string;
+	};
 }) {
-  const handler = vi.fn();
-  const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
+	const handler = vi.fn();
+	const { runner } = createHookRunnerWithRegistry([
+		{ hookName: params.hookName, handler },
+	]);
 
-  if (params.hookName === "session_start") {
-    await runner.runSessionStart(params.event as PluginHookSessionStartEvent, params.sessionCtx);
-  } else {
-    await runner.runSessionEnd(params.event as PluginHookSessionEndEvent, params.sessionCtx);
-  }
+	if (params.hookName === "session_start") {
+		await runner.runSessionStart(
+			params.event as PluginHookSessionStartEvent,
+			params.sessionCtx,
+		);
+	} else {
+		await runner.runSessionEnd(
+			params.event as PluginHookSessionEndEvent,
+			params.sessionCtx,
+		);
+	}
 
-  expect(handler).toHaveBeenCalledWith(params.event, params.sessionCtx);
+	expect(handler).toHaveBeenCalledWith(params.event, params.sessionCtx);
 }
 
 describe("session hook runner methods", () => {
-  const sessionCtx = { sessionId: "abc-123", sessionKey: "agent:main:abc", agentId: "main" };
+	const sessionCtx = {
+		sessionId: "abc-123",
+		sessionKey: "agent:main:abc",
+		agentId: "main",
+	};
 
-  it.each([
-    {
-      name: "runSessionStart invokes registered session_start hooks",
-      hookName: "session_start" as const,
-      event: { sessionId: "abc-123", sessionKey: "agent:main:abc", resumedFrom: "old-session" },
-    },
-    {
-      name: "runSessionEnd invokes registered session_end hooks",
-      hookName: "session_end" as const,
-      event: { sessionId: "abc-123", sessionKey: "agent:main:abc", messageCount: 42 },
-    },
-  ] as const)("$name", async ({ hookName, event }) => {
-    await expectSessionHookCall({ hookName, event, sessionCtx });
-  });
+	it.each([
+		{
+			name: "runSessionStart invokes registered session_start hooks",
+			hookName: "session_start" as const,
+			event: {
+				sessionId: "abc-123",
+				sessionKey: "agent:main:abc",
+				resumedFrom: "old-session",
+			},
+		},
+		{
+			name: "runSessionEnd invokes registered session_end hooks",
+			hookName: "session_end" as const,
+			event: {
+				sessionId: "abc-123",
+				sessionKey: "agent:main:abc",
+				messageCount: 42,
+			},
+		},
+	] as const)("$name", async ({ hookName, event }) => {
+		await expectSessionHookCall({ hookName, event, sessionCtx });
+	});
 
-  it("hasHooks returns true for registered session hooks", () => {
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "session_start", handler: vi.fn() },
-    ]);
+	it("hasHooks returns true for registered session hooks", () => {
+		const { runner } = createHookRunnerWithRegistry([
+			{ hookName: "session_start", handler: vi.fn() },
+		]);
 
-    expect(runner.hasHooks("session_start")).toBe(true);
-    expect(runner.hasHooks("session_end")).toBe(false);
-  });
+		expect(runner.hasHooks("session_start")).toBe(true);
+		expect(runner.hasHooks("session_end")).toBe(false);
+	});
 });

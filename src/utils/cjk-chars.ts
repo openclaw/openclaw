@@ -22,7 +22,8 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
  * Ideographs, Hangul Syllables, Hiragana, Katakana, and other non-Latin
  * scripts that typically use ~1 token per character.
  */
-const NON_LATIN_RE = /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\u{20000}-\u{2FA1F}]/gu;
+const NON_LATIN_RE =
+	/[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\u{20000}-\u{2FA1F}]/gu;
 
 /**
  * Return an adjusted character length that accounts for non-Latin (CJK, etc.)
@@ -33,15 +34,15 @@ const NON_LATIN_RE = /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\u{20
  * For pure ASCII/Latin text the return value equals `text.length` (no change).
  */
 export function estimateStringChars(text: string): number {
-  if (text.length === 0) {
-    return 0;
-  }
-  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
-  // Use code-point length instead of UTF-16 length so that surrogate pairs
-  // (CJK Extension B+, U+20000–U+2FA1F) are counted as 1 character, not 2.
-  const codePointLength = countCodePoints(text, nonLatinCount);
-  // Non-Latin chars already contribute 1 to codePointLength, so add the extra weight.
-  return codePointLength + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
+	if (text.length === 0) {
+		return 0;
+	}
+	const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
+	// Use code-point length instead of UTF-16 length so that surrogate pairs
+	// (CJK Extension B+, U+20000–U+2FA1F) are counted as 1 character, not 2.
+	const codePointLength = countCodePoints(text, nonLatinCount);
+	// Non-Latin chars already contribute 1 to codePointLength, so add the extra weight.
+	return codePointLength + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
 }
 
 /**
@@ -61,13 +62,13 @@ const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
  * (the vast majority of inputs) this returns `text.length` unchanged.
  */
 function countCodePoints(text: string, nonLatinCount: number): number {
-  if (nonLatinCount === 0) {
-    return text.length;
-  }
-  // Count only CJK-range surrogate pairs — each occupies 2 UTF-16 units
-  // but represents 1 code point (and 1 regex match in NON_LATIN_RE).
-  const cjkSurrogates = (text.match(CJK_SURROGATE_HIGH_RE) ?? []).length;
-  return text.length - cjkSurrogates;
+	if (nonLatinCount === 0) {
+		return text.length;
+	}
+	// Count only CJK-range surrogate pairs — each occupies 2 UTF-16 units
+	// but represents 1 code point (and 1 regex match in NON_LATIN_RE).
+	const cjkSurrogates = (text.match(CJK_SURROGATE_HIGH_RE) ?? []).length;
+	return text.length - cjkSurrogates;
 }
 
 /**
@@ -77,5 +78,5 @@ function countCodePoints(text: string, nonLatinCount: number): number {
  * `estimateStringChars(text) / CHARS_PER_TOKEN_ESTIMATE` instead.
  */
 export function estimateTokensFromChars(chars: number): number {
-  return Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN_ESTIMATE);
+	return Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN_ESTIMATE);
 }

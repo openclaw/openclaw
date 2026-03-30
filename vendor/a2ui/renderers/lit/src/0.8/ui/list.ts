@@ -14,21 +14,21 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Root } from "./root.js";
 import { classMap } from "lit/directives/class-map.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
 
 @customElement("a2ui-list")
 export class List extends Root {
-  @property({ reflect: true, type: String })
-  accessor direction: "vertical" | "horizontal" = "vertical";
+	@property({ reflect: true, type: String })
+	accessor direction: "vertical" | "horizontal" = "vertical";
 
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       * {
         box-sizing: border-box;
       }
@@ -57,16 +57,18 @@ export class List extends Root {
         }
       }
     `,
-  ];
+	];
 
-  render() {
-    return html`<section
+	render() {
+		return html`<section
       class=${classMap(this.theme.components.List)}
-      style=${this.theme.additionalStyles?.List
-        ? styleMap(this.theme.additionalStyles?.List)
-        : nothing}
+      style=${
+				this.theme.additionalStyles?.List
+					? styleMap(this.theme.additionalStyles?.List)
+					: nothing
+			}
     >
       <slot></slot>
     </section>`;
-  }
+	}
 }

@@ -28,14 +28,14 @@ const opacityBehavior = `
 
 export const behavior = `
   ${new Array(21)
-    .fill(0)
-    .map((_, idx) => {
-      return `.behavior-ho-${idx * 5} {
+		.fill(0)
+		.map((_, idx) => {
+			return `.behavior-ho-${idx * 5} {
           --opacity: ${idx / 20};
           ${opacityBehavior}
         }`;
-    })
-    .join("\n")}
+		})
+		.join("\n")}
 
   .behavior-o-s {
     overflow: scroll;

@@ -14,32 +14,38 @@
  limitations under the License.
  */
 
-import { Component, computed, inject, input, ViewEncapsulation } from '@angular/core';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Primitives, Styles, Types } from '@a2ui/lit/0.8';
-import { MarkdownRenderer } from '../data/markdown';
+import { type Primitives, Styles, type Types } from "@a2ui/lit/0.8";
+import {
+	Component,
+	computed,
+	inject,
+	input,
+	ViewEncapsulation,
+} from "@angular/core";
+import { MarkdownRenderer } from "../data/markdown";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 interface HintedStyles {
-  h1: Record<string, string>;
-  h2: Record<string, string>;
-  h3: Record<string, string>;
-  h4: Record<string, string>;
-  h5: Record<string, string>;
-  body: Record<string, string>;
-  caption: Record<string, string>;
+	h1: Record<string, string>;
+	h2: Record<string, string>;
+	h3: Record<string, string>;
+	h4: Record<string, string>;
+	h5: Record<string, string>;
+	body: Record<string, string>;
+	caption: Record<string, string>;
 }
 
 @Component({
-  selector: 'a2ui-text',
-  template: `
+	selector: "a2ui-text",
+	template: `
     <section
       [class]="classes()"
       [style]="additionalStyles()"
       [innerHTML]="resolvedText()"
     ></section>
   `,
-  encapsulation: ViewEncapsulation.None,
-  styles: `
+	encapsulation: ViewEncapsulation.None,
+	styles: `
     a2ui-text {
       display: block;
       flex: var(--weight);
@@ -56,82 +62,82 @@ interface HintedStyles {
   `,
 })
 export class Text extends DynamicComponent {
-  private markdownRenderer = inject(MarkdownRenderer);
-  readonly text = input.required<Primitives.StringValue | null>();
-  readonly usageHint = input.required<Types.ResolvedText['usageHint'] | null>();
+	private markdownRenderer = inject(MarkdownRenderer);
+	readonly text = input.required<Primitives.StringValue | null>();
+	readonly usageHint = input.required<Types.ResolvedText["usageHint"] | null>();
 
-  protected resolvedText = computed(() => {
-    const usageHint = this.usageHint();
-    let value = super.resolvePrimitive(this.text());
+	protected resolvedText = computed(() => {
+		const usageHint = this.usageHint();
+		let value = super.resolvePrimitive(this.text());
 
-    if (value == null) {
-      return '(empty)';
-    }
+		if (value == null) {
+			return "(empty)";
+		}
 
-    switch (usageHint) {
-      case 'h1':
-        value = `# ${value}`;
-        break;
-      case 'h2':
-        value = `## ${value}`;
-        break;
-      case 'h3':
-        value = `### ${value}`;
-        break;
-      case 'h4':
-        value = `#### ${value}`;
-        break;
-      case 'h5':
-        value = `##### ${value}`;
-        break;
-      case 'caption':
-        value = `*${value}*`;
-        break;
-      default:
-        value = String(value);
-        break;
-    }
+		switch (usageHint) {
+			case "h1":
+				value = `# ${value}`;
+				break;
+			case "h2":
+				value = `## ${value}`;
+				break;
+			case "h3":
+				value = `### ${value}`;
+				break;
+			case "h4":
+				value = `#### ${value}`;
+				break;
+			case "h5":
+				value = `##### ${value}`;
+				break;
+			case "caption":
+				value = `*${value}*`;
+				break;
+			default:
+				value = String(value);
+				break;
+		}
 
-    return this.markdownRenderer.render(
-      value,
-      Styles.appendToAll(this.theme.markdown, ['ol', 'ul', 'li'], {}),
-    );
-  });
+		return this.markdownRenderer.render(
+			value,
+			Styles.appendToAll(this.theme.markdown, ["ol", "ul", "li"], {}),
+		);
+	});
 
-  protected classes = computed(() => {
-    const usageHint = this.usageHint();
+	protected classes = computed(() => {
+		const usageHint = this.usageHint();
 
-    return Styles.merge(
-      this.theme.components.Text.all,
-      usageHint ? this.theme.components.Text[usageHint] : {},
-    );
-  });
+		return Styles.merge(
+			this.theme.components.Text.all,
+			usageHint ? this.theme.components.Text[usageHint] : {},
+		);
+	});
 
-  protected additionalStyles = computed(() => {
-    const usageHint = this.usageHint();
-    const styles = this.theme.additionalStyles?.Text;
+	protected additionalStyles = computed(() => {
+		const usageHint = this.usageHint();
+		const styles = this.theme.additionalStyles?.Text;
 
-    if (!styles) {
-      return null;
-    }
+		if (!styles) {
+			return null;
+		}
 
-    let additionalStyles: Record<string, string> = {};
+		let additionalStyles: Record<string, string> = {};
 
-    if (this.areHintedStyles(styles)) {
-      additionalStyles = styles[usageHint ?? 'body'];
-    } else {
-      additionalStyles = styles;
-    }
+		if (this.areHintedStyles(styles)) {
+			additionalStyles = styles[usageHint ?? "body"];
+		} else {
+			additionalStyles = styles;
+		}
 
-    return additionalStyles;
-  });
+		return additionalStyles;
+	});
 
-  private areHintedStyles(styles: unknown): styles is HintedStyles {
-    if (typeof styles !== 'object' || !styles || Array.isArray(styles)) {
-      return false;
-    }
+	private areHintedStyles(styles: unknown): styles is HintedStyles {
+		if (typeof styles !== "object" || !styles || Array.isArray(styles)) {
+			return false;
+		}
 
-    const expected = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'caption', 'body'];
-    return expected.every((v) => v in styles);
-  }
+		const expected = ["h1", "h2", "h3", "h4", "h5", "h6", "caption", "body"];
+		return expected.every((v) => v in styles);
+	}
 }

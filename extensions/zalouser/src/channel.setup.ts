@@ -5,8 +5,8 @@ import { zalouserSetupWizard } from "./setup-surface.js";
 import { createZalouserPluginBase } from "./shared.js";
 
 export const zalouserSetupPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
-  ...createZalouserPluginBase({
-    setupWizard: zalouserSetupWizard,
-    setup: zalouserSetupAdapter,
-  }),
+	...createZalouserPluginBase({
+		setupWizard: zalouserSetupWizard,
+		setup: zalouserSetupAdapter,
+	}),
 };

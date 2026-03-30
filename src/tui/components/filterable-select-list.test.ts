@@ -1,81 +1,81 @@
 import { describe, expect, it } from "vitest";
 import {
-  FilterableSelectList,
-  type FilterableSelectItem,
-  type FilterableSelectListTheme,
+	type FilterableSelectItem,
+	FilterableSelectList,
+	type FilterableSelectListTheme,
 } from "./filterable-select-list.js";
 
 const mockTheme: FilterableSelectListTheme = {
-  selectedPrefix: (t) => `[${t}]`,
-  selectedText: (t) => `**${t}**`,
-  description: (t) => `(${t})`,
-  scrollInfo: (t) => `~${t}~`,
-  noMatch: (t) => `!${t}!`,
-  filterLabel: (t) => `>${t}<`,
+	selectedPrefix: (t) => `[${t}]`,
+	selectedText: (t) => `**${t}**`,
+	description: (t) => `(${t})`,
+	scrollInfo: (t) => `~${t}~`,
+	noMatch: (t) => `!${t}!`,
+	filterLabel: (t) => `>${t}<`,
 };
 
 const testItems: FilterableSelectItem[] = [
-  {
-    value: "session-1",
-    label: "first session",
-    description: "Oldest",
-    searchText: "alpha",
-  },
-  {
-    value: "session-2",
-    label: "second session",
-    description: "Newest",
-    searchText: "beta",
-  },
+	{
+		value: "session-1",
+		label: "first session",
+		description: "Oldest",
+		searchText: "alpha",
+	},
+	{
+		value: "session-2",
+		label: "second session",
+		description: "Newest",
+		searchText: "beta",
+	},
 ];
 
 describe("FilterableSelectList", () => {
-  function typeInput(list: FilterableSelectList, text: string) {
-    for (const ch of text) {
-      list.handleInput(ch);
-    }
-  }
+	function typeInput(list: FilterableSelectList, text: string) {
+		for (const ch of text) {
+			list.handleInput(ch);
+		}
+	}
 
-  it("clears the active filter before cancelling", () => {
-    const list = new FilterableSelectList(testItems, 5, mockTheme);
-    let cancelled = false;
-    list.onCancel = () => {
-      cancelled = true;
-    };
+	it("clears the active filter before cancelling", () => {
+		const list = new FilterableSelectList(testItems, 5, mockTheme);
+		let cancelled = false;
+		list.onCancel = () => {
+			cancelled = true;
+		};
 
-    typeInput(list, "beta");
-    expect(list.getFilterText()).toBe("beta");
-    expect(list.getSelectedItem()?.value).toBe("session-2");
+		typeInput(list, "beta");
+		expect(list.getFilterText()).toBe("beta");
+		expect(list.getSelectedItem()?.value).toBe("session-2");
 
-    list.handleInput("\x1b");
+		list.handleInput("\x1b");
 
-    expect(cancelled).toBe(false);
-    expect(list.getFilterText()).toBe("");
-    expect(list.render(80).join("\n")).toContain("first session");
-    expect(list.render(80).join("\n")).toContain("second session");
-  });
+		expect(cancelled).toBe(false);
+		expect(list.getFilterText()).toBe("");
+		expect(list.render(80).join("\n")).toContain("first session");
+		expect(list.render(80).join("\n")).toContain("second session");
+	});
 
-  it("calls onCancel when escape is pressed with an empty filter", () => {
-    const list = new FilterableSelectList(testItems, 5, mockTheme);
-    let cancelled = false;
-    list.onCancel = () => {
-      cancelled = true;
-    };
+	it("calls onCancel when escape is pressed with an empty filter", () => {
+		const list = new FilterableSelectList(testItems, 5, mockTheme);
+		let cancelled = false;
+		list.onCancel = () => {
+			cancelled = true;
+		};
 
-    list.handleInput("\x1b");
+		list.handleInput("\x1b");
 
-    expect(cancelled).toBe(true);
-  });
+		expect(cancelled).toBe(true);
+	});
 
-  it("calls onCancel when ctrl+c is pressed with an empty filter", () => {
-    const list = new FilterableSelectList(testItems, 5, mockTheme);
-    let cancelled = false;
-    list.onCancel = () => {
-      cancelled = true;
-    };
+	it("calls onCancel when ctrl+c is pressed with an empty filter", () => {
+		const list = new FilterableSelectList(testItems, 5, mockTheme);
+		let cancelled = false;
+		list.onCancel = () => {
+			cancelled = true;
+		};
 
-    list.handleInput("\u0003");
+		list.handleInput("\u0003");
 
-    expect(cancelled).toBe(true);
-  });
+		expect(cancelled).toBe(true);
+	});
 });

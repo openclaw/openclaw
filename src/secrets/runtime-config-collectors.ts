@@ -6,28 +6,28 @@ import { collectPluginConfigAssignments } from "./runtime-config-collectors-plug
 import type { ResolverContext } from "./runtime-shared.js";
 
 export function collectConfigAssignments(params: {
-  config: OpenClawConfig;
-  context: ResolverContext;
-  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+	config: OpenClawConfig;
+	context: ResolverContext;
+	loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
-  const defaults = params.context.sourceConfig.secrets?.defaults;
+	const defaults = params.context.sourceConfig.secrets?.defaults;
 
-  collectCoreConfigAssignments({
-    config: params.config,
-    defaults,
-    context: params.context,
-  });
+	collectCoreConfigAssignments({
+		config: params.config,
+		defaults,
+		context: params.context,
+	});
 
-  collectChannelConfigAssignments({
-    config: params.config,
-    defaults,
-    context: params.context,
-  });
+	collectChannelConfigAssignments({
+		config: params.config,
+		defaults,
+		context: params.context,
+	});
 
-  collectPluginConfigAssignments({
-    config: params.config,
-    defaults,
-    context: params.context,
-    loadablePluginOrigins: params.loadablePluginOrigins,
-  });
+	collectPluginConfigAssignments({
+		config: params.config,
+		defaults,
+		context: params.context,
+		loadablePluginOrigins: params.loadablePluginOrigins,
+	});
 }

@@ -1,7 +1,7 @@
 export type { OpenClawConfig } from "../../../src/config/config.js";
 export {
-  __testing,
-  registerSessionBindingAdapter,
+	__testing,
+	registerSessionBindingAdapter,
 } from "../../../src/infra/outbound/session-binding-service.js";
 export { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 export { resolveAgentRoute } from "../../../src/routing/resolve-route.js";

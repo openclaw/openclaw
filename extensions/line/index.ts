@@ -7,10 +7,10 @@ export { linePlugin } from "./src/channel.js";
 export { setLineRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: "line",
-  name: "LINE",
-  description: "LINE Messaging API channel plugin",
-  plugin: linePlugin,
-  setRuntime: setLineRuntime,
-  registerFull: registerLineCardCommand,
+	id: "line",
+	name: "LINE",
+	description: "LINE Messaging API channel plugin",
+	plugin: linePlugin,
+	setRuntime: setLineRuntime,
+	registerFull: registerLineCardCommand,
 });

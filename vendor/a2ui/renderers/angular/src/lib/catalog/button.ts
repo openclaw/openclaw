@@ -14,15 +14,15 @@
  limitations under the License.
  */
 
-import { Component, input } from '@angular/core';
-import { Types } from '@a2ui/lit/0.8';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Renderer } from '../rendering/renderer';
+import type { Types } from "@a2ui/lit/0.8";
+import { Component, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
+import { Renderer } from "../rendering/renderer";
 
 @Component({
-  selector: 'a2ui-button',
-  imports: [Renderer],
-  template: `
+	selector: "a2ui-button",
+	imports: [Renderer],
+	template: `
     <button
       [class]="theme.components.Button"
       [style]="theme.additionalStyles?.Button"
@@ -35,7 +35,7 @@ import { Renderer } from '../rendering/renderer';
       />
     </button>
   `,
-  styles: `
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -44,13 +44,13 @@ import { Renderer } from '../rendering/renderer';
   `,
 })
 export class Button extends DynamicComponent<Types.ButtonNode> {
-  readonly action = input.required<Types.Action | null>();
+	readonly action = input.required<Types.Action | null>();
 
-  protected handleClick() {
-    const action = this.action();
+	protected handleClick() {
+		const action = this.action();
 
-    if (action) {
-      super.sendAction(action);
-    }
-  }
+		if (action) {
+			super.sendAction(action);
+		}
+	}
 }

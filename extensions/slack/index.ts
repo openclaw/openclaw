@@ -6,9 +6,9 @@ export { slackPlugin } from "./src/channel.js";
 export { setSlackRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: "slack",
-  name: "Slack",
-  description: "Slack channel plugin",
-  plugin: slackPlugin,
-  setRuntime: setSlackRuntime,
+	id: "slack",
+	name: "Slack",
+	description: "Slack channel plugin",
+	plugin: slackPlugin,
+	setRuntime: setSlackRuntime,
 });

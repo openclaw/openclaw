@@ -12,14 +12,14 @@ import type { ChannelLogSink } from "./types.js";
  * Registry entry tracking a client manager and its associated account.
  */
 type RegistryEntry = {
-  /** The client manager instance */
-  manager: TwitchClientManager;
-  /** The account ID this manager is for */
-  accountId: string;
-  /** Logger for this entry */
-  logger: ChannelLogSink;
-  /** When this entry was created */
-  createdAt: number;
+	/** The client manager instance */
+	manager: TwitchClientManager;
+	/** The account ID this manager is for */
+	accountId: string;
+	/** Logger for this entry */
+	logger: ChannelLogSink;
+	/** When this entry was created */
+	createdAt: number;
 };
 
 /**
@@ -36,24 +36,24 @@ const registry = new Map<string, RegistryEntry>();
  * @returns The client manager
  */
 export function getOrCreateClientManager(
-  accountId: string,
-  logger: ChannelLogSink,
+	accountId: string,
+	logger: ChannelLogSink,
 ): TwitchClientManager {
-  const existing = registry.get(accountId);
-  if (existing) {
-    return existing.manager;
-  }
+	const existing = registry.get(accountId);
+	if (existing) {
+		return existing.manager;
+	}
 
-  const manager = new TwitchClientManager(logger);
-  registry.set(accountId, {
-    manager,
-    accountId,
-    logger,
-    createdAt: Date.now(),
-  });
+	const manager = new TwitchClientManager(logger);
+	registry.set(accountId, {
+		manager,
+		accountId,
+		logger,
+		createdAt: Date.now(),
+	});
 
-  logger.info(`Registered client manager for account: ${accountId}`);
-  return manager;
+	logger.info(`Registered client manager for account: ${accountId}`);
+	return manager;
 }
 
 /**
@@ -62,8 +62,10 @@ export function getOrCreateClientManager(
  * @param accountId - The account ID
  * @returns The client manager, or undefined if not registered
  */
-export function getClientManager(accountId: string): TwitchClientManager | undefined {
-  return registry.get(accountId)?.manager;
+export function getClientManager(
+	accountId: string,
+): TwitchClientManager | undefined {
+	return registry.get(accountId)?.manager;
 }
 
 /**
@@ -73,17 +75,17 @@ export function getClientManager(accountId: string): TwitchClientManager | undef
  * @returns Promise that resolves when cleanup is complete
  */
 export async function removeClientManager(accountId: string): Promise<void> {
-  const entry = registry.get(accountId);
-  if (!entry) {
-    return;
-  }
+	const entry = registry.get(accountId);
+	if (!entry) {
+		return;
+	}
 
-  // Disconnect the client manager
-  await entry.manager.disconnectAll();
+	// Disconnect the client manager
+	await entry.manager.disconnectAll();
 
-  // Remove from registry
-  registry.delete(accountId);
-  entry.logger.info(`Unregistered client manager for account: ${accountId}`);
+	// Remove from registry
+	registry.delete(accountId);
+	entry.logger.info(`Unregistered client manager for account: ${accountId}`);
 }
 
 /**
@@ -92,8 +94,10 @@ export async function removeClientManager(accountId: string): Promise<void> {
  * @returns Promise that resolves when all cleanup is complete
  */
 export async function removeAllClientManagers(): Promise<void> {
-  const promises = [...registry.keys()].map((accountId) => removeClientManager(accountId));
-  await Promise.all(promises);
+	const promises = [...registry.keys()].map((accountId) =>
+		removeClientManager(accountId),
+	);
+	await Promise.all(promises);
 }
 
 /**
@@ -102,7 +106,7 @@ export async function removeAllClientManagers(): Promise<void> {
  * @returns The count of registered managers
  */
 export function getRegisteredClientManagerCount(): number {
-  return registry.size;
+	return registry.size;
 }
 
 /**
@@ -111,5 +115,5 @@ export function getRegisteredClientManagerCount(): number {
  * This is primarily for testing purposes.
  */
 export function _clearAllClientManagersForTest(): void {
-  registry.clear();
+	registry.clear();
 }

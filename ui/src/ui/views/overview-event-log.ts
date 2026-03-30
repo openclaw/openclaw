@@ -5,17 +5,17 @@ import { icons } from "../icons.ts";
 import { formatEventPayload } from "../presenter.ts";
 
 export type OverviewEventLogProps = {
-  events: EventLogEntry[];
+	events: EventLogEntry[];
 };
 
 export function renderOverviewEventLog(props: OverviewEventLogProps) {
-  if (props.events.length === 0) {
-    return nothing;
-  }
+	if (props.events.length === 0) {
+		return nothing;
+	}
 
-  const visible = props.events.slice(0, 20);
+	const visible = props.events.slice(0, 20);
 
-  return html`
+	return html`
     <details class="card ov-event-log" open>
       <summary class="ov-expandable-toggle">
         <span class="nav-item__icon">${icons.radio}</span>
@@ -24,18 +24,20 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
       </summary>
       <div class="ov-event-log-list">
         ${visible.map(
-          (entry) => html`
+					(entry) => html`
             <div class="ov-event-log-entry">
               <span class="ov-event-log-ts">${new Date(entry.ts).toLocaleTimeString()}</span>
               <span class="ov-event-log-name">${entry.event}</span>
-              ${entry.payload
-                ? html`<span class="ov-event-log-payload muted"
+              ${
+								entry.payload
+									? html`<span class="ov-event-log-payload muted"
                     >${formatEventPayload(entry.payload).slice(0, 120)}</span
                   >`
-                : nothing}
+									: nothing
+							}
             </div>
           `,
-        )}
+				)}
       </div>
     </details>
   `;

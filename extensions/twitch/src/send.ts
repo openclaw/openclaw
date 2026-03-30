@@ -15,12 +15,12 @@ import { generateMessageId, normalizeTwitchChannel } from "./utils/twitch.js";
  * Result from sending a message to Twitch.
  */
 export interface SendMessageResult {
-  /** Whether the send was successful */
-  ok: boolean;
-  /** The message ID (generated for tracking) */
-  messageId: string;
-  /** Error message if the send failed */
-  error?: string;
+	/** Whether the send was successful */
+	ok: boolean;
+	/** The message ID (generated for tracking) */
+	messageId: string;
+	/** Error message if the send failed */
+	error?: string;
 }
 
 /**
@@ -48,86 +48,87 @@ export interface SendMessageResult {
  * );
  */
 export async function sendMessageTwitchInternal(
-  channel: string,
-  text: string,
-  cfg: OpenClawConfig,
-  accountId: string = DEFAULT_ACCOUNT_ID,
-  stripMarkdown: boolean = true,
-  logger: Console = console,
+	channel: string,
+	text: string,
+	cfg: OpenClawConfig,
+	accountId: string = DEFAULT_ACCOUNT_ID,
+	stripMarkdown: boolean = true,
+	logger: Console = console,
 ): Promise<SendMessageResult> {
-  const { account, configured, availableAccountIds } = resolveTwitchAccountContext(cfg, accountId);
-  if (!account) {
-    return {
-      ok: false,
-      messageId: generateMessageId(),
-      error: `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
-    };
-  }
+	const { account, configured, availableAccountIds } =
+		resolveTwitchAccountContext(cfg, accountId);
+	if (!account) {
+		return {
+			ok: false,
+			messageId: generateMessageId(),
+			error: `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
+		};
+	}
 
-  if (!configured) {
-    return {
-      ok: false,
-      messageId: generateMessageId(),
-      error:
-        `Account ${accountId} is not properly configured. ` +
-        "Required: username, clientId, and token (config or env for default account).",
-    };
-  }
+	if (!configured) {
+		return {
+			ok: false,
+			messageId: generateMessageId(),
+			error:
+				`Account ${accountId} is not properly configured. ` +
+				"Required: username, clientId, and token (config or env for default account).",
+		};
+	}
 
-  const normalizedChannel = channel || account.channel;
-  if (!normalizedChannel) {
-    return {
-      ok: false,
-      messageId: generateMessageId(),
-      error: "No channel specified and no default channel in account config",
-    };
-  }
+	const normalizedChannel = channel || account.channel;
+	if (!normalizedChannel) {
+		return {
+			ok: false,
+			messageId: generateMessageId(),
+			error: "No channel specified and no default channel in account config",
+		};
+	}
 
-  const cleanedText = stripMarkdown ? stripMarkdownForTwitch(text) : text;
-  if (!cleanedText) {
-    return {
-      ok: true,
-      messageId: "skipped",
-    };
-  }
+	const cleanedText = stripMarkdown ? stripMarkdownForTwitch(text) : text;
+	if (!cleanedText) {
+		return {
+			ok: true,
+			messageId: "skipped",
+		};
+	}
 
-  const clientManager = getRegistryClientManager(accountId);
-  if (!clientManager) {
-    return {
-      ok: false,
-      messageId: generateMessageId(),
-      error: `Client manager not found for account: ${accountId}. Please start the Twitch gateway first.`,
-    };
-  }
+	const clientManager = getRegistryClientManager(accountId);
+	if (!clientManager) {
+		return {
+			ok: false,
+			messageId: generateMessageId(),
+			error: `Client manager not found for account: ${accountId}. Please start the Twitch gateway first.`,
+		};
+	}
 
-  try {
-    const result = await clientManager.sendMessage(
-      account,
-      normalizeTwitchChannel(normalizedChannel),
-      cleanedText,
-      cfg,
-      accountId,
-    );
+	try {
+		const result = await clientManager.sendMessage(
+			account,
+			normalizeTwitchChannel(normalizedChannel),
+			cleanedText,
+			cfg,
+			accountId,
+		);
 
-    if (!result.ok) {
-      return {
-        ok: false,
-        messageId: result.messageId ?? generateMessageId(),
-        error: result.error ?? "Send failed",
-      };
-    }
+		if (!result.ok) {
+			return {
+				ok: false,
+				messageId: result.messageId ?? generateMessageId(),
+				error: result.error ?? "Send failed",
+			};
+		}
 
-    return {
-      ok: true,
-      messageId: result.messageId ?? generateMessageId(),
-    };
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    logger.error(`Failed to send message: ${errorMsg}`);
-    return {
-      ok: false,
-      messageId: generateMessageId(),
-      error: errorMsg,
-    };
-  }
+		return {
+			ok: true,
+			messageId: result.messageId ?? generateMessageId(),
+		};
+	} catch (error) {
+		const errorMsg = error instanceof Error ? error.message : String(error);
+		logger.error(`Failed to send message: ${errorMsg}`);
+		return {
+			ok: false,
+			messageId: generateMessageId(),
+			error: errorMsg,
+		};
+	}
 }

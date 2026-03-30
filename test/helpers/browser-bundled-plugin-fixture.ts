@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 const BROWSER_FIXTURE_MANIFEST = {
-  id: "browser",
-  enabledByDefault: true,
-  configSchema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {},
-  },
+	id: "browser",
+	enabledByDefault: true,
+	configSchema: {
+		type: "object",
+		additionalProperties: false,
+		properties: {},
+	},
 };
 
 const BROWSER_FIXTURE_ENTRY = `module.exports = {
@@ -50,20 +50,29 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
   },
 };`;
 
-export function createBundledBrowserPluginFixture(): { rootDir: string; cleanup: () => void } {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-bundled-"));
-  const pluginDir = path.join(rootDir, "browser");
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(BROWSER_FIXTURE_MANIFEST, null, 2),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pluginDir, "index.js"), BROWSER_FIXTURE_ENTRY, "utf8");
-  return {
-    rootDir,
-    cleanup() {
-      fs.rmSync(rootDir, { recursive: true, force: true });
-    },
-  };
+export function createBundledBrowserPluginFixture(): {
+	rootDir: string;
+	cleanup: () => void;
+} {
+	const rootDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "openclaw-browser-bundled-"),
+	);
+	const pluginDir = path.join(rootDir, "browser");
+	fs.mkdirSync(pluginDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(pluginDir, "openclaw.plugin.json"),
+		JSON.stringify(BROWSER_FIXTURE_MANIFEST, null, 2),
+		"utf8",
+	);
+	fs.writeFileSync(
+		path.join(pluginDir, "index.js"),
+		BROWSER_FIXTURE_ENTRY,
+		"utf8",
+	);
+	return {
+		rootDir,
+		cleanup() {
+			fs.rmSync(rootDir, { recursive: true, force: true });
+		},
+	};
 }

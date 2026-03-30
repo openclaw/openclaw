@@ -5,88 +5,90 @@ let locator: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
 const getPageForTargetId = vi.fn(async () => {
-  if (!page) {
-    throw new Error("test: page not set");
-  }
-  return page;
+	if (!page) {
+		throw new Error("test: page not set");
+	}
+	return page;
 });
 const ensurePageState = vi.fn(() => {});
 const restoreRoleRefsForTarget = vi.fn(() => {});
 const refLocator = vi.fn(() => {
-  if (!locator) {
-    throw new Error("test: locator not set");
-  }
-  return locator;
+	if (!locator) {
+		throw new Error("test: locator not set");
+	}
+	return locator;
 });
 
 vi.mock("./pw-session.js", () => {
-  return {
-    ensurePageState,
-    forceDisconnectPlaywrightForTarget,
-    getPageForTargetId,
-    refLocator,
-    restoreRoleRefsForTarget,
-  };
+	return {
+		ensurePageState,
+		forceDisconnectPlaywrightForTarget,
+		getPageForTargetId,
+		refLocator,
+		restoreRoleRefsForTarget,
+	};
 });
 
 let evaluateViaPlaywright: typeof import("./pw-tools-core.interactions.js").evaluateViaPlaywright;
 
 function createPendingEval() {
-  let evalCalled!: () => void;
-  const evalCalledPromise = new Promise<void>((resolve) => {
-    evalCalled = resolve;
-  });
-  return {
-    evalCalledPromise,
-    resolveEvalCalled: evalCalled,
-  };
+	let evalCalled!: () => void;
+	const evalCalledPromise = new Promise<void>((resolve) => {
+		evalCalled = resolve;
+	});
+	return {
+		evalCalledPromise,
+		resolveEvalCalled: evalCalled,
+	};
 }
 
 describe("evaluateViaPlaywright (abort)", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    page = null;
-    locator = null;
-    ({ evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  });
+	beforeEach(async () => {
+		vi.resetModules();
+		vi.clearAllMocks();
+		page = null;
+		locator = null;
+		({ evaluateViaPlaywright } = await import(
+			"./pw-tools-core.interactions.js"
+		));
+	});
 
-  it.each([
-    { label: "page.evaluate", fn: "() => 1" },
-    { label: "locator.evaluate", fn: "(el) => el.textContent", ref: "e1" },
-  ])("rejects when aborted after $label starts", async ({ fn, ref }) => {
-    const ctrl = new AbortController();
-    const pending = createPendingEval();
-    const pendingPromise = new Promise(() => {});
+	it.each([
+		{ label: "page.evaluate", fn: "() => 1" },
+		{ label: "locator.evaluate", fn: "(el) => el.textContent", ref: "e1" },
+	])("rejects when aborted after $label starts", async ({ fn, ref }) => {
+		const ctrl = new AbortController();
+		const pending = createPendingEval();
+		const pendingPromise = new Promise(() => {});
 
-    page = {
-      evaluate: vi.fn(() => {
-        if (!ref) {
-          pending.resolveEvalCalled();
-        }
-        return pendingPromise;
-      }),
-    };
-    locator = {
-      evaluate: vi.fn(() => {
-        if (ref) {
-          pending.resolveEvalCalled();
-        }
-        return pendingPromise;
-      }),
-    };
+		page = {
+			evaluate: vi.fn(() => {
+				if (!ref) {
+					pending.resolveEvalCalled();
+				}
+				return pendingPromise;
+			}),
+		};
+		locator = {
+			evaluate: vi.fn(() => {
+				if (ref) {
+					pending.resolveEvalCalled();
+				}
+				return pendingPromise;
+			}),
+		};
 
-    const p = evaluateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      fn,
-      ref,
-      signal: ctrl.signal,
-    });
+		const p = evaluateViaPlaywright({
+			cdpUrl: "http://127.0.0.1:9222",
+			fn,
+			ref,
+			signal: ctrl.signal,
+		});
 
-    await pending.evalCalledPromise;
-    ctrl.abort(new Error("aborted by test"));
+		await pending.evalCalledPromise;
+		ctrl.abort(new Error("aborted by test"));
 
-    await expect(p).rejects.toThrow("aborted by test");
-    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalled();
-  });
+		await expect(p).rejects.toThrow("aborted by test");
+		expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalled();
+	});
 });

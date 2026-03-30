@@ -13,14 +13,14 @@ import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUpload } from "./pending-uploads.js";
 
 export type FileConsentMedia = {
-  buffer: Buffer;
-  filename: string;
-  contentType?: string;
+	buffer: Buffer;
+	filename: string;
+	contentType?: string;
 };
 
 export type FileConsentActivityResult = {
-  activity: Record<string, unknown>;
-  uploadId: string;
+	activity: Record<string, unknown>;
+	uploadId: string;
 };
 
 /**
@@ -28,32 +28,32 @@ export type FileConsentActivityResult = {
  * Returns the activity object and uploadId - caller is responsible for sending.
  */
 export function prepareFileConsentActivity(params: {
-  media: FileConsentMedia;
-  conversationId: string;
-  description?: string;
+	media: FileConsentMedia;
+	conversationId: string;
+	description?: string;
 }): FileConsentActivityResult {
-  const { media, conversationId, description } = params;
+	const { media, conversationId, description } = params;
 
-  const uploadId = storePendingUpload({
-    buffer: media.buffer,
-    filename: media.filename,
-    contentType: media.contentType,
-    conversationId,
-  });
+	const uploadId = storePendingUpload({
+		buffer: media.buffer,
+		filename: media.filename,
+		contentType: media.contentType,
+		conversationId,
+	});
 
-  const consentCard = buildFileConsentCard({
-    filename: media.filename,
-    description: description || `File: ${media.filename}`,
-    sizeInBytes: media.buffer.length,
-    context: { uploadId },
-  });
+	const consentCard = buildFileConsentCard({
+		filename: media.filename,
+		description: description || `File: ${media.filename}`,
+		sizeInBytes: media.buffer.length,
+		context: { uploadId },
+	});
 
-  const activity: Record<string, unknown> = {
-    type: "message",
-    attachments: [consentCard],
-  };
+	const activity: Record<string, unknown> = {
+		type: "message",
+		attachments: [consentCard],
+	};
 
-  return { activity, uploadId };
+	return { activity, uploadId };
 }
 
 /**
@@ -61,13 +61,13 @@ export function prepareFileConsentActivity(params: {
  * True for: personal chat AND (large file OR non-image)
  */
 export function requiresFileConsent(params: {
-  conversationType: string | undefined;
-  contentType: string | undefined;
-  bufferSize: number;
-  thresholdBytes: number;
+	conversationType: string | undefined;
+	contentType: string | undefined;
+	bufferSize: number;
+	thresholdBytes: number;
 }): boolean {
-  const isPersonal = params.conversationType?.toLowerCase() === "personal";
-  const isImage = params.contentType?.startsWith("image/") ?? false;
-  const isLargeFile = params.bufferSize >= params.thresholdBytes;
-  return isPersonal && (isLargeFile || !isImage);
+	const isPersonal = params.conversationType?.toLowerCase() === "personal";
+	const isImage = params.contentType?.startsWith("image/") ?? false;
+	const isLargeFile = params.bufferSize >= params.thresholdBytes;
+	return isPersonal && (isLargeFile || !isImage);
 }

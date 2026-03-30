@@ -14,16 +14,16 @@
  limitations under the License.
  */
 
-import { Component, ViewEncapsulation } from '@angular/core';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Renderer } from '../rendering/renderer';
-import { Types } from '@a2ui/lit/0.8';
+import type { Types } from "@a2ui/lit/0.8";
+import { Component, ViewEncapsulation } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
+import { Renderer } from "../rendering/renderer";
 
 @Component({
-  selector: 'a2ui-card',
-  imports: [Renderer],
-  encapsulation: ViewEncapsulation.None,
-  styles: `
+	selector: "a2ui-card",
+	imports: [Renderer],
+	encapsulation: ViewEncapsulation.None,
+	styles: `
     a2ui-card {
       display: block;
       flex: var(--weight);
@@ -43,7 +43,7 @@ import { Types } from '@a2ui/lit/0.8';
       width: 100%;
     }
   `,
-  template: `
+	template: `
     @let properties = component().properties;
     @let children = properties.children || [properties.child];
 
@@ -54,4 +54,4 @@ import { Types } from '@a2ui/lit/0.8';
     </section>
   `,
 })
-export class Card extends DynamicComponent<Types.CardNode> { }
+export class Card extends DynamicComponent<Types.CardNode> {}

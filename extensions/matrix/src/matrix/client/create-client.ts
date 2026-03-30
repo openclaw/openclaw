@@ -5,71 +5,74 @@ import { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
-  maybeMigrateLegacyStorage,
-  resolveMatrixStoragePaths,
-  writeStorageMeta,
+	maybeMigrateLegacyStorage,
+	resolveMatrixStoragePaths,
+	writeStorageMeta,
 } from "./storage.js";
 
 export async function createMatrixClient(params: {
-  homeserver: string;
-  userId?: string;
-  accessToken: string;
-  password?: string;
-  deviceId?: string;
-  encryption?: boolean;
-  localTimeoutMs?: number;
-  initialSyncLimit?: number;
-  accountId?: string | null;
-  autoBootstrapCrypto?: boolean;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
+	homeserver: string;
+	userId?: string;
+	accessToken: string;
+	password?: string;
+	deviceId?: string;
+	encryption?: boolean;
+	localTimeoutMs?: number;
+	initialSyncLimit?: number;
+	accountId?: string | null;
+	autoBootstrapCrypto?: boolean;
+	allowPrivateNetwork?: boolean;
+	ssrfPolicy?: SsrFPolicy;
+	dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixClient> {
-  ensureMatrixSdkLoggingConfigured();
-  const env = process.env;
-  const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
-    allowPrivateNetwork: params.allowPrivateNetwork,
-  });
-  const userId = params.userId?.trim() || "unknown";
-  const matrixClientUserId = params.userId?.trim() || undefined;
+	ensureMatrixSdkLoggingConfigured();
+	const env = process.env;
+	const homeserver = await resolveValidatedMatrixHomeserverUrl(
+		params.homeserver,
+		{
+			allowPrivateNetwork: params.allowPrivateNetwork,
+		},
+	);
+	const userId = params.userId?.trim() || "unknown";
+	const matrixClientUserId = params.userId?.trim() || undefined;
 
-  const storagePaths = resolveMatrixStoragePaths({
-    homeserver,
-    userId,
-    accessToken: params.accessToken,
-    accountId: params.accountId,
-    deviceId: params.deviceId,
-    env,
-  });
-  await maybeMigrateLegacyStorage({
-    storagePaths,
-    env,
-  });
-  fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+	const storagePaths = resolveMatrixStoragePaths({
+		homeserver,
+		userId,
+		accessToken: params.accessToken,
+		accountId: params.accountId,
+		deviceId: params.deviceId,
+		env,
+	});
+	await maybeMigrateLegacyStorage({
+		storagePaths,
+		env,
+	});
+	fs.mkdirSync(storagePaths.rootDir, { recursive: true });
 
-  writeStorageMeta({
-    storagePaths,
-    homeserver,
-    userId,
-    accountId: params.accountId,
-    deviceId: params.deviceId,
-  });
+	writeStorageMeta({
+		storagePaths,
+		homeserver,
+		userId,
+		accountId: params.accountId,
+		deviceId: params.deviceId,
+	});
 
-  const cryptoDatabasePrefix = `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`;
+	const cryptoDatabasePrefix = `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`;
 
-  return new MatrixClient(homeserver, params.accessToken, {
-    userId: matrixClientUserId,
-    password: params.password,
-    deviceId: params.deviceId,
-    encryption: params.encryption,
-    localTimeoutMs: params.localTimeoutMs,
-    initialSyncLimit: params.initialSyncLimit,
-    storagePath: storagePaths.storagePath,
-    recoveryKeyPath: storagePaths.recoveryKeyPath,
-    idbSnapshotPath: storagePaths.idbSnapshotPath,
-    cryptoDatabasePrefix,
-    autoBootstrapCrypto: params.autoBootstrapCrypto,
-    ssrfPolicy: params.ssrfPolicy,
-    dispatcherPolicy: params.dispatcherPolicy,
-  });
+	return new MatrixClient(homeserver, params.accessToken, {
+		userId: matrixClientUserId,
+		password: params.password,
+		deviceId: params.deviceId,
+		encryption: params.encryption,
+		localTimeoutMs: params.localTimeoutMs,
+		initialSyncLimit: params.initialSyncLimit,
+		storagePath: storagePaths.storagePath,
+		recoveryKeyPath: storagePaths.recoveryKeyPath,
+		idbSnapshotPath: storagePaths.idbSnapshotPath,
+		cryptoDatabasePrefix,
+		autoBootstrapCrypto: params.autoBootstrapCrypto,
+		ssrfPolicy: params.ssrfPolicy,
+		dispatcherPolicy: params.dispatcherPolicy,
+	});
 }

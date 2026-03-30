@@ -10,351 +10,362 @@ const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
-  sendMediaFeishu: sendMediaFeishuMock,
+	sendMediaFeishu: sendMediaFeishuMock,
 }));
 
 vi.mock("./send.js", () => ({
-  sendMessageFeishu: sendMessageFeishuMock,
-  sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
-  sendStructuredCardFeishu: sendStructuredCardFeishuMock,
+	sendMessageFeishu: sendMessageFeishuMock,
+	sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
+	sendStructuredCardFeishu: sendStructuredCardFeishuMock,
 }));
 
 vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      text: {
-        chunkMarkdownText: (text: string) => [text],
-      },
-    },
-  }),
+	getFeishuRuntime: () => ({
+		channel: {
+			text: {
+				chunkMarkdownText: (text: string) => [text],
+			},
+		},
+	}),
 }));
 
 import { feishuOutbound } from "./outbound.js";
+
 const sendText = feishuOutbound.sendText!;
 const emptyConfig: ClawdbotConfig = {};
 const cardRenderConfig: ClawdbotConfig = {
-  channels: {
-    feishu: {
-      renderMode: "card",
-    },
-  },
+	channels: {
+		feishu: {
+			renderMode: "card",
+		},
+	},
 };
 
 function resetOutboundMocks() {
-  vi.clearAllMocks();
-  sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
-  sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
-  sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
-  sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+	vi.clearAllMocks();
+	sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
+	sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+	sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+	sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
 }
 
 describe("feishuOutbound.sendText local-image auto-convert", () => {
-  beforeEach(() => {
-    resetOutboundMocks();
-  });
+	beforeEach(() => {
+		resetOutboundMocks();
+	});
 
-  it("chunks outbound text without requiring Feishu runtime initialization", () => {
-    const chunker = feishuOutbound.chunker;
-    if (!chunker) {
-      throw new Error("feishuOutbound.chunker missing");
-    }
+	it("chunks outbound text without requiring Feishu runtime initialization", () => {
+		const chunker = feishuOutbound.chunker;
+		if (!chunker) {
+			throw new Error("feishuOutbound.chunker missing");
+		}
 
-    expect(() => chunker("hello world", 5)).not.toThrow();
-    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
-  });
+		expect(() => chunker("hello world", 5)).not.toThrow();
+		expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+	});
 
-  async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
-    const file = path.join(dir, `sample${ext}`);
-    await fs.writeFile(file, "image-data");
-    return { dir, file };
-  }
+	async function createTmpImage(
+		ext = ".png",
+	): Promise<{ dir: string; file: string }> {
+		const dir = await fs.mkdtemp(
+			path.join(os.tmpdir(), "openclaw-feishu-outbound-"),
+		);
+		const file = path.join(dir, `sample${ext}`);
+		await fs.writeFile(file, "image-data");
+		return { dir, file };
+	}
 
-  it("sends an absolute existing local image path as media", async () => {
-    const { dir, file } = await createTmpImage();
-    try {
-      const result = await sendText({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: file,
-        accountId: "main",
-        mediaLocalRoots: [dir],
-      });
+	it("sends an absolute existing local image path as media", async () => {
+		const { dir, file } = await createTmpImage();
+		try {
+			const result = await sendText({
+				cfg: emptyConfig,
+				to: "chat_1",
+				text: file,
+				accountId: "main",
+				mediaLocalRoots: [dir],
+			});
 
-      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "chat_1",
-          mediaUrl: file,
-          accountId: "main",
-          mediaLocalRoots: [dir],
-        }),
-      );
-      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-      expect(result).toEqual(
-        expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
-      );
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
+			expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					to: "chat_1",
+					mediaUrl: file,
+					accountId: "main",
+					mediaLocalRoots: [dir],
+				}),
+			);
+			expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+			expect(result).toEqual(
+				expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+			);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
 
-  it("keeps non-path text on the text-send path", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "please upload /tmp/example.png",
-      accountId: "main",
-    });
+	it("keeps non-path text on the text-send path", async () => {
+		await sendText({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "please upload /tmp/example.png",
+			accountId: "main",
+		});
 
-    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "please upload /tmp/example.png",
-        accountId: "main",
-      }),
-    );
-  });
+		expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+		expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "please upload /tmp/example.png",
+				accountId: "main",
+			}),
+		);
+	});
 
-  it("falls back to plain text if local-image media send fails", async () => {
-    const { dir, file } = await createTmpImage();
-    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
-    try {
-      await sendText({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: file,
-        accountId: "main",
-      });
+	it("falls back to plain text if local-image media send fails", async () => {
+		const { dir, file } = await createTmpImage();
+		sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+		try {
+			await sendText({
+				cfg: emptyConfig,
+				to: "chat_1",
+				text: file,
+				accountId: "main",
+			});
 
-      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "chat_1",
-          text: file,
-          accountId: "main",
-        }),
-      );
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
+			expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+			expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					to: "chat_1",
+					text: file,
+					accountId: "main",
+				}),
+			);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
 
-  it("uses markdown cards when renderMode=card", async () => {
-    const result = await sendText({
-      cfg: cardRenderConfig,
-      to: "chat_1",
-      text: "| a | b |\n| - | - |",
-      accountId: "main",
-    });
+	it("uses markdown cards when renderMode=card", async () => {
+		const result = await sendText({
+			cfg: cardRenderConfig,
+			to: "chat_1",
+			text: "| a | b |\n| - | - |",
+			accountId: "main",
+		});
 
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "| a | b |\n| - | - |",
-        accountId: "main",
-      }),
-    );
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
-  });
+		expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "| a | b |\n| - | - |",
+				accountId: "main",
+			}),
+		);
+		expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+		expect(result).toEqual(
+			expect.objectContaining({ channel: "feishu", messageId: "card_msg" }),
+		);
+	});
 
-  it("forwards replyToId as replyToMessageId on sendText", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "hello",
-      replyToId: "om_reply_1",
-      accountId: "main",
-    });
+	it("forwards replyToId as replyToMessageId on sendText", async () => {
+		await sendText({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "hello",
+			replyToId: "om_reply_1",
+			accountId: "main",
+		});
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "hello",
-        replyToMessageId: "om_reply_1",
-        accountId: "main",
-      }),
-    );
-  });
+		expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "hello",
+				replyToMessageId: "om_reply_1",
+				accountId: "main",
+			}),
+		);
+	});
 
-  it("falls back to threadId when replyToId is empty on sendText", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "hello",
-      replyToId: " ",
-      threadId: "om_thread_2",
-      accountId: "main",
-    });
+	it("falls back to threadId when replyToId is empty on sendText", async () => {
+		await sendText({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "hello",
+			replyToId: " ",
+			threadId: "om_thread_2",
+			accountId: "main",
+		});
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "hello",
-        replyToMessageId: "om_thread_2",
-        accountId: "main",
-      }),
-    );
-  });
+		expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "hello",
+				replyToMessageId: "om_thread_2",
+				accountId: "main",
+			}),
+		);
+	});
 });
 
 describe("feishuOutbound.sendText replyToId forwarding", () => {
-  beforeEach(() => {
-    resetOutboundMocks();
-  });
+	beforeEach(() => {
+		resetOutboundMocks();
+	});
 
-  it("forwards replyToId as replyToMessageId to sendMessageFeishu", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "hello",
-      replyToId: "om_reply_target",
-      accountId: "main",
-    });
+	it("forwards replyToId as replyToMessageId to sendMessageFeishu", async () => {
+		await sendText({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "hello",
+			replyToId: "om_reply_target",
+			accountId: "main",
+		});
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "hello",
-        replyToMessageId: "om_reply_target",
-        accountId: "main",
-      }),
-    );
-  });
+		expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "hello",
+				replyToMessageId: "om_reply_target",
+				accountId: "main",
+			}),
+		);
+	});
 
-  it("forwards replyToId to sendStructuredCardFeishu when renderMode=card", async () => {
-    await sendText({
-      cfg: cardRenderConfig,
-      to: "chat_1",
-      text: "```code```",
-      replyToId: "om_reply_target",
-      accountId: "main",
-    });
+	it("forwards replyToId to sendStructuredCardFeishu when renderMode=card", async () => {
+		await sendText({
+			cfg: cardRenderConfig,
+			to: "chat_1",
+			text: "```code```",
+			replyToId: "om_reply_target",
+			accountId: "main",
+		});
 
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToMessageId: "om_reply_target",
-      }),
-    );
-  });
+		expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				replyToMessageId: "om_reply_target",
+			}),
+		);
+	});
 
-  it("does not pass replyToMessageId when replyToId is absent", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "hello",
-      accountId: "main",
-    });
+	it("does not pass replyToMessageId when replyToId is absent", async () => {
+		await sendText({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "hello",
+			accountId: "main",
+		});
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "hello",
-        accountId: "main",
-      }),
-    );
-    expect(sendMessageFeishuMock.mock.calls[0][0].replyToMessageId).toBeUndefined();
-  });
+		expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "hello",
+				accountId: "main",
+			}),
+		);
+		expect(
+			sendMessageFeishuMock.mock.calls[0][0].replyToMessageId,
+		).toBeUndefined();
+	});
 });
 
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
-  beforeEach(() => {
-    resetOutboundMocks();
-  });
+	beforeEach(() => {
+		resetOutboundMocks();
+	});
 
-  it("forwards replyToId to sendMediaFeishu", async () => {
-    await feishuOutbound.sendMedia?.({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "",
-      mediaUrl: "https://example.com/image.png",
-      replyToId: "om_reply_target",
-      accountId: "main",
-    });
+	it("forwards replyToId to sendMediaFeishu", async () => {
+		await feishuOutbound.sendMedia?.({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "",
+			mediaUrl: "https://example.com/image.png",
+			replyToId: "om_reply_target",
+			accountId: "main",
+		});
 
-    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToMessageId: "om_reply_target",
-      }),
-    );
-  });
+		expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				replyToMessageId: "om_reply_target",
+			}),
+		);
+	});
 
-  it("forwards replyToId to text caption send", async () => {
-    await feishuOutbound.sendMedia?.({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "caption text",
-      mediaUrl: "https://example.com/image.png",
-      replyToId: "om_reply_target",
-      accountId: "main",
-    });
+	it("forwards replyToId to text caption send", async () => {
+		await feishuOutbound.sendMedia?.({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "caption text",
+			mediaUrl: "https://example.com/image.png",
+			replyToId: "om_reply_target",
+			accountId: "main",
+		});
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToMessageId: "om_reply_target",
-      }),
-    );
-  });
+		expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				replyToMessageId: "om_reply_target",
+			}),
+		);
+	});
 });
 
 describe("feishuOutbound.sendMedia renderMode", () => {
-  beforeEach(() => {
-    resetOutboundMocks();
-  });
+	beforeEach(() => {
+		resetOutboundMocks();
+	});
 
-  it("uses markdown cards for captions when renderMode=card", async () => {
-    const result = await feishuOutbound.sendMedia?.({
-      cfg: cardRenderConfig,
-      to: "chat_1",
-      text: "| a | b |\n| - | - |",
-      mediaUrl: "https://example.com/image.png",
-      accountId: "main",
-    });
+	it("uses markdown cards for captions when renderMode=card", async () => {
+		const result = await feishuOutbound.sendMedia?.({
+			cfg: cardRenderConfig,
+			to: "chat_1",
+			text: "| a | b |\n| - | - |",
+			mediaUrl: "https://example.com/image.png",
+			accountId: "main",
+		});
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "| a | b |\n| - | - |",
-        accountId: "main",
-      }),
-    );
-    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        mediaUrl: "https://example.com/image.png",
-        accountId: "main",
-      }),
-    );
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
-  });
+		expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "| a | b |\n| - | - |",
+				accountId: "main",
+			}),
+		);
+		expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				mediaUrl: "https://example.com/image.png",
+				accountId: "main",
+			}),
+		);
+		expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+		expect(result).toEqual(
+			expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+		);
+	});
 
-  it("uses threadId fallback as replyToMessageId on sendMedia", async () => {
-    await feishuOutbound.sendMedia?.({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "caption",
-      mediaUrl: "https://example.com/image.png",
-      threadId: "om_thread_1",
-      accountId: "main",
-    });
+	it("uses threadId fallback as replyToMessageId on sendMedia", async () => {
+		await feishuOutbound.sendMedia?.({
+			cfg: emptyConfig,
+			to: "chat_1",
+			text: "caption",
+			mediaUrl: "https://example.com/image.png",
+			threadId: "om_thread_1",
+			accountId: "main",
+		});
 
-    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        mediaUrl: "https://example.com/image.png",
-        replyToMessageId: "om_thread_1",
-        accountId: "main",
-      }),
-    );
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat_1",
-        text: "caption",
-        replyToMessageId: "om_thread_1",
-        accountId: "main",
-      }),
-    );
-  });
+		expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				mediaUrl: "https://example.com/image.png",
+				replyToMessageId: "om_thread_1",
+				accountId: "main",
+			}),
+		);
+		expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "chat_1",
+				text: "caption",
+				replyToMessageId: "om_thread_1",
+				accountId: "main",
+			}),
+		);
+	});
 });

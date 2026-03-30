@@ -14,52 +14,54 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Root } from "./root.js";
-import { StateEvent } from "../events/events.js";
 import { classMap } from "lit/directives/class-map.js";
-import { Action } from "../types/components.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { StateEvent } from "../events/events.js";
+import type { Action } from "../types/components.js";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
 
 @customElement("a2ui-button")
 export class Button extends Root {
-  @property()
-  accessor action: Action | null = null;
+	@property()
+	accessor action: Action | null = null;
 
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       :host {
         display: block;
         flex: var(--weight);
         min-height: 0;
       }
     `,
-  ];
+	];
 
-  render() {
-    return html`<button
+	render() {
+		return html`<button
       class=${classMap(this.theme.components.Button)}
-      style=${this.theme.additionalStyles?.Button
-        ? styleMap(this.theme.additionalStyles?.Button)
-        : nothing}
+      style=${
+				this.theme.additionalStyles?.Button
+					? styleMap(this.theme.additionalStyles?.Button)
+					: nothing
+			}
       @click=${() => {
-        if (!this.action) {
-          return;
-        }
-        const evt = new StateEvent<"a2ui.action">({
-          eventType: "a2ui.action",
-          action: this.action,
-          dataContextPath: this.dataContextPath,
-          sourceComponentId: this.id,
-          sourceComponent: this.component,
-        });
-        this.dispatchEvent(evt);
-      }}
+				if (!this.action) {
+					return;
+				}
+				const evt = new StateEvent<"a2ui.action">({
+					eventType: "a2ui.action",
+					action: this.action,
+					dataContextPath: this.dataContextPath,
+					sourceComponentId: this.id,
+					sourceComponent: this.component,
+				});
+				this.dispatchEvent(evt);
+			}}
     >
       <slot></slot>
     </button>`;
-  }
+	}
 }

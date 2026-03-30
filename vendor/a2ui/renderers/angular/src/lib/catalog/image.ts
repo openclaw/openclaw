@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-import { Component, computed, input } from '@angular/core';
-import { Primitives, Styles, Types } from '@a2ui/lit/0.8';
-import { DynamicComponent } from '../rendering/dynamic-component';
+import { type Primitives, Styles, type Types } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: 'a2ui-image',
-  styles: `
+	selector: "a2ui-image",
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -35,7 +35,7 @@ import { DynamicComponent } from '../rendering/dynamic-component';
       box-sizing: border-box;
     }
   `,
-  template: `
+	template: `
     @let resolvedUrl = this.resolvedUrl();
 
     @if (resolvedUrl) {
@@ -46,17 +46,21 @@ import { DynamicComponent } from '../rendering/dynamic-component';
   `,
 })
 export class Image extends DynamicComponent {
-  readonly url = input.required<Primitives.StringValue | null>();
-  readonly usageHint = input.required<Types.ResolvedImage['usageHint'] | null>();
+	readonly url = input.required<Primitives.StringValue | null>();
+	readonly usageHint = input.required<
+		Types.ResolvedImage["usageHint"] | null
+	>();
 
-  protected readonly resolvedUrl = computed(() => this.resolvePrimitive(this.url()));
+	protected readonly resolvedUrl = computed(() =>
+		this.resolvePrimitive(this.url()),
+	);
 
-  protected classes = computed(() => {
-    const usageHint = this.usageHint();
+	protected classes = computed(() => {
+		const usageHint = this.usageHint();
 
-    return Styles.merge(
-      this.theme.components.Image.all,
-      usageHint ? this.theme.components.Image[usageHint] : {},
-    );
-  });
+		return Styles.merge(
+			this.theme.components.Image.all,
+			usageHint ? this.theme.components.Image[usageHint] : {},
+		);
+	});
 }

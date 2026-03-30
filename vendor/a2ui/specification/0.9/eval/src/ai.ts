@@ -1,4 +1,3 @@
-
 /*
  Copyright 2025 Google LLC
 
@@ -15,32 +14,32 @@
  limitations under the License.
  */
 
+import { openAI } from "@genkit-ai/compat-oai/openai";
 import { googleAI } from "@genkit-ai/google-genai";
 import { genkit } from "genkit";
-import { openAI } from "@genkit-ai/compat-oai/openai";
 import { anthropic } from "genkitx-anthropic";
 import { logger } from "./logger";
 
 const plugins = [];
 
 if (process.env.GEMINI_API_KEY) {
-  logger.info("Initializing Google AI plugin...");
-  plugins.push(
-    googleAI({
-      apiKey: process.env.GEMINI_API_KEY!,
-      experimental_debugTraces: true,
-    })
-  );
+	logger.info("Initializing Google AI plugin...");
+	plugins.push(
+		googleAI({
+			apiKey: process.env.GEMINI_API_KEY!,
+			experimental_debugTraces: true,
+		}),
+	);
 }
 if (process.env.OPENAI_API_KEY) {
-  logger.info("Initializing OpenAI plugin...");
-  plugins.push(openAI());
+	logger.info("Initializing OpenAI plugin...");
+	plugins.push(openAI());
 }
 if (process.env.ANTHROPIC_API_KEY) {
-  logger.info("Initializing Anthropic plugin...");
-  plugins.push(anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! }));
+	logger.info("Initializing Anthropic plugin...");
+	plugins.push(anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! }));
 }
 
 export const ai = genkit({
-  plugins,
+	plugins,
 });

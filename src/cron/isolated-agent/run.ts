@@ -406,6 +406,14 @@ export async function runCronIsolatedAgentTurn(params: {
   // must not prevent the actual agent run from executing.
   cronSession.sessionEntry.modelProvider = provider;
   cronSession.sessionEntry.model = model;
+  // Only persist provider/model overrides when the cron payload explicitly
+  // specified a model.  Without this guard, default-resolved models become
+  // "sticky" session overrides that prevent future config changes from
+  // taking effect (P1: openclaw/openclaw#56848).
+  if (resolvedModelSelection.isExplicitModel) {
+    cronSession.sessionEntry.providerOverride = provider;
+    cronSession.sessionEntry.modelOverride = model;
+  }
   cronSession.sessionEntry.systemSent = true;
   try {
     await persistSessionEntry();

@@ -1,22 +1,22 @@
-export type { MatrixAuth } from "./client/types.js";
-export { isBunRuntime } from "./client/runtime.js";
 export { getMatrixScopedEnvVarNames } from "../env-vars.js";
 export {
-  hasReadyMatrixEnvAuth,
-  resolveMatrixEnvAuthReadiness,
-  resolveMatrixConfigForAccount,
-  resolveScopedMatrixEnvConfig,
-  resolveMatrixAuth,
-  resolveMatrixAuthContext,
-  resolveValidatedMatrixHomeserverUrl,
-  validateMatrixHomeserverUrl,
+	hasReadyMatrixEnvAuth,
+	resolveMatrixAuth,
+	resolveMatrixAuthContext,
+	resolveMatrixConfigForAccount,
+	resolveMatrixEnvAuthReadiness,
+	resolveScopedMatrixEnvConfig,
+	resolveValidatedMatrixHomeserverUrl,
+	validateMatrixHomeserverUrl,
 } from "./client/config.js";
 export { createMatrixClient } from "./client/create-client.js";
+export { isBunRuntime } from "./client/runtime.js";
 export {
-  acquireSharedMatrixClient,
-  removeSharedClientInstance,
-  releaseSharedClientInstance,
-  resolveSharedMatrixClient,
-  stopSharedClientForAccount,
-  stopSharedClientInstance,
+	acquireSharedMatrixClient,
+	releaseSharedClientInstance,
+	removeSharedClientInstance,
+	resolveSharedMatrixClient,
+	stopSharedClientForAccount,
+	stopSharedClientInstance,
 } from "./client/shared.js";
+export type { MatrixAuth } from "./client/types.js";

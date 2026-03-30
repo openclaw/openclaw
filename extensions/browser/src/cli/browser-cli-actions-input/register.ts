@@ -6,11 +6,11 @@ import { registerBrowserFormWaitEvalCommands } from "./register.form-wait-eval.j
 import { registerBrowserNavigationCommands } from "./register.navigation.js";
 
 export function registerBrowserActionInputCommands(
-  browser: Command,
-  parentOpts: (cmd: Command) => BrowserParentOpts,
+	browser: Command,
+	parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  registerBrowserNavigationCommands(browser, parentOpts);
-  registerBrowserElementCommands(browser, parentOpts);
-  registerBrowserFilesAndDownloadsCommands(browser, parentOpts);
-  registerBrowserFormWaitEvalCommands(browser, parentOpts);
+	registerBrowserNavigationCommands(browser, parentOpts);
+	registerBrowserElementCommands(browser, parentOpts);
+	registerBrowserFilesAndDownloadsCommands(browser, parentOpts);
+	registerBrowserFormWaitEvalCommands(browser, parentOpts);
 }

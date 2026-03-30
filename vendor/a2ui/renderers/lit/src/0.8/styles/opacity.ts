@@ -16,9 +16,9 @@
 
 export const opacity = `
   ${new Array(21)
-    .fill(0)
-    .map((_, idx) => {
-      return `.opacity-el-${idx * 5} { opacity: ${idx / 20}; }`;
-    })
-    .join("\n")}
+		.fill(0)
+		.map((_, idx) => {
+			return `.opacity-el-${idx * 5} { opacity: ${idx / 20}; }`;
+		})
+		.join("\n")}
 `;

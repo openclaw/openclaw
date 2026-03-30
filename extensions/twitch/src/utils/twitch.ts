@@ -18,8 +18,8 @@ import { randomUUID } from "node:crypto";
  * normalizeTwitchChannel("MyChannel") // "mychannel"
  */
 export function normalizeTwitchChannel(channel: string): string {
-  const trimmed = channel.trim().toLowerCase();
-  return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
+	const trimmed = channel.trim().toLowerCase();
+	return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
 }
 
 /**
@@ -30,7 +30,9 @@ export function normalizeTwitchChannel(channel: string): string {
  * @returns Error object with descriptive message
  */
 export function missingTargetError(provider: string, hint?: string): Error {
-  return new Error(`Delivering to ${provider} requires target${hint ? ` ${hint}` : ""}`);
+	return new Error(
+		`Delivering to ${provider} requires target${hint ? ` ${hint}` : ""}`,
+	);
 }
 
 /**
@@ -42,7 +44,7 @@ export function missingTargetError(provider: string, hint?: string): Error {
  * @returns A unique message ID
  */
 export function generateMessageId(): string {
-  return `${Date.now()}-${randomUUID()}`;
+	return `${Date.now()}-${randomUUID()}`;
 }
 
 /**
@@ -58,7 +60,7 @@ export function generateMessageId(): string {
  * normalizeToken("abc123") // "abc123"
  */
 export function normalizeToken(token: string): string {
-  return token.startsWith("oauth:") ? token.slice(6) : token;
+	return token.startsWith("oauth:") ? token.slice(6) : token;
 }
 
 /**
@@ -68,13 +70,13 @@ export function normalizeToken(token: string): string {
  * @returns true if the account has required credentials
  */
 export function isAccountConfigured(
-  account: {
-    username?: string;
-    accessToken?: string;
-    clientId?: string;
-  },
-  resolvedToken?: string | null,
+	account: {
+		username?: string;
+		accessToken?: string;
+		clientId?: string;
+	},
+	resolvedToken?: string | null,
 ): boolean {
-  const token = resolvedToken ?? account?.accessToken;
-  return Boolean(account?.username && token && account?.clientId);
+	const token = resolvedToken ?? account?.accessToken;
+	return Boolean(account?.username && token && account?.clientId);
 }

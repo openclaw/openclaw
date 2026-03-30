@@ -2,152 +2,184 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  detectChangedExtensionIds,
-  listAvailableExtensionIds,
-  listChangedExtensionIds,
-  partitionExtensionTestFiles,
-  resolveExtensionTestPlan,
+	detectChangedExtensionIds,
+	listAvailableExtensionIds,
+	listChangedExtensionIds,
+	partitionExtensionTestFiles,
+	resolveExtensionTestPlan,
 } from "../../scripts/test-extension.mjs";
-import { bundledPluginFile, bundledPluginRoot } from "../helpers/bundled-plugin-paths.js";
+import {
+	bundledPluginFile,
+	bundledPluginRoot,
+} from "../helpers/bundled-plugin-paths.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
 function readPlan(args: string[], cwd = process.cwd()) {
-  const stdout = execFileSync(process.execPath, [scriptPath, ...args, "--dry-run", "--json"], {
-    cwd,
-    encoding: "utf8",
-  });
-  return JSON.parse(stdout) as ReturnType<typeof resolveExtensionTestPlan>;
+	const stdout = execFileSync(
+		process.execPath,
+		[scriptPath, ...args, "--dry-run", "--json"],
+		{
+			cwd,
+			encoding: "utf8",
+		},
+	);
+	return JSON.parse(stdout) as ReturnType<typeof resolveExtensionTestPlan>;
 }
 
 function runScript(args: string[], cwd = process.cwd()) {
-  return execFileSync(process.execPath, [scriptPath, ...args], {
-    cwd,
-    encoding: "utf8",
-  });
+	return execFileSync(process.execPath, [scriptPath, ...args], {
+		cwd,
+		encoding: "utf8",
+	});
 }
 
 function findExtensionWithoutTests() {
-  const extensionId = listAvailableExtensionIds().find(
-    (candidate) =>
-      resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).testFiles.length === 0,
-  );
+	const extensionId = listAvailableExtensionIds().find(
+		(candidate) =>
+			resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() })
+				.testFiles.length === 0,
+	);
 
-  expect(extensionId).toBeDefined();
-  return extensionId ?? "missing-no-test-extension";
+	expect(extensionId).toBeDefined();
+	return extensionId ?? "missing-no-test-extension";
 }
 
 describe("scripts/test-extension.mjs", () => {
-  it("resolves channel-root extensions onto the channel vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
+	it("resolves channel-root extensions onto the channel vitest config", () => {
+		const plan = resolveExtensionTestPlan({
+			targetArg: "slack",
+			cwd: process.cwd(),
+		});
 
-    expect(plan.extensionId).toBe("slack");
-    expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
-    expect(plan.config).toBe("vitest.channels.config.ts");
-    expect(plan.testFiles.some((file) => file.startsWith(`${bundledPluginRoot("slack")}/`))).toBe(
-      true,
-    );
-  });
+		expect(plan.extensionId).toBe("slack");
+		expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
+		expect(plan.config).toBe("vitest.channels.config.ts");
+		expect(
+			plan.testFiles.some((file) =>
+				file.startsWith(`${bundledPluginRoot("slack")}/`),
+			),
+		).toBe(true);
+	});
 
-  it("splits channel monitor files into isolated runs", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "discord", cwd: process.cwd() });
+	it("splits channel monitor files into isolated runs", () => {
+		const plan = resolveExtensionTestPlan({
+			targetArg: "discord",
+			cwd: process.cwd(),
+		});
 
-    expect(plan.config).toBe("vitest.channels.config.ts");
-    expect(plan.isolatedTestFiles).toContain(
-      bundledPluginFile("discord", "src/monitor/provider.test.ts"),
-    );
-    expect(plan.sharedTestFiles).toContain(bundledPluginFile("discord", "src/channel.test.ts"));
-    expect(plan.sharedTestFiles).not.toContain(
-      bundledPluginFile("discord", "src/monitor/provider.test.ts"),
-    );
-  });
+		expect(plan.config).toBe("vitest.channels.config.ts");
+		expect(plan.isolatedTestFiles).toContain(
+			bundledPluginFile("discord", "src/monitor/provider.test.ts"),
+		);
+		expect(plan.sharedTestFiles).toContain(
+			bundledPluginFile("discord", "src/channel.test.ts"),
+		);
+		expect(plan.sharedTestFiles).not.toContain(
+			bundledPluginFile("discord", "src/monitor/provider.test.ts"),
+		);
+	});
 
-  it("resolves provider extensions onto the extensions vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() });
+	it("resolves provider extensions onto the extensions vitest config", () => {
+		const plan = resolveExtensionTestPlan({
+			targetArg: "firecrawl",
+			cwd: process.cwd(),
+		});
 
-    expect(plan.extensionId).toBe("firecrawl");
-    expect(plan.config).toBe("vitest.extensions.config.ts");
-    expect(
-      plan.testFiles.some((file) => file.startsWith(`${bundledPluginRoot("firecrawl")}/`)),
-    ).toBe(true);
-  });
+		expect(plan.extensionId).toBe("firecrawl");
+		expect(plan.config).toBe("vitest.extensions.config.ts");
+		expect(
+			plan.testFiles.some((file) =>
+				file.startsWith(`${bundledPluginRoot("firecrawl")}/`),
+			),
+		).toBe(true);
+	});
 
-  it("applies exact isolated files for non-channel extensions", () => {
-    const { isolatedTestFiles, sharedTestFiles } = partitionExtensionTestFiles({
-      config: "vitest.extensions.config.ts",
-      testFiles: [
-        bundledPluginFile("firecrawl", "src/firecrawl-scrape-tool.test.ts"),
-        bundledPluginFile("firecrawl", "src/index.test.ts"),
-      ],
-    });
+	it("applies exact isolated files for non-channel extensions", () => {
+		const { isolatedTestFiles, sharedTestFiles } = partitionExtensionTestFiles({
+			config: "vitest.extensions.config.ts",
+			testFiles: [
+				bundledPluginFile("firecrawl", "src/firecrawl-scrape-tool.test.ts"),
+				bundledPluginFile("firecrawl", "src/index.test.ts"),
+			],
+		});
 
-    expect(isolatedTestFiles).toEqual([
-      bundledPluginFile("firecrawl", "src/firecrawl-scrape-tool.test.ts"),
-    ]);
-    expect(sharedTestFiles).toEqual([bundledPluginFile("firecrawl", "src/index.test.ts")]);
-  });
+		expect(isolatedTestFiles).toEqual([
+			bundledPluginFile("firecrawl", "src/firecrawl-scrape-tool.test.ts"),
+		]);
+		expect(sharedTestFiles).toEqual([
+			bundledPluginFile("firecrawl", "src/index.test.ts"),
+		]);
+	});
 
-  it("includes paired src roots when they contain tests", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
+	it("includes paired src roots when they contain tests", () => {
+		const plan = resolveExtensionTestPlan({
+			targetArg: "line",
+			cwd: process.cwd(),
+		});
 
-    expect(plan.roots).toContain(bundledPluginRoot("line"));
-    expect(plan.config).toBe("vitest.extensions.config.ts");
-    expect(plan.testFiles.some((file) => file.startsWith(`${bundledPluginRoot("line")}/`))).toBe(
-      true,
-    );
-  });
+		expect(plan.roots).toContain(bundledPluginRoot("line"));
+		expect(plan.config).toBe("vitest.extensions.config.ts");
+		expect(
+			plan.testFiles.some((file) =>
+				file.startsWith(`${bundledPluginRoot("line")}/`),
+			),
+		).toBe(true);
+	});
 
-  it("infers the extension from the current working directory", () => {
-    const cwd = path.join(process.cwd(), "extensions", "slack");
-    const plan = readPlan([], cwd);
+	it("infers the extension from the current working directory", () => {
+		const cwd = path.join(process.cwd(), "extensions", "slack");
+		const plan = readPlan([], cwd);
 
-    expect(plan.extensionId).toBe("slack");
-    expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
-  });
+		expect(plan.extensionId).toBe("slack");
+		expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
+	});
 
-  it("maps changed paths back to extension ids", () => {
-    const extensionIds = detectChangedExtensionIds([
-      bundledPluginFile("slack", "src/channel.ts"),
-      "src/line/message.test.ts",
-      bundledPluginFile("firecrawl", "package.json"),
-      "src/not-a-plugin/file.ts",
-    ]);
+	it("maps changed paths back to extension ids", () => {
+		const extensionIds = detectChangedExtensionIds([
+			bundledPluginFile("slack", "src/channel.ts"),
+			"src/line/message.test.ts",
+			bundledPluginFile("firecrawl", "package.json"),
+			"src/not-a-plugin/file.ts",
+		]);
 
-    expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
-  });
+		expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
+	});
 
-  it("lists available extension ids", () => {
-    const extensionIds = listAvailableExtensionIds();
+	it("lists available extension ids", () => {
+		const extensionIds = listAvailableExtensionIds();
 
-    expect(extensionIds).toContain("slack");
-    expect(extensionIds).toContain("firecrawl");
-    expect(extensionIds).toEqual(
-      [...extensionIds].toSorted((left, right) => left.localeCompare(right)),
-    );
-  });
+		expect(extensionIds).toContain("slack");
+		expect(extensionIds).toContain("firecrawl");
+		expect(extensionIds).toEqual(
+			[...extensionIds].toSorted((left, right) => left.localeCompare(right)),
+		);
+	});
 
-  it("can fail safe to all extensions when the base revision is unavailable", () => {
-    const extensionIds = listChangedExtensionIds({
-      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-      unavailableBaseBehavior: "all",
-    });
+	it("can fail safe to all extensions when the base revision is unavailable", () => {
+		const extensionIds = listChangedExtensionIds({
+			base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+			unavailableBaseBehavior: "all",
+		});
 
-    expect(extensionIds).toEqual(listAvailableExtensionIds());
-  });
+		expect(extensionIds).toEqual(listAvailableExtensionIds());
+	});
 
-  it("dry-run still reports a plan for extensions without tests", () => {
-    const extensionId = findExtensionWithoutTests();
-    const plan = readPlan([extensionId]);
+	it("dry-run still reports a plan for extensions without tests", () => {
+		const extensionId = findExtensionWithoutTests();
+		const plan = readPlan([extensionId]);
 
-    expect(plan.extensionId).toBe(extensionId);
-    expect(plan.testFiles).toEqual([]);
-  });
+		expect(plan.extensionId).toBe(extensionId);
+		expect(plan.testFiles).toEqual([]);
+	});
 
-  it("treats extensions without tests as a no-op by default", () => {
-    const extensionId = findExtensionWithoutTests();
-    const stdout = runScript([extensionId]);
+	it("treats extensions without tests as a no-op by default", () => {
+		const extensionId = findExtensionWithoutTests();
+		const stdout = runScript([extensionId]);
 
-    expect(stdout).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
-    expect(stdout).toContain("Skipping.");
-  });
+		expect(stdout).toContain(
+			`No tests found for ${bundledPluginRoot(extensionId)}.`,
+		);
+		expect(stdout).toContain("Skipping.");
+	});
 });

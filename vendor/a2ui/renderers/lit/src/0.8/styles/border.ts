@@ -18,9 +18,9 @@ import { grid } from "./shared.js";
 
 export const border = `
   ${new Array(25)
-    .fill(0)
-    .map((_, idx) => {
-      return `
+		.fill(0)
+		.map((_, idx) => {
+			return `
         .border-bw-${idx} { border-width: ${idx}px; }
         .border-btw-${idx} { border-top-width: ${idx}px; }
         .border-bbw-${idx} { border-bottom-width: ${idx}px; }
@@ -29,8 +29,8 @@ export const border = `
 
         .border-ow-${idx} { outline-width: ${idx}px; }
         .border-br-${idx} { border-radius: ${idx * grid}px; overflow: hidden;}`;
-    })
-    .join("\n")}
+		})
+		.join("\n")}
 
   .border-br-50pc {
     border-radius: 50%;

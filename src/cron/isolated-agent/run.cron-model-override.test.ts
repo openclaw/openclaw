@@ -250,4 +250,39 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
+
+  it("does NOT persist providerOverride/modelOverride when model resolved from defaults", async () => {
+    // No explicit payload.model — model comes from subagent/agent defaults
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    // model/modelProvider should be set (for session display)
+    expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+    // But providerOverride/modelOverride should NOT be set (prevents sticky overrides)
+    expect(cronSession.sessionEntry.providerOverride).toBeUndefined();
+    expect(cronSession.sessionEntry.modelOverride).toBeUndefined();
+  });
+
+  it("persists providerOverride/modelOverride when payload.model is explicitly set", async () => {
+    // Explicit payload.model
+    const jobWithExplicitModel = makeJob({
+      payload: { kind: "agentTurn", message: "run digest", model: "anthropic/claude-sonnet-4-6" },
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams({ job: jobWithExplicitModel }));
+
+    // Both model and overrides should be set
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+    expect(cronSession.sessionEntry.providerOverride).toBe("anthropic");
+    expect(cronSession.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
+  });
 });

@@ -1,6 +1,6 @@
 import type {
-  SessionUsageTimePoint as SharedSessionUsageTimePoint,
-  SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
+	SessionUsageTimePoint as SharedSessionUsageTimePoint,
+	SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
 } from "../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult as SharedSessionsUsageResult } from "../../../src/shared/usage-types.js";
 
@@ -11,10 +11,10 @@ export type SessionsUsageResult = SharedSessionsUsageResult;
 export type CostUsageDailyEntry = SessionsUsageTotals & { date: string };
 
 export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: SessionsUsageTotals;
+	updatedAt: number;
+	days: number;
+	daily: CostUsageDailyEntry[];
+	totals: SessionsUsageTotals;
 };
 
 export type SessionUsageTimePoint = SharedSessionUsageTimePoint;

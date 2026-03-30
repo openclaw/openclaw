@@ -3,71 +3,73 @@ const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "blob:"]);
 const BLOCKED_DATA_IMAGE_MIME_TYPES = new Set(["image/svg+xml"]);
 
 function isAllowedDataImageUrl(url: string): boolean {
-  if (!url.toLowerCase().startsWith(DATA_URL_PREFIX)) {
-    return false;
-  }
+	if (!url.toLowerCase().startsWith(DATA_URL_PREFIX)) {
+		return false;
+	}
 
-  const commaIndex = url.indexOf(",");
-  if (commaIndex < DATA_URL_PREFIX.length) {
-    return false;
-  }
+	const commaIndex = url.indexOf(",");
+	if (commaIndex < DATA_URL_PREFIX.length) {
+		return false;
+	}
 
-  const metadata = url.slice(DATA_URL_PREFIX.length, commaIndex);
-  const mimeType = metadata.split(";")[0]?.trim().toLowerCase() ?? "";
-  if (!mimeType.startsWith("image/")) {
-    return false;
-  }
+	const metadata = url.slice(DATA_URL_PREFIX.length, commaIndex);
+	const mimeType = metadata.split(";")[0]?.trim().toLowerCase() ?? "";
+	if (!mimeType.startsWith("image/")) {
+		return false;
+	}
 
-  return !BLOCKED_DATA_IMAGE_MIME_TYPES.has(mimeType);
+	return !BLOCKED_DATA_IMAGE_MIME_TYPES.has(mimeType);
 }
 
 export type ResolveSafeExternalUrlOptions = {
-  allowDataImage?: boolean;
+	allowDataImage?: boolean;
 };
 
 export function resolveSafeExternalUrl(
-  rawUrl: string,
-  baseHref: string,
-  opts: ResolveSafeExternalUrlOptions = {},
+	rawUrl: string,
+	baseHref: string,
+	opts: ResolveSafeExternalUrlOptions = {},
 ): string | null {
-  const candidate = rawUrl.trim();
-  if (!candidate) {
-    return null;
-  }
+	const candidate = rawUrl.trim();
+	if (!candidate) {
+		return null;
+	}
 
-  if (opts.allowDataImage === true && isAllowedDataImageUrl(candidate)) {
-    return candidate;
-  }
+	if (opts.allowDataImage === true && isAllowedDataImageUrl(candidate)) {
+		return candidate;
+	}
 
-  if (candidate.toLowerCase().startsWith(DATA_URL_PREFIX)) {
-    return null;
-  }
+	if (candidate.toLowerCase().startsWith(DATA_URL_PREFIX)) {
+		return null;
+	}
 
-  try {
-    const parsed = new URL(candidate, baseHref);
-    return ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol.toLowerCase()) ? parsed.toString() : null;
-  } catch {
-    return null;
-  }
+	try {
+		const parsed = new URL(candidate, baseHref);
+		return ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol.toLowerCase())
+			? parsed.toString()
+			: null;
+	} catch {
+		return null;
+	}
 }
 
 export type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
-  baseHref?: string;
+	baseHref?: string;
 };
 
 export function openExternalUrlSafe(
-  rawUrl: string,
-  opts: OpenExternalUrlSafeOptions = {},
+	rawUrl: string,
+	opts: OpenExternalUrlSafeOptions = {},
 ): WindowProxy | null {
-  const baseHref = opts.baseHref ?? window.location.href;
-  const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, opts);
-  if (!safeUrl) {
-    return null;
-  }
+	const baseHref = opts.baseHref ?? window.location.href;
+	const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, opts);
+	if (!safeUrl) {
+		return null;
+	}
 
-  const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
-  if (opened) {
-    opened.opener = null;
-  }
-  return opened;
+	const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
+	if (opened) {
+		opened.opener = null;
+	}
+	return opened;
 }

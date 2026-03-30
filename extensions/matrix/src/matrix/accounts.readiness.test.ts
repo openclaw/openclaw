@@ -4,24 +4,28 @@ import type { CoreConfig } from "../types.js";
 import { resolveMatrixAccount } from "./accounts.js";
 
 describe("resolveMatrixAccount readiness", () => {
-  it("does not treat inherited base auth as configured for named accounts", () => {
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          accessToken: "base-token",
-          accounts: {
-            ops: {
-              homeserver: "https://matrix.example.org",
-            },
-          },
-        },
-      },
-    };
+	it("does not treat inherited base auth as configured for named accounts", () => {
+		const cfg: CoreConfig = {
+			channels: {
+				matrix: {
+					homeserver: "https://matrix.example.org",
+					accessToken: "base-token",
+					accounts: {
+						ops: {
+							homeserver: "https://matrix.example.org",
+						},
+					},
+				},
+			},
+		};
 
-    installMatrixTestRuntime({ cfg });
+		installMatrixTestRuntime({ cfg });
 
-    expect(resolveMatrixAccount({ cfg, accountId: "default" }).configured).toBe(true);
-    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).configured).toBe(false);
-  });
+		expect(resolveMatrixAccount({ cfg, accountId: "default" }).configured).toBe(
+			true,
+		);
+		expect(resolveMatrixAccount({ cfg, accountId: "ops" }).configured).toBe(
+			false,
+		);
+	});
 });

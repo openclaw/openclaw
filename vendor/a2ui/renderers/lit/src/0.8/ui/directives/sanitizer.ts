@@ -23,18 +23,18 @@ import { html, render } from "lit";
  * value could break out of the attribute value and e.g. add another attribute).
  */
 export function escapeNodeText(str: string | null | undefined) {
-  const frag = document.createElement("div");
-  render(html`${str}`, frag);
+	const frag = document.createElement("div");
+	render(html`${str}`, frag);
 
-  return frag.innerHTML.replaceAll(/<!--([^-]*)-->/gim, "");
+	return frag.innerHTML.replaceAll(/<!--([^-]*)-->/gim, "");
 }
 
 export function unescapeNodeText(str: string | null | undefined) {
-  if (!str) {
-    return "";
-  }
+	if (!str) {
+		return "";
+	}
 
-  const frag = document.createElement("textarea");
-  frag.innerHTML = str;
-  return frag.value;
+	const frag = document.createElement("textarea");
+	frag.innerHTML = str;
+	return frag.value;
 }

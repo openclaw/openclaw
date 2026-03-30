@@ -1,6 +1,6 @@
 export {
-  removeReactionSignal,
-  sendReactionSignal,
-  type SignalReactionOpts,
-  type SignalReactionResult,
+	removeReactionSignal,
+	type SignalReactionOpts,
+	type SignalReactionResult,
+	sendReactionSignal,
 } from "./src/send-reactions.js";

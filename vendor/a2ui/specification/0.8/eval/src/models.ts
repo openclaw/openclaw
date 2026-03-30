@@ -14,55 +14,55 @@
  limitations under the License.
  */
 
-import { googleAI } from "@genkit-ai/google-genai";
 import { openAI } from "@genkit-ai/compat-oai/openai";
-import { claude35Haiku, claude4Sonnet } from "genkitx-anthropic";
+import { googleAI } from "@genkit-ai/google-genai";
+import { claude4Sonnet, claude35Haiku } from "genkitx-anthropic";
 
 export interface ModelConfiguration {
-  model: any;
-  name: string;
-  config?: any;
+	model: any;
+	name: string;
+	config?: any;
 }
 
 export const modelsToTest: ModelConfiguration[] = [
-  {
-    model: openAI.model("gpt-5"),
-    name: "gpt-5",
-    config: { reasoning_effort: "minimal" },
-  },
-  {
-    model: openAI.model("gpt-5-mini"),
-    name: "gpt-5-mini",
-    config: { reasoning_effort: "minimal" },
-  },
-  {
-    model: openAI.model("gpt-4.1"),
-    name: "gpt-4.1",
-    config: {},
-  },
-  {
-    model: googleAI.model("gemini-2.5-pro"),
-    name: "gemini-2.5-pro-thinking",
-    config: { thinkingConfig: { thinkingBudget: 1000 } },
-  },
-  {
-    model: googleAI.model("gemini-2.5-flash"),
-    name: "gemini-2.5-flash",
-    config: { thinkingConfig: { thinkingBudget: 0 } },
-  },
-  {
-    model: googleAI.model("gemini-2.5-flash-lite"),
-    name: "gemini-2.5-flash-lite",
-    config: { thinkingConfig: { thinkingBudget: 0 } },
-  },
-  {
-    model: claude4Sonnet,
-    name: "claude-4-sonnet",
-    config: {},
-  },
-  {
-    model: claude35Haiku,
-    name: "claude-35-haiku",
-    config: {},
-  },
+	{
+		model: openAI.model("gpt-5"),
+		name: "gpt-5",
+		config: { reasoning_effort: "minimal" },
+	},
+	{
+		model: openAI.model("gpt-5-mini"),
+		name: "gpt-5-mini",
+		config: { reasoning_effort: "minimal" },
+	},
+	{
+		model: openAI.model("gpt-4.1"),
+		name: "gpt-4.1",
+		config: {},
+	},
+	{
+		model: googleAI.model("gemini-2.5-pro"),
+		name: "gemini-2.5-pro-thinking",
+		config: { thinkingConfig: { thinkingBudget: 1000 } },
+	},
+	{
+		model: googleAI.model("gemini-2.5-flash"),
+		name: "gemini-2.5-flash",
+		config: { thinkingConfig: { thinkingBudget: 0 } },
+	},
+	{
+		model: googleAI.model("gemini-2.5-flash-lite"),
+		name: "gemini-2.5-flash-lite",
+		config: { thinkingConfig: { thinkingBudget: 0 } },
+	},
+	{
+		model: claude4Sonnet,
+		name: "claude-4-sonnet",
+		config: {},
+	},
+	{
+		model: claude35Haiku,
+		name: "claude-35-haiku",
+		config: {},
+	},
 ];

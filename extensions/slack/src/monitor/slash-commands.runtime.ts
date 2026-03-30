@@ -1,47 +1,48 @@
 import {
-  buildCommandTextFromArgs as buildCommandTextFromArgsImpl,
-  findCommandByNativeName as findCommandByNativeNameImpl,
-  listNativeCommandSpecsForConfig as listNativeCommandSpecsForConfigImpl,
-  parseCommandArgs as parseCommandArgsImpl,
-  resolveCommandArgMenu as resolveCommandArgMenuImpl,
+	buildCommandTextFromArgs as buildCommandTextFromArgsImpl,
+	findCommandByNativeName as findCommandByNativeNameImpl,
+	listNativeCommandSpecsForConfig as listNativeCommandSpecsForConfigImpl,
+	parseCommandArgs as parseCommandArgsImpl,
+	resolveCommandArgMenu as resolveCommandArgMenuImpl,
 } from "openclaw/plugin-sdk/command-auth";
 
 type BuildCommandTextFromArgs =
-  typeof import("openclaw/plugin-sdk/command-auth").buildCommandTextFromArgs;
+	typeof import("openclaw/plugin-sdk/command-auth").buildCommandTextFromArgs;
 type FindCommandByNativeName =
-  typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
+	typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
 type ListNativeCommandSpecsForConfig =
-  typeof import("openclaw/plugin-sdk/command-auth").listNativeCommandSpecsForConfig;
-type ParseCommandArgs = typeof import("openclaw/plugin-sdk/command-auth").parseCommandArgs;
+	typeof import("openclaw/plugin-sdk/command-auth").listNativeCommandSpecsForConfig;
+type ParseCommandArgs =
+	typeof import("openclaw/plugin-sdk/command-auth").parseCommandArgs;
 type ResolveCommandArgMenu =
-  typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgMenu;
+	typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgMenu;
 
 export function buildCommandTextFromArgs(
-  ...args: Parameters<BuildCommandTextFromArgs>
+	...args: Parameters<BuildCommandTextFromArgs>
 ): ReturnType<BuildCommandTextFromArgs> {
-  return buildCommandTextFromArgsImpl(...args);
+	return buildCommandTextFromArgsImpl(...args);
 }
 
 export function findCommandByNativeName(
-  ...args: Parameters<FindCommandByNativeName>
+	...args: Parameters<FindCommandByNativeName>
 ): ReturnType<FindCommandByNativeName> {
-  return findCommandByNativeNameImpl(...args);
+	return findCommandByNativeNameImpl(...args);
 }
 
 export function listNativeCommandSpecsForConfig(
-  ...args: Parameters<ListNativeCommandSpecsForConfig>
+	...args: Parameters<ListNativeCommandSpecsForConfig>
 ): ReturnType<ListNativeCommandSpecsForConfig> {
-  return listNativeCommandSpecsForConfigImpl(...args);
+	return listNativeCommandSpecsForConfigImpl(...args);
 }
 
 export function parseCommandArgs(
-  ...args: Parameters<ParseCommandArgs>
+	...args: Parameters<ParseCommandArgs>
 ): ReturnType<ParseCommandArgs> {
-  return parseCommandArgsImpl(...args);
+	return parseCommandArgsImpl(...args);
 }
 
 export function resolveCommandArgMenu(
-  ...args: Parameters<ResolveCommandArgMenu>
+	...args: Parameters<ResolveCommandArgMenu>
 ): ReturnType<ResolveCommandArgMenu> {
-  return resolveCommandArgMenuImpl(...args);
+	return resolveCommandArgMenuImpl(...args);
 }

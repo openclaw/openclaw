@@ -1,84 +1,101 @@
 import { html, nothing } from "lit";
-import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
+import {
+	i18n,
+	isSupportedLocale,
+	type Locale,
+	SUPPORTED_LOCALES,
+	t,
+} from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import {
+	buildExternalLinkRel,
+	EXTERNAL_LINK_TARGET,
+} from "../external-link.ts";
+import { formatDurationHuman, formatRelativeTimestamp } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
 import type { UiSettings } from "../storage.ts";
 import type {
-  AttentionItem,
-  CronJob,
-  CronStatus,
-  SessionsListResult,
-  SessionsUsageResult,
-  SkillStatusReport,
+	AttentionItem,
+	CronJob,
+	CronStatus,
+	SessionsListResult,
+	SessionsUsageResult,
+	SkillStatusReport,
 } from "../types.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
-  resolveAuthHintKind,
-  shouldShowInsecureContextHint,
-  shouldShowPairingHint,
+	resolveAuthHintKind,
+	shouldShowInsecureContextHint,
+	shouldShowPairingHint,
 } from "./overview-hints.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
 
 export type OverviewProps = {
-  connected: boolean;
-  hello: GatewayHelloOk | null;
-  settings: UiSettings;
-  password: string;
-  lastError: string | null;
-  lastErrorCode: string | null;
-  presenceCount: number;
-  sessionsCount: number | null;
-  cronEnabled: boolean | null;
-  cronNext: number | null;
-  lastChannelsRefresh: number | null;
-  // New dashboard data
-  usageResult: SessionsUsageResult | null;
-  sessionsResult: SessionsListResult | null;
-  skillsReport: SkillStatusReport | null;
-  cronJobs: CronJob[];
-  cronStatus: CronStatus | null;
-  attentionItems: AttentionItem[];
-  eventLog: EventLogEntry[];
-  overviewLogLines: string[];
-  showGatewayToken: boolean;
-  showGatewayPassword: boolean;
-  onSettingsChange: (next: UiSettings) => void;
-  onPasswordChange: (next: string) => void;
-  onSessionKeyChange: (next: string) => void;
-  onToggleGatewayTokenVisibility: () => void;
-  onToggleGatewayPasswordVisibility: () => void;
-  onConnect: () => void;
-  onRefresh: () => void;
-  onNavigate: (tab: string) => void;
-  onRefreshLogs: () => void;
+	connected: boolean;
+	hello: GatewayHelloOk | null;
+	settings: UiSettings;
+	password: string;
+	lastError: string | null;
+	lastErrorCode: string | null;
+	presenceCount: number;
+	sessionsCount: number | null;
+	cronEnabled: boolean | null;
+	cronNext: number | null;
+	lastChannelsRefresh: number | null;
+	// New dashboard data
+	usageResult: SessionsUsageResult | null;
+	sessionsResult: SessionsListResult | null;
+	skillsReport: SkillStatusReport | null;
+	cronJobs: CronJob[];
+	cronStatus: CronStatus | null;
+	attentionItems: AttentionItem[];
+	eventLog: EventLogEntry[];
+	overviewLogLines: string[];
+	showGatewayToken: boolean;
+	showGatewayPassword: boolean;
+	onSettingsChange: (next: UiSettings) => void;
+	onPasswordChange: (next: string) => void;
+	onSessionKeyChange: (next: string) => void;
+	onToggleGatewayTokenVisibility: () => void;
+	onToggleGatewayPasswordVisibility: () => void;
+	onConnect: () => void;
+	onRefresh: () => void;
+	onNavigate: (tab: string) => void;
+	onRefreshLogs: () => void;
 };
 
 export function renderOverview(props: OverviewProps) {
-  const snapshot = props.hello?.snapshot as
-    | {
-        uptimeMs?: number;
-        authMode?: "none" | "token" | "password" | "trusted-proxy";
-      }
-    | undefined;
-  const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
-  const tickIntervalMs = props.hello?.policy?.tickIntervalMs;
-  const tick = tickIntervalMs
-    ? `${(tickIntervalMs / 1000).toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1)}s`
-    : t("common.na");
-  const authMode = snapshot?.authMode;
-  const isTrustedProxy = authMode === "trusted-proxy";
+	const snapshot = props.hello?.snapshot as
+		| {
+				uptimeMs?: number;
+				authMode?: "none" | "token" | "password" | "trusted-proxy";
+		  }
+		| undefined;
+	const uptime = snapshot?.uptimeMs
+		? formatDurationHuman(snapshot.uptimeMs)
+		: t("common.na");
+	const tickIntervalMs = props.hello?.policy?.tickIntervalMs;
+	const tick = tickIntervalMs
+		? `${(tickIntervalMs / 1000).toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1)}s`
+		: t("common.na");
+	const authMode = snapshot?.authMode;
+	const isTrustedProxy = authMode === "trusted-proxy";
 
-  const pairingHint = (() => {
-    if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
-      return null;
-    }
-    return html`
+	const pairingHint = (() => {
+		if (
+			!shouldShowPairingHint(
+				props.connected,
+				props.lastError,
+				props.lastErrorCode,
+			)
+		) {
+			return null;
+		}
+		return html`
       <div class="muted" style="margin-top: 8px">
         ${t("overview.pairing.hint")}
         <div style="margin-top: 6px">
@@ -98,21 +115,21 @@ export function renderOverview(props: OverviewProps) {
         </div>
       </div>
     `;
-  })();
+	})();
 
-  const authHint = (() => {
-    const authHintKind = resolveAuthHintKind({
-      connected: props.connected,
-      lastError: props.lastError,
-      lastErrorCode: props.lastErrorCode,
-      hasToken: Boolean(props.settings.token.trim()),
-      hasPassword: Boolean(props.password.trim()),
-    });
-    if (authHintKind == null) {
-      return null;
-    }
-    if (authHintKind === "required") {
-      return html`
+	const authHint = (() => {
+		const authHintKind = resolveAuthHintKind({
+			connected: props.connected,
+			lastError: props.lastError,
+			lastErrorCode: props.lastErrorCode,
+			hasToken: Boolean(props.settings.token.trim()),
+			hasPassword: Boolean(props.password.trim()),
+		});
+		if (authHintKind == null) {
+			return null;
+		}
+		if (authHintKind === "required") {
+			return html`
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
@@ -131,8 +148,8 @@ export function renderOverview(props: OverviewProps) {
           </div>
         </div>
       `;
-    }
-    return html`
+		}
+		return html`
       <div class="muted" style="margin-top: 8px">
         ${t("overview.auth.failed", { command: "openclaw dashboard --no-open" })}
         <div style="margin-top: 6px">
@@ -147,26 +164,33 @@ export function renderOverview(props: OverviewProps) {
         </div>
       </div>
     `;
-  })();
+	})();
 
-  const insecureContextHint = (() => {
-    if (props.connected || !props.lastError) {
-      return null;
-    }
-    const isSecureContext = typeof window !== "undefined" ? window.isSecureContext : true;
-    if (isSecureContext) {
-      return null;
-    }
-    if (!shouldShowInsecureContextHint(props.connected, props.lastError, props.lastErrorCode)) {
-      return null;
-    }
-    return html`
+	const insecureContextHint = (() => {
+		if (props.connected || !props.lastError) {
+			return null;
+		}
+		const isSecureContext =
+			typeof window !== "undefined" ? window.isSecureContext : true;
+		if (isSecureContext) {
+			return null;
+		}
+		if (
+			!shouldShowInsecureContextHint(
+				props.connected,
+				props.lastError,
+				props.lastErrorCode,
+			)
+		) {
+			return null;
+		}
+		return html`
       <div class="muted" style="margin-top: 8px">
         ${t("overview.insecure.hint", { url: "http://127.0.0.1:18789" })}
         <div style="margin-top: 6px">
           ${t("overview.insecure.stayHttp", {
-            config: "gateway.controlUi.allowInsecureAuth: true",
-          })}
+						config: "gateway.controlUi.allowInsecureAuth: true",
+					})}
         </div>
         <div style="margin-top: 6px">
           <a
@@ -189,13 +213,13 @@ export function renderOverview(props: OverviewProps) {
         </div>
       </div>
     `;
-  })();
+	})();
 
-  const currentLocale = isSupportedLocale(props.settings.locale)
-    ? props.settings.locale
-    : i18n.getLocale();
+	const currentLocale = isSupportedLocale(props.settings.locale)
+		? props.settings.locale
+		: i18n.getLocale();
 
-  return html`
+	return html`
     <section class="grid">
       <div class="card">
         <div class="card-title">${t("overview.access.title")}</div>
@@ -206,19 +230,23 @@ export function renderOverview(props: OverviewProps) {
             <input
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
-                  gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
-                });
-              }}
+								const v = (e.target as HTMLInputElement).value;
+								props.onSettingsChange({
+									...props.settings,
+									gatewayUrl: v,
+									token:
+										v.trim() === props.settings.gatewayUrl.trim()
+											? props.settings.token
+											: "",
+								});
+							}}
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          ${isTrustedProxy
-            ? ""
-            : html`
+          ${
+						isTrustedProxy
+							? ""
+							: html`
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
                   <div style="display: flex; align-items: center; gap: 8px;">
@@ -228,9 +256,9 @@ export function renderOverview(props: OverviewProps) {
                       style="flex: 1;"
                       .value=${props.settings.token}
                       @input=${(e: Event) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        props.onSettingsChange({ ...props.settings, token: v });
-                      }}
+												const v = (e.target as HTMLInputElement).value;
+												props.onSettingsChange({ ...props.settings, token: v });
+											}}
                       placeholder="OPENCLAW_GATEWAY_TOKEN"
                     />
                     <button
@@ -255,9 +283,9 @@ export function renderOverview(props: OverviewProps) {
                       style="flex: 1;"
                       .value=${props.password}
                       @input=${(e: Event) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        props.onPasswordChange(v);
-                      }}
+												const v = (e.target as HTMLInputElement).value;
+												props.onPasswordChange(v);
+											}}
                       placeholder="system or shared password"
                     />
                     <button
@@ -273,15 +301,16 @@ export function renderOverview(props: OverviewProps) {
                     </button>
                   </div>
                 </label>
-              `}
+              `
+					}
           <label class="field">
             <span>${t("overview.access.sessionKey")}</span>
             <input
               .value=${props.settings.sessionKey}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSessionKeyChange(v);
-              }}
+								const v = (e.target as HTMLInputElement).value;
+								props.onSessionKeyChange(v);
+							}}
             />
           </label>
           <label class="field">
@@ -289,17 +318,19 @@ export function renderOverview(props: OverviewProps) {
             <select
               .value=${currentLocale}
               @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
-              }}
+								const v = (e.target as HTMLSelectElement).value as Locale;
+								void i18n.setLocale(v);
+								props.onSettingsChange({ ...props.settings, locale: v });
+							}}
             >
               ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc} ?selected=${currentLocale === loc}>
+								const key = loc.replace(/-([a-zA-Z])/g, (_, c) =>
+									c.toUpperCase(),
+								);
+								return html`<option value=${loc} ?selected=${currentLocale === loc}>
                   ${t(`languages.${key}`)}
                 </option>`;
-              })}
+							})}
             </select>
           </label>
         </div>
@@ -307,13 +338,16 @@ export function renderOverview(props: OverviewProps) {
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
           <span class="muted"
-            >${isTrustedProxy
-              ? t("overview.access.trustedProxy")
-              : t("overview.access.connectHint")}</span
+            >${
+							isTrustedProxy
+								? t("overview.access.trustedProxy")
+								: t("overview.access.connectHint")
+						}</span
           >
         </div>
-        ${!props.connected
-          ? html`
+        ${
+					!props.connected
+						? html`
               <div class="login-gate__help" style="margin-top: 16px;">
                 <div class="login-gate__help-title">${t("overview.connection.title")}</div>
                 <ol class="login-gate__steps">
@@ -343,7 +377,8 @@ export function renderOverview(props: OverviewProps) {
                 </div>
               </div>
             `
-          : nothing}
+						: nothing
+				}
       </div>
 
       <div class="card">
@@ -367,48 +402,52 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
             <div class="stat-value">
-              ${props.lastChannelsRefresh
-                ? formatRelativeTimestamp(props.lastChannelsRefresh)
-                : t("common.na")}
+              ${
+								props.lastChannelsRefresh
+									? formatRelativeTimestamp(props.lastChannelsRefresh)
+									: t("common.na")
+							}
             </div>
           </div>
         </div>
-        ${props.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${
+					props.lastError
+						? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
             </div>`
-          : html`
+						: html`
               <div class="callout" style="margin-top: 14px">
                 ${t("overview.snapshot.channelsHint")}
               </div>
-            `}
+            `
+				}
       </div>
     </section>
 
     <div class="ov-section-divider"></div>
 
     ${renderOverviewCards({
-      usageResult: props.usageResult,
-      sessionsResult: props.sessionsResult,
-      skillsReport: props.skillsReport,
-      cronJobs: props.cronJobs,
-      cronStatus: props.cronStatus,
-      presenceCount: props.presenceCount,
-      onNavigate: props.onNavigate,
-    })}
+			usageResult: props.usageResult,
+			sessionsResult: props.sessionsResult,
+			skillsReport: props.skillsReport,
+			cronJobs: props.cronJobs,
+			cronStatus: props.cronStatus,
+			presenceCount: props.presenceCount,
+			onNavigate: props.onNavigate,
+		})}
     ${renderOverviewAttention({ items: props.attentionItems })}
 
     <div class="ov-section-divider"></div>
 
     <div class="ov-bottom-grid">
       ${renderOverviewEventLog({
-        events: props.eventLog,
-      })}
+				events: props.eventLog,
+			})}
       ${renderOverviewLogTail({
-        lines: props.overviewLogLines,
-        onRefreshLogs: props.onRefreshLogs,
-      })}
+				lines: props.overviewLogLines,
+				onRefreshLogs: props.onRefreshLogs,
+			})}
     </div>
   `;
 }

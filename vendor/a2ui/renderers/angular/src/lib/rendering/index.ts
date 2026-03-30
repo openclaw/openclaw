@@ -14,7 +14,7 @@
  limitations under the License.
  */
 
-export * from './catalog';
-export * from './dynamic-component';
-export * from './renderer';
-export * from './theming';
+export * from "./catalog";
+export * from "./dynamic-component";
+export * from "./renderer";
+export * from "./theming";

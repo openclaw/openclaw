@@ -7,27 +7,30 @@ import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/set
 import "./zalo-js.test-mocks.js";
 import { zalouserSetupPlugin } from "./channel.setup.js";
 
-const zalouserSetupGetStatus = createPluginSetupWizardStatus(zalouserSetupPlugin);
+const zalouserSetupGetStatus =
+	createPluginSetupWizardStatus(zalouserSetupPlugin);
 
 describe("zalouser setup plugin", () => {
-  it("builds setup status without an initialized runtime", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-setup-"));
+	it("builds setup status without an initialized runtime", async () => {
+		const stateDir = await mkdtemp(
+			path.join(os.tmpdir(), "openclaw-zalouser-setup-"),
+		);
 
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          zalouserSetupGetStatus({
-            cfg: {},
-            accountOverrides: {},
-          }),
-        ).resolves.toMatchObject({
-          channel: "zalouser",
-          configured: false,
-          statusLines: ["Zalo Personal: needs QR login"],
-        });
-      });
-    } finally {
-      await rm(stateDir, { recursive: true, force: true });
-    }
-  });
+		try {
+			await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+				await expect(
+					zalouserSetupGetStatus({
+						cfg: {},
+						accountOverrides: {},
+					}),
+				).resolves.toMatchObject({
+					channel: "zalouser",
+					configured: false,
+					statusLines: ["Zalo Personal: needs QR login"],
+				});
+			});
+		} finally {
+			await rm(stateDir, { recursive: true, force: true });
+		}
+	});
 });

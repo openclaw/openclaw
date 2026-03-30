@@ -34,6 +34,7 @@ export type ResolveCronModelSelectionResult =
       provider: string;
       model: string;
       warning?: string;
+      isExplicitModel?: boolean;
     }
   | {
       ok: false;
@@ -142,5 +143,5 @@ export async function resolveCronModelSelection(
     }
   }
 
-  return { ok: true, provider, model };
+  return { ok: true, provider, model, isExplicitModel: !!(modelOverride && modelOverride.length > 0) };
 }

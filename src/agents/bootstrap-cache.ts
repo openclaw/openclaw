@@ -1,36 +1,39 @@
-import { loadWorkspaceBootstrapFiles, type WorkspaceBootstrapFile } from "./workspace.js";
+import {
+	loadWorkspaceBootstrapFiles,
+	type WorkspaceBootstrapFile,
+} from "./workspace.js";
 
 const cache = new Map<string, WorkspaceBootstrapFile[]>();
 
 export async function getOrLoadBootstrapFiles(params: {
-  workspaceDir: string;
-  sessionKey: string;
+	workspaceDir: string;
+	sessionKey: string;
 }): Promise<WorkspaceBootstrapFile[]> {
-  const existing = cache.get(params.sessionKey);
-  if (existing) {
-    return existing;
-  }
+	const existing = cache.get(params.sessionKey);
+	if (existing) {
+		return existing;
+	}
 
-  const files = await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  cache.set(params.sessionKey, files);
-  return files;
+	const files = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+	cache.set(params.sessionKey, files);
+	return files;
 }
 
 export function clearBootstrapSnapshot(sessionKey: string): void {
-  cache.delete(sessionKey);
+	cache.delete(sessionKey);
 }
 
 export function clearBootstrapSnapshotOnSessionRollover(params: {
-  sessionKey?: string;
-  previousSessionId?: string;
+	sessionKey?: string;
+	previousSessionId?: string;
 }): void {
-  if (!params.sessionKey || !params.previousSessionId) {
-    return;
-  }
+	if (!params.sessionKey || !params.previousSessionId) {
+		return;
+	}
 
-  clearBootstrapSnapshot(params.sessionKey);
+	clearBootstrapSnapshot(params.sessionKey);
 }
 
 export function clearAllBootstrapSnapshots(): void {
-  cache.clear();
+	cache.clear();
 }

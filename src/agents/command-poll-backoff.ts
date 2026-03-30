@@ -8,8 +8,11 @@ const BACKOFF_SCHEDULE_MS = [5000, 10000, 30000, 60000];
  * Implements exponential backoff schedule: 5s → 10s → 30s → 60s (capped).
  */
 export function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
-  const index = Math.min(consecutiveNoOutputPolls, BACKOFF_SCHEDULE_MS.length - 1);
-  return BACKOFF_SCHEDULE_MS[index] ?? 60000;
+	const index = Math.min(
+		consecutiveNoOutputPolls,
+		BACKOFF_SCHEDULE_MS.length - 1,
+	);
+	return BACKOFF_SCHEDULE_MS[index] ?? 60000;
 }
 
 /**
@@ -20,26 +23,26 @@ export function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
  * @returns Suggested delay in milliseconds before next poll
  */
 export function recordCommandPoll(
-  state: SessionState,
-  commandId: string,
-  hasNewOutput: boolean,
+	state: SessionState,
+	commandId: string,
+	hasNewOutput: boolean,
 ): number {
-  if (!state.commandPollCounts) {
-    state.commandPollCounts = new Map();
-  }
+	if (!state.commandPollCounts) {
+		state.commandPollCounts = new Map();
+	}
 
-  const existing = state.commandPollCounts.get(commandId);
-  const now = Date.now();
+	const existing = state.commandPollCounts.get(commandId);
+	const now = Date.now();
 
-  if (hasNewOutput) {
-    state.commandPollCounts.set(commandId, { count: 0, lastPollAt: now });
-    return BACKOFF_SCHEDULE_MS[0] ?? 5000;
-  }
+	if (hasNewOutput) {
+		state.commandPollCounts.set(commandId, { count: 0, lastPollAt: now });
+		return BACKOFF_SCHEDULE_MS[0] ?? 5000;
+	}
 
-  const newCount = (existing?.count ?? -1) + 1;
-  state.commandPollCounts.set(commandId, { count: newCount, lastPollAt: now });
+	const newCount = (existing?.count ?? -1) + 1;
+	state.commandPollCounts.set(commandId, { count: newCount, lastPollAt: now });
 
-  return calculateBackoffMs(newCount);
+	return calculateBackoffMs(newCount);
 }
 
 /**
@@ -47,36 +50,42 @@ export function recordCommandPoll(
  * Useful for checking current backoff level.
  */
 export function getCommandPollSuggestion(
-  state: SessionState,
-  commandId: string,
+	state: SessionState,
+	commandId: string,
 ): number | undefined {
-  const pollData = state.commandPollCounts?.get(commandId);
-  if (!pollData) {
-    return undefined;
-  }
-  return calculateBackoffMs(pollData.count);
+	const pollData = state.commandPollCounts?.get(commandId);
+	if (!pollData) {
+		return undefined;
+	}
+	return calculateBackoffMs(pollData.count);
 }
 
 /**
  * Reset poll count for a command (e.g., when command completes).
  */
-export function resetCommandPollCount(state: SessionState, commandId: string): void {
-  state.commandPollCounts?.delete(commandId);
+export function resetCommandPollCount(
+	state: SessionState,
+	commandId: string,
+): void {
+	state.commandPollCounts?.delete(commandId);
 }
 
 /**
  * Prune stale command poll records (older than 1 hour).
  * Call periodically to prevent memory bloat.
  */
-export function pruneStaleCommandPolls(state: SessionState, maxAgeMs = 3600000): void {
-  if (!state.commandPollCounts) {
-    return;
-  }
+export function pruneStaleCommandPolls(
+	state: SessionState,
+	maxAgeMs = 3600000,
+): void {
+	if (!state.commandPollCounts) {
+		return;
+	}
 
-  const now = Date.now();
-  for (const [commandId, data] of state.commandPollCounts.entries()) {
-    if (now - data.lastPollAt > maxAgeMs) {
-      state.commandPollCounts.delete(commandId);
-    }
-  }
+	const now = Date.now();
+	for (const [commandId, data] of state.commandPollCounts.entries()) {
+		if (now - data.lastPollAt > maxAgeMs) {
+			state.commandPollCounts.delete(commandId);
+		}
+	}
 }

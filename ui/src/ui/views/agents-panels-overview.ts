@@ -1,103 +1,107 @@
 import { html, nothing } from "lit";
 import type {
-  AgentIdentityResult,
-  AgentsFilesListResult,
-  AgentsListResult,
-  ModelCatalogEntry,
+	AgentIdentityResult,
+	AgentsFilesListResult,
+	AgentsListResult,
+	ModelCatalogEntry,
 } from "../types.ts";
-import {
-  buildModelOptions,
-  normalizeModelValue,
-  parseFallbackList,
-  resolveAgentConfig,
-  resolveModelFallbacks,
-  resolveModelLabel,
-  resolveModelPrimary,
-} from "./agents-utils.ts";
 import type { AgentsPanel } from "./agents.ts";
+import {
+	buildModelOptions,
+	normalizeModelValue,
+	parseFallbackList,
+	resolveAgentConfig,
+	resolveModelFallbacks,
+	resolveModelLabel,
+	resolveModelPrimary,
+} from "./agents-utils.ts";
 
 export function renderAgentOverview(params: {
-  agent: AgentsListResult["agents"][number];
-  basePath: string;
-  defaultId: string | null;
-  configForm: Record<string, unknown> | null;
-  agentFilesList: AgentsFilesListResult | null;
-  agentIdentity: AgentIdentityResult | null;
-  agentIdentityLoading: boolean;
-  agentIdentityError: string | null;
-  configLoading: boolean;
-  configSaving: boolean;
-  configDirty: boolean;
-  modelCatalog: ModelCatalogEntry[];
-  onConfigReload: () => void;
-  onConfigSave: () => void;
-  onModelChange: (agentId: string, modelId: string | null) => void;
-  onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
-  onSelectPanel: (panel: AgentsPanel) => void;
+	agent: AgentsListResult["agents"][number];
+	basePath: string;
+	defaultId: string | null;
+	configForm: Record<string, unknown> | null;
+	agentFilesList: AgentsFilesListResult | null;
+	agentIdentity: AgentIdentityResult | null;
+	agentIdentityLoading: boolean;
+	agentIdentityError: string | null;
+	configLoading: boolean;
+	configSaving: boolean;
+	configDirty: boolean;
+	modelCatalog: ModelCatalogEntry[];
+	onConfigReload: () => void;
+	onConfigSave: () => void;
+	onModelChange: (agentId: string, modelId: string | null) => void;
+	onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+	onSelectPanel: (panel: AgentsPanel) => void;
 }) {
-  const {
-    agent,
-    configForm,
-    agentFilesList,
-    configLoading,
-    configSaving,
-    configDirty,
-    onConfigReload,
-    onConfigSave,
-    onModelChange,
-    onModelFallbacksChange,
-    onSelectPanel,
-  } = params;
-  const config = resolveAgentConfig(configForm, agent.id);
-  const agentModel = agent.model;
-  const workspaceFromFiles =
-    agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
-  const workspace =
-    workspaceFromFiles ||
-    config.entry?.workspace ||
-    config.defaults?.workspace ||
-    agent.workspace ||
-    "default";
-  const model = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agentModel);
-  const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
-  const entryPrimary = resolveModelPrimary(config.entry?.model);
-  const defaultPrimary =
-    resolveModelPrimary(config.defaults?.model) ||
-    (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null) ||
-    (configForm ? null : resolveModelPrimary(agentModel));
-  const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
-  const modelFallbacks =
-    resolveModelFallbacks(config.entry?.model) ??
-    resolveModelFallbacks(config.defaults?.model) ??
-    (configForm ? null : resolveModelFallbacks(agentModel));
-  const fallbackChips = modelFallbacks ?? [];
-  const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
-  const skillCount = skillFilter?.length ?? null;
-  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
-  const disabled = !configForm || configLoading || configSaving;
+	const {
+		agent,
+		configForm,
+		agentFilesList,
+		configLoading,
+		configSaving,
+		configDirty,
+		onConfigReload,
+		onConfigSave,
+		onModelChange,
+		onModelFallbacksChange,
+		onSelectPanel,
+	} = params;
+	const config = resolveAgentConfig(configForm, agent.id);
+	const agentModel = agent.model;
+	const workspaceFromFiles =
+		agentFilesList && agentFilesList.agentId === agent.id
+			? agentFilesList.workspace
+			: null;
+	const workspace =
+		workspaceFromFiles ||
+		config.entry?.workspace ||
+		config.defaults?.workspace ||
+		agent.workspace ||
+		"default";
+	const model = config.entry?.model
+		? resolveModelLabel(config.entry?.model)
+		: config.defaults?.model
+			? resolveModelLabel(config.defaults?.model)
+			: resolveModelLabel(agentModel);
+	const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
+	const entryPrimary = resolveModelPrimary(config.entry?.model);
+	const defaultPrimary =
+		resolveModelPrimary(config.defaults?.model) ||
+		(defaultModel !== "-" ? normalizeModelValue(defaultModel) : null) ||
+		(configForm ? null : resolveModelPrimary(agentModel));
+	const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
+	const modelFallbacks =
+		resolveModelFallbacks(config.entry?.model) ??
+		resolveModelFallbacks(config.defaults?.model) ??
+		(configForm ? null : resolveModelFallbacks(agentModel));
+	const fallbackChips = modelFallbacks ?? [];
+	const skillFilter = Array.isArray(config.entry?.skills)
+		? config.entry?.skills
+		: null;
+	const skillCount = skillFilter?.length ?? null;
+	const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
+	const disabled = !configForm || configLoading || configSaving;
 
-  const removeChip = (index: number) => {
-    const next = fallbackChips.filter((_, i) => i !== index);
-    onModelFallbacksChange(agent.id, next);
-  };
+	const removeChip = (index: number) => {
+		const next = fallbackChips.filter((_, i) => i !== index);
+		onModelFallbacksChange(agent.id, next);
+	};
 
-  const handleChipKeydown = (e: KeyboardEvent) => {
-    const input = e.target as HTMLInputElement;
-    if (e.key === "Enter" || e.key === ",") {
-      e.preventDefault();
-      const parsed = parseFallbackList(input.value);
-      if (parsed.length > 0) {
-        onModelFallbacksChange(agent.id, [...fallbackChips, ...parsed]);
-        input.value = "";
-      }
-    }
-  };
+	const handleChipKeydown = (e: KeyboardEvent) => {
+		const input = e.target as HTMLInputElement;
+		if (e.key === "Enter" || e.key === ",") {
+			e.preventDefault();
+			const parsed = parseFallbackList(input.value);
+			if (parsed.length > 0) {
+				onModelFallbacksChange(agent.id, [...fallbackChips, ...parsed]);
+				input.value = "";
+			}
+		}
+	};
 
-  return html`
+	return html`
     <section class="card">
       <div class="card-title">Overview</div>
       <div class="card-sub">Workspace paths and identity metadata.</div>
@@ -126,13 +130,15 @@ export function renderAgentOverview(params: {
         </div>
       </div>
 
-      ${configDirty
-        ? html`
+      ${
+				configDirty
+					? html`
             <div class="callout warn" style="margin-top: 16px">
               You have unsaved config changes.
             </div>
           `
-        : nothing}
+					: nothing
+			}
 
       <div class="agent-model-select" style="margin-top: 20px;">
         <div class="label">Model Selection</div>
@@ -143,15 +149,20 @@ export function renderAgentOverview(params: {
               .value=${isDefault ? (effectivePrimary ?? "") : (entryPrimary ?? "")}
               ?disabled=${disabled}
               @change=${(e: Event) =>
-                onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
+								onModelChange(
+									agent.id,
+									(e.target as HTMLSelectElement).value || null,
+								)}
             >
-              ${isDefault
-                ? html` <option value="">Not set</option> `
-                : html`
+              ${
+								isDefault
+									? html` <option value="">Not set</option> `
+									: html`
                     <option value="">
                       ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
                     </option>
-                  `}
+                  `
+							}
               ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
             </select>
           </label>
@@ -160,15 +171,15 @@ export function renderAgentOverview(params: {
             <div
               class="agent-chip-input"
               @click=${(e: Event) => {
-                const container = e.currentTarget as HTMLElement;
-                const input = container.querySelector("input");
-                if (input) {
-                  input.focus();
-                }
-              }}
+								const container = e.currentTarget as HTMLElement;
+								const input = container.querySelector("input");
+								if (input) {
+									input.focus();
+								}
+							}}
             >
               ${fallbackChips.map(
-                (chip, i) => html`
+								(chip, i) => html`
                   <span class="chip">
                     ${chip}
                     <button
@@ -181,19 +192,22 @@ export function renderAgentOverview(params: {
                     </button>
                   </span>
                 `,
-              )}
+							)}
               <input
                 ?disabled=${disabled}
                 placeholder=${fallbackChips.length === 0 ? "provider/model" : ""}
                 @keydown=${handleChipKeydown}
                 @blur=${(e: Event) => {
-                  const input = e.target as HTMLInputElement;
-                  const parsed = parseFallbackList(input.value);
-                  if (parsed.length > 0) {
-                    onModelFallbacksChange(agent.id, [...fallbackChips, ...parsed]);
-                    input.value = "";
-                  }
-                }}
+									const input = e.target as HTMLInputElement;
+									const parsed = parseFallbackList(input.value);
+									if (parsed.length > 0) {
+										onModelFallbacksChange(agent.id, [
+											...fallbackChips,
+											...parsed,
+										]);
+										input.value = "";
+									}
+								}}
               />
             </div>
           </div>

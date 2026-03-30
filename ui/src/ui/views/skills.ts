@@ -6,108 +6,114 @@ import { resolveSafeExternalUrl } from "../open-external-url.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
-  computeSkillMissing,
-  computeSkillReasons,
-  renderSkillStatusChips,
+	computeSkillMissing,
+	computeSkillReasons,
+	renderSkillStatusChips,
 } from "./skills-shared.ts";
 
 function safeExternalHref(raw?: string): string | null {
-  if (!raw) {
-    return null;
-  }
-  return resolveSafeExternalUrl(raw, window.location.href);
+	if (!raw) {
+		return null;
+	}
+	return resolveSafeExternalUrl(raw, window.location.href);
 }
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 
 export type SkillsProps = {
-  connected: boolean;
-  loading: boolean;
-  report: SkillStatusReport | null;
-  error: string | null;
-  filter: string;
-  statusFilter: SkillsStatusFilter;
-  edits: Record<string, string>;
-  busyKey: string | null;
-  messages: SkillMessageMap;
-  detailKey: string | null;
-  onFilterChange: (next: string) => void;
-  onStatusFilterChange: (next: SkillsStatusFilter) => void;
-  onRefresh: () => void;
-  onToggle: (skillKey: string, enabled: boolean) => void;
-  onEdit: (skillKey: string, value: string) => void;
-  onSaveKey: (skillKey: string) => void;
-  onInstall: (skillKey: string, name: string, installId: string) => void;
-  onDetailOpen: (skillKey: string) => void;
-  onDetailClose: () => void;
+	connected: boolean;
+	loading: boolean;
+	report: SkillStatusReport | null;
+	error: string | null;
+	filter: string;
+	statusFilter: SkillsStatusFilter;
+	edits: Record<string, string>;
+	busyKey: string | null;
+	messages: SkillMessageMap;
+	detailKey: string | null;
+	onFilterChange: (next: string) => void;
+	onStatusFilterChange: (next: SkillsStatusFilter) => void;
+	onRefresh: () => void;
+	onToggle: (skillKey: string, enabled: boolean) => void;
+	onEdit: (skillKey: string, value: string) => void;
+	onSaveKey: (skillKey: string) => void;
+	onInstall: (skillKey: string, name: string, installId: string) => void;
+	onDetailOpen: (skillKey: string) => void;
+	onDetailClose: () => void;
 };
 
 type StatusTabDef = { id: SkillsStatusFilter; label: string };
 
 const STATUS_TABS: StatusTabDef[] = [
-  { id: "all", label: "All" },
-  { id: "ready", label: "Ready" },
-  { id: "needs-setup", label: "Needs Setup" },
-  { id: "disabled", label: "Disabled" },
+	{ id: "all", label: "All" },
+	{ id: "ready", label: "Ready" },
+	{ id: "needs-setup", label: "Needs Setup" },
+	{ id: "disabled", label: "Disabled" },
 ];
 
-function skillMatchesStatus(skill: SkillStatusEntry, status: SkillsStatusFilter): boolean {
-  switch (status) {
-    case "all":
-      return true;
-    case "ready":
-      return !skill.disabled && skill.eligible;
-    case "needs-setup":
-      return !skill.disabled && !skill.eligible;
-    case "disabled":
-      return skill.disabled;
-  }
+function skillMatchesStatus(
+	skill: SkillStatusEntry,
+	status: SkillsStatusFilter,
+): boolean {
+	switch (status) {
+		case "all":
+			return true;
+		case "ready":
+			return !skill.disabled && skill.eligible;
+		case "needs-setup":
+			return !skill.disabled && !skill.eligible;
+		case "disabled":
+			return skill.disabled;
+	}
 }
 
 function skillStatusClass(skill: SkillStatusEntry): string {
-  if (skill.disabled) {
-    return "muted";
-  }
-  return skill.eligible ? "ok" : "warn";
+	if (skill.disabled) {
+		return "muted";
+	}
+	return skill.eligible ? "ok" : "warn";
 }
 
 export function renderSkills(props: SkillsProps) {
-  const skills = props.report?.skills ?? [];
+	const skills = props.report?.skills ?? [];
 
-  const statusCounts: Record<SkillsStatusFilter, number> = {
-    all: skills.length,
-    ready: 0,
-    "needs-setup": 0,
-    disabled: 0,
-  };
-  for (const s of skills) {
-    if (s.disabled) {
-      statusCounts.disabled++;
-    } else if (s.eligible) {
-      statusCounts.ready++;
-    } else {
-      statusCounts["needs-setup"]++;
-    }
-  }
+	const statusCounts: Record<SkillsStatusFilter, number> = {
+		all: skills.length,
+		ready: 0,
+		"needs-setup": 0,
+		disabled: 0,
+	};
+	for (const s of skills) {
+		if (s.disabled) {
+			statusCounts.disabled++;
+		} else if (s.eligible) {
+			statusCounts.ready++;
+		} else {
+			statusCounts["needs-setup"]++;
+		}
+	}
 
-  const afterStatus =
-    props.statusFilter === "all"
-      ? skills
-      : skills.filter((s) => skillMatchesStatus(s, props.statusFilter));
+	const afterStatus =
+		props.statusFilter === "all"
+			? skills
+			: skills.filter((s) => skillMatchesStatus(s, props.statusFilter));
 
-  const filter = props.filter.trim().toLowerCase();
-  const filtered = filter
-    ? afterStatus.filter((skill) =>
-        [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(filter),
-      )
-    : afterStatus;
-  const groups = groupSkills(filtered);
+	const filter = props.filter.trim().toLowerCase();
+	const filtered = filter
+		? afterStatus.filter((skill) =>
+				[skill.name, skill.description, skill.source]
+					.join(" ")
+					.toLowerCase()
+					.includes(filter),
+			)
+		: afterStatus;
+	const groups = groupSkills(filtered);
 
-  const detailSkill = props.detailKey
-    ? (skills.find((s) => s.skillKey === props.detailKey) ?? null)
-    : null;
+	const detailSkill = props.detailKey
+		? (skills.find((s) => s.skillKey === props.detailKey) ?? null)
+		: null;
 
-  return html`
+	return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -125,7 +131,7 @@ export function renderSkills(props: SkillsProps) {
 
       <div class="agent-tabs" style="margin-top: 14px;">
         ${STATUS_TABS.map(
-          (tab) => html`
+					(tab) => html`
             <button
               class="agent-tab ${props.statusFilter === tab.id ? "active" : ""}"
               @click=${() => props.onStatusFilterChange(tab.id)}
@@ -133,7 +139,7 @@ export function renderSkills(props: SkillsProps) {
               ${tab.label}<span class="agent-tab-count">${statusCounts[tab.id]}</span>
             </button>
           `,
-        )}
+				)}
       </div>
 
       <div
@@ -160,21 +166,26 @@ export function renderSkills(props: SkillsProps) {
         <div class="muted">${filtered.length} shown</div>
       </div>
 
-      ${props.error
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
-        : nothing}
-      ${filtered.length === 0
-        ? html`
+      ${
+				props.error
+					? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
+					: nothing
+			}
+      ${
+				filtered.length === 0
+					? html`
             <div class="muted" style="margin-top: 16px">
-              ${!props.connected && !props.report
-                ? "Not connected to gateway."
-                : "No skills found."}
+              ${
+								!props.connected && !props.report
+									? "Not connected to gateway."
+									: "No skills found."
+							}
             </div>
           `
-        : html`
+					: html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
               ${groups.map((group) => {
-                return html`
+								return html`
                   <details class="agent-skills-group" open>
                     <summary class="agent-skills-header">
                       <span>${group.label}</span>
@@ -185,9 +196,10 @@ export function renderSkills(props: SkillsProps) {
                     </div>
                   </details>
                 `;
-              })}
+							})}
             </div>
-          `}
+          `
+			}
     </section>
 
     ${detailSkill ? renderSkillDetail(detailSkill, props) : nothing}
@@ -195,10 +207,10 @@ export function renderSkills(props: SkillsProps) {
 }
 
 function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
-  const busy = props.busyKey === skill.skillKey;
-  const dotClass = skillStatusClass(skill);
+	const busy = props.busyKey === skill.skillKey;
+	const dotClass = skillStatusClass(skill);
 
-  return html`
+	return html`
     <div class="list-item list-item-clickable" @click=${() => props.onDetailOpen(skill.skillKey)}>
       <div class="list-main">
         <div class="list-title" style="display: flex; align-items: center; gap: 8px;">
@@ -219,9 +231,9 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
             .checked=${!skill.disabled}
             ?disabled=${busy}
             @change=${(e: Event) => {
-              e.stopPropagation();
-              props.onToggle(skill.skillKey, skill.disabled);
-            }}
+							e.stopPropagation();
+							props.onToggle(skill.skillKey, skill.disabled);
+						}}
           />
         </label>
       </div>
@@ -230,30 +242,32 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
 }
 
 function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
-  const busy = props.busyKey === skill.skillKey;
-  const apiKey = props.edits[skill.skillKey] ?? "";
-  const message = props.messages[skill.skillKey] ?? null;
-  const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
-  const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
-  const missing = computeSkillMissing(skill);
-  const reasons = computeSkillReasons(skill);
-  const ensureModalOpen = (el?: Element) => {
-    if (!(el instanceof HTMLDialogElement) || el.open) {
-      return;
-    }
-    el.showModal();
-  };
+	const busy = props.busyKey === skill.skillKey;
+	const apiKey = props.edits[skill.skillKey] ?? "";
+	const message = props.messages[skill.skillKey] ?? null;
+	const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
+	const showBundledBadge = Boolean(
+		skill.bundled && skill.source !== "openclaw-bundled",
+	);
+	const missing = computeSkillMissing(skill);
+	const reasons = computeSkillReasons(skill);
+	const ensureModalOpen = (el?: Element) => {
+		if (!(el instanceof HTMLDialogElement) || el.open) {
+			return;
+		}
+		el.showModal();
+	};
 
-  return html`
+	return html`
     <dialog
       class="md-preview-dialog"
       ${ref(ensureModalOpen)}
       @click=${(e: Event) => {
-        const dialog = e.currentTarget as HTMLDialogElement;
-        if (e.target === dialog) {
-          dialog.close();
-        }
-      }}
+				const dialog = e.currentTarget as HTMLDialogElement;
+				if (e.target === dialog) {
+					dialog.close();
+				}
+			}}
       @close=${props.onDetailClose}
     >
       <div class="md-preview-dialog__panel">
@@ -269,8 +283,8 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
           <button
             class="btn btn--sm"
             @click=${(e: Event) => {
-              (e.currentTarget as HTMLElement).closest("dialog")?.close();
-            }}
+							(e.currentTarget as HTMLElement).closest("dialog")?.close();
+						}}
           >
             Close
           </button>
@@ -283,8 +297,9 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${renderSkillStatusChips({ skill, showBundledBadge })}
           </div>
 
-          ${missing.length > 0
-            ? html`
+          ${
+						missing.length > 0
+							? html`
                 <div
                   class="callout"
                   style="border-color: var(--warn-subtle); background: var(--warn-subtle); color: var(--warn);"
@@ -293,12 +308,15 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   <div>${missing.join(", ")}</div>
                 </div>
               `
-            : nothing}
-          ${reasons.length > 0
-            ? html`
+							: nothing
+					}
+          ${
+						reasons.length > 0
+							? html`
                 <div class="muted" style="font-size: 13px;">Reason: ${reasons.join(", ")}</div>
               `
-            : nothing}
+							: nothing
+					}
 
           <div style="display: flex; align-items: center; gap: 12px;">
             <label class="skill-toggle-wrap">
@@ -313,24 +331,29 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             <span style="font-size: 13px; font-weight: 500;">
               ${skill.disabled ? "Disabled" : "Enabled"}
             </span>
-            ${canInstall
-              ? html`<button
+            ${
+							canInstall
+								? html`<button
                   class="btn"
                   ?disabled=${busy}
                   @click=${() => props.onInstall(skill.skillKey, skill.name, skill.install[0].id)}
                 >
                   ${busy ? "Installing\u2026" : skill.install[0].label}
                 </button>`
-              : nothing}
+								: nothing
+						}
           </div>
 
-          ${message
-            ? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
+          ${
+						message
+							? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
                 ${message.message}
               </div>`
-            : nothing}
-          ${skill.primaryEnv
-            ? html`
+							: nothing
+					}
+          ${
+						skill.primaryEnv
+							? html`
                 <div style="display: grid; gap: 8px;">
                   <div class="field">
                     <span
@@ -343,20 +366,23 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                       type="password"
                       .value=${apiKey}
                       @input=${(e: Event) =>
-                        props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
+												props.onEdit(
+													skill.skillKey,
+													(e.target as HTMLInputElement).value,
+												)}
                     />
                   </div>
                   ${(() => {
-                    const href = safeExternalHref(skill.homepage);
-                    return href
-                      ? html`<div class="muted" style="font-size: 13px;">
+										const href = safeExternalHref(skill.homepage);
+										return href
+											? html`<div class="muted" style="font-size: 13px;">
                           Get your key:
                           <a href="${href}" target="_blank" rel="noopener noreferrer"
                             >${skill.homepage}</a
                           >
                         </div>`
-                      : nothing;
-                  })()}
+											: nothing;
+									})()}
                   <button
                     class="btn primary"
                     ?disabled=${busy}
@@ -366,7 +392,8 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   </button>
                 </div>
               `
-            : nothing}
+							: nothing
+					}
 
           <div
             style="border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 6px; font-size: 12px; color: var(--muted);"
@@ -374,15 +401,15 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             <div><span style="font-weight: 600;">Source:</span> ${skill.source}</div>
             <div style="font-family: var(--mono); word-break: break-all;">${skill.filePath}</div>
             ${(() => {
-              const safeHref = safeExternalHref(skill.homepage);
-              return safeHref
-                ? html`<div>
+							const safeHref = safeExternalHref(skill.homepage);
+							return safeHref
+								? html`<div>
                     <a href="${safeHref}" target="_blank" rel="noopener noreferrer"
                       >${skill.homepage}</a
                     >
                   </div>`
-                : nothing;
-            })()}
+								: nothing;
+						})()}
           </div>
         </div>
       </div>

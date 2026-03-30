@@ -8,11 +8,16 @@ import type { ModelCatalogEntry } from "../types.ts";
  * convention).  Returns an array of {@link ModelCatalogEntry}; on failure the
  * caller receives an empty array rather than throwing.
  */
-export async function loadModels(client: GatewayBrowserClient): Promise<ModelCatalogEntry[]> {
-  try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
-    return result?.models ?? [];
-  } catch {
-    return [];
-  }
+export async function loadModels(
+	client: GatewayBrowserClient,
+): Promise<ModelCatalogEntry[]> {
+	try {
+		const result = await client.request<{ models: ModelCatalogEntry[] }>(
+			"models.list",
+			{},
+		);
+		return result?.models ?? [];
+	} catch {
+		return [];
+	}
 }

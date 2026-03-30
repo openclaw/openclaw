@@ -5,85 +5,85 @@ import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/contro
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
 describe("loadControlUiBootstrapConfig", () => {
-  it("loads assistant identity from the bootstrap endpoint", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        basePath: "/openclaw",
-        assistantName: "Ops",
-        assistantAvatar: "O",
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+	it("loads assistant identity from the bootstrap endpoint", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				basePath: "/openclaw",
+				assistantName: "Ops",
+				assistantAvatar: "O",
+			}),
+		});
+		vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const state = {
-      basePath: "/openclaw",
-      assistantName: "Assistant",
-      assistantAvatar: null,
-      assistantAgentId: null,
-      serverVersion: null,
-    };
+		const state = {
+			basePath: "/openclaw",
+			assistantName: "Assistant",
+			assistantAvatar: null,
+			assistantAgentId: null,
+			serverVersion: null,
+		};
 
-    await loadControlUiBootstrapConfig(state);
+		await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(state.assistantName).toBe("Ops");
-    expect(state.assistantAvatar).toBe("O");
-    expect(state.assistantAgentId).toBeNull();
-    expect(state.serverVersion).toBeNull();
+		expect(fetchMock).toHaveBeenCalledWith(
+			`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
+			expect.objectContaining({ method: "GET" }),
+		);
+		expect(state.assistantName).toBe("Ops");
+		expect(state.assistantAvatar).toBe("O");
+		expect(state.assistantAgentId).toBeNull();
+		expect(state.serverVersion).toBeNull();
 
-    vi.unstubAllGlobals();
-  });
+		vi.unstubAllGlobals();
+	});
 
-  it("ignores failures", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: false });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+	it("ignores failures", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({ ok: false });
+		vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const state = {
-      basePath: "",
-      assistantName: "Assistant",
-      assistantAvatar: null,
-      assistantAgentId: null,
-      serverVersion: null,
-    };
+		const state = {
+			basePath: "",
+			assistantName: "Assistant",
+			assistantAvatar: null,
+			assistantAgentId: null,
+			serverVersion: null,
+		};
 
-    await loadControlUiBootstrapConfig(state);
+		await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(state.assistantName).toBe("Assistant");
-    expect(state.assistantAgentId).toBeNull();
-    expect(state.serverVersion).toBeNull();
+		expect(fetchMock).toHaveBeenCalledWith(
+			CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+			expect.objectContaining({ method: "GET" }),
+		);
+		expect(state.assistantName).toBe("Assistant");
+		expect(state.assistantAgentId).toBeNull();
+		expect(state.serverVersion).toBeNull();
 
-    vi.unstubAllGlobals();
-  });
+		vi.unstubAllGlobals();
+	});
 
-  it("normalizes trailing slash basePath for bootstrap fetch path", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: false });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+	it("normalizes trailing slash basePath for bootstrap fetch path", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({ ok: false });
+		vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const state = {
-      basePath: "/openclaw/",
-      assistantName: "Assistant",
-      assistantAvatar: null,
-      assistantAgentId: null,
-      serverVersion: null,
-    };
+		const state = {
+			basePath: "/openclaw/",
+			assistantName: "Assistant",
+			assistantAvatar: null,
+			assistantAgentId: null,
+			serverVersion: null,
+		};
 
-    await loadControlUiBootstrapConfig(state);
+		await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(state.assistantAgentId).toBeNull();
-    expect(state.serverVersion).toBeNull();
+		expect(fetchMock).toHaveBeenCalledWith(
+			`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
+			expect.objectContaining({ method: "GET" }),
+		);
+		expect(state.assistantAgentId).toBeNull();
+		expect(state.serverVersion).toBeNull();
 
-    vi.unstubAllGlobals();
-  });
+		vi.unstubAllGlobals();
+	});
 });

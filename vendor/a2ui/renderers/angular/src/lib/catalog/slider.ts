@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-import { Component, computed, input } from '@angular/core';
-import { Primitives } from '@a2ui/lit/0.8';
-import { DynamicComponent } from '../rendering/dynamic-component';
+import type { Primitives } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: '[a2ui-slider]',
-  template: `
+	selector: "[a2ui-slider]",
+	template: `
     <section [class]="theme.components.Slider.container">
       <label [class]="theme.components.Slider.label" [for]="inputId">
         {{ label() }}
@@ -39,7 +39,7 @@ import { DynamicComponent } from '../rendering/dynamic-component';
       />
     </section>
   `,
-  styles: `
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -53,21 +53,28 @@ import { DynamicComponent } from '../rendering/dynamic-component';
   `,
 })
 export class Slider extends DynamicComponent {
-  readonly value = input.required<Primitives.NumberValue | null>();
-  readonly label = input('');
-  readonly minValue = input.required<number | undefined>();
-  readonly maxValue = input.required<number | undefined>();
+	readonly value = input.required<Primitives.NumberValue | null>();
+	readonly label = input("");
+	readonly minValue = input.required<number | undefined>();
+	readonly maxValue = input.required<number | undefined>();
 
-  protected readonly inputId = super.getUniqueId('a2ui-slider');
-  protected resolvedValue = computed(() => super.resolvePrimitive(this.value()) ?? 0);
+	protected readonly inputId = super.getUniqueId("a2ui-slider");
+	protected resolvedValue = computed(
+		() => super.resolvePrimitive(this.value()) ?? 0,
+	);
 
-  protected handleInput(event: Event) {
-    const path = this.value()?.path;
+	protected handleInput(event: Event) {
+		const path = this.value()?.path;
 
-    if (!(event.target instanceof HTMLInputElement) || !path) {
-      return;
-    }
+		if (!(event.target instanceof HTMLInputElement) || !path) {
+			return;
+		}
 
-    this.processor.setData(this.component(), path, event.target.valueAsNumber, this.surfaceId());
-  }
+		this.processor.setData(
+			this.component(),
+			path,
+			event.target.valueAsNumber,
+			this.surfaceId(),
+		);
+	}
 }

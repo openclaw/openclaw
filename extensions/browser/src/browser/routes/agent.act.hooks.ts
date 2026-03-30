@@ -2,142 +2,159 @@ import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
-  readBody,
-  requirePwAi,
-  resolveTargetIdFromBody,
-  withRouteTabContext,
+	readBody,
+	requirePwAi,
+	resolveTargetIdFromBody,
+	withRouteTabContext,
 } from "./agent.shared.js";
-import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
+import {
+	DEFAULT_UPLOAD_DIR,
+	resolveExistingPathsWithinRoot,
+} from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+import {
+	jsonError,
+	toBoolean,
+	toNumber,
+	toStringArray,
+	toStringOrEmpty,
+} from "./utils.js";
 
 export function registerBrowserAgentActHookRoutes(
-  app: BrowserRouteRegistrar,
-  ctx: BrowserRouteContext,
+	app: BrowserRouteRegistrar,
+	ctx: BrowserRouteContext,
 ) {
-  app.post("/hooks/file-chooser", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const ref = toStringOrEmpty(body.ref) || undefined;
-    const inputRef = toStringOrEmpty(body.inputRef) || undefined;
-    const element = toStringOrEmpty(body.element) || undefined;
-    const paths = toStringArray(body.paths) ?? [];
-    const timeoutMs = toNumber(body.timeoutMs);
-    if (!paths.length) {
-      return jsonError(res, 400, "paths are required");
-    }
+	app.post("/hooks/file-chooser", async (req, res) => {
+		const body = readBody(req);
+		const targetId = resolveTargetIdFromBody(body);
+		const ref = toStringOrEmpty(body.ref) || undefined;
+		const inputRef = toStringOrEmpty(body.inputRef) || undefined;
+		const element = toStringOrEmpty(body.element) || undefined;
+		const paths = toStringArray(body.paths) ?? [];
+		const timeoutMs = toNumber(body.timeoutMs);
+		if (!paths.length) {
+			return jsonError(res, 400, "paths are required");
+		}
 
-    await withRouteTabContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      run: async ({ profileCtx, cdpUrl, tab }) => {
-        const uploadPathsResult = await resolveExistingPathsWithinRoot({
-          rootDir: DEFAULT_UPLOAD_DIR,
-          requestedPaths: paths,
-          scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-        });
-        if (!uploadPathsResult.ok) {
-          res.status(400).json({ error: uploadPathsResult.error });
-          return;
-        }
-        const resolvedPaths = uploadPathsResult.paths;
+		await withRouteTabContext({
+			req,
+			res,
+			ctx,
+			targetId,
+			run: async ({ profileCtx, cdpUrl, tab }) => {
+				const uploadPathsResult = await resolveExistingPathsWithinRoot({
+					rootDir: DEFAULT_UPLOAD_DIR,
+					requestedPaths: paths,
+					scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+				});
+				if (!uploadPathsResult.ok) {
+					res.status(400).json({ error: uploadPathsResult.error });
+					return;
+				}
+				const resolvedPaths = uploadPathsResult.paths;
 
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          if (element) {
-            return jsonError(
-              res,
-              501,
-              "existing-session file uploads do not support element selectors; use ref/inputRef.",
-            );
-          }
-          if (resolvedPaths.length !== 1) {
-            return jsonError(
-              res,
-              501,
-              "existing-session file uploads currently support one file at a time.",
-            );
-          }
-          const uid = inputRef || ref;
-          if (!uid) {
-            return jsonError(res, 501, "existing-session file uploads require ref or inputRef.");
-          }
-          await uploadChromeMcpFile({
-            profileName: profileCtx.profile.name,
-            userDataDir: profileCtx.profile.userDataDir,
-            targetId: tab.targetId,
-            uid,
-            filePath: resolvedPaths[0] ?? "",
-          });
-          return res.json({ ok: true });
-        }
+				if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+					if (element) {
+						return jsonError(
+							res,
+							501,
+							"existing-session file uploads do not support element selectors; use ref/inputRef.",
+						);
+					}
+					if (resolvedPaths.length !== 1) {
+						return jsonError(
+							res,
+							501,
+							"existing-session file uploads currently support one file at a time.",
+						);
+					}
+					const uid = inputRef || ref;
+					if (!uid) {
+						return jsonError(
+							res,
+							501,
+							"existing-session file uploads require ref or inputRef.",
+						);
+					}
+					await uploadChromeMcpFile({
+						profileName: profileCtx.profile.name,
+						userDataDir: profileCtx.profile.userDataDir,
+						targetId: tab.targetId,
+						uid,
+						filePath: resolvedPaths[0] ?? "",
+					});
+					return res.json({ ok: true });
+				}
 
-        const pw = await requirePwAi(res, "file chooser hook");
-        if (!pw) {
-          return;
-        }
+				const pw = await requirePwAi(res, "file chooser hook");
+				if (!pw) {
+					return;
+				}
 
-        if (inputRef || element) {
-          if (ref) {
-            return jsonError(res, 400, "ref cannot be combined with inputRef/element");
-          }
-          await pw.setInputFilesViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            inputRef,
-            element,
-            paths: resolvedPaths,
-          });
-        } else {
-          await pw.armFileUploadViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            paths: resolvedPaths,
-            timeoutMs: timeoutMs ?? undefined,
-          });
-          if (ref) {
-            await pw.clickViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ref,
-            });
-          }
-        }
-        res.json({ ok: true });
-      },
-    });
-  });
+				if (inputRef || element) {
+					if (ref) {
+						return jsonError(
+							res,
+							400,
+							"ref cannot be combined with inputRef/element",
+						);
+					}
+					await pw.setInputFilesViaPlaywright({
+						cdpUrl,
+						targetId: tab.targetId,
+						inputRef,
+						element,
+						paths: resolvedPaths,
+					});
+				} else {
+					await pw.armFileUploadViaPlaywright({
+						cdpUrl,
+						targetId: tab.targetId,
+						paths: resolvedPaths,
+						timeoutMs: timeoutMs ?? undefined,
+					});
+					if (ref) {
+						await pw.clickViaPlaywright({
+							cdpUrl,
+							targetId: tab.targetId,
+							ref,
+						});
+					}
+				}
+				res.json({ ok: true });
+			},
+		});
+	});
 
-  app.post("/hooks/dialog", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const accept = toBoolean(body.accept);
-    const promptText = toStringOrEmpty(body.promptText) || undefined;
-    const timeoutMs = toNumber(body.timeoutMs);
-    if (accept === undefined) {
-      return jsonError(res, 400, "accept is required");
-    }
+	app.post("/hooks/dialog", async (req, res) => {
+		const body = readBody(req);
+		const targetId = resolveTargetIdFromBody(body);
+		const accept = toBoolean(body.accept);
+		const promptText = toStringOrEmpty(body.promptText) || undefined;
+		const timeoutMs = toNumber(body.timeoutMs);
+		if (accept === undefined) {
+			return jsonError(res, 400, "accept is required");
+		}
 
-    await withRouteTabContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      run: async ({ profileCtx, cdpUrl, tab }) => {
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          if (timeoutMs) {
-            return jsonError(
-              res,
-              501,
-              "existing-session dialog handling does not support timeoutMs.",
-            );
-          }
-          await evaluateChromeMcpScript({
-            profileName: profileCtx.profile.name,
-            userDataDir: profileCtx.profile.userDataDir,
-            targetId: tab.targetId,
-            fn: `() => {
+		await withRouteTabContext({
+			req,
+			res,
+			ctx,
+			targetId,
+			run: async ({ profileCtx, cdpUrl, tab }) => {
+				if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+					if (timeoutMs) {
+						return jsonError(
+							res,
+							501,
+							"existing-session dialog handling does not support timeoutMs.",
+						);
+					}
+					await evaluateChromeMcpScript({
+						profileName: profileCtx.profile.name,
+						userDataDir: profileCtx.profile.userDataDir,
+						targetId: tab.targetId,
+						fn: `() => {
               const state = (window.__openclawDialogHook ??= {});
               if (!state.originals) {
                 state.originals = {
@@ -176,22 +193,22 @@ export function registerBrowserAgentActHookRoutes(
               };
               return true;
             }`,
-          });
-          return res.json({ ok: true });
-        }
-        const pw = await requirePwAi(res, "dialog hook");
-        if (!pw) {
-          return;
-        }
-        await pw.armDialogViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          accept,
-          promptText,
-          timeoutMs: timeoutMs ?? undefined,
-        });
-        res.json({ ok: true });
-      },
-    });
-  });
+					});
+					return res.json({ ok: true });
+				}
+				const pw = await requirePwAi(res, "dialog hook");
+				if (!pw) {
+					return;
+				}
+				await pw.armDialogViaPlaywright({
+					cdpUrl,
+					targetId: tab.targetId,
+					accept,
+					promptText,
+					timeoutMs: timeoutMs ?? undefined,
+				});
+				res.json({ ok: true });
+			},
+		});
+	});
 }

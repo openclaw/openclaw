@@ -6,76 +6,81 @@ import { parseMinHostVersionRequirement } from "../../../src/plugins/min-host-ve
 import { bundledPluginFile } from "../bundled-plugin-paths.js";
 
 type PackageManifest = {
-  dependencies?: Record<string, string>;
-  openclaw?: {
-    install?: {
-      minHostVersion?: string;
-    };
-  };
+	dependencies?: Record<string, string>;
+	openclaw?: {
+		install?: {
+			minHostVersion?: string;
+		};
+	};
 };
 
 type PackageManifestContractParams = {
-  pluginId: string;
-  runtimeDeps?: string[];
-  minHostVersionBaseline?: string;
+	pluginId: string;
+	runtimeDeps?: string[];
+	minHostVersionBaseline?: string;
 };
 
 function readJson<T>(relativePath: string): T {
-  const absolutePath = path.resolve(process.cwd(), relativePath);
-  return JSON.parse(fs.readFileSync(absolutePath, "utf8")) as T;
+	const absolutePath = path.resolve(process.cwd(), relativePath);
+	return JSON.parse(fs.readFileSync(absolutePath, "utf8")) as T;
 }
 
-export function describePackageManifestContract(params: PackageManifestContractParams) {
-  const packagePath = bundledPluginFile(params.pluginId, "package.json");
+export function describePackageManifestContract(
+	params: PackageManifestContractParams,
+) {
+	const packagePath = bundledPluginFile(params.pluginId, "package.json");
 
-  describe(`${params.pluginId} package manifest contract`, () => {
-    if (params.runtimeDeps?.length) {
-      for (const dependencyName of params.runtimeDeps) {
-        it(`keeps ${dependencyName} plugin-local`, () => {
-          const rootManifest = readJson<PackageManifest>("package.json");
-          const pluginManifest = readJson<PackageManifest>(packagePath);
-          const pluginSpec = pluginManifest.dependencies?.[dependencyName];
-          const rootSpec = rootManifest.dependencies?.[dependencyName];
+	describe(`${params.pluginId} package manifest contract`, () => {
+		if (params.runtimeDeps?.length) {
+			for (const dependencyName of params.runtimeDeps) {
+				it(`keeps ${dependencyName} plugin-local`, () => {
+					const rootManifest = readJson<PackageManifest>("package.json");
+					const pluginManifest = readJson<PackageManifest>(packagePath);
+					const pluginSpec = pluginManifest.dependencies?.[dependencyName];
+					const rootSpec = rootManifest.dependencies?.[dependencyName];
 
-          expect(pluginSpec).toBeTruthy();
-          expect(rootSpec).toBeUndefined();
-        });
-      }
-    }
+					expect(pluginSpec).toBeTruthy();
+					expect(rootSpec).toBeUndefined();
+				});
+			}
+		}
 
-    const minHostVersionBaseline = params.minHostVersionBaseline;
-    if (minHostVersionBaseline) {
-      it("declares a parseable minHostVersion floor at or above the baseline", () => {
-        const baseline = parseSemver(minHostVersionBaseline);
-        expect(baseline).not.toBeNull();
-        if (!baseline) {
-          return;
-        }
+		const minHostVersionBaseline = params.minHostVersionBaseline;
+		if (minHostVersionBaseline) {
+			it("declares a parseable minHostVersion floor at or above the baseline", () => {
+				const baseline = parseSemver(minHostVersionBaseline);
+				expect(baseline).not.toBeNull();
+				if (!baseline) {
+					return;
+				}
 
-        const manifest = readJson<PackageManifest>(packagePath);
-        const requirement = parseMinHostVersionRequirement(
-          manifest.openclaw?.install?.minHostVersion ?? null,
-        );
+				const manifest = readJson<PackageManifest>(packagePath);
+				const requirement = parseMinHostVersionRequirement(
+					manifest.openclaw?.install?.minHostVersion ?? null,
+				);
 
-        expect(
-          requirement,
-          `${packagePath} should declare openclaw.install.minHostVersion`,
-        ).not.toBeNull();
-        if (!requirement) {
-          return;
-        }
+				expect(
+					requirement,
+					`${packagePath} should declare openclaw.install.minHostVersion`,
+				).not.toBeNull();
+				if (!requirement) {
+					return;
+				}
 
-        const minimum = parseSemver(requirement.minimumLabel);
-        expect(minimum, `${packagePath} should use a parseable semver floor`).not.toBeNull();
-        if (!minimum) {
-          return;
-        }
+				const minimum = parseSemver(requirement.minimumLabel);
+				expect(
+					minimum,
+					`${packagePath} should use a parseable semver floor`,
+				).not.toBeNull();
+				if (!minimum) {
+					return;
+				}
 
-        expect(
-          isAtLeast(minimum, baseline),
-          `${packagePath} should require at least OpenClaw ${minHostVersionBaseline}`,
-        ).toBe(true);
-      });
-    }
-  });
+				expect(
+					isAtLeast(minimum, baseline),
+					`${packagePath} should require at least OpenClaw ${minHostVersionBaseline}`,
+				).toBe(true);
+			});
+		}
+	});
 }

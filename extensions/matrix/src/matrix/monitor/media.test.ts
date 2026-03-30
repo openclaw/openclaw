@@ -4,136 +4,136 @@ import { setMatrixRuntime } from "../../runtime.js";
 import { downloadMatrixMedia } from "./media.js";
 
 function createEncryptedClient() {
-  const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
+	const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
 
-  return {
-    client: {
-      crypto: { decryptMedia },
-      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("../sdk.js").MatrixClient,
-    decryptMedia,
-  };
+	return {
+		client: {
+			crypto: { decryptMedia },
+			mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
+		} as unknown as import("../sdk.js").MatrixClient,
+		decryptMedia,
+	};
 }
 
 function createEncryptedFile() {
-  return {
-    url: "mxc://example/file",
-    key: {
-      kty: "oct",
-      key_ops: ["encrypt", "decrypt"],
-      alg: "A256CTR",
-      k: "secret",
-      ext: true,
-    },
-    iv: "iv",
-    hashes: { sha256: "hash" },
-    v: "v2",
-  };
+	return {
+		url: "mxc://example/file",
+		key: {
+			kty: "oct",
+			key_ops: ["encrypt", "decrypt"],
+			alg: "A256CTR",
+			k: "secret",
+			ext: true,
+		},
+		iv: "iv",
+		hashes: { sha256: "hash" },
+		v: "v2",
+	};
 }
 
 describe("downloadMatrixMedia", () => {
-  const saveMediaBuffer = vi.fn().mockResolvedValue({
-    path: "/tmp/media",
-    contentType: "image/png",
-  });
+	const saveMediaBuffer = vi.fn().mockResolvedValue({
+		path: "/tmp/media",
+		contentType: "image/png",
+	});
 
-  const runtimeStub = {
-    channel: {
-      media: {
-        saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-      },
-    },
-  } as unknown as PluginRuntime;
+	const runtimeStub = {
+		channel: {
+			media: {
+				saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+			},
+		},
+	} as unknown as PluginRuntime;
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setMatrixRuntime(runtimeStub);
-  });
+	beforeEach(() => {
+		vi.clearAllMocks();
+		setMatrixRuntime(runtimeStub);
+	});
 
-  it("decrypts encrypted media when file payloads are present", async () => {
-    const { client, decryptMedia } = createEncryptedClient();
-    const file = createEncryptedFile();
+	it("decrypts encrypted media when file payloads are present", async () => {
+		const { client, decryptMedia } = createEncryptedClient();
+		const file = createEncryptedFile();
 
-    const result = await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 1024,
-      file,
-    });
+		const result = await downloadMatrixMedia({
+			client,
+			mxcUrl: "mxc://example/file",
+			contentType: "image/png",
+			maxBytes: 1024,
+			file,
+		});
 
-    expect(decryptMedia).toHaveBeenCalledWith(file, {
-      maxBytes: 1024,
-      readIdleTimeoutMs: 30_000,
-    });
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      Buffer.from("decrypted"),
-      "image/png",
-      "inbound",
-      1024,
-      undefined,
-    );
-    expect(result?.path).toBe("/tmp/media");
-  });
+		expect(decryptMedia).toHaveBeenCalledWith(file, {
+			maxBytes: 1024,
+			readIdleTimeoutMs: 30_000,
+		});
+		expect(saveMediaBuffer).toHaveBeenCalledWith(
+			Buffer.from("decrypted"),
+			"image/png",
+			"inbound",
+			1024,
+			undefined,
+		);
+		expect(result?.path).toBe("/tmp/media");
+	});
 
-  it("forwards originalFilename to saveMediaBuffer when provided", async () => {
-    const { client } = createEncryptedClient();
-    const file = createEncryptedFile();
+	it("forwards originalFilename to saveMediaBuffer when provided", async () => {
+		const { client } = createEncryptedClient();
+		const file = createEncryptedFile();
 
-    await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 1024,
-      file,
-      originalFilename: "Screenshot 2026-03-27.png",
-    });
+		await downloadMatrixMedia({
+			client,
+			mxcUrl: "mxc://example/file",
+			contentType: "image/png",
+			maxBytes: 1024,
+			file,
+			originalFilename: "Screenshot 2026-03-27.png",
+		});
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      Buffer.from("decrypted"),
-      "image/png",
-      "inbound",
-      1024,
-      "Screenshot 2026-03-27.png",
-    );
-  });
+		expect(saveMediaBuffer).toHaveBeenCalledWith(
+			Buffer.from("decrypted"),
+			"image/png",
+			"inbound",
+			1024,
+			"Screenshot 2026-03-27.png",
+		);
+	});
 
-  it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
-    const { client, decryptMedia } = createEncryptedClient();
-    const file = createEncryptedFile();
+	it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
+		const { client, decryptMedia } = createEncryptedClient();
+		const file = createEncryptedFile();
 
-    await expect(
-      downloadMatrixMedia({
-        client,
-        mxcUrl: "mxc://example/file",
-        contentType: "image/png",
-        sizeBytes: 2048,
-        maxBytes: 1024,
-        file,
-      }),
-    ).rejects.toThrow("Matrix media exceeds configured size limit");
+		await expect(
+			downloadMatrixMedia({
+				client,
+				mxcUrl: "mxc://example/file",
+				contentType: "image/png",
+				sizeBytes: 2048,
+				maxBytes: 1024,
+				file,
+			}),
+		).rejects.toThrow("Matrix media exceeds configured size limit");
 
-    expect(decryptMedia).not.toHaveBeenCalled();
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-  });
+		expect(decryptMedia).not.toHaveBeenCalled();
+		expect(saveMediaBuffer).not.toHaveBeenCalled();
+	});
 
-  it("passes byte limits through plain media downloads", async () => {
-    const downloadContent = vi.fn().mockResolvedValue(Buffer.from("plain"));
+	it("passes byte limits through plain media downloads", async () => {
+		const downloadContent = vi.fn().mockResolvedValue(Buffer.from("plain"));
 
-    const client = {
-      downloadContent,
-    } as unknown as import("../sdk.js").MatrixClient;
+		const client = {
+			downloadContent,
+		} as unknown as import("../sdk.js").MatrixClient;
 
-    await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 4096,
-    });
+		await downloadMatrixMedia({
+			client,
+			mxcUrl: "mxc://example/file",
+			contentType: "image/png",
+			maxBytes: 4096,
+		});
 
-    expect(downloadContent).toHaveBeenCalledWith("mxc://example/file", {
-      maxBytes: 4096,
-      readIdleTimeoutMs: 30_000,
-    });
-  });
+		expect(downloadContent).toHaveBeenCalledWith("mxc://example/file", {
+			maxBytes: 4096,
+			readIdleTimeoutMs: 30_000,
+		});
+	});
 });

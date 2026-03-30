@@ -14,5 +14,5 @@
  limitations under the License.
  */
 
-export * from './processor';
-export * from './types';
+export * from "./processor";
+export * from "./types";

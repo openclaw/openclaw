@@ -15,6 +15,6 @@
  */
 
 import { createContext } from "@lit/context";
-import { type Theme } from "../../types/types.js";
+import type { Theme } from "../../types/types.js";
 
 export const themeContext = createContext<Theme | undefined>("A2UITheme");

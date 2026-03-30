@@ -14,25 +14,25 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Root } from "./root.js";
 import { classMap } from "lit/directives/class-map.js";
-import { ResolvedRow } from "../types/types";
 import { styleMap } from "lit/directives/style-map.js";
+import type { ResolvedRow } from "../types/types";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
 
 @customElement("a2ui-row")
 export class Row extends Root {
-  @property({ reflect: true, type: String })
-  accessor alignment: ResolvedRow["alignment"] = "stretch";
+	@property({ reflect: true, type: String })
+	accessor alignment: ResolvedRow["alignment"] = "stretch";
 
-  @property({ reflect: true, type: String })
-  accessor distribution: ResolvedRow["distribution"] = "start";
+	@property({ reflect: true, type: String })
+	accessor distribution: ResolvedRow["distribution"] = "start";
 
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       * {
         box-sizing: border-box;
       }
@@ -89,16 +89,18 @@ export class Row extends Root {
         justify-content: space-evenly;
       }
     `,
-  ];
+	];
 
-  render() {
-    return html`<section
+	render() {
+		return html`<section
       class=${classMap(this.theme.components.Row)}
-      style=${this.theme.additionalStyles?.Row
-        ? styleMap(this.theme.additionalStyles?.Row)
-        : nothing}
+      style=${
+				this.theme.additionalStyles?.Row
+					? styleMap(this.theme.additionalStyles?.Row)
+					: nothing
+			}
     >
       <slot></slot>
     </section>`;
-  }
+	}
 }

@@ -6,9 +6,9 @@ export { whatsappPlugin } from "./src/channel.js";
 export { setWhatsAppRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: "whatsapp",
-  name: "WhatsApp",
-  description: "WhatsApp channel plugin",
-  plugin: whatsappPlugin,
-  setRuntime: setWhatsAppRuntime,
+	id: "whatsapp",
+	name: "WhatsApp",
+	description: "WhatsApp channel plugin",
+	plugin: whatsappPlugin,
+	setRuntime: setWhatsAppRuntime,
 });

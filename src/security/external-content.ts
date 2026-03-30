@@ -15,33 +15,33 @@ import { randomBytes } from "node:crypto";
  * These are logged for monitoring but content is still processed (wrapped safely).
  */
 const SUSPICIOUS_PATTERNS = [
-  /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
-  /disregard\s+(all\s+)?(previous|prior|above)/i,
-  /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
-  /you\s+are\s+now\s+(a|an)\s+/i,
-  /new\s+instructions?:/i,
-  /system\s*:?\s*(prompt|override|command)/i,
-  /\bexec\b.*command\s*=/i,
-  /elevated\s*=\s*true/i,
-  /rm\s+-rf/i,
-  /delete\s+all\s+(emails?|files?|data)/i,
-  /<\/?system>/i,
-  /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
-  /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/i,
-  /^\s*System:\s+/im,
+	/ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
+	/disregard\s+(all\s+)?(previous|prior|above)/i,
+	/forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
+	/you\s+are\s+now\s+(a|an)\s+/i,
+	/new\s+instructions?:/i,
+	/system\s*:?\s*(prompt|override|command)/i,
+	/\bexec\b.*command\s*=/i,
+	/elevated\s*=\s*true/i,
+	/rm\s+-rf/i,
+	/delete\s+all\s+(emails?|files?|data)/i,
+	/<\/?system>/i,
+	/\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
+	/\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/i,
+	/^\s*System:\s+/im,
 ];
 
 /**
  * Check if content contains suspicious patterns that may indicate injection.
  */
 export function detectSuspiciousPatterns(content: string): string[] {
-  const matches: string[] = [];
-  for (const pattern of SUSPICIOUS_PATTERNS) {
-    if (pattern.test(content)) {
-      matches.push(pattern.source);
-    }
-  }
-  return matches;
+	const matches: string[] = [];
+	for (const pattern of SUSPICIOUS_PATTERNS) {
+		if (pattern.test(content)) {
+			matches.push(pattern.source);
+		}
+	}
+	return matches;
 }
 
 /**
@@ -54,15 +54,15 @@ const EXTERNAL_CONTENT_START_NAME = "EXTERNAL_UNTRUSTED_CONTENT";
 const EXTERNAL_CONTENT_END_NAME = "END_EXTERNAL_UNTRUSTED_CONTENT";
 
 function createExternalContentMarkerId(): string {
-  return randomBytes(8).toString("hex");
+	return randomBytes(8).toString("hex");
 }
 
 function createExternalContentStartMarker(id: string): string {
-  return `<<<${EXTERNAL_CONTENT_START_NAME} id="${id}">>>`;
+	return `<<<${EXTERNAL_CONTENT_START_NAME} id="${id}">>>`;
 }
 
 function createExternalContentEndMarker(id: string): string {
-  return `<<<${EXTERNAL_CONTENT_END_NAME} id="${id}">>>`;
+	return `<<<${EXTERNAL_CONTENT_END_NAME} id="${id}">>>`;
 }
 
 /**
@@ -82,173 +82,178 @@ SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source (e.
 `.trim();
 
 export type ExternalContentSource =
-  | "email"
-  | "webhook"
-  | "api"
-  | "browser"
-  | "channel_metadata"
-  | "web_search"
-  | "web_fetch"
-  | "unknown";
+	| "email"
+	| "webhook"
+	| "api"
+	| "browser"
+	| "channel_metadata"
+	| "web_search"
+	| "web_fetch"
+	| "unknown";
 
 // Hook-origin async runs need immutable ingress provenance because routed
 // session keys can be normalized outside the hook:* namespace.
 export type HookExternalContentSource = "gmail" | "webhook";
 
 const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
-  email: "Email",
-  webhook: "Webhook",
-  api: "API",
-  browser: "Browser",
-  channel_metadata: "Channel metadata",
-  web_search: "Web Search",
-  web_fetch: "Web Fetch",
-  unknown: "External",
+	email: "Email",
+	webhook: "Webhook",
+	api: "API",
+	browser: "Browser",
+	channel_metadata: "Channel metadata",
+	web_search: "Web Search",
+	web_fetch: "Web Fetch",
+	unknown: "External",
 };
 
 export function resolveHookExternalContentSource(
-  sessionKey: string,
+	sessionKey: string,
 ): HookExternalContentSource | undefined {
-  const normalized = sessionKey.trim().toLowerCase();
-  if (normalized.startsWith("hook:gmail:")) {
-    return "gmail";
-  }
-  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
-    return "webhook";
-  }
-  return undefined;
+	const normalized = sessionKey.trim().toLowerCase();
+	if (normalized.startsWith("hook:gmail:")) {
+		return "gmail";
+	}
+	if (
+		normalized.startsWith("hook:webhook:") ||
+		normalized.startsWith("hook:")
+	) {
+		return "webhook";
+	}
+	return undefined;
 }
 
 export function mapHookExternalContentSource(
-  source: HookExternalContentSource,
+	source: HookExternalContentSource,
 ): Extract<ExternalContentSource, "email" | "webhook"> {
-  return source === "gmail" ? "email" : "webhook";
+	return source === "gmail" ? "email" : "webhook";
 }
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
 // Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
 const ANGLE_BRACKET_MAP: Record<number, string> = {
-  0xff1c: "<", // fullwidth <
-  0xff1e: ">", // fullwidth >
-  0x2329: "<", // left-pointing angle bracket
-  0x232a: ">", // right-pointing angle bracket
-  0x3008: "<", // CJK left angle bracket
-  0x3009: ">", // CJK right angle bracket
-  0x2039: "<", // single left-pointing angle quotation mark
-  0x203a: ">", // single right-pointing angle quotation mark
-  0x27e8: "<", // mathematical left angle bracket
-  0x27e9: ">", // mathematical right angle bracket
-  0xfe64: "<", // small less-than sign
-  0xfe65: ">", // small greater-than sign
-  0x00ab: "<", // left-pointing double angle quotation mark
-  0x00bb: ">", // right-pointing double angle quotation mark
-  0x300a: "<", // left double angle bracket
-  0x300b: ">", // right double angle bracket
-  0x27ea: "<", // mathematical left double angle bracket
-  0x27eb: ">", // mathematical right double angle bracket
-  0x27ec: "<", // mathematical left white tortoise shell bracket
-  0x27ed: ">", // mathematical right white tortoise shell bracket
-  0x27ee: "<", // mathematical left flattened parenthesis
-  0x27ef: ">", // mathematical right flattened parenthesis
-  0x276c: "<", // medium left-pointing angle bracket ornament
-  0x276d: ">", // medium right-pointing angle bracket ornament
-  0x276e: "<", // heavy left-pointing angle quotation mark ornament
-  0x276f: ">", // heavy right-pointing angle quotation mark ornament
-  0x02c2: "<", // modifier letter left arrowhead
-  0x02c3: ">", // modifier letter right arrowhead
+	65308: "<", // fullwidth <
+	65310: ">", // fullwidth >
+	9001: "<", // left-pointing angle bracket
+	9002: ">", // right-pointing angle bracket
+	12296: "<", // CJK left angle bracket
+	12297: ">", // CJK right angle bracket
+	8249: "<", // single left-pointing angle quotation mark
+	8250: ">", // single right-pointing angle quotation mark
+	10216: "<", // mathematical left angle bracket
+	10217: ">", // mathematical right angle bracket
+	65124: "<", // small less-than sign
+	65125: ">", // small greater-than sign
+	171: "<", // left-pointing double angle quotation mark
+	187: ">", // right-pointing double angle quotation mark
+	12298: "<", // left double angle bracket
+	12299: ">", // right double angle bracket
+	10218: "<", // mathematical left double angle bracket
+	10219: ">", // mathematical right double angle bracket
+	10220: "<", // mathematical left white tortoise shell bracket
+	10221: ">", // mathematical right white tortoise shell bracket
+	10222: "<", // mathematical left flattened parenthesis
+	10223: ">", // mathematical right flattened parenthesis
+	10092: "<", // medium left-pointing angle bracket ornament
+	10093: ">", // medium right-pointing angle bracket ornament
+	10094: "<", // heavy left-pointing angle quotation mark ornament
+	10095: ">", // heavy right-pointing angle quotation mark ornament
+	706: "<", // modifier letter left arrowhead
+	707: ">", // modifier letter right arrowhead
 };
 
 function foldMarkerChar(char: string): string {
-  const code = char.charCodeAt(0);
-  if (code >= 0xff21 && code <= 0xff3a) {
-    return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
-  }
-  if (code >= 0xff41 && code <= 0xff5a) {
-    return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
-  }
-  const bracket = ANGLE_BRACKET_MAP[code];
-  if (bracket) {
-    return bracket;
-  }
-  return char;
+	const code = char.charCodeAt(0);
+	if (code >= 0xff21 && code <= 0xff3a) {
+		return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
+	}
+	if (code >= 0xff41 && code <= 0xff5a) {
+		return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
+	}
+	const bracket = ANGLE_BRACKET_MAP[code];
+	if (bracket) {
+		return bracket;
+	}
+	return char;
 }
 
 const MARKER_IGNORABLE_CHAR_RE = /\u200B|\u200C|\u200D|\u2060|\uFEFF|\u00AD/g;
 
 function foldMarkerText(input: string): string {
-  return (
-    input
-      // Strip invisible format characters that can split marker tokens without changing
-      // how downstream models interpret the apparent boundary text.
-      .replace(MARKER_IGNORABLE_CHAR_RE, "")
-      .replace(
-        /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
-        (char) => foldMarkerChar(char),
-      )
-  );
+	return (
+		input
+			// Strip invisible format characters that can split marker tokens without changing
+			// how downstream models interpret the apparent boundary text.
+			.replace(MARKER_IGNORABLE_CHAR_RE, "")
+			.replace(
+				/[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
+				(char) => foldMarkerChar(char),
+			)
+	);
 }
 
 function replaceMarkers(content: string): string {
-  const folded = foldMarkerText(content);
-  // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
-  // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
-  if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
-    return content;
-  }
-  const replacements: Array<{ start: number; end: number; value: string }> = [];
-  // Match markers with or without id attribute (handles both legacy and spoofed markers)
-  const patterns: Array<{ regex: RegExp; value: string }> = [
-    {
-      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
-      value: "[[MARKER_SANITIZED]]",
-    },
-    {
-      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
-      value: "[[END_MARKER_SANITIZED]]",
-    },
-  ];
+	const folded = foldMarkerText(content);
+	// Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
+	// to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
+	if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
+		return content;
+	}
+	const replacements: Array<{ start: number; end: number; value: string }> = [];
+	// Match markers with or without id attribute (handles both legacy and spoofed markers)
+	const patterns: Array<{ regex: RegExp; value: string }> = [
+		{
+			regex:
+				/<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+			value: "[[MARKER_SANITIZED]]",
+		},
+		{
+			regex:
+				/<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+			value: "[[END_MARKER_SANITIZED]]",
+		},
+	];
 
-  for (const pattern of patterns) {
-    pattern.regex.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.regex.exec(folded)) !== null) {
-      replacements.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        value: pattern.value,
-      });
-    }
-  }
+	for (const pattern of patterns) {
+		pattern.regex.lastIndex = 0;
+		let match: RegExpExecArray | null;
+		while ((match = pattern.regex.exec(folded)) !== null) {
+			replacements.push({
+				start: match.index,
+				end: match.index + match[0].length,
+				value: pattern.value,
+			});
+		}
+	}
 
-  if (replacements.length === 0) {
-    return content;
-  }
-  replacements.sort((a, b) => a.start - b.start);
+	if (replacements.length === 0) {
+		return content;
+	}
+	replacements.sort((a, b) => a.start - b.start);
 
-  let cursor = 0;
-  let output = "";
-  for (const replacement of replacements) {
-    if (replacement.start < cursor) {
-      continue;
-    }
-    output += content.slice(cursor, replacement.start);
-    output += replacement.value;
-    cursor = replacement.end;
-  }
-  output += content.slice(cursor);
-  return output;
+	let cursor = 0;
+	let output = "";
+	for (const replacement of replacements) {
+		if (replacement.start < cursor) {
+			continue;
+		}
+		output += content.slice(cursor, replacement.start);
+		output += replacement.value;
+		cursor = replacement.end;
+	}
+	output += content.slice(cursor);
+	return output;
 }
 
 export type WrapExternalContentOptions = {
-  /** Source of the external content */
-  source: ExternalContentSource;
-  /** Original sender information (e.g., email address) */
-  sender?: string;
-  /** Subject line (for emails) */
-  subject?: string;
-  /** Whether to include detailed security warning */
-  includeWarning?: boolean;
+	/** Source of the external content */
+	source: ExternalContentSource;
+	/** Original sender information (e.g., email address) */
+	sender?: string;
+	/** Subject line (for emails) */
+	subject?: string;
+	/** Whether to include detailed security warning */
+	includeWarning?: boolean;
 };
 
 /**
@@ -267,33 +272,37 @@ export type WrapExternalContentOptions = {
  * // Pass safeContent to LLM instead of raw emailBody
  * ```
  */
-export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
-  const { source, sender, subject, includeWarning = true } = options;
+export function wrapExternalContent(
+	content: string,
+	options: WrapExternalContentOptions,
+): string {
+	const { source, sender, subject, includeWarning = true } = options;
 
-  const sanitized = replaceMarkers(content);
-  const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
-  const metadataLines: string[] = [`Source: ${sourceLabel}`];
-  const sanitizeMetadataValue = (value: string) => replaceMarkers(value).replace(/[\r\n]+/g, " ");
+	const sanitized = replaceMarkers(content);
+	const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
+	const metadataLines: string[] = [`Source: ${sourceLabel}`];
+	const sanitizeMetadataValue = (value: string) =>
+		replaceMarkers(value).replace(/[\r\n]+/g, " ");
 
-  if (sender) {
-    metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
-  }
-  if (subject) {
-    metadataLines.push(`Subject: ${sanitizeMetadataValue(subject)}`);
-  }
+	if (sender) {
+		metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
+	}
+	if (subject) {
+		metadataLines.push(`Subject: ${sanitizeMetadataValue(subject)}`);
+	}
 
-  const metadata = metadataLines.join("\n");
-  const warningBlock = includeWarning ? `${EXTERNAL_CONTENT_WARNING}\n\n` : "";
-  const markerId = createExternalContentMarkerId();
+	const metadata = metadataLines.join("\n");
+	const warningBlock = includeWarning ? `${EXTERNAL_CONTENT_WARNING}\n\n` : "";
+	const markerId = createExternalContentMarkerId();
 
-  return [
-    warningBlock,
-    createExternalContentStartMarker(markerId),
-    metadata,
-    "---",
-    sanitized,
-    createExternalContentEndMarker(markerId),
-  ].join("\n");
+	return [
+		warningBlock,
+		createExternalContentStartMarker(markerId),
+		metadata,
+		"---",
+		sanitized,
+		createExternalContentEndMarker(markerId),
+	].join("\n");
 }
 
 /**
@@ -301,52 +310,54 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
  * Combines the security-wrapped content with contextual information.
  */
 export function buildSafeExternalPrompt(params: {
-  content: string;
-  source: ExternalContentSource;
-  sender?: string;
-  subject?: string;
-  jobName?: string;
-  jobId?: string;
-  timestamp?: string;
+	content: string;
+	source: ExternalContentSource;
+	sender?: string;
+	subject?: string;
+	jobName?: string;
+	jobId?: string;
+	timestamp?: string;
 }): string {
-  const { content, source, sender, subject, jobName, jobId, timestamp } = params;
+	const { content, source, sender, subject, jobName, jobId, timestamp } =
+		params;
 
-  const wrappedContent = wrapExternalContent(content, {
-    source,
-    sender,
-    subject,
-    includeWarning: true,
-  });
+	const wrappedContent = wrapExternalContent(content, {
+		source,
+		sender,
+		subject,
+		includeWarning: true,
+	});
 
-  const contextLines: string[] = [];
-  if (jobName) {
-    contextLines.push(`Task: ${jobName}`);
-  }
-  if (jobId) {
-    contextLines.push(`Job ID: ${jobId}`);
-  }
-  if (timestamp) {
-    contextLines.push(`Received: ${timestamp}`);
-  }
+	const contextLines: string[] = [];
+	if (jobName) {
+		contextLines.push(`Task: ${jobName}`);
+	}
+	if (jobId) {
+		contextLines.push(`Job ID: ${jobId}`);
+	}
+	if (timestamp) {
+		contextLines.push(`Received: ${timestamp}`);
+	}
 
-  const context = contextLines.length > 0 ? `${contextLines.join(" | ")}\n\n` : "";
+	const context =
+		contextLines.length > 0 ? `${contextLines.join(" | ")}\n\n` : "";
 
-  return `${context}${wrappedContent}`;
+	return `${context}${wrappedContent}`;
 }
 
 /**
  * Checks if a session key indicates an external hook source.
  */
 export function isExternalHookSession(sessionKey: string): boolean {
-  return resolveHookExternalContentSource(sessionKey) !== undefined;
+	return resolveHookExternalContentSource(sessionKey) !== undefined;
 }
 
 /**
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  const source = resolveHookExternalContentSource(sessionKey);
-  return source ? mapHookExternalContentSource(source) : "unknown";
+	const source = resolveHookExternalContentSource(sessionKey);
+	return source ? mapHookExternalContentSource(source) : "unknown";
 }
 
 /**
@@ -354,10 +365,10 @@ export function getHookType(sessionKey: string): ExternalContentSource {
  * This is a simpler wrapper for web tools that just need content wrapped.
  */
 export function wrapWebContent(
-  content: string,
-  source: "web_search" | "web_fetch" = "web_search",
+	content: string,
+	source: "web_search" | "web_fetch" = "web_search",
 ): string {
-  const includeWarning = source === "web_fetch";
-  // Marker sanitization happens in wrapExternalContent
-  return wrapExternalContent(content, { source, includeWarning });
+	const includeWarning = source === "web_fetch";
+	// Marker sanitization happens in wrapExternalContent
+	return wrapExternalContent(content, { source, includeWarning });
 }

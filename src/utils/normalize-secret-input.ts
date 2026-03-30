@@ -14,21 +14,23 @@
  * silently altering "Bearer <token>" style values.
  */
 export function normalizeSecretInput(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const collapsed = value.replace(/[\r\n\u2028\u2029]+/g, "");
-  let latin1Only = "";
-  for (const char of collapsed) {
-    const codePoint = char.codePointAt(0);
-    if (typeof codePoint === "number" && codePoint <= 0xff) {
-      latin1Only += char;
-    }
-  }
-  return latin1Only.trim();
+	if (typeof value !== "string") {
+		return "";
+	}
+	const collapsed = value.replace(/[\r\n\u2028\u2029]+/g, "");
+	let latin1Only = "";
+	for (const char of collapsed) {
+		const codePoint = char.codePointAt(0);
+		if (typeof codePoint === "number" && codePoint <= 0xff) {
+			latin1Only += char;
+		}
+	}
+	return latin1Only.trim();
 }
 
-export function normalizeOptionalSecretInput(value: unknown): string | undefined {
-  const normalized = normalizeSecretInput(value);
-  return normalized ? normalized : undefined;
+export function normalizeOptionalSecretInput(
+	value: unknown,
+): string | undefined {
+	const normalized = normalizeSecretInput(value);
+	return normalized ? normalized : undefined;
 }

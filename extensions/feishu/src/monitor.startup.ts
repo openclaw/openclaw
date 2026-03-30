@@ -3,79 +3,82 @@ import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS = 30_000;
-const FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV = "OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS";
+const FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV =
+	"OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS";
 
 function resolveStartupProbeTimeoutMs(): number {
-  const raw = process.env[FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV];
-  if (raw) {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return Math.floor(parsed);
-    }
-    console.warn(
-      `[feishu] ${FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV}="${raw}" is invalid; using default ${FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS}ms`,
-    );
-  }
-  return FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS;
+	const raw = process.env[FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV];
+	if (raw) {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return Math.floor(parsed);
+		}
+		console.warn(
+			`[feishu] ${FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV}="${raw}" is invalid; using default ${FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS}ms`,
+		);
+	}
+	return FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS;
 }
 
-export const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
+export const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS =
+	resolveStartupProbeTimeoutMs();
 
 type FetchBotOpenIdOptions = {
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-  timeoutMs?: number;
+	runtime?: RuntimeEnv;
+	abortSignal?: AbortSignal;
+	timeoutMs?: number;
 };
 
 export type FeishuMonitorBotIdentity = {
-  botOpenId?: string;
-  botName?: string;
+	botOpenId?: string;
+	botName?: string;
 };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("timeout") || message?.toLowerCase().includes("timed out")
-    ? true
-    : false;
+	return !!(
+		message?.toLowerCase().includes("timeout") ||
+		message?.toLowerCase().includes("timed out")
+	);
 }
 
 function isAbortErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("aborted") ?? false;
+	return message?.toLowerCase().includes("aborted") ?? false;
 }
 
 export async function fetchBotIdentityForMonitor(
-  account: ResolvedFeishuAccount,
-  options: FetchBotOpenIdOptions = {},
+	account: ResolvedFeishuAccount,
+	options: FetchBotOpenIdOptions = {},
 ): Promise<FeishuMonitorBotIdentity> {
-  if (options.abortSignal?.aborted) {
-    return {};
-  }
+	if (options.abortSignal?.aborted) {
+		return {};
+	}
 
-  const timeoutMs = options.timeoutMs ?? FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS;
-  const result = await probeFeishu(account, {
-    timeoutMs,
-    abortSignal: options.abortSignal,
-  });
-  if (result.ok) {
-    return { botOpenId: result.botOpenId, botName: result.botName };
-  }
+	const timeoutMs = options.timeoutMs ?? FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS;
+	const result = await probeFeishu(account, {
+		timeoutMs,
+		abortSignal: options.abortSignal,
+	});
+	if (result.ok) {
+		return { botOpenId: result.botOpenId, botName: result.botName };
+	}
 
-  if (options.abortSignal?.aborted || isAbortErrorMessage(result.error)) {
-    return {};
-  }
+	if (options.abortSignal?.aborted || isAbortErrorMessage(result.error)) {
+		return {};
+	}
 
-  if (isTimeoutErrorMessage(result.error)) {
-    const error = options.runtime?.error ?? console.error;
-    error(
-      `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
-    );
-  }
-  return {};
+	if (isTimeoutErrorMessage(result.error)) {
+		const error = options.runtime?.error ?? console.error;
+		error(
+			`feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
+		);
+	}
+	return {};
 }
 
 export async function fetchBotOpenIdForMonitor(
-  account: ResolvedFeishuAccount,
-  options: FetchBotOpenIdOptions = {},
+	account: ResolvedFeishuAccount,
+	options: FetchBotOpenIdOptions = {},
 ): Promise<string | undefined> {
-  const identity = await fetchBotIdentityForMonitor(account, options);
-  return identity.botOpenId;
+	const identity = await fetchBotIdentityForMonitor(account, options);
+	return identity.botOpenId;
 }

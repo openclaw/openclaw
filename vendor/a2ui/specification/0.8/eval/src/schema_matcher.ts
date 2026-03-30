@@ -15,10 +15,10 @@
  */
 
 export interface ValidationResult {
-  success: boolean;
-  error?: string;
+	success: boolean;
+	error?: string;
 }
 
 export abstract class SchemaMatcher {
-  abstract validate(schema: any): ValidationResult;
+	abstract validate(schema: any): ValidationResult;
 }

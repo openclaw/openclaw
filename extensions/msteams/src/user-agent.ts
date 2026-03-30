@@ -4,21 +4,23 @@ import { getMSTeamsRuntime } from "./runtime.js";
 let cachedUserAgent: string | undefined;
 
 function resolveTeamsSdkVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require("@microsoft/teams.apps/package.json") as { version?: string };
-    return pkg.version ?? "unknown";
-  } catch {
-    return "unknown";
-  }
+	try {
+		const require = createRequire(import.meta.url);
+		const pkg = require("@microsoft/teams.apps/package.json") as {
+			version?: string;
+		};
+		return pkg.version ?? "unknown";
+	} catch {
+		return "unknown";
+	}
 }
 
 function resolveOpenClawVersion(): string {
-  try {
-    return getMSTeamsRuntime().version;
-  } catch {
-    return "unknown";
-  }
+	try {
+		return getMSTeamsRuntime().version;
+	} catch {
+		return "unknown";
+	}
 }
 
 /**
@@ -33,13 +35,13 @@ function resolveOpenClawVersion(): string {
  */
 /** Reset the cached User-Agent (for testing). */
 export function resetUserAgentCache(): void {
-  cachedUserAgent = undefined;
+	cachedUserAgent = undefined;
 }
 
 export function buildUserAgent(): string {
-  if (cachedUserAgent) {
-    return cachedUserAgent;
-  }
-  cachedUserAgent = `teams.ts[apps]/${resolveTeamsSdkVersion()} OpenClaw/${resolveOpenClawVersion()}`;
-  return cachedUserAgent;
+	if (cachedUserAgent) {
+		return cachedUserAgent;
+	}
+	cachedUserAgent = `teams.ts[apps]/${resolveTeamsSdkVersion()} OpenClaw/${resolveOpenClawVersion()}`;
+	return cachedUserAgent;
 }

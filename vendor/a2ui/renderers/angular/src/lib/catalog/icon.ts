@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-import { Component, computed, input } from '@angular/core';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Primitives } from '@a2ui/lit/0.8';
+import type { Primitives } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: 'a2ui-icon',
-  styles: `
+	selector: "a2ui-icon",
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -28,7 +28,7 @@ import { Primitives } from '@a2ui/lit/0.8';
       overflow: auto;
     }
   `,
-  template: `
+	template: `
     @let resolvedName = this.resolvedName();
 
     @if (resolvedName) {
@@ -39,6 +39,8 @@ import { Primitives } from '@a2ui/lit/0.8';
   `,
 })
 export class Icon extends DynamicComponent {
-  readonly name = input.required<Primitives.StringValue | null>();
-  protected readonly resolvedName = computed(() => this.resolvePrimitive(this.name()));
+	readonly name = input.required<Primitives.StringValue | null>();
+	protected readonly resolvedName = computed(() =>
+		this.resolvePrimitive(this.name()),
+	);
 }

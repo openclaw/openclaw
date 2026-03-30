@@ -14,8 +14,8 @@
  limitations under the License.
  */
 
-export * from './lib/rendering/index';
-export * from './lib/data/index';
-export * from './lib/config';
-export * from './lib/catalog/default';
-export { Surface } from './lib/catalog/surface';
+export * from "./lib/catalog/default";
+export { Surface } from "./lib/catalog/surface";
+export * from "./lib/config";
+export * from "./lib/data/index";
+export * from "./lib/rendering/index";

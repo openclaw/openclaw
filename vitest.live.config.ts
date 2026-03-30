@@ -4,17 +4,19 @@ import baseConfig from "./vitest.config.ts";
 
 const base = baseConfig as unknown as Record<string, unknown>;
 const baseTest = (baseConfig as { test?: { exclude?: string[] } }).test ?? {};
-const exclude = (baseTest.exclude ?? []).filter((p) => p !== "**/*.live.test.ts");
+const exclude = (baseTest.exclude ?? []).filter(
+	(p) => p !== "**/*.live.test.ts",
+);
 
 export default defineConfig({
-  ...base,
-  test: {
-    ...baseTest,
-    // Live suites need immediate provider/gateway progress output rather than
-    // Vitest's buffered per-test console capture.
-    disableConsoleIntercept: true,
-    maxWorkers: 1,
-    include: ["src/**/*.live.test.ts", BUNDLED_PLUGIN_LIVE_TEST_GLOB],
-    exclude,
-  },
+	...base,
+	test: {
+		...baseTest,
+		// Live suites need immediate provider/gateway progress output rather than
+		// Vitest's buffered per-test console capture.
+		disableConsoleIntercept: true,
+		maxWorkers: 1,
+		include: ["src/**/*.live.test.ts", BUNDLED_PLUGIN_LIVE_TEST_GLOB],
+		exclude,
+	},
 });

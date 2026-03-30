@@ -1,4 +1,4 @@
 export {
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
-  setMatrixThreadBindingMaxAgeBySessionKey,
+	setMatrixThreadBindingIdleTimeoutBySessionKey,
+	setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./src/matrix/thread-bindings-shared.js";

@@ -9,17 +9,23 @@ import { fetchWithSsrFGuard } from "../../runtime-api.js";
 import { getDefaultSsrFPolicy } from "../urbit/context.js";
 
 // Default to OpenClaw workspace media directory
-const DEFAULT_MEDIA_DIR = path.join(homedir(), ".openclaw", "workspace", "media", "inbound");
+const DEFAULT_MEDIA_DIR = path.join(
+	homedir(),
+	".openclaw",
+	"workspace",
+	"media",
+	"inbound",
+);
 
 export interface ExtractedImage {
-  url: string;
-  alt?: string;
+	url: string;
+	alt?: string;
 }
 
 export interface DownloadedMedia {
-  localPath: string;
-  contentType: string;
-  originalUrl: string;
+	localPath: string;
+	contentType: string;
+	originalUrl: string;
 }
 
 /**
@@ -27,22 +33,22 @@ export interface DownloadedMedia {
  * Returns array of image URLs found in the message.
  */
 export function extractImageBlocks(content: unknown): ExtractedImage[] {
-  if (!content || !Array.isArray(content)) {
-    return [];
-  }
+	if (!content || !Array.isArray(content)) {
+		return [];
+	}
 
-  const images: ExtractedImage[] = [];
+	const images: ExtractedImage[] = [];
 
-  for (const verse of content) {
-    if (verse?.block?.image?.src) {
-      images.push({
-        url: verse.block.image.src,
-        alt: verse.block.image.alt,
-      });
-    }
-  }
+	for (const verse of content) {
+		if (verse?.block?.image?.src) {
+			images.push({
+				url: verse.block.image.src,
+				alt: verse.block.image.alt,
+			});
+		}
+	}
 
-  return images;
+	return images;
 }
 
 /**
@@ -50,91 +56,99 @@ export function extractImageBlocks(content: unknown): ExtractedImage[] {
  * Returns the local path where the file was saved.
  */
 export async function downloadMedia(
-  url: string,
-  mediaDir: string = DEFAULT_MEDIA_DIR,
+	url: string,
+	mediaDir: string = DEFAULT_MEDIA_DIR,
 ): Promise<DownloadedMedia | null> {
-  try {
-    // Validate URL is http/https before fetching
-    const parsedUrl = new URL(url);
-    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      console.warn(`[tlon-media] Rejected non-http(s) URL: ${url}`);
-      return null;
-    }
+	try {
+		// Validate URL is http/https before fetching
+		const parsedUrl = new URL(url);
+		if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+			console.warn(`[tlon-media] Rejected non-http(s) URL: ${url}`);
+			return null;
+		}
 
-    // Ensure media directory exists
-    await mkdir(mediaDir, { recursive: true });
+		// Ensure media directory exists
+		await mkdir(mediaDir, { recursive: true });
 
-    // Fetch with SSRF protection
-    // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: { method: "GET" },
-      policy: getDefaultSsrFPolicy(),
-      auditContext: "tlon-media-download",
-    });
+		// Fetch with SSRF protection
+		// Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
+		const { response, release } = await fetchWithSsrFGuard({
+			url,
+			init: { method: "GET" },
+			policy: getDefaultSsrFPolicy(),
+			auditContext: "tlon-media-download",
+		});
 
-    try {
-      if (!response.ok) {
-        console.error(`[tlon-media] Failed to fetch ${url}: ${response.status}`);
-        return null;
-      }
+		try {
+			if (!response.ok) {
+				console.error(
+					`[tlon-media] Failed to fetch ${url}: ${response.status}`,
+				);
+				return null;
+			}
 
-      // Determine content type and extension
-      const contentType = response.headers.get("content-type") || "application/octet-stream";
-      const ext = getExtensionFromContentType(contentType) || getExtensionFromUrl(url) || "bin";
+			// Determine content type and extension
+			const contentType =
+				response.headers.get("content-type") || "application/octet-stream";
+			const ext =
+				getExtensionFromContentType(contentType) ||
+				getExtensionFromUrl(url) ||
+				"bin";
 
-      // Generate unique filename
-      const filename = `${randomUUID()}.${ext}`;
-      const localPath = path.join(mediaDir, filename);
+			// Generate unique filename
+			const filename = `${randomUUID()}.${ext}`;
+			const localPath = path.join(mediaDir, filename);
 
-      // Stream to file
-      const body = response.body;
-      if (!body) {
-        console.error(`[tlon-media] No response body for ${url}`);
-        return null;
-      }
+			// Stream to file
+			const body = response.body;
+			if (!body) {
+				console.error(`[tlon-media] No response body for ${url}`);
+				return null;
+			}
 
-      const writeStream = createWriteStream(localPath);
-      await pipeline(Readable.fromWeb(body as any), writeStream);
+			const writeStream = createWriteStream(localPath);
+			await pipeline(Readable.fromWeb(body as any), writeStream);
 
-      return {
-        localPath,
-        contentType,
-        originalUrl: url,
-      };
-    } finally {
-      await release();
-    }
-  } catch (error: any) {
-    console.error(`[tlon-media] Error downloading ${url}: ${error?.message ?? String(error)}`);
-    return null;
-  }
+			return {
+				localPath,
+				contentType,
+				originalUrl: url,
+			};
+		} finally {
+			await release();
+		}
+	} catch (error: any) {
+		console.error(
+			`[tlon-media] Error downloading ${url}: ${error?.message ?? String(error)}`,
+		);
+		return null;
+	}
 }
 
 function getExtensionFromContentType(contentType: string): string | null {
-  const map: Record<string, string> = {
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/png": "png",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "audio/mpeg": "mp3",
-    "audio/ogg": "ogg",
-  };
-  return map[contentType.split(";")[0].trim()] ?? null;
+	const map: Record<string, string> = {
+		"image/jpeg": "jpg",
+		"image/jpg": "jpg",
+		"image/png": "png",
+		"image/gif": "gif",
+		"image/webp": "webp",
+		"image/svg+xml": "svg",
+		"video/mp4": "mp4",
+		"video/webm": "webm",
+		"audio/mpeg": "mp3",
+		"audio/ogg": "ogg",
+	};
+	return map[contentType.split(";")[0].trim()] ?? null;
 }
 
 function getExtensionFromUrl(url: string): string | null {
-  try {
-    const pathname = new URL(url).pathname;
-    const match = pathname.match(/\.([a-z0-9]+)$/i);
-    return match ? match[1].toLowerCase() : null;
-  } catch {
-    return null;
-  }
+	try {
+		const pathname = new URL(url).pathname;
+		const match = pathname.match(/\.([a-z0-9]+)$/i);
+		return match ? match[1].toLowerCase() : null;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -142,25 +156,25 @@ function getExtensionFromUrl(url: string): string | null {
  * Format matches OpenClaw's expected attachment structure.
  */
 export async function downloadMessageImages(
-  content: unknown,
-  mediaDir?: string,
+	content: unknown,
+	mediaDir?: string,
 ): Promise<Array<{ path: string; contentType: string }>> {
-  const images = extractImageBlocks(content);
-  if (images.length === 0) {
-    return [];
-  }
+	const images = extractImageBlocks(content);
+	if (images.length === 0) {
+		return [];
+	}
 
-  const attachments: Array<{ path: string; contentType: string }> = [];
+	const attachments: Array<{ path: string; contentType: string }> = [];
 
-  for (const image of images) {
-    const downloaded = await downloadMedia(image.url, mediaDir);
-    if (downloaded) {
-      attachments.push({
-        path: downloaded.localPath,
-        contentType: downloaded.contentType,
-      });
-    }
-  }
+	for (const image of images) {
+		const downloaded = await downloadMedia(image.url, mediaDir);
+		if (downloaded) {
+			attachments.push({
+				path: downloaded.localPath,
+				contentType: downloaded.contentType,
+			});
+		}
+	}
 
-  return attachments;
+	return attachments;
 }

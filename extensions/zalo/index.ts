@@ -6,9 +6,9 @@ export { zaloPlugin } from "./src/channel.js";
 export { setZaloRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: "zalo",
-  name: "Zalo",
-  description: "Zalo channel plugin",
-  plugin: zaloPlugin,
-  setRuntime: setZaloRuntime,
+	id: "zalo",
+	name: "Zalo",
+	description: "Zalo channel plugin",
+	plugin: zaloPlugin,
+	setRuntime: setZaloRuntime,
 });

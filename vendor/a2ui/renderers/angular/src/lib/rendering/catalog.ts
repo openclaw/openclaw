@@ -14,23 +14,23 @@
  limitations under the License.
  */
 
-import { Binding, InjectionToken, Type } from '@angular/core';
-import { DynamicComponent } from './dynamic-component';
-import { Types } from '@a2ui/lit/0.8';
+import type { Types } from "@a2ui/lit/0.8";
+import { type Binding, InjectionToken, type Type } from "@angular/core";
+import type { DynamicComponent } from "./dynamic-component";
 
 export type CatalogLoader = () =>
-  | Promise<Type<DynamicComponent<any>>>
-  | Type<DynamicComponent<any>>;
+	| Promise<Type<DynamicComponent<any>>>
+	| Type<DynamicComponent<any>>;
 
 export type CatalogEntry<T extends Types.AnyComponentNode> =
-  | CatalogLoader
-  | {
-    type: CatalogLoader;
-    bindings: (data: T) => Binding[];
-  };
+	| CatalogLoader
+	| {
+			type: CatalogLoader;
+			bindings: (data: T) => Binding[];
+	  };
 
 export interface Catalog {
-  [key: string]: CatalogEntry<Types.AnyComponentNode>;
+	[key: string]: CatalogEntry<Types.AnyComponentNode>;
 }
 
-export const Catalog = new InjectionToken<Catalog>('Catalog');
+export const Catalog = new InjectionToken<Catalog>("Catalog");

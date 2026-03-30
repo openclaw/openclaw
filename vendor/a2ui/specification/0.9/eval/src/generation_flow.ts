@@ -16,28 +16,28 @@
 
 import { z } from "genkit";
 import { ai } from "./ai";
-import { ModelConfiguration } from "./models";
-import { rateLimiter } from "./rateLimiter";
 import { logger } from "./logger";
+import type { ModelConfiguration } from "./models";
+import { rateLimiter } from "./rateLimiter";
 
 // Define a UI component generator flow
 export const componentGeneratorFlow = ai.defineFlow(
-  {
-    name: "componentGeneratorFlow",
-    inputSchema: z.object({
-      prompt: z.string(),
-      modelConfig: z.any(), // Ideally, we'd have a Zod schema for ModelConfiguration
-      schemas: z.any(),
-      catalogRules: z.string().optional(),
-    }),
-    outputSchema: z.any(),
-  },
-  async ({ prompt, modelConfig, schemas, catalogRules }) => {
-    const schemaDefs = Object.values(schemas)
-      .map((s: any) => JSON.stringify(s, null, 2))
-      .join("\n\n");
+	{
+		name: "componentGeneratorFlow",
+		inputSchema: z.object({
+			prompt: z.string(),
+			modelConfig: z.any(), // Ideally, we'd have a Zod schema for ModelConfiguration
+			schemas: z.any(),
+			catalogRules: z.string().optional(),
+		}),
+		outputSchema: z.any(),
+	},
+	async ({ prompt, modelConfig, schemas, catalogRules }) => {
+		const schemaDefs = Object.values(schemas)
+			.map((s: any) => JSON.stringify(s, null, 2))
+			.join("\n\n");
 
-    const fullPrompt = `You are an AI assistant. Based on the following request, generate a stream of JSON messages that conform to the provided JSON Schemas.
+		const fullPrompt = `You are an AI assistant. Based on the following request, generate a stream of JSON messages that conform to the provided JSON Schemas.
 The output MUST be a series of JSON objects, each enclosed in a markdown code block (or a single block with multiple objects).
 
 Standard Instructions:
@@ -63,86 +63,86 @@ ${schemaDefs}
 Request:
 ${prompt}
 `;
-    const estimatedInputTokens = Math.ceil(fullPrompt.length / 2.5);
-    await rateLimiter.acquirePermit(
-      modelConfig as ModelConfiguration,
-      estimatedInputTokens
-    );
+		const estimatedInputTokens = Math.ceil(fullPrompt.length / 2.5);
+		await rateLimiter.acquirePermit(
+			modelConfig as ModelConfiguration,
+			estimatedInputTokens,
+		);
 
-    // Generate text response
-    let response;
-    const startTime = Date.now();
-    try {
-      response = await ai.generate({
-        prompt: fullPrompt,
-        model: modelConfig.model,
-        config: modelConfig.config,
-      });
-    } catch (e) {
-      logger.error(`Error during ai.generate: ${e}`);
-      rateLimiter.reportError(modelConfig as ModelConfiguration, e);
-      throw e;
-    }
-    const latency = Date.now() - startTime;
+		// Generate text response
+		let response;
+		const startTime = Date.now();
+		try {
+			response = await ai.generate({
+				prompt: fullPrompt,
+				model: modelConfig.model,
+				config: modelConfig.config,
+			});
+		} catch (e) {
+			logger.error(`Error during ai.generate: ${e}`);
+			rateLimiter.reportError(modelConfig as ModelConfiguration, e);
+			throw e;
+		}
+		const latency = Date.now() - startTime;
 
-    if (!response) throw new Error("Failed to generate component");
+		if (!response) throw new Error("Failed to generate component");
 
-    let candidate = (response as any).candidates?.[0];
+		let candidate = (response as any).candidates?.[0];
 
-    // Fallback for different response structure (e.g. Genkit 0.9+ or specific model adapters)
-    if (!candidate && (response as any).message) {
-      const message = (response as any).message;
-      candidate = {
-        index: 0,
-        content: message.content,
-        finishReason: "STOP", // Assume STOP if not provided in this format
-        message: message,
-      };
-    }
+		// Fallback for different response structure (e.g. Genkit 0.9+ or specific model adapters)
+		if (!candidate && (response as any).message) {
+			const message = (response as any).message;
+			candidate = {
+				index: 0,
+				content: message.content,
+				finishReason: "STOP", // Assume STOP if not provided in this format
+				message: message,
+			};
+		}
 
-    if (!candidate) {
-      logger.error(
-        `No candidates returned in response. Full response: ${JSON.stringify(response, null, 2)}`
-      );
-      throw new Error("No candidates returned");
-    }
+		if (!candidate) {
+			logger.error(
+				`No candidates returned in response. Full response: ${JSON.stringify(response, null, 2)}`,
+			);
+			throw new Error("No candidates returned");
+		}
 
-    if (
-      candidate.finishReason !== "STOP" &&
-      candidate.finishReason !== undefined
-    ) {
-      logger.warn(
-        `Model finished with reason: ${candidate.finishReason}. Content: ${JSON.stringify(
-          candidate.content
-        )}`
-      );
-    }
+		if (
+			candidate.finishReason !== "STOP" &&
+			candidate.finishReason !== undefined
+		) {
+			logger.warn(
+				`Model finished with reason: ${candidate.finishReason}. Content: ${JSON.stringify(
+					candidate.content,
+				)}`,
+			);
+		}
 
-    // Record token usage (adjusting for actual usage)
-    const inputTokens = response.usage?.inputTokens || 0;
-    const outputTokens = response.usage?.outputTokens || 0;
-    const totalTokens = inputTokens + outputTokens;
+		// Record token usage (adjusting for actual usage)
+		const inputTokens = response.usage?.inputTokens || 0;
+		const outputTokens = response.usage?.outputTokens || 0;
+		const _totalTokens = inputTokens + outputTokens;
 
-    // We already recorded estimatedInputTokens. We need to record the difference.
-    // If actual > estimated, we record the positive difference.
-    // If actual < estimated, we technically over-counted, but RateLimiter doesn't support negative adjustments yet.
-    // For safety, we just record any *additional* tokens if we under-estimated.
-    // And we definitely record the output tokens.
+		// We already recorded estimatedInputTokens. We need to record the difference.
+		// If actual > estimated, we record the positive difference.
+		// If actual < estimated, we technically over-counted, but RateLimiter doesn't support negative adjustments yet.
+		// For safety, we just record any *additional* tokens if we under-estimated.
+		// And we definitely record the output tokens.
 
-    const additionalInputTokens = Math.max(
-      0,
-      inputTokens - estimatedInputTokens
-    );
-    const tokensToAdd = additionalInputTokens + outputTokens;
+		const additionalInputTokens = Math.max(
+			0,
+			inputTokens - estimatedInputTokens,
+		);
+		const tokensToAdd = additionalInputTokens + outputTokens;
 
-    if (tokensToAdd > 0) {
-      rateLimiter.recordUsage(
-        modelConfig as ModelConfiguration,
-        tokensToAdd,
-        false
-      );
-    }
+		if (tokensToAdd > 0) {
+			rateLimiter.recordUsage(
+				modelConfig as ModelConfiguration,
+				tokensToAdd,
+				false,
+			);
+		}
 
-    return { text: response.text, latency };
-  }
+		return { text: response.text, latency };
+	},
 );

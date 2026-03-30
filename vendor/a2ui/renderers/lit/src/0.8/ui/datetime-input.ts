@@ -14,32 +14,32 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Root } from "./root.js";
-import { StringValue } from "../types/primitives.js";
 import { classMap } from "lit/directives/class-map.js";
-import { A2uiMessageProcessor } from "../data/model-processor.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { A2uiMessageProcessor } from "../data/model-processor.js";
+import type { StringValue } from "../types/primitives.js";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
 
 @customElement("a2ui-datetimeinput")
 export class DateTimeInput extends Root {
-  @property()
-  accessor value: StringValue | null = null;
+	@property()
+	accessor value: StringValue | null = null;
 
-  @property()
-  accessor label: StringValue | null = null;
+	@property()
+	accessor label: StringValue | null = null;
 
-  @property({ reflect: false, type: Boolean })
-  accessor enableDate = true;
+	@property({ reflect: false, type: Boolean })
+	accessor enableDate = true;
 
-  @property({ reflect: false, type: Boolean })
-  accessor enableTime = true;
+	@property({ reflect: false, type: Boolean })
+	accessor enableTime = true;
 
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       * {
         box-sizing: border-box;
       }
@@ -59,31 +59,31 @@ export class DateTimeInput extends Root {
         width: 100%;
       }
     `,
-  ];
+	];
 
-  #setBoundValue(value: string) {
-    if (!this.value || !this.processor) {
-      return;
-    }
+	#setBoundValue(value: string) {
+		if (!this.value || !this.processor) {
+			return;
+		}
 
-    if (!("path" in this.value)) {
-      return;
-    }
+		if (!("path" in this.value)) {
+			return;
+		}
 
-    if (!this.value.path) {
-      return;
-    }
+		if (!this.value.path) {
+			return;
+		}
 
-    this.processor.setData(
-      this.component,
-      this.value.path,
-      value,
-      this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID
-    );
-  }
+		this.processor.setData(
+			this.component,
+			this.value.path,
+			value,
+			this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID,
+		);
+	}
 
-  #renderField(value: string) {
-    return html`<section
+	#renderField(value: string) {
+		return html`<section
       class=${classMap(this.theme.components.DateTimeInput.container)}
     >
       <label
@@ -94,16 +94,18 @@ export class DateTimeInput extends Root {
       <input
         autocomplete="off"
         class=${classMap(this.theme.components.DateTimeInput.element)}
-        style=${this.theme.additionalStyles?.DateTimeInput
-          ? styleMap(this.theme.additionalStyles?.DateTimeInput)
-          : nothing}
+        style=${
+					this.theme.additionalStyles?.DateTimeInput
+						? styleMap(this.theme.additionalStyles?.DateTimeInput)
+						: nothing
+				}
         @input=${(evt: Event) => {
-          if (!(evt.target instanceof HTMLInputElement)) {
-            return;
-          }
+					if (!(evt.target instanceof HTMLInputElement)) {
+						return;
+					}
 
-          this.#setBoundValue(evt.target.value);
-        }}
+					this.#setBoundValue(evt.target.value);
+				}}
         id="data"
         name="data"
         .value=${this.#formatInputValue(value)}
@@ -111,87 +113,87 @@ export class DateTimeInput extends Root {
         .type=${this.#getInputType()}
       />
     </section>`;
-  }
+	}
 
-  #getInputType() {
-    if (this.enableDate && this.enableTime) {
-      return "datetime-local";
-    } else if (this.enableDate) {
-      return "date";
-    } else if (this.enableTime) {
-      return "time";
-    }
+	#getInputType() {
+		if (this.enableDate && this.enableTime) {
+			return "datetime-local";
+		} else if (this.enableDate) {
+			return "date";
+		} else if (this.enableTime) {
+			return "time";
+		}
 
-    return "datetime-local";
-  }
+		return "datetime-local";
+	}
 
-  #formatInputValue(value: string) {
-    const inputType = this.#getInputType();
-    const date = value ? new Date(value) : null;
+	#formatInputValue(value: string) {
+		const inputType = this.#getInputType();
+		const date = value ? new Date(value) : null;
 
-    if (!date || isNaN(date.getTime())) {
-      return "";
-    }
+		if (!date || Number.isNaN(date.getTime())) {
+			return "";
+		}
 
-    const year = this.#padNumber(date.getFullYear());
-    const month = this.#padNumber(date.getMonth());
-    const day = this.#padNumber(date.getDate());
-    const hours = this.#padNumber(date.getHours());
-    const minutes = this.#padNumber(date.getMinutes());
+		const year = this.#padNumber(date.getFullYear());
+		const month = this.#padNumber(date.getMonth());
+		const day = this.#padNumber(date.getDate());
+		const hours = this.#padNumber(date.getHours());
+		const minutes = this.#padNumber(date.getMinutes());
 
-    // Browsers are picky with what format they allow for the `value` attribute of date/time inputs.
-    // We need to parse it out of the provided value. Note that we don't use `toISOString`,
-    // because the resulting value is relative to UTC.
-    if (inputType === "date") {
-      return `${year}-${month}-${day}`;
-    } else if (inputType === "time") {
-      return `${hours}:${minutes}`;
-    }
+		// Browsers are picky with what format they allow for the `value` attribute of date/time inputs.
+		// We need to parse it out of the provided value. Note that we don't use `toISOString`,
+		// because the resulting value is relative to UTC.
+		if (inputType === "date") {
+			return `${year}-${month}-${day}`;
+		} else if (inputType === "time") {
+			return `${hours}:${minutes}`;
+		}
 
-    return `${year}-${month}-${day}T${hours}:${minutes}`;
-  }
+		return `${year}-${month}-${day}T${hours}:${minutes}`;
+	}
 
-  #padNumber(value: number) {
-    return value.toString().padStart(2, "0");
-  }
+	#padNumber(value: number) {
+		return value.toString().padStart(2, "0");
+	}
 
-  #getPlaceholderText() {
-    // TODO: this should likely be passed from the model.
-    const inputType = this.#getInputType();
+	#getPlaceholderText() {
+		// TODO: this should likely be passed from the model.
+		const inputType = this.#getInputType();
 
-    if (inputType === "date") {
-      return "Date";
-    } else if (inputType === "time") {
-      return "Time";
-    }
+		if (inputType === "date") {
+			return "Date";
+		} else if (inputType === "time") {
+			return "Time";
+		}
 
-    return "Date & Time";
-  }
+		return "Date & Time";
+	}
 
-  render() {
-    if (this.value && typeof this.value === "object") {
-      if ("literalString" in this.value && this.value.literalString) {
-        return this.#renderField(this.value.literalString);
-      } else if ("literal" in this.value && this.value.literal !== undefined) {
-        return this.#renderField(this.value.literal);
-      } else if (this.value && "path" in this.value && this.value.path) {
-        if (!this.processor || !this.component) {
-          return html`(no model)`;
-        }
+	render() {
+		if (this.value && typeof this.value === "object") {
+			if ("literalString" in this.value && this.value.literalString) {
+				return this.#renderField(this.value.literalString);
+			} else if ("literal" in this.value && this.value.literal !== undefined) {
+				return this.#renderField(this.value.literal);
+			} else if (this.value && "path" in this.value && this.value.path) {
+				if (!this.processor || !this.component) {
+					return html`(no model)`;
+				}
 
-        const textValue = this.processor.getData(
-          this.component,
-          this.value.path,
-          this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID
-        );
-        if (typeof textValue !== "string") {
-          return html`(invalid)`;
-        }
+				const textValue = this.processor.getData(
+					this.component,
+					this.value.path,
+					this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID,
+				);
+				if (typeof textValue !== "string") {
+					return html`(invalid)`;
+				}
 
-        return this.#renderField(textValue);
-      }
-    }
+				return this.#renderField(textValue);
+			}
+		}
 
-    return nothing;
-  }
+		return nothing;
+	}
 }

@@ -1,7 +1,11 @@
 import {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
+	hasConfiguredSecretInput,
+	normalizeResolvedSecretInputString,
+	normalizeSecretInputString,
 } from "../runtime-api.js";
 
-export { hasConfiguredSecretInput, normalizeResolvedSecretInputString, normalizeSecretInputString };
+export {
+	hasConfiguredSecretInput,
+	normalizeResolvedSecretInputString,
+	normalizeSecretInputString,
+};

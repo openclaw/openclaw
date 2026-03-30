@@ -1,5 +1,5 @@
 export {
-  isMemoryMultimodalEnabled,
-  normalizeMemoryMultimodalSettings,
-  type MemoryMultimodalSettings,
+	isMemoryMultimodalEnabled,
+	type MemoryMultimodalSettings,
+	normalizeMemoryMultimodalSettings,
 } from "./host/multimodal.js";

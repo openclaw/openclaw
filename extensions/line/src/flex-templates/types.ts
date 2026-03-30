@@ -11,12 +11,12 @@ export type FlexComponent = messagingApi.FlexComponent;
 export type Action = messagingApi.Action;
 
 export interface ListItem {
-  title: string;
-  subtitle?: string;
-  action?: Action;
+	title: string;
+	subtitle?: string;
+	action?: Action;
 }
 
 export interface CardAction {
-  label: string;
-  action: Action;
+	label: string;
+	action: Action;
 }

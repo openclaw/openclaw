@@ -1,9 +1,9 @@
 let pwAiLoaded = false;
 
 export function markPwAiLoaded(): void {
-  pwAiLoaded = true;
+	pwAiLoaded = true;
 }
 
 export function isPwAiLoaded(): boolean {
-  return pwAiLoaded;
+	return pwAiLoaded;
 }

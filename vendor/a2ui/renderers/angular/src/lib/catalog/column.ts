@@ -14,15 +14,15 @@
  limitations under the License.
  */
 
-import { Component, computed, input } from '@angular/core';
-import { Types } from '@a2ui/lit/0.8';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Renderer } from '../rendering/renderer';
+import type { Types } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
+import { Renderer } from "../rendering/renderer";
 
 @Component({
-  selector: 'a2ui-column',
-  imports: [Renderer],
-  styles: `
+	selector: "a2ui-column",
+	imports: [Renderer],
+	styles: `
     :host {
       display: flex;
       flex: var(--weight);
@@ -76,7 +76,7 @@ import { Renderer } from '../rendering/renderer';
       justify-content: space-evenly;
     }
   `,
-  template: `
+	template: `
     <section [class]="classes()" [style]="theme.additionalStyles?.Column">
       @for (child of component().properties.children; track child) {
         <ng-container a2ui-renderer [surfaceId]="surfaceId()!" [component]="child" />
@@ -85,12 +85,12 @@ import { Renderer } from '../rendering/renderer';
   `,
 })
 export class Column extends DynamicComponent<Types.ColumnNode> {
-  readonly alignment = input<Types.ResolvedColumn['alignment']>('stretch');
-  readonly distribution = input<Types.ResolvedColumn['distribution']>('start');
+	readonly alignment = input<Types.ResolvedColumn["alignment"]>("stretch");
+	readonly distribution = input<Types.ResolvedColumn["distribution"]>("start");
 
-  protected readonly classes = computed(() => ({
-    ...this.theme.components.Column,
-    [`align-${this.alignment()}`]: true,
-    [`distribute-${this.distribution()}`]: true,
-  }));
+	protected readonly classes = computed(() => ({
+		...this.theme.components.Column,
+		[`align-${this.alignment()}`]: true,
+		[`distribute-${this.distribution()}`]: true,
+	}));
 }

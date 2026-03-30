@@ -2,37 +2,44 @@ import { html, nothing, type TemplateResult } from "lit";
 import { icons as sharedIcons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
-  defaultValue,
-  hasSensitiveConfigData,
-  hintForPath,
-  humanize,
-  pathKey,
-  REDACTED_PLACEHOLDER,
-  schemaType,
-  type JsonSchema,
+	defaultValue,
+	hasSensitiveConfigData,
+	hintForPath,
+	humanize,
+	type JsonSchema,
+	pathKey,
+	REDACTED_PLACEHOLDER,
+	schemaType,
 } from "./config-form.shared.ts";
 
-const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
+const META_KEYS = new Set([
+	"title",
+	"description",
+	"default",
+	"nullable",
+	"tags",
+	"x-tags",
+]);
 
 function isAnySchema(schema: JsonSchema): boolean {
-  const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
-  return keys.length === 0;
+	const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
+	return keys.length === 0;
 }
 
 function jsonValue(value: unknown): string {
-  if (value === undefined) {
-    return "";
-  }
-  try {
-    return JSON.stringify(value, null, 2) ?? "";
-  } catch {
-    return "";
-  }
+	if (value === undefined) {
+		return "";
+	}
+	try {
+		return JSON.stringify(value, null, 2) ?? "";
+	} catch {
+		return "";
+	}
 }
 
 // SVG Icons as template literals
 const icons = {
-  chevronDown: html`
+	chevronDown: html`
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -44,7 +51,7 @@ const icons = {
       <polyline points="6 9 12 15 18 9"></polyline>
     </svg>
   `,
-  plus: html`
+	plus: html`
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -57,7 +64,7 @@ const icons = {
       <line x1="5" y1="12" x2="19" y2="12"></line>
     </svg>
   `,
-  minus: html`
+	minus: html`
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -69,7 +76,7 @@ const icons = {
       <line x1="5" y1="12" x2="19" y2="12"></line>
     </svg>
   `,
-  trash: html`
+	trash: html`
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -84,7 +91,7 @@ const icons = {
       ></path>
     </svg>
   `,
-  edit: html`
+	edit: html`
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -100,69 +107,80 @@ const icons = {
 };
 
 type FieldMeta = {
-  label: string;
-  help?: string;
-  tags: string[];
+	label: string;
+	help?: string;
+	tags: string[];
 };
 
 type SensitiveRenderParams = {
-  path: Array<string | number>;
-  value: unknown;
-  hints: ConfigUiHints;
-  revealSensitive: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+	path: Array<string | number>;
+	value: unknown;
+	hints: ConfigUiHints;
+	revealSensitive: boolean;
+	isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
 };
 
 type SensitiveRenderState = {
-  isSensitive: boolean;
-  isRedacted: boolean;
-  isRevealed: boolean;
-  canReveal: boolean;
+	isSensitive: boolean;
+	isRedacted: boolean;
+	isRevealed: boolean;
+	canReveal: boolean;
 };
 
 export type ConfigSearchCriteria = {
-  text: string;
-  tags: string[];
+	text: string;
+	tags: string[];
 };
 
-function getSensitiveRenderState(params: SensitiveRenderParams): SensitiveRenderState {
-  const isSensitive = hasSensitiveConfigData(params.value, params.path, params.hints);
-  const isRevealed =
-    isSensitive &&
-    (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
-  return {
-    isSensitive,
-    isRedacted: isSensitive && !isRevealed,
-    isRevealed,
-    canReveal: isSensitive,
-  };
+function getSensitiveRenderState(
+	params: SensitiveRenderParams,
+): SensitiveRenderState {
+	const isSensitive = hasSensitiveConfigData(
+		params.value,
+		params.path,
+		params.hints,
+	);
+	const isRevealed =
+		isSensitive &&
+		(params.revealSensitive ||
+			(params.isSensitivePathRevealed?.(params.path) ?? false));
+	return {
+		isSensitive,
+		isRedacted: isSensitive && !isRevealed,
+		isRevealed,
+		canReveal: isSensitive,
+	};
 }
 
 function renderSensitiveToggleButton(params: {
-  path: Array<string | number>;
-  state: SensitiveRenderState;
-  disabled: boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
+	path: Array<string | number>;
+	state: SensitiveRenderState;
+	disabled: boolean;
+	onToggleSensitivePath?: (path: Array<string | number>) => void;
 }): TemplateResult | typeof nothing {
-  const { state } = params;
-  if (!state.isSensitive || !params.onToggleSensitivePath) {
-    return nothing;
-  }
-  return html`
+	const { state } = params;
+	if (!state.isSensitive || !params.onToggleSensitivePath) {
+		return nothing;
+	}
+	return html`
     <button
       type="button"
       class="btn btn--icon ${state.isRevealed ? "active" : ""}"
       style="width:28px;height:28px;padding:0;"
-      title=${state.canReveal
-        ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
-      aria-label=${state.canReveal
-        ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
+      title=${
+				state.canReveal
+					? state.isRevealed
+						? "Hide value"
+						: "Reveal value"
+					: "Disable stream mode to reveal value"
+			}
+      aria-label=${
+				state.canReveal
+					? state.isRevealed
+						? "Hide value"
+						: "Reveal value"
+					: "Disable stream mode to reveal value"
+			}
       aria-pressed=${state.isRevealed}
       ?disabled=${params.disabled || !state.canReveal}
       @click=${() => params.onToggleSensitivePath?.(params.path)}
@@ -172,408 +190,448 @@ function renderSensitiveToggleButton(params: {
   `;
 }
 
-function hasSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
-  return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
+function hasSearchCriteria(
+	criteria: ConfigSearchCriteria | undefined,
+): boolean {
+	return Boolean(
+		criteria && (criteria.text.length > 0 || criteria.tags.length > 0),
+	);
 }
 
 export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
-  const tags: string[] = [];
-  const seen = new Set<string>();
-  const raw = query.trim();
-  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
-    const normalized = token.trim().toLowerCase();
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      tags.push(normalized);
-    }
-    return leading;
-  });
-  return {
-    text: stripped.trim().toLowerCase(),
-    tags,
-  };
+	const tags: string[] = [];
+	const seen = new Set<string>();
+	const raw = query.trim();
+	const stripped = raw.replace(
+		/(^|\s)tag:([^\s]+)/gi,
+		(_, leading: string, token: string) => {
+			const normalized = token.trim().toLowerCase();
+			if (normalized && !seen.has(normalized)) {
+				seen.add(normalized);
+				tags.push(normalized);
+			}
+			return leading;
+		},
+	);
+	return {
+		text: stripped.trim().toLowerCase(),
+		tags,
+	};
 }
 
 function normalizeTags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const value of raw) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const tag = value.trim();
-    if (!tag) {
-      continue;
-    }
-    const key = tag.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    tags.push(tag);
-  }
-  return tags;
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+	const seen = new Set<string>();
+	const tags: string[] = [];
+	for (const value of raw) {
+		if (typeof value !== "string") {
+			continue;
+		}
+		const tag = value.trim();
+		if (!tag) {
+			continue;
+		}
+		const key = tag.toLowerCase();
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		tags.push(tag);
+	}
+	return tags;
 }
 
 function resolveFieldMeta(
-  path: Array<string | number>,
-  schema: JsonSchema,
-  hints: ConfigUiHints,
+	path: Array<string | number>,
+	schema: JsonSchema,
+	hints: ConfigUiHints,
 ): FieldMeta {
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
-  const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
-  const hintTags = normalizeTags(hint?.tags);
-  return {
-    label,
-    help,
-    tags: hintTags.length > 0 ? hintTags : schemaTags,
-  };
+	const hint = hintForPath(path, hints);
+	const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
+	const help = hint?.help ?? schema.description;
+	const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
+	const hintTags = normalizeTags(hint?.tags);
+	return {
+		label,
+		help,
+		tags: hintTags.length > 0 ? hintTags : schemaTags,
+	};
 }
 
-function matchesText(text: string, candidates: Array<string | undefined>): boolean {
-  if (!text) {
-    return true;
-  }
-  for (const candidate of candidates) {
-    if (candidate && candidate.toLowerCase().includes(text)) {
-      return true;
-    }
-  }
-  return false;
+function matchesText(
+	text: string,
+	candidates: Array<string | undefined>,
+): boolean {
+	if (!text) {
+		return true;
+	}
+	for (const candidate of candidates) {
+		if (candidate?.toLowerCase().includes(text)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
-  if (filterTags.length === 0) {
-    return true;
-  }
-  const normalized = new Set(fieldTags.map((tag) => tag.toLowerCase()));
-  return filterTags.every((tag) => normalized.has(tag));
+	if (filterTags.length === 0) {
+		return true;
+	}
+	const normalized = new Set(fieldTags.map((tag) => tag.toLowerCase()));
+	return filterTags.every((tag) => normalized.has(tag));
 }
 
 function matchesNodeSelf(params: {
-  schema: JsonSchema;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
+	schema: JsonSchema;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	criteria: ConfigSearchCriteria;
 }): boolean {
-  const { schema, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  if (!matchesTags(criteria.tags, tags)) {
-    return false;
-  }
+	const { schema, path, hints, criteria } = params;
+	if (!hasSearchCriteria(criteria)) {
+		return true;
+	}
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	if (!matchesTags(criteria.tags, tags)) {
+		return false;
+	}
 
-  if (!criteria.text) {
-    return true;
-  }
+	if (!criteria.text) {
+		return true;
+	}
 
-  const pathLabel = path
-    .filter((segment): segment is string => typeof segment === "string")
-    .join(".");
-  const enumText =
-    schema.enum && schema.enum.length > 0
-      ? schema.enum.map((value) => String(value)).join(" ")
-      : "";
+	const pathLabel = path
+		.filter((segment): segment is string => typeof segment === "string")
+		.join(".");
+	const enumText =
+		schema.enum && schema.enum.length > 0
+			? schema.enum.map((value) => String(value)).join(" ")
+			: "";
 
-  return matchesText(criteria.text, [
-    label,
-    help,
-    schema.title,
-    schema.description,
-    pathLabel,
-    enumText,
-  ]);
+	return matchesText(criteria.text, [
+		label,
+		help,
+		schema.title,
+		schema.description,
+		pathLabel,
+		enumText,
+	]);
 }
 
 export function matchesNodeSearch(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	criteria: ConfigSearchCriteria;
 }): boolean {
-  const { schema, value, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  if (matchesNodeSelf({ schema, path, hints, criteria })) {
-    return true;
-  }
+	const { schema, value, path, hints, criteria } = params;
+	if (!hasSearchCriteria(criteria)) {
+		return true;
+	}
+	if (matchesNodeSelf({ schema, path, hints, criteria })) {
+		return true;
+	}
 
-  const type = schemaType(schema);
-  if (type === "object") {
-    const fallback = value ?? schema.default;
-    const obj =
-      fallback && typeof fallback === "object" && !Array.isArray(fallback)
-        ? (fallback as Record<string, unknown>)
-        : {};
-    const props = schema.properties ?? {};
-    for (const [propKey, node] of Object.entries(props)) {
-      if (
-        matchesNodeSearch({
-          schema: node,
-          value: obj[propKey],
-          path: [...path, propKey],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-    const additional = schema.additionalProperties;
-    if (additional && typeof additional === "object") {
-      const reserved = new Set(Object.keys(props));
-      for (const [entryKey, entryValue] of Object.entries(obj)) {
-        if (reserved.has(entryKey)) {
-          continue;
-        }
-        if (
-          matchesNodeSearch({
-            schema: additional,
-            value: entryValue,
-            path: [...path, entryKey],
-            hints,
-            criteria,
-          })
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
+	const type = schemaType(schema);
+	if (type === "object") {
+		const fallback = value ?? schema.default;
+		const obj =
+			fallback && typeof fallback === "object" && !Array.isArray(fallback)
+				? (fallback as Record<string, unknown>)
+				: {};
+		const props = schema.properties ?? {};
+		for (const [propKey, node] of Object.entries(props)) {
+			if (
+				matchesNodeSearch({
+					schema: node,
+					value: obj[propKey],
+					path: [...path, propKey],
+					hints,
+					criteria,
+				})
+			) {
+				return true;
+			}
+		}
+		const additional = schema.additionalProperties;
+		if (additional && typeof additional === "object") {
+			const reserved = new Set(Object.keys(props));
+			for (const [entryKey, entryValue] of Object.entries(obj)) {
+				if (reserved.has(entryKey)) {
+					continue;
+				}
+				if (
+					matchesNodeSearch({
+						schema: additional,
+						value: entryValue,
+						path: [...path, entryKey],
+						hints,
+						criteria,
+					})
+				) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
 
-  if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-    if (!itemsSchema) {
-      return false;
-    }
-    const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
-    if (arr.length === 0) {
-      return false;
-    }
-    for (let idx = 0; idx < arr.length; idx += 1) {
-      if (
-        matchesNodeSearch({
-          schema: itemsSchema,
-          value: arr[idx],
-          path: [...path, idx],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-  }
+	if (type === "array") {
+		const itemsSchema = Array.isArray(schema.items)
+			? schema.items[0]
+			: schema.items;
+		if (!itemsSchema) {
+			return false;
+		}
+		const arr = Array.isArray(value)
+			? value
+			: Array.isArray(schema.default)
+				? schema.default
+				: [];
+		if (arr.length === 0) {
+			return false;
+		}
+		for (let idx = 0; idx < arr.length; idx += 1) {
+			if (
+				matchesNodeSearch({
+					schema: itemsSchema,
+					value: arr[idx],
+					path: [...path, idx],
+					hints,
+					criteria,
+				})
+			) {
+				return true;
+			}
+		}
+	}
 
-  return false;
+	return false;
 }
 
 function renderTags(tags: string[]): TemplateResult | typeof nothing {
-  if (tags.length === 0) {
-    return nothing;
-  }
-  return html`
+	if (tags.length === 0) {
+		return nothing;
+	}
+	return html`
     <div class="cfg-tags">${tags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}</div>
   `;
 }
 
 export function renderNode(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  unsupported: Set<string>;
-  disabled: boolean;
-  showLabel?: boolean;
-  searchCriteria?: ConfigSearchCriteria;
-  revealSensitive?: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	unsupported: Set<string>;
+	disabled: boolean;
+	showLabel?: boolean;
+	searchCriteria?: ConfigSearchCriteria;
+	revealSensitive?: boolean;
+	isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+	onToggleSensitivePath?: (path: Array<string | number>) => void;
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult | typeof nothing {
-  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const type = schemaType(schema);
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const key = pathKey(path);
-  const criteria = params.searchCriteria;
+	const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
+	const showLabel = params.showLabel ?? true;
+	const type = schemaType(schema);
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	const key = pathKey(path);
+	const criteria = params.searchCriteria;
 
-  if (unsupported.has(key)) {
-    return html`<div class="cfg-field cfg-field--error">
+	if (unsupported.has(key)) {
+		return html`<div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
       <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
     </div>`;
-  }
-  if (
-    criteria &&
-    hasSearchCriteria(criteria) &&
-    !matchesNodeSearch({ schema, value, path, hints, criteria })
-  ) {
-    return nothing;
-  }
+	}
+	if (
+		criteria &&
+		hasSearchCriteria(criteria) &&
+		!matchesNodeSearch({ schema, value, path, hints, criteria })
+	) {
+		return nothing;
+	}
 
-  // Handle anyOf/oneOf unions
-  if (schema.anyOf || schema.oneOf) {
-    const variants = schema.anyOf ?? schema.oneOf ?? [];
-    const nonNull = variants.filter(
-      (v) => !(v.type === "null" || (Array.isArray(v.type) && v.type.includes("null"))),
-    );
+	// Handle anyOf/oneOf unions
+	if (schema.anyOf || schema.oneOf) {
+		const variants = schema.anyOf ?? schema.oneOf ?? [];
+		const nonNull = variants.filter(
+			(v) =>
+				!(
+					v.type === "null" ||
+					(Array.isArray(v.type) && v.type.includes("null"))
+				),
+		);
 
-    if (nonNull.length === 1) {
-      return renderNode({ ...params, schema: nonNull[0] });
-    }
+		if (nonNull.length === 1) {
+			return renderNode({ ...params, schema: nonNull[0] });
+		}
 
-    // Check if it's a set of literal values (enum-like)
-    const extractLiteral = (v: JsonSchema): unknown => {
-      if (v.const !== undefined) {
-        return v.const;
-      }
-      if (v.enum && v.enum.length === 1) {
-        return v.enum[0];
-      }
-      return undefined;
-    };
-    const literals = nonNull.map(extractLiteral);
-    const allLiterals = literals.every((v) => v !== undefined);
+		// Check if it's a set of literal values (enum-like)
+		const extractLiteral = (v: JsonSchema): unknown => {
+			if (v.const !== undefined) {
+				return v.const;
+			}
+			if (v.enum && v.enum.length === 1) {
+				return v.enum[0];
+			}
+			return undefined;
+		};
+		const literals = nonNull.map(extractLiteral);
+		const allLiterals = literals.every((v) => v !== undefined);
 
-    if (allLiterals && literals.length > 0 && literals.length <= 5) {
-      // Use segmented control for small sets
-      const resolvedValue = value ?? schema.default;
-      return html`
+		if (allLiterals && literals.length > 0 && literals.length <= 5) {
+			// Use segmented control for small sets
+			const resolvedValue = value ?? schema.default;
+			return html`
         <div class="cfg-field">
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
           <div class="cfg-segmented">
             ${literals.map(
-              (lit) => html`
+							(lit) => html`
                 <button
                   type="button"
                   class="cfg-segmented__btn ${
-                    // oxlint-disable typescript/no-base-to-string
-                    lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""
-                  }"
+										// oxlint-disable typescript/no-base-to-string
+										lit === resolvedValue ||
+										String(lit) === String(resolvedValue)
+											? "active"
+											: ""
+									}"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, lit)}
                 >
                   ${
-                    // oxlint-disable typescript/no-base-to-string
-                    String(lit)
-                  }
+										// oxlint-disable typescript/no-base-to-string
+										String(lit)
+									}
                 </button>
               `,
-            )}
+						)}
           </div>
         </div>
       `;
-    }
+		}
 
-    if (allLiterals && literals.length > 5) {
-      // Use dropdown for larger sets
-      return renderSelect({ ...params, options: literals, value: value ?? schema.default });
-    }
+		if (allLiterals && literals.length > 5) {
+			// Use dropdown for larger sets
+			return renderSelect({
+				...params,
+				options: literals,
+				value: value ?? schema.default,
+			});
+		}
 
-    // Handle mixed primitive types
-    const primitiveTypes = new Set(nonNull.map((variant) => schemaType(variant)).filter(Boolean));
-    const normalizedTypes = new Set(
-      [...primitiveTypes].map((v) => (v === "integer" ? "number" : v)),
-    );
+		// Handle mixed primitive types
+		const primitiveTypes = new Set(
+			nonNull.map((variant) => schemaType(variant)).filter(Boolean),
+		);
+		const normalizedTypes = new Set(
+			[...primitiveTypes].map((v) => (v === "integer" ? "number" : v)),
+		);
 
-    if ([...normalizedTypes].every((v) => ["string", "number", "boolean"].includes(v as string))) {
-      const hasString = normalizedTypes.has("string");
-      const hasNumber = normalizedTypes.has("number");
-      const hasBoolean = normalizedTypes.has("boolean");
+		if (
+			[...normalizedTypes].every((v) =>
+				["string", "number", "boolean"].includes(v as string),
+			)
+		) {
+			const hasString = normalizedTypes.has("string");
+			const hasNumber = normalizedTypes.has("number");
+			const hasBoolean = normalizedTypes.has("boolean");
 
-      if (hasBoolean && normalizedTypes.size === 1) {
-        return renderNode({
-          ...params,
-          schema: { ...schema, type: "boolean", anyOf: undefined, oneOf: undefined },
-        });
-      }
+			if (hasBoolean && normalizedTypes.size === 1) {
+				return renderNode({
+					...params,
+					schema: {
+						...schema,
+						type: "boolean",
+						anyOf: undefined,
+						oneOf: undefined,
+					},
+				});
+			}
 
-      if (hasString || hasNumber) {
-        return renderTextInput({
-          ...params,
-          inputType: hasNumber && !hasString ? "number" : "text",
-        });
-      }
-    }
+			if (hasString || hasNumber) {
+				return renderTextInput({
+					...params,
+					inputType: hasNumber && !hasString ? "number" : "text",
+				});
+			}
+		}
 
-    // Complex union (e.g. array | object) — render as JSON textarea
-    return renderJsonTextarea({
-      schema,
-      value,
-      path,
-      hints,
-      disabled,
-      showLabel,
-      revealSensitive: params.revealSensitive ?? false,
-      isSensitivePathRevealed: params.isSensitivePathRevealed,
-      onToggleSensitivePath: params.onToggleSensitivePath,
-      onPatch,
-    });
-  }
+		// Complex union (e.g. array | object) — render as JSON textarea
+		return renderJsonTextarea({
+			schema,
+			value,
+			path,
+			hints,
+			disabled,
+			showLabel,
+			revealSensitive: params.revealSensitive ?? false,
+			isSensitivePathRevealed: params.isSensitivePathRevealed,
+			onToggleSensitivePath: params.onToggleSensitivePath,
+			onPatch,
+		});
+	}
 
-  // Enum - use segmented for small, dropdown for large
-  if (schema.enum) {
-    const options = schema.enum;
-    if (options.length <= 5) {
-      const resolvedValue = value ?? schema.default;
-      return html`
+	// Enum - use segmented for small, dropdown for large
+	if (schema.enum) {
+		const options = schema.enum;
+		if (options.length <= 5) {
+			const resolvedValue = value ?? schema.default;
+			return html`
         <div class="cfg-field">
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
           <div class="cfg-segmented">
             ${options.map(
-              (opt) => html`
+							(opt) => html`
                 <button
                   type="button"
-                  class="cfg-segmented__btn ${opt === resolvedValue ||
-                  String(opt) === String(resolvedValue)
-                    ? "active"
-                    : ""}"
+                  class="cfg-segmented__btn ${
+										opt === resolvedValue ||
+										String(opt) === String(resolvedValue)
+											? "active"
+											: ""
+									}"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, opt)}
                 >
                   ${String(opt)}
                 </button>
               `,
-            )}
+						)}
           </div>
         </div>
       `;
-    }
-    return renderSelect({ ...params, options, value: value ?? schema.default });
-  }
+		}
+		return renderSelect({ ...params, options, value: value ?? schema.default });
+	}
 
-  // Object type - collapsible section
-  if (type === "object") {
-    return renderObject(params);
-  }
+	// Object type - collapsible section
+	if (type === "object") {
+		return renderObject(params);
+	}
 
-  // Array type
-  if (type === "array") {
-    return renderArray(params);
-  }
+	// Array type
+	if (type === "array") {
+		return renderArray(params);
+	}
 
-  // Boolean - toggle row
-  if (type === "boolean") {
-    const displayValue =
-      typeof value === "boolean"
-        ? value
-        : typeof schema.default === "boolean"
-          ? schema.default
-          : false;
-    return html`
+	// Boolean - toggle row
+	if (type === "boolean") {
+		const displayValue =
+			typeof value === "boolean"
+				? value
+				: typeof schema.default === "boolean"
+					? schema.default
+					: false;
+		return html`
       <label class="cfg-toggle-row ${disabled ? "disabled" : ""}">
         <div class="cfg-toggle-row__content">
           <span class="cfg-toggle-row__label">${label}</span>
@@ -591,20 +649,20 @@ export function renderNode(params: {
         </div>
       </label>
     `;
-  }
+	}
 
-  // Number/Integer
-  if (type === "number" || type === "integer") {
-    return renderNumberInput(params);
-  }
+	// Number/Integer
+	if (type === "number" || type === "integer") {
+		return renderNumberInput(params);
+	}
 
-  // String
-  if (type === "string") {
-    return renderTextInput({ ...params, inputType: "text" });
-  }
+	// String
+	if (type === "string") {
+		return renderTextInput({ ...params, inputType: "text" });
+	}
 
-  // Fallback
-  return html`
+	// Fallback
+	return html`
     <div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
       <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
@@ -613,40 +671,44 @@ export function renderNode(params: {
 }
 
 function renderTextInput(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  disabled: boolean;
-  showLabel?: boolean;
-  searchCriteria?: ConfigSearchCriteria;
-  revealSensitive?: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  inputType: "text" | "number";
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	disabled: boolean;
+	showLabel?: boolean;
+	searchCriteria?: ConfigSearchCriteria;
+	revealSensitive?: boolean;
+	isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+	onToggleSensitivePath?: (path: Array<string | number>) => void;
+	inputType: "text" | "number";
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch, inputType } = params;
-  const showLabel = params.showLabel ?? true;
-  const hint = hintForPath(path, hints);
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const sensitiveState = getSensitiveRenderState({
-    path,
-    value,
-    hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  });
-  const placeholder = sensitiveState.isRedacted
-    ? REDACTED_PLACEHOLDER
-    : (hint?.placeholder ??
-      // oxlint-disable typescript/no-base-to-string
-      (schema.default !== undefined ? `Default: ${String(schema.default)}` : ""));
-  const displayValue = sensitiveState.isRedacted ? "" : (value ?? "");
-  const effectiveInputType =
-    sensitiveState.isSensitive && !sensitiveState.isRedacted ? "text" : inputType;
+	const { schema, value, path, hints, disabled, onPatch, inputType } = params;
+	const showLabel = params.showLabel ?? true;
+	const hint = hintForPath(path, hints);
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	const sensitiveState = getSensitiveRenderState({
+		path,
+		value,
+		hints,
+		revealSensitive: params.revealSensitive ?? false,
+		isSensitivePathRevealed: params.isSensitivePathRevealed,
+	});
+	const placeholder = sensitiveState.isRedacted
+		? REDACTED_PLACEHOLDER
+		: (hint?.placeholder ??
+			// oxlint-disable typescript/no-base-to-string
+			(schema.default !== undefined
+				? `Default: ${String(schema.default)}`
+				: ""));
+	const displayValue = sensitiveState.isRedacted ? "" : (value ?? "");
+	const effectiveInputType =
+		sensitiveState.isSensitive && !sensitiveState.isRedacted
+			? "text"
+			: inputType;
 
-  return html`
+	return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
@@ -659,42 +721,43 @@ function renderTextInput(params: {
           ?disabled=${disabled}
           ?readonly=${sensitiveState.isRedacted}
           @click=${() => {
-            if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
-              params.onToggleSensitivePath(path);
-            }
-          }}
+						if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
+							params.onToggleSensitivePath(path);
+						}
+					}}
           @input=${(e: Event) => {
-            if (sensitiveState.isRedacted) {
-              return;
-            }
-            const raw = (e.target as HTMLInputElement).value;
-            if (inputType === "number") {
-              if (raw.trim() === "") {
-                onPatch(path, undefined);
-                return;
-              }
-              const parsed = Number(raw);
-              onPatch(path, Number.isNaN(parsed) ? raw : parsed);
-              return;
-            }
-            onPatch(path, raw);
-          }}
+						if (sensitiveState.isRedacted) {
+							return;
+						}
+						const raw = (e.target as HTMLInputElement).value;
+						if (inputType === "number") {
+							if (raw.trim() === "") {
+								onPatch(path, undefined);
+								return;
+							}
+							const parsed = Number(raw);
+							onPatch(path, Number.isNaN(parsed) ? raw : parsed);
+							return;
+						}
+						onPatch(path, raw);
+					}}
           @change=${(e: Event) => {
-            if (inputType === "number" || sensitiveState.isRedacted) {
-              return;
-            }
-            const raw = (e.target as HTMLInputElement).value;
-            onPatch(path, raw.trim());
-          }}
+						if (inputType === "number" || sensitiveState.isRedacted) {
+							return;
+						}
+						const raw = (e.target as HTMLInputElement).value;
+						onPatch(path, raw.trim());
+					}}
         />
         ${renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        })}
-        ${schema.default !== undefined
-          ? html`
+					path,
+					state: sensitiveState,
+					disabled,
+					onToggleSensitivePath: params.onToggleSensitivePath,
+				})}
+        ${
+					schema.default !== undefined
+						? html`
               <button
                 type="button"
                 class="cfg-input__reset"
@@ -705,29 +768,30 @@ function renderTextInput(params: {
                 ↺
               </button>
             `
-          : nothing}
+						: nothing
+				}
       </div>
     </div>
   `;
 }
 
 function renderNumberInput(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  disabled: boolean;
-  showLabel?: boolean;
-  searchCriteria?: ConfigSearchCriteria;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	disabled: boolean;
+	showLabel?: boolean;
+	searchCriteria?: ConfigSearchCriteria;
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const displayValue = value ?? schema.default ?? "";
-  const numValue = typeof displayValue === "number" ? displayValue : 0;
+	const { schema, value, path, hints, disabled, onPatch } = params;
+	const showLabel = params.showLabel ?? true;
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	const displayValue = value ?? schema.default ?? "";
+	const numValue = typeof displayValue === "number" ? displayValue : 0;
 
-  return html`
+	return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
@@ -746,10 +810,10 @@ function renderNumberInput(params: {
           .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
           @input=${(e: Event) => {
-            const raw = (e.target as HTMLInputElement).value;
-            const parsed = raw === "" ? undefined : Number(raw);
-            onPatch(path, parsed);
-          }}
+						const raw = (e.target as HTMLInputElement).value;
+						const parsed = raw === "" ? undefined : Number(raw);
+						onPatch(path, parsed);
+					}}
         />
         <button
           type="button"
@@ -765,26 +829,26 @@ function renderNumberInput(params: {
 }
 
 function renderSelect(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  disabled: boolean;
-  showLabel?: boolean;
-  searchCriteria?: ConfigSearchCriteria;
-  options: unknown[];
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	disabled: boolean;
+	showLabel?: boolean;
+	searchCriteria?: ConfigSearchCriteria;
+	options: unknown[];
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, disabled, options, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const resolvedValue = value ?? schema.default;
-  const currentIndex = options.findIndex(
-    (opt) => opt === resolvedValue || String(opt) === String(resolvedValue),
-  );
-  const unset = "__unset__";
+	const { schema, value, path, hints, disabled, options, onPatch } = params;
+	const showLabel = params.showLabel ?? true;
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	const resolvedValue = value ?? schema.default;
+	const currentIndex = options.findIndex(
+		(opt) => opt === resolvedValue || String(opt) === String(resolvedValue),
+	);
+	const unset = "__unset__";
 
-  return html`
+	return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
@@ -793,9 +857,9 @@ function renderSelect(params: {
         ?disabled=${disabled}
         .value=${currentIndex >= 0 ? String(currentIndex) : unset}
         @change=${(e: Event) => {
-          const val = (e.target as HTMLSelectElement).value;
-          onPatch(path, val === unset ? undefined : options[Number(val)]);
-        }}
+					const val = (e.target as HTMLSelectElement).value;
+					onPatch(path, val === unset ? undefined : options[Number(val)]);
+				}}
       >
         <option value=${unset}>Select...</option>
         ${options.map((opt, idx) => html` <option value=${String(idx)}>${String(opt)}</option> `)}
@@ -805,31 +869,31 @@ function renderSelect(params: {
 }
 
 function renderJsonTextarea(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  disabled: boolean;
-  showLabel?: boolean;
-  revealSensitive?: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	disabled: boolean;
+	showLabel?: boolean;
+	revealSensitive?: boolean;
+	isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+	onToggleSensitivePath?: (path: Array<string | number>) => void;
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const fallback = jsonValue(value);
-  const sensitiveState = getSensitiveRenderState({
-    path,
-    value,
-    hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  });
-  const displayValue = sensitiveState.isRedacted ? "" : fallback;
+	const { schema, value, path, hints, disabled, onPatch } = params;
+	const showLabel = params.showLabel ?? true;
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	const fallback = jsonValue(value);
+	const sensitiveState = getSensitiveRenderState({
+		path,
+		value,
+		hints,
+		revealSensitive: params.revealSensitive ?? false,
+		isSensitivePathRevealed: params.isSensitivePathRevealed,
+	});
+	const displayValue = sensitiveState.isRedacted ? "" : fallback;
 
-  return html`
+	return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
@@ -842,140 +906,142 @@ function renderJsonTextarea(params: {
           ?disabled=${disabled}
           ?readonly=${sensitiveState.isRedacted}
           @click=${() => {
-            if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
-              params.onToggleSensitivePath(path);
-            }
-          }}
+						if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
+							params.onToggleSensitivePath(path);
+						}
+					}}
           @change=${(e: Event) => {
-            if (sensitiveState.isRedacted) {
-              return;
-            }
-            const target = e.target as HTMLTextAreaElement;
-            const raw = target.value.trim();
-            if (!raw) {
-              onPatch(path, undefined);
-              return;
-            }
-            try {
-              onPatch(path, JSON.parse(raw));
-            } catch {
-              target.value = fallback;
-            }
-          }}
+						if (sensitiveState.isRedacted) {
+							return;
+						}
+						const target = e.target as HTMLTextAreaElement;
+						const raw = target.value.trim();
+						if (!raw) {
+							onPatch(path, undefined);
+							return;
+						}
+						try {
+							onPatch(path, JSON.parse(raw));
+						} catch {
+							target.value = fallback;
+						}
+					}}
         ></textarea>
         ${renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        })}
+					path,
+					state: sensitiveState,
+					disabled,
+					onToggleSensitivePath: params.onToggleSensitivePath,
+				})}
       </div>
     </div>
   `;
 }
 
 function renderObject(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  unsupported: Set<string>;
-  disabled: boolean;
-  showLabel?: boolean;
-  searchCriteria?: ConfigSearchCriteria;
-  revealSensitive?: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	unsupported: Set<string>;
+	disabled: boolean;
+	showLabel?: boolean;
+	searchCriteria?: ConfigSearchCriteria;
+	revealSensitive?: boolean;
+	isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+	onToggleSensitivePath?: (path: Array<string | number>) => void;
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    searchCriteria,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-  } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const selfMatched =
-    searchCriteria && hasSearchCriteria(searchCriteria)
-      ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
-      : false;
-  const childSearchCriteria = selfMatched ? undefined : searchCriteria;
+	const {
+		schema,
+		value,
+		path,
+		hints,
+		unsupported,
+		disabled,
+		onPatch,
+		searchCriteria,
+		revealSensitive,
+		isSensitivePathRevealed,
+		onToggleSensitivePath,
+	} = params;
+	const showLabel = params.showLabel ?? true;
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	const selfMatched =
+		searchCriteria && hasSearchCriteria(searchCriteria)
+			? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
+			: false;
+	const childSearchCriteria = selfMatched ? undefined : searchCriteria;
 
-  const fallback = value ?? schema.default;
-  const obj =
-    fallback && typeof fallback === "object" && !Array.isArray(fallback)
-      ? (fallback as Record<string, unknown>)
-      : {};
-  const props = schema.properties ?? {};
-  const entries = Object.entries(props);
+	const fallback = value ?? schema.default;
+	const obj =
+		fallback && typeof fallback === "object" && !Array.isArray(fallback)
+			? (fallback as Record<string, unknown>)
+			: {};
+	const props = schema.properties ?? {};
+	const entries = Object.entries(props);
 
-  // Sort by hint order
-  const sorted = entries.toSorted((a, b) => {
-    const orderA = hintForPath([...path, a[0]], hints)?.order ?? 0;
-    const orderB = hintForPath([...path, b[0]], hints)?.order ?? 0;
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    return a[0].localeCompare(b[0]);
-  });
+	// Sort by hint order
+	const sorted = entries.toSorted((a, b) => {
+		const orderA = hintForPath([...path, a[0]], hints)?.order ?? 0;
+		const orderB = hintForPath([...path, b[0]], hints)?.order ?? 0;
+		if (orderA !== orderB) {
+			return orderA - orderB;
+		}
+		return a[0].localeCompare(b[0]);
+	});
 
-  const reserved = new Set(Object.keys(props));
-  const additional = schema.additionalProperties;
-  const allowExtra = Boolean(additional) && typeof additional === "object";
+	const reserved = new Set(Object.keys(props));
+	const additional = schema.additionalProperties;
+	const allowExtra = Boolean(additional) && typeof additional === "object";
 
-  const fields = html`
+	const fields = html`
     ${sorted.map(([propKey, node]) =>
-      renderNode({
-        schema: node,
-        value: obj[propKey],
-        path: [...path, propKey],
-        hints,
-        unsupported,
-        disabled,
-        searchCriteria: childSearchCriteria,
-        revealSensitive,
-        isSensitivePathRevealed,
-        onToggleSensitivePath,
-        onPatch,
-      }),
-    )}
-    ${allowExtra
-      ? renderMapField({
-          schema: additional,
-          value: obj,
-          path,
-          hints,
-          unsupported,
-          disabled,
-          reservedKeys: reserved,
-          searchCriteria: childSearchCriteria,
-          revealSensitive,
-          isSensitivePathRevealed,
-          onToggleSensitivePath,
-          onPatch,
-        })
-      : nothing}
+			renderNode({
+				schema: node,
+				value: obj[propKey],
+				path: [...path, propKey],
+				hints,
+				unsupported,
+				disabled,
+				searchCriteria: childSearchCriteria,
+				revealSensitive,
+				isSensitivePathRevealed,
+				onToggleSensitivePath,
+				onPatch,
+			}),
+		)}
+    ${
+			allowExtra
+				? renderMapField({
+						schema: additional,
+						value: obj,
+						path,
+						hints,
+						unsupported,
+						disabled,
+						reservedKeys: reserved,
+						searchCriteria: childSearchCriteria,
+						revealSensitive,
+						isSensitivePathRevealed,
+						onToggleSensitivePath,
+						onPatch,
+					})
+				: nothing
+		}
   `;
 
-  // For top-level, don't wrap in collapsible
-  if (path.length === 1) {
-    return html` <div class="cfg-fields">${fields}</div> `;
-  }
+	// For top-level, don't wrap in collapsible
+	if (path.length === 1) {
+		return html` <div class="cfg-fields">${fields}</div> `;
+	}
 
-  if (!showLabel) {
-    return html` <div class="cfg-fields cfg-fields--inline">${fields}</div> `;
-  }
+	if (!showLabel) {
+		return html` <div class="cfg-fields cfg-fields--inline">${fields}</div> `;
+	}
 
-  // Nested objects get collapsible treatment
-  return html`
+	// Nested objects get collapsible treatment
+	return html`
     <details class="cfg-object" ?open=${path.length <= 2}>
       <summary class="cfg-object__header">
         <span class="cfg-object__title-wrap">
@@ -991,53 +1057,59 @@ function renderObject(params: {
 }
 
 function renderArray(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  unsupported: Set<string>;
-  disabled: boolean;
-  showLabel?: boolean;
-  searchCriteria?: ConfigSearchCriteria;
-  revealSensitive?: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: unknown;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	unsupported: Set<string>;
+	disabled: boolean;
+	showLabel?: boolean;
+	searchCriteria?: ConfigSearchCriteria;
+	revealSensitive?: boolean;
+	isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+	onToggleSensitivePath?: (path: Array<string | number>) => void;
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    searchCriteria,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-  } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const selfMatched =
-    searchCriteria && hasSearchCriteria(searchCriteria)
-      ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
-      : false;
-  const childSearchCriteria = selfMatched ? undefined : searchCriteria;
+	const {
+		schema,
+		value,
+		path,
+		hints,
+		unsupported,
+		disabled,
+		onPatch,
+		searchCriteria,
+		revealSensitive,
+		isSensitivePathRevealed,
+		onToggleSensitivePath,
+	} = params;
+	const showLabel = params.showLabel ?? true;
+	const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+	const selfMatched =
+		searchCriteria && hasSearchCriteria(searchCriteria)
+			? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
+			: false;
+	const childSearchCriteria = selfMatched ? undefined : searchCriteria;
 
-  const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-  if (!itemsSchema) {
-    return html`
+	const itemsSchema = Array.isArray(schema.items)
+		? schema.items[0]
+		: schema.items;
+	if (!itemsSchema) {
+		return html`
       <div class="cfg-field cfg-field--error">
         <div class="cfg-field__label">${label}</div>
         <div class="cfg-field__error">Unsupported array schema. Use Raw mode.</div>
       </div>
     `;
-  }
+	}
 
-  const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
+	const arr = Array.isArray(value)
+		? value
+		: Array.isArray(schema.default)
+			? schema.default
+			: [];
 
-  return html`
+	return html`
     <div class="cfg-array">
       <div class="cfg-array__header">
         <div class="cfg-array__title">
@@ -1050,21 +1122,22 @@ function renderArray(params: {
           class="cfg-array__add"
           ?disabled=${disabled}
           @click=${() => {
-            const next = [...arr, defaultValue(itemsSchema)];
-            onPatch(path, next);
-          }}
+						const next = [...arr, defaultValue(itemsSchema)];
+						onPatch(path, next);
+					}}
         >
           <span class="cfg-array__add-icon">${icons.plus}</span>
           Add
         </button>
       </div>
       ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
-      ${arr.length === 0
-        ? html` <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div> `
-        : html`
+      ${
+				arr.length === 0
+					? html` <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div> `
+					: html`
             <div class="cfg-array__items">
               ${arr.map(
-                (item, idx) => html`
+								(item, idx) => html`
                   <div class="cfg-array__item">
                     <div class="cfg-array__item-header">
                       <span class="cfg-array__item-index">#${idx + 1}</span>
@@ -1074,83 +1147,86 @@ function renderArray(params: {
                         title="Remove item"
                         ?disabled=${disabled}
                         @click=${() => {
-                          const next = [...arr];
-                          next.splice(idx, 1);
-                          onPatch(path, next);
-                        }}
+													const next = [...arr];
+													next.splice(idx, 1);
+													onPatch(path, next);
+												}}
                       >
                         ${icons.trash}
                       </button>
                     </div>
                     <div class="cfg-array__item-content">
                       ${renderNode({
-                        schema: itemsSchema,
-                        value: item,
-                        path: [...path, idx],
-                        hints,
-                        unsupported,
-                        disabled,
-                        searchCriteria: childSearchCriteria,
-                        showLabel: false,
-                        revealSensitive,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath,
-                        onPatch,
-                      })}
+												schema: itemsSchema,
+												value: item,
+												path: [...path, idx],
+												hints,
+												unsupported,
+												disabled,
+												searchCriteria: childSearchCriteria,
+												showLabel: false,
+												revealSensitive,
+												isSensitivePathRevealed,
+												onToggleSensitivePath,
+												onPatch,
+											})}
                     </div>
                   </div>
                 `,
-              )}
+							)}
             </div>
-          `}
+          `
+			}
     </div>
   `;
 }
 
 function renderMapField(params: {
-  schema: JsonSchema;
-  value: Record<string, unknown>;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  unsupported: Set<string>;
-  disabled: boolean;
-  reservedKeys: Set<string>;
-  searchCriteria?: ConfigSearchCriteria;
-  revealSensitive?: boolean;
-  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-  onToggleSensitivePath?: (path: Array<string | number>) => void;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
+	schema: JsonSchema;
+	value: Record<string, unknown>;
+	path: Array<string | number>;
+	hints: ConfigUiHints;
+	unsupported: Set<string>;
+	disabled: boolean;
+	reservedKeys: Set<string>;
+	searchCriteria?: ConfigSearchCriteria;
+	revealSensitive?: boolean;
+	isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+	onToggleSensitivePath?: (path: Array<string | number>) => void;
+	onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    reservedKeys,
-    onPatch,
-    searchCriteria,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-  } = params;
-  const anySchema = isAnySchema(schema);
-  const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
-  const visibleEntries =
-    searchCriteria && hasSearchCriteria(searchCriteria)
-      ? entries.filter(([key, entryValue]) =>
-          matchesNodeSearch({
-            schema,
-            value: entryValue,
-            path: [...path, key],
-            hints,
-            criteria: searchCriteria,
-          }),
-        )
-      : entries;
+	const {
+		schema,
+		value,
+		path,
+		hints,
+		unsupported,
+		disabled,
+		reservedKeys,
+		onPatch,
+		searchCriteria,
+		revealSensitive,
+		isSensitivePathRevealed,
+		onToggleSensitivePath,
+	} = params;
+	const anySchema = isAnySchema(schema);
+	const entries = Object.entries(value ?? {}).filter(
+		([key]) => !reservedKeys.has(key),
+	);
+	const visibleEntries =
+		searchCriteria && hasSearchCriteria(searchCriteria)
+			? entries.filter(([key, entryValue]) =>
+					matchesNodeSearch({
+						schema,
+						value: entryValue,
+						path: [...path, key],
+						hints,
+						criteria: searchCriteria,
+					}),
+				)
+			: entries;
 
-  return html`
+	return html`
     <div class="cfg-map">
       <div class="cfg-map__header">
         <span class="cfg-map__label">Custom entries</span>
@@ -1159,37 +1235,38 @@ function renderMapField(params: {
           class="cfg-map__add"
           ?disabled=${disabled}
           @click=${() => {
-            const next = { ...value };
-            let index = 1;
-            let key = `custom-${index}`;
-            while (key in next) {
-              index += 1;
-              key = `custom-${index}`;
-            }
-            next[key] = anySchema ? {} : defaultValue(schema);
-            onPatch(path, next);
-          }}
+						const next = { ...value };
+						let index = 1;
+						let key = `custom-${index}`;
+						while (key in next) {
+							index += 1;
+							key = `custom-${index}`;
+						}
+						next[key] = anySchema ? {} : defaultValue(schema);
+						onPatch(path, next);
+					}}
         >
           <span class="cfg-map__add-icon">${icons.plus}</span>
           Add Entry
         </button>
       </div>
 
-      ${visibleEntries.length === 0
-        ? html` <div class="cfg-map__empty">No custom entries.</div> `
-        : html`
+      ${
+				visibleEntries.length === 0
+					? html` <div class="cfg-map__empty">No custom entries.</div> `
+					: html`
             <div class="cfg-map__items">
               ${visibleEntries.map(([key, entryValue]) => {
-                const valuePath = [...path, key];
-                const fallback = jsonValue(entryValue);
-                const sensitiveState = getSensitiveRenderState({
-                  path: valuePath,
-                  value: entryValue,
-                  hints,
-                  revealSensitive: revealSensitive ?? false,
-                  isSensitivePathRevealed,
-                });
-                return html`
+								const valuePath = [...path, key];
+								const fallback = jsonValue(entryValue);
+								const sensitiveState = getSensitiveRenderState({
+									path: valuePath,
+									value: entryValue,
+									hints,
+									revealSensitive: revealSensitive ?? false,
+									isSensitivePathRevealed,
+								});
+								return html`
                   <div class="cfg-map__item">
                     <div class="cfg-map__item-header">
                       <div class="cfg-map__item-key">
@@ -1200,18 +1277,20 @@ function renderMapField(params: {
                           .value=${key}
                           ?disabled=${disabled}
                           @change=${(e: Event) => {
-                            const nextKey = (e.target as HTMLInputElement).value.trim();
-                            if (!nextKey || nextKey === key) {
-                              return;
-                            }
-                            const next = { ...value };
-                            if (nextKey in next) {
-                              return;
-                            }
-                            next[nextKey] = next[key];
-                            delete next[key];
-                            onPatch(path, next);
-                          }}
+														const nextKey = (
+															e.target as HTMLInputElement
+														).value.trim();
+														if (!nextKey || nextKey === key) {
+															return;
+														}
+														const next = { ...value };
+														if (nextKey in next) {
+															return;
+														}
+														next[nextKey] = next[key];
+														delete next[key];
+														onPatch(path, next);
+													}}
                         />
                       </div>
                       <button
@@ -1220,79 +1299,90 @@ function renderMapField(params: {
                         title="Remove entry"
                         ?disabled=${disabled}
                         @click=${() => {
-                          const next = { ...value };
-                          delete next[key];
-                          onPatch(path, next);
-                        }}
+													const next = { ...value };
+													delete next[key];
+													onPatch(path, next);
+												}}
                       >
                         ${icons.trash}
                       </button>
                     </div>
                     <div class="cfg-map__item-value">
-                      ${anySchema
-                        ? html`
+                      ${
+												anySchema
+													? html`
                             <div class="cfg-input-wrap">
                               <textarea
-                                class="cfg-textarea cfg-textarea--sm${sensitiveState.isRedacted
-                                  ? " cfg-textarea--redacted"
-                                  : ""}"
-                                placeholder=${sensitiveState.isRedacted
-                                  ? REDACTED_PLACEHOLDER
-                                  : "JSON value"}
+                                class="cfg-textarea cfg-textarea--sm${
+																	sensitiveState.isRedacted
+																		? " cfg-textarea--redacted"
+																		: ""
+																}"
+                                placeholder=${
+																	sensitiveState.isRedacted
+																		? REDACTED_PLACEHOLDER
+																		: "JSON value"
+																}
                                 rows="2"
                                 .value=${sensitiveState.isRedacted ? "" : fallback}
                                 ?disabled=${disabled}
                                 ?readonly=${sensitiveState.isRedacted}
                                 @click=${() => {
-                                  if (sensitiveState.isRedacted && onToggleSensitivePath) {
-                                    onToggleSensitivePath(valuePath);
-                                  }
-                                }}
+																	if (
+																		sensitiveState.isRedacted &&
+																		onToggleSensitivePath
+																	) {
+																		onToggleSensitivePath(valuePath);
+																	}
+																}}
                                 @change=${(e: Event) => {
-                                  if (sensitiveState.isRedacted) {
-                                    return;
-                                  }
-                                  const target = e.target as HTMLTextAreaElement;
-                                  const raw = target.value.trim();
-                                  if (!raw) {
-                                    onPatch(valuePath, undefined);
-                                    return;
-                                  }
-                                  try {
-                                    onPatch(valuePath, JSON.parse(raw));
-                                  } catch {
-                                    target.value = fallback;
-                                  }
-                                }}
+																	if (sensitiveState.isRedacted) {
+																		return;
+																	}
+																	const target =
+																		e.target as HTMLTextAreaElement;
+																	const raw = target.value.trim();
+																	if (!raw) {
+																		onPatch(valuePath, undefined);
+																		return;
+																	}
+																	try {
+																		onPatch(valuePath, JSON.parse(raw));
+																	} catch {
+																		target.value = fallback;
+																	}
+																}}
                               ></textarea>
                               ${renderSensitiveToggleButton({
-                                path: valuePath,
-                                state: sensitiveState,
-                                disabled,
-                                onToggleSensitivePath,
-                              })}
+																path: valuePath,
+																state: sensitiveState,
+																disabled,
+																onToggleSensitivePath,
+															})}
                             </div>
                           `
-                        : renderNode({
-                            schema,
-                            value: entryValue,
-                            path: valuePath,
-                            hints,
-                            unsupported,
-                            disabled,
-                            searchCriteria,
-                            showLabel: false,
-                            revealSensitive,
-                            isSensitivePathRevealed,
-                            onToggleSensitivePath,
-                            onPatch,
-                          })}
+													: renderNode({
+															schema,
+															value: entryValue,
+															path: valuePath,
+															hints,
+															unsupported,
+															disabled,
+															searchCriteria,
+															showLabel: false,
+															revealSensitive,
+															isSensitivePathRevealed,
+															onToggleSensitivePath,
+															onPatch,
+														})
+											}
                     </div>
                   </div>
                 `;
-              })}
+							})}
             </div>
-          `}
+          `
+			}
     </div>
   `;
 }

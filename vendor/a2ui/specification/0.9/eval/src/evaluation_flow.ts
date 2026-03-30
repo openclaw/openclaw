@@ -1,4 +1,3 @@
-
 /*
  Copyright 2025 Google LLC
 
@@ -17,57 +16,56 @@
 
 import { z } from "genkit";
 import { ai } from "./ai";
-import { rateLimiter } from "./rateLimiter";
 import { logger } from "./logger";
-import * as yaml from "js-yaml";
+import { rateLimiter } from "./rateLimiter";
 
 // Define an evaluation flow
 export const evaluationFlow = ai.defineFlow(
-  {
-    name: "evaluationFlow",
-    inputSchema: z.object({
-      originalPrompt: z.string(),
-      generatedOutput: z.string(),
-      evalModel: z.string(),
-      schemas: z.any(),
-    }),
-    outputSchema: z.object({
-      pass: z.boolean(),
-      reason: z.string(),
-      issues: z
-        .array(
-          z.object({
-            issue: z.string(),
-            severity: z.enum(["minor", "significant", "critical"]),
-          })
-        )
-        .optional(),
-      evalPrompt: z.string().optional(),
-    }),
-  },
-  async ({ originalPrompt, generatedOutput, evalModel, schemas }) => {
-    const schemaDefs = Object.values(schemas)
-      .map((s: any) => JSON.stringify(s, null, 2))
-      .join("\n\n");
+	{
+		name: "evaluationFlow",
+		inputSchema: z.object({
+			originalPrompt: z.string(),
+			generatedOutput: z.string(),
+			evalModel: z.string(),
+			schemas: z.any(),
+		}),
+		outputSchema: z.object({
+			pass: z.boolean(),
+			reason: z.string(),
+			issues: z
+				.array(
+					z.object({
+						issue: z.string(),
+						severity: z.enum(["minor", "significant", "critical"]),
+					}),
+				)
+				.optional(),
+			evalPrompt: z.string().optional(),
+		}),
+	},
+	async ({ originalPrompt, generatedOutput, evalModel, schemas }) => {
+		const schemaDefs = Object.values(schemas)
+			.map((s: any) => JSON.stringify(s, null, 2))
+			.join("\n\n");
 
-    const EvalResultSchema = z.object({
-      pass: z
-        .boolean()
-        .describe("Whether the generated UI meets the requirements"),
-      reason: z.string().describe("Summary of the reason for a failure."),
-      issues: z
-        .array(
-          z.object({
-            issue: z.string().describe("Description of the issue"),
-            severity: z
-              .enum(["minor", "significant", "critical"])
-              .describe("Severity of the issue"),
-          })
-        )
-        .describe("List of specific issues found."),
-    });
+		const EvalResultSchema = z.object({
+			pass: z
+				.boolean()
+				.describe("Whether the generated UI meets the requirements"),
+			reason: z.string().describe("Summary of the reason for a failure."),
+			issues: z
+				.array(
+					z.object({
+						issue: z.string().describe("Description of the issue"),
+						severity: z
+							.enum(["minor", "significant", "critical"])
+							.describe("Severity of the issue"),
+					}),
+				)
+				.describe("List of specific issues found."),
+		});
 
-    const evalPrompt = `You are an expert QA evaluator for a UI generation system.
+		const evalPrompt = `You are an expert QA evaluator for a UI generation system.
 Your task is to evaluate whether the generated UI JSON matches the user's request and conforms to the expected behavior.
 
 User Request:
@@ -139,55 +137,55 @@ Return a JSON object with the following schema:
 \`\`\`
 `;
 
-    // Calculate estimated tokens for rate limiting
-    const estimatedInputTokens = Math.ceil(evalPrompt.length / 2.5);
+		// Calculate estimated tokens for rate limiting
+		const estimatedInputTokens = Math.ceil(evalPrompt.length / 2.5);
 
-    // Find the model config for the eval model
-    // We need to look it up from the models list or create a temporary config
-    // For now, we'll try to find it in the imported models list, or default to a safe config
-    const { modelsToTest } = await import("./models");
-    let evalModelConfig = modelsToTest.find((m) => m.name === evalModel);
+		// Find the model config for the eval model
+		// We need to look it up from the models list or create a temporary config
+		// For now, we'll try to find it in the imported models list, or default to a safe config
+		const { modelsToTest } = await import("./models");
+		let evalModelConfig = modelsToTest.find((m) => m.name === evalModel);
 
-    if (!evalModelConfig) {
-      // If not found, create a temporary config with default limits
-      evalModelConfig = {
-        name: evalModel,
-        model: null, // We don't need the model object for rate limiting if we just use the name
-        requestsPerMinute: 60, // Safe default
-        tokensPerMinute: 100000, // Safe default
-      };
-    }
+		if (!evalModelConfig) {
+			// If not found, create a temporary config with default limits
+			evalModelConfig = {
+				name: evalModel,
+				model: null, // We don't need the model object for rate limiting if we just use the name
+				requestsPerMinute: 60, // Safe default
+				tokensPerMinute: 100000, // Safe default
+			};
+		}
 
-    await rateLimiter.acquirePermit(evalModelConfig, estimatedInputTokens);
+		await rateLimiter.acquirePermit(evalModelConfig, estimatedInputTokens);
 
-    try {
-      const response = await ai.generate({
-        prompt: evalPrompt,
-        model: evalModelConfig.model || evalModel, // Use the model object if available, otherwise the string
-        config: evalModelConfig.config,
-        output: {
-          schema: EvalResultSchema,
-        },
-      });
+		try {
+			const response = await ai.generate({
+				prompt: evalPrompt,
+				model: evalModelConfig.model || evalModel, // Use the model object if available, otherwise the string
+				config: evalModelConfig.config,
+				output: {
+					schema: EvalResultSchema,
+				},
+			});
 
-      // Parse the output
-      const result = response.output;
-      if (!result) {
-        throw new Error("No output from evaluation model");
-      }
+			// Parse the output
+			const result = response.output;
+			if (!result) {
+				throw new Error("No output from evaluation model");
+			}
 
-      return {
-        pass: result.pass,
-        reason: result.reason || "No reason provided",
-        issues: result.issues || [],
-        evalPrompt: evalPrompt,
-      };
-    } catch (e: any) {
-      logger.error(`Error during evaluation: ${e}`);
-      if (evalModelConfig) {
-        rateLimiter.reportError(evalModelConfig, e);
-      }
-      throw e; // Re-throw to let the retry logic handle it
-    }
-  }
+			return {
+				pass: result.pass,
+				reason: result.reason || "No reason provided",
+				issues: result.issues || [],
+				evalPrompt: evalPrompt,
+			};
+		} catch (e: any) {
+			logger.error(`Error during evaluation: ${e}`);
+			if (evalModelConfig) {
+				rateLimiter.reportError(evalModelConfig, e);
+			}
+			throw e; // Re-throw to let the retry logic handle it
+		}
+	},
 );

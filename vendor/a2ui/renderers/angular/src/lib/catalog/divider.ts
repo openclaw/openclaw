@@ -14,13 +14,14 @@
  limitations under the License.
  */
 
-import { Component } from '@angular/core';
-import { DynamicComponent } from '../rendering/dynamic-component';
+import { Component } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: 'a2ui-divider',
-  template: '<hr [class]="theme.components.Divider" [style]="theme.additionalStyles?.Divider"/>',
-  styles: `
+	selector: "a2ui-divider",
+	template:
+		'<hr [class]="theme.components.Divider" [style]="theme.additionalStyles?.Divider"/>',
+	styles: `
     :host {
       display: block;
       min-height: 0;

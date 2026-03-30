@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-import { Component, computed, input } from '@angular/core';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Primitives } from '@a2ui/lit/0.8';
+import type { Primitives } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: 'a2ui-audio',
-  template: `
+	selector: "a2ui-audio",
+	template: `
     @let resolvedUrl = this.resolvedUrl();
 
     @if (resolvedUrl) {
@@ -29,7 +29,7 @@ import { Primitives } from '@a2ui/lit/0.8';
       </section>
     }
   `,
-  styles: `
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -42,9 +42,11 @@ import { Primitives } from '@a2ui/lit/0.8';
       width: 100%;
       box-sizing: border-box;
     }
-  `
+  `,
 })
 export class Audio extends DynamicComponent {
-  readonly url = input.required<Primitives.StringValue | null>();
-  protected readonly resolvedUrl = computed(() => this.resolvePrimitive(this.url()));
+	readonly url = input.required<Primitives.StringValue | null>();
+	protected readonly resolvedUrl = computed(() =>
+		this.resolvePrimitive(this.url()),
+	);
 }

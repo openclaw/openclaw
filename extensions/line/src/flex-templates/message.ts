@@ -4,10 +4,13 @@ import type { FlexContainer } from "./types.js";
 /**
  * Wrap a FlexContainer in a FlexMessage
  */
-export function toFlexMessage(altText: string, contents: FlexContainer): messagingApi.FlexMessage {
-  return {
-    type: "flex",
-    altText,
-    contents,
-  };
+export function toFlexMessage(
+	altText: string,
+	contents: FlexContainer,
+): messagingApi.FlexMessage {
+	return {
+		type: "flex",
+		altText,
+		contents,
+	};
 }

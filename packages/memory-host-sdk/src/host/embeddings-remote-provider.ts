@@ -1,63 +1,69 @@
 import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
+import type {
+	EmbeddingProvider,
+	EmbeddingProviderOptions,
+} from "./embeddings.js";
 import {
-  resolveRemoteEmbeddingBearerClient,
-  type RemoteEmbeddingProviderId,
+	type RemoteEmbeddingProviderId,
+	resolveRemoteEmbeddingBearerClient,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type RemoteEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
+	baseUrl: string;
+	headers: Record<string, string>;
+	ssrfPolicy?: SsrFPolicy;
+	model: string;
 };
 
 export function createRemoteEmbeddingProvider(params: {
-  id: string;
-  client: RemoteEmbeddingClient;
-  errorPrefix: string;
-  maxInputTokens?: number;
+	id: string;
+	client: RemoteEmbeddingClient;
+	errorPrefix: string;
+	maxInputTokens?: number;
 }): EmbeddingProvider {
-  const { client } = params;
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+	const { client } = params;
+	const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
 
-  const embed = async (input: string[]): Promise<number[][]> => {
-    if (input.length === 0) {
-      return [];
-    }
-    return await fetchRemoteEmbeddingVectors({
-      url,
-      headers: client.headers,
-      ssrfPolicy: client.ssrfPolicy,
-      body: { model: client.model, input },
-      errorPrefix: params.errorPrefix,
-    });
-  };
+	const embed = async (input: string[]): Promise<number[][]> => {
+		if (input.length === 0) {
+			return [];
+		}
+		return await fetchRemoteEmbeddingVectors({
+			url,
+			headers: client.headers,
+			ssrfPolicy: client.ssrfPolicy,
+			body: { model: client.model, input },
+			errorPrefix: params.errorPrefix,
+		});
+	};
 
-  return {
-    id: params.id,
-    model: client.model,
-    ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
-    embedQuery: async (text) => {
-      const [vec] = await embed([text]);
-      return vec ?? [];
-    },
-    embedBatch: embed,
-  };
+	return {
+		id: params.id,
+		model: client.model,
+		...(typeof params.maxInputTokens === "number"
+			? { maxInputTokens: params.maxInputTokens }
+			: {}),
+		embedQuery: async (text) => {
+			const [vec] = await embed([text]);
+			return vec ?? [];
+		},
+		embedBatch: embed,
+	};
 }
 
 export async function resolveRemoteEmbeddingClient(params: {
-  provider: RemoteEmbeddingProviderId;
-  options: EmbeddingProviderOptions;
-  defaultBaseUrl: string;
-  normalizeModel: (model: string) => string;
+	provider: RemoteEmbeddingProviderId;
+	options: EmbeddingProviderOptions;
+	defaultBaseUrl: string;
+	normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
-    provider: params.provider,
-    options: params.options,
-    defaultBaseUrl: params.defaultBaseUrl,
-  });
-  const model = params.normalizeModel(params.options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+	const { baseUrl, headers, ssrfPolicy } =
+		await resolveRemoteEmbeddingBearerClient({
+			provider: params.provider,
+			options: params.options,
+			defaultBaseUrl: params.defaultBaseUrl,
+		});
+	const model = params.normalizeModel(params.options.model);
+	return { baseUrl, headers, ssrfPolicy, model };
 }

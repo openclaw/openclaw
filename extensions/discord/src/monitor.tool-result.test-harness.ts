@@ -11,52 +11,64 @@ export const loadConfigMock: MockFn = vi.fn();
 
 const sendModule = await import("./send.js");
 vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(
-  (...args) => sendMock(...args) as never,
+	(...args) => sendMock(...args) as never,
 );
-vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(async (...args) => {
-  reactMock(...args);
-  return { ok: true };
-});
+vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(
+	async (...args) => {
+		reactMock(...args);
+		return { ok: true };
+	},
+);
 
 const replyRuntimeModule = await import("openclaw/plugin-sdk/reply-runtime");
 vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(
-  (...args) => dispatchMock(...args) as never,
+	(...args) => dispatchMock(...args) as never,
 );
-vi.spyOn(replyRuntimeModule, "dispatchInboundMessageWithDispatcher").mockImplementation(
-  (...args) => dispatchMock(...args) as never,
-);
-vi.spyOn(replyRuntimeModule, "dispatchInboundMessageWithBufferedDispatcher").mockImplementation(
-  (...args) => dispatchMock(...args) as never,
-);
+vi.spyOn(
+	replyRuntimeModule,
+	"dispatchInboundMessageWithDispatcher",
+).mockImplementation((...args) => dispatchMock(...args) as never);
+vi.spyOn(
+	replyRuntimeModule,
+	"dispatchInboundMessageWithBufferedDispatcher",
+).mockImplementation((...args) => dispatchMock(...args) as never);
 
 function createPairingStoreMocks() {
-  return {
-    readChannelAllowFromStore(...args: unknown[]) {
-      return readAllowFromStoreMock(...args);
-    },
-    upsertChannelPairingRequest(...args: unknown[]) {
-      return upsertPairingRequestMock(...args);
-    },
-  };
+	return {
+		readChannelAllowFromStore(...args: unknown[]) {
+			return readAllowFromStoreMock(...args);
+		},
+		upsertChannelPairingRequest(...args: unknown[]) {
+			return upsertPairingRequestMock(...args);
+		},
+	};
 }
 
-const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
-vi.spyOn(conversationRuntimeModule, "readChannelAllowFromStore").mockImplementation(
-  createPairingStoreMocks().readChannelAllowFromStore,
+const conversationRuntimeModule = await import(
+	"openclaw/plugin-sdk/conversation-runtime"
 );
-vi.spyOn(conversationRuntimeModule, "upsertChannelPairingRequest").mockImplementation(
-  createPairingStoreMocks().upsertChannelPairingRequest,
-);
+vi.spyOn(
+	conversationRuntimeModule,
+	"readChannelAllowFromStore",
+).mockImplementation(createPairingStoreMocks().readChannelAllowFromStore);
+vi.spyOn(
+	conversationRuntimeModule,
+	"upsertChannelPairingRequest",
+).mockImplementation(createPairingStoreMocks().upsertChannelPairingRequest);
 
 const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");
 vi.spyOn(configRuntimeModule, "loadConfig").mockImplementation(
-  (...args) => loadConfigMock(...args) as never,
+	(...args) => loadConfigMock(...args) as never,
 );
-vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(() => undefined);
+vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(
+	() => undefined,
+);
 vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
-  () => "/tmp/openclaw-sessions.json",
+	() => "/tmp/openclaw-sessions.json",
 );
 vi.spyOn(configRuntimeModule, "updateLastRoute").mockImplementation(
-  (...args) => updateLastRouteMock(...args) as never,
+	(...args) => updateLastRouteMock(...args) as never,
 );
-vi.spyOn(configRuntimeModule, "resolveSessionKey").mockImplementation(vi.fn() as never);
+vi.spyOn(configRuntimeModule, "resolveSessionKey").mockImplementation(
+	vi.fn() as never,
+);

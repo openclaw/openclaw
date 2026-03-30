@@ -7,159 +7,159 @@ const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 
 function isSuppressedByEnv(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return normalized !== "0" && normalized !== "false" && normalized !== "off";
+	if (!value) {
+		return false;
+	}
+	const normalized = value.trim().toLowerCase();
+	if (!normalized) {
+		return false;
+	}
+	return normalized !== "0" && normalized !== "false" && normalized !== "off";
 }
 
 function splitLongWord(word: string, maxLen: number): string[] {
-  if (maxLen <= 0) {
-    return [word];
-  }
-  const chars = Array.from(word);
-  const parts: string[] = [];
-  for (let i = 0; i < chars.length; i += maxLen) {
-    parts.push(chars.slice(i, i + maxLen).join(""));
-  }
-  return parts.length > 0 ? parts : [word];
+	if (maxLen <= 0) {
+		return [word];
+	}
+	const chars = Array.from(word);
+	const parts: string[] = [];
+	for (let i = 0; i < chars.length; i += maxLen) {
+		parts.push(chars.slice(i, i + maxLen).join(""));
+	}
+	return parts.length > 0 ? parts : [word];
 }
 
 function isCopySensitiveToken(word: string): boolean {
-  if (!word) {
-    return false;
-  }
-  if (URL_PREFIX_RE.test(word)) {
-    return true;
-  }
-  if (
-    word.startsWith("/") ||
-    word.startsWith("~/") ||
-    word.startsWith("./") ||
-    word.startsWith("../")
-  ) {
-    return true;
-  }
-  if (WINDOWS_DRIVE_RE.test(word) || word.startsWith("\\\\")) {
-    return true;
-  }
-  if (word.includes("/") || word.includes("\\")) {
-    return true;
-  }
-  // Preserve common file-like tokens (for example administrators_authorized_keys).
-  return word.includes("_") && FILE_LIKE_RE.test(word);
+	if (!word) {
+		return false;
+	}
+	if (URL_PREFIX_RE.test(word)) {
+		return true;
+	}
+	if (
+		word.startsWith("/") ||
+		word.startsWith("~/") ||
+		word.startsWith("./") ||
+		word.startsWith("../")
+	) {
+		return true;
+	}
+	if (WINDOWS_DRIVE_RE.test(word) || word.startsWith("\\\\")) {
+		return true;
+	}
+	if (word.includes("/") || word.includes("\\")) {
+		return true;
+	}
+	// Preserve common file-like tokens (for example administrators_authorized_keys).
+	return word.includes("_") && FILE_LIKE_RE.test(word);
 }
 
 function pushWrappedWordSegments(params: {
-  word: string;
-  available: number;
-  firstPrefix: string;
-  continuationPrefix: string;
-  lines: string[];
+	word: string;
+	available: number;
+	firstPrefix: string;
+	continuationPrefix: string;
+	lines: string[];
 }) {
-  const parts = splitLongWord(params.word, params.available);
-  const first = parts.shift() ?? "";
-  params.lines.push(params.firstPrefix + first);
-  for (const part of parts) {
-    params.lines.push(params.continuationPrefix + part);
-  }
+	const parts = splitLongWord(params.word, params.available);
+	const first = parts.shift() ?? "";
+	params.lines.push(params.firstPrefix + first);
+	for (const part of parts) {
+		params.lines.push(params.continuationPrefix + part);
+	}
 }
 
 function wrapLine(line: string, maxWidth: number): string[] {
-  if (line.trim().length === 0) {
-    return [line];
-  }
-  const match = line.match(/^(\s*)([-*\u2022]\s+)?(.*)$/);
-  const indent = match?.[1] ?? "";
-  const bullet = match?.[2] ?? "";
-  const content = match?.[3] ?? "";
-  const firstPrefix = `${indent}${bullet}`;
-  const nextPrefix = `${indent}${bullet ? " ".repeat(bullet.length) : ""}`;
-  const firstWidth = Math.max(10, maxWidth - visibleWidth(firstPrefix));
-  const nextWidth = Math.max(10, maxWidth - visibleWidth(nextPrefix));
+	if (line.trim().length === 0) {
+		return [line];
+	}
+	const match = line.match(/^(\s*)([-*\u2022]\s+)?(.*)$/);
+	const indent = match?.[1] ?? "";
+	const bullet = match?.[2] ?? "";
+	const content = match?.[3] ?? "";
+	const firstPrefix = `${indent}${bullet}`;
+	const nextPrefix = `${indent}${bullet ? " ".repeat(bullet.length) : ""}`;
+	const firstWidth = Math.max(10, maxWidth - visibleWidth(firstPrefix));
+	const nextWidth = Math.max(10, maxWidth - visibleWidth(nextPrefix));
 
-  const words = content.split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let current = "";
-  let prefix = firstPrefix;
-  let available = firstWidth;
+	const words = content.split(/\s+/).filter(Boolean);
+	const lines: string[] = [];
+	let current = "";
+	let prefix = firstPrefix;
+	let available = firstWidth;
 
-  for (const word of words) {
-    if (!current) {
-      if (visibleWidth(word) > available) {
-        if (isCopySensitiveToken(word)) {
-          current = word;
-          continue;
-        }
-        pushWrappedWordSegments({
-          word,
-          available,
-          firstPrefix: prefix,
-          continuationPrefix: nextPrefix,
-          lines,
-        });
-        prefix = nextPrefix;
-        available = nextWidth;
-        continue;
-      }
-      current = word;
-      continue;
-    }
+	for (const word of words) {
+		if (!current) {
+			if (visibleWidth(word) > available) {
+				if (isCopySensitiveToken(word)) {
+					current = word;
+					continue;
+				}
+				pushWrappedWordSegments({
+					word,
+					available,
+					firstPrefix: prefix,
+					continuationPrefix: nextPrefix,
+					lines,
+				});
+				prefix = nextPrefix;
+				available = nextWidth;
+				continue;
+			}
+			current = word;
+			continue;
+		}
 
-    const candidate = `${current} ${word}`;
-    if (visibleWidth(candidate) <= available) {
-      current = candidate;
-      continue;
-    }
+		const candidate = `${current} ${word}`;
+		if (visibleWidth(candidate) <= available) {
+			current = candidate;
+			continue;
+		}
 
-    lines.push(prefix + current);
-    prefix = nextPrefix;
-    available = nextWidth;
+		lines.push(prefix + current);
+		prefix = nextPrefix;
+		available = nextWidth;
 
-    if (visibleWidth(word) > available) {
-      if (isCopySensitiveToken(word)) {
-        current = word;
-        continue;
-      }
-      pushWrappedWordSegments({
-        word,
-        available,
-        firstPrefix: prefix,
-        continuationPrefix: prefix,
-        lines,
-      });
-      current = "";
-      continue;
-    }
-    current = word;
-  }
+		if (visibleWidth(word) > available) {
+			if (isCopySensitiveToken(word)) {
+				current = word;
+				continue;
+			}
+			pushWrappedWordSegments({
+				word,
+				available,
+				firstPrefix: prefix,
+				continuationPrefix: prefix,
+				lines,
+			});
+			current = "";
+			continue;
+		}
+		current = word;
+	}
 
-  if (current || words.length === 0) {
-    lines.push(prefix + current);
-  }
+	if (current || words.length === 0) {
+		lines.push(prefix + current);
+	}
 
-  return lines;
+	return lines;
 }
 
 export function wrapNoteMessage(
-  message: string,
-  options: { maxWidth?: number; columns?: number } = {},
+	message: string,
+	options: { maxWidth?: number; columns?: number } = {},
 ): string {
-  const columns = options.columns ?? process.stdout.columns ?? 80;
-  const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
-  return message
-    .split("\n")
-    .flatMap((line) => wrapLine(line, maxWidth))
-    .join("\n");
+	const columns = options.columns ?? process.stdout.columns ?? 80;
+	const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
+	return message
+		.split("\n")
+		.flatMap((line) => wrapLine(line, maxWidth))
+		.join("\n");
 }
 
 export function note(message: string, title?: string) {
-  if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
-    return;
-  }
-  clackNote(wrapNoteMessage(message), stylePromptTitle(title));
+	if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
+		return;
+	}
+	clackNote(wrapNoteMessage(message), stylePromptTitle(title));
 }

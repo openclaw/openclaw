@@ -1,15 +1,15 @@
 export {
-  TOKEN_REFRESH_MARGIN_MS,
-  buildFoundryProviderBaseUrl,
-  extractFoundryEndpoint,
-  isFoundryProviderApi,
-  resolveConfiguredModelNameHint,
-  type CachedTokenEntry,
+	buildFoundryProviderBaseUrl,
+	type CachedTokenEntry,
+	extractFoundryEndpoint,
+	isFoundryProviderApi,
+	resolveConfiguredModelNameHint,
+	TOKEN_REFRESH_MARGIN_MS,
 } from "./shared.js";
 
 export function getFoundryTokenCacheKey(params?: {
-  subscriptionId?: string;
-  tenantId?: string;
+	subscriptionId?: string;
+	tenantId?: string;
 }): string {
-  return `${params?.subscriptionId ?? ""}:${params?.tenantId ?? ""}`;
+	return `${params?.subscriptionId ?? ""}:${params?.tenantId ?? ""}`;
 }

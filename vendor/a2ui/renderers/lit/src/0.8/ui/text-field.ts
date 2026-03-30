@@ -14,31 +14,31 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { Root } from "./root.js";
-import { StringValue } from "../types/primitives.js";
 import { classMap } from "lit/directives/class-map.js";
-import { ResolvedTextField } from "../types/types";
-import { A2uiMessageProcessor } from "../data/model-processor.js";
 import { styleMap } from "lit/directives/style-map.js";
-import { extractStringValue } from "./utils/utils.js";
+import { A2uiMessageProcessor } from "../data/model-processor.js";
+import type { StringValue } from "../types/primitives.js";
+import type { ResolvedTextField } from "../types/types";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
+import { extractStringValue } from "./utils/utils.js";
 
 @customElement("a2ui-textfield")
 export class TextField extends Root {
-  @property()
-  accessor text: StringValue | null = null;
+	@property()
+	accessor text: StringValue | null = null;
 
-  @property()
-  accessor label: StringValue | null = null;
+	@property()
+	accessor label: StringValue | null = null;
 
-  @property()
-  accessor inputType: ResolvedTextField["type"] | null = null;
+	@property()
+	accessor inputType: ResolvedTextField["type"] | null = null;
 
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       * {
         box-sizing: border-box;
       }
@@ -58,51 +58,55 @@ export class TextField extends Root {
         margin-bottom: 4px;
       }
     `,
-  ];
+	];
 
-  #setBoundValue(value: string) {
-    if (!this.text || !this.processor) {
-      return;
-    }
-    if (!("path" in this.text)) {
-      return;
-    }
-    if (!this.text.path) {
-      return;
-    }
+	#setBoundValue(value: string) {
+		if (!this.text || !this.processor) {
+			return;
+		}
+		if (!("path" in this.text)) {
+			return;
+		}
+		if (!this.text.path) {
+			return;
+		}
 
-    this.processor.setData(
-      this.component,
-      this.text.path,
-      value,
-      this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID
-    );
-  }
+		this.processor.setData(
+			this.component,
+			this.text.path,
+			value,
+			this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID,
+		);
+	}
 
-  #renderField(value: string | number, label: string) {
-    return html` <section
+	#renderField(value: string | number, label: string) {
+		return html` <section
       class=${classMap(this.theme.components.TextField.container)}
     >
-      ${label && label !== ""
-        ? html`<label
+      ${
+				label && label !== ""
+					? html`<label
             class=${classMap(this.theme.components.TextField.label)}
             for="data"
             >${label}</label
           >`
-        : nothing}
+					: nothing
+			}
       <input
         autocomplete="off"
         class=${classMap(this.theme.components.TextField.element)}
-        style=${this.theme.additionalStyles?.TextField
-          ? styleMap(this.theme.additionalStyles?.TextField)
-          : nothing}
+        style=${
+					this.theme.additionalStyles?.TextField
+						? styleMap(this.theme.additionalStyles?.TextField)
+						: nothing
+				}
         @input=${(evt: Event) => {
-          if (!(evt.target instanceof HTMLInputElement)) {
-            return;
-          }
+					if (!(evt.target instanceof HTMLInputElement)) {
+						return;
+					}
 
-          this.#setBoundValue(evt.target.value);
-        }}
+					this.#setBoundValue(evt.target.value);
+				}}
         name="data"
         id="data"
         .value=${value}
@@ -110,22 +114,22 @@ export class TextField extends Root {
         type=${this.inputType === "number" ? "number" : "text"}
       />
     </section>`;
-  }
+	}
 
-  render() {
-    const label = extractStringValue(
-      this.label,
-      this.component,
-      this.processor,
-      this.surfaceId
-    );
-    const value = extractStringValue(
-      this.text,
-      this.component,
-      this.processor,
-      this.surfaceId
-    );
+	render() {
+		const label = extractStringValue(
+			this.label,
+			this.component,
+			this.processor,
+			this.surfaceId,
+		);
+		const value = extractStringValue(
+			this.text,
+			this.component,
+			this.processor,
+			this.surfaceId,
+		);
 
-    return this.#renderField(value, label);
-  }
+		return this.#renderField(value, label);
+	}
 }

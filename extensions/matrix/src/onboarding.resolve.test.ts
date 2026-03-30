@@ -3,51 +3,55 @@ import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const resolveMatrixTargetsMock = vi.hoisted(() =>
-  vi.fn(async () => [{ input: "Alice", resolved: true, id: "@alice:example.org" }]),
+	vi.fn(async () => [
+		{ input: "Alice", resolved: true, id: "@alice:example.org" },
+	]),
 );
 
 vi.mock("./resolve-targets.js", () => ({
-  resolveMatrixTargets: resolveMatrixTargetsMock,
+	resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
 let runMatrixAddAccountAllowlistConfigure: typeof import("./onboarding.test-harness.js").runMatrixAddAccountAllowlistConfigure;
 
 describe("matrix onboarding account-scoped resolution", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runMatrixAddAccountAllowlistConfigure } = await import("./onboarding.test-harness.js"));
-    installMatrixTestRuntime();
-    resolveMatrixTargetsMock.mockClear();
-  });
+	beforeEach(async () => {
+		vi.resetModules();
+		({ runMatrixAddAccountAllowlistConfigure } = await import(
+			"./onboarding.test-harness.js"
+		));
+		installMatrixTestRuntime();
+		resolveMatrixTargetsMock.mockClear();
+	});
 
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
 
-  it("passes accountId into Matrix allowlist target resolution during onboarding", async () => {
-    const result = await runMatrixAddAccountAllowlistConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              default: {
-                homeserver: "https://matrix.main.example.org",
-                accessToken: "main-token",
-              },
-            },
-          },
-        },
-      } as CoreConfig,
-      allowFromInput: "Alice",
-      roomsAllowlistInput: "",
-    });
+	it("passes accountId into Matrix allowlist target resolution during onboarding", async () => {
+		const result = await runMatrixAddAccountAllowlistConfigure({
+			cfg: {
+				channels: {
+					matrix: {
+						accounts: {
+							default: {
+								homeserver: "https://matrix.main.example.org",
+								accessToken: "main-token",
+							},
+						},
+					},
+				},
+			} as CoreConfig,
+			allowFromInput: "Alice",
+			roomsAllowlistInput: "",
+		});
 
-    expect(result).not.toBe("skip");
-    expect(resolveMatrixTargetsMock).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      accountId: "ops",
-      inputs: ["Alice"],
-      kind: "user",
-    });
-  });
+		expect(result).not.toBe("skip");
+		expect(resolveMatrixTargetsMock).toHaveBeenCalledWith({
+			cfg: expect.any(Object),
+			accountId: "ops",
+			inputs: ["Alice"],
+			kind: "user",
+		});
+	});
 });

@@ -25,13 +25,13 @@ import { type } from "./type.js";
 export * from "./utils.js";
 
 export const structuralStyles: string = [
-  behavior,
-  border,
-  colors,
-  icons,
-  layout,
-  opacity,
-  type,
+	behavior,
+	border,
+	colors,
+	icons,
+	layout,
+	opacity,
+	type,
 ]
-  .flat(Infinity)
-  .join("\n");
+	.flat(Infinity)
+	.join("\n");

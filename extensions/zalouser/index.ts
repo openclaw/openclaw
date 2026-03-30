@@ -7,12 +7,12 @@ export { zalouserPlugin } from "./src/channel.js";
 export { setZalouserRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: "zalouser",
-  name: "Zalo Personal",
-  description: "Zalo personal account messaging via native zca-js integration",
-  plugin: zalouserPlugin,
-  setRuntime: setZalouserRuntime,
-  registerFull(api) {
-    api.registerTool((ctx) => createZalouserTool(ctx), { name: "zalouser" });
-  },
+	id: "zalouser",
+	name: "Zalo Personal",
+	description: "Zalo personal account messaging via native zca-js integration",
+	plugin: zalouserPlugin,
+	setRuntime: setZalouserRuntime,
+	registerFull(api) {
+		api.registerTool((ctx) => createZalouserTool(ctx), { name: "zalouser" });
+	},
 });

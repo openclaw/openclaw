@@ -4,6 +4,6 @@ import { createRequire } from "node:module";
 // uses __dirname to locate platform-specific native .node bindings).
 const require = createRequire(import.meta.url);
 const { Attachment, EncryptedAttachment } =
-  require("@matrix-org/matrix-sdk-crypto-nodejs") as typeof import("@matrix-org/matrix-sdk-crypto-nodejs");
+	require("@matrix-org/matrix-sdk-crypto-nodejs") as typeof import("@matrix-org/matrix-sdk-crypto-nodejs");
 
 export { Attachment, EncryptedAttachment };

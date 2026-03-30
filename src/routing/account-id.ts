@@ -12,59 +12,65 @@ const normalizeAccountIdCache = new Map<string, string>();
 const normalizeOptionalAccountIdCache = new Map<string, string | undefined>();
 
 function canonicalizeAccountId(value: string): string {
-  if (VALID_ID_RE.test(value)) {
-    return value.toLowerCase();
-  }
-  return value
-    .toLowerCase()
-    .replace(INVALID_CHARS_RE, "-")
-    .replace(LEADING_DASH_RE, "")
-    .replace(TRAILING_DASH_RE, "")
-    .slice(0, 64);
+	if (VALID_ID_RE.test(value)) {
+		return value.toLowerCase();
+	}
+	return value
+		.toLowerCase()
+		.replace(INVALID_CHARS_RE, "-")
+		.replace(LEADING_DASH_RE, "")
+		.replace(TRAILING_DASH_RE, "")
+		.slice(0, 64);
 }
 
 function normalizeCanonicalAccountId(value: string): string | undefined {
-  const canonical = canonicalizeAccountId(value);
-  if (!canonical || isBlockedObjectKey(canonical)) {
-    return undefined;
-  }
-  return canonical;
+	const canonical = canonicalizeAccountId(value);
+	if (!canonical || isBlockedObjectKey(canonical)) {
+		return undefined;
+	}
+	return canonical;
 }
 
 export function normalizeAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  const cached = normalizeAccountIdCache.get(trimmed);
-  if (cached) {
-    return cached;
-  }
-  const normalized = normalizeCanonicalAccountId(trimmed) || DEFAULT_ACCOUNT_ID;
-  setNormalizeCache(normalizeAccountIdCache, trimmed, normalized);
-  return normalized;
+	const trimmed = (value ?? "").trim();
+	if (!trimmed) {
+		return DEFAULT_ACCOUNT_ID;
+	}
+	const cached = normalizeAccountIdCache.get(trimmed);
+	if (cached) {
+		return cached;
+	}
+	const normalized = normalizeCanonicalAccountId(trimmed) || DEFAULT_ACCOUNT_ID;
+	setNormalizeCache(normalizeAccountIdCache, trimmed, normalized);
+	return normalized;
 }
 
-export function normalizeOptionalAccountId(value: string | undefined | null): string | undefined {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (normalizeOptionalAccountIdCache.has(trimmed)) {
-    return normalizeOptionalAccountIdCache.get(trimmed);
-  }
-  const normalized = normalizeCanonicalAccountId(trimmed) || undefined;
-  setNormalizeCache(normalizeOptionalAccountIdCache, trimmed, normalized);
-  return normalized;
+export function normalizeOptionalAccountId(
+	value: string | undefined | null,
+): string | undefined {
+	const trimmed = (value ?? "").trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	if (normalizeOptionalAccountIdCache.has(trimmed)) {
+		return normalizeOptionalAccountIdCache.get(trimmed);
+	}
+	const normalized = normalizeCanonicalAccountId(trimmed) || undefined;
+	setNormalizeCache(normalizeOptionalAccountIdCache, trimmed, normalized);
+	return normalized;
 }
 
-function setNormalizeCache<T>(cache: Map<string, T>, key: string, value: T): void {
-  cache.set(key, value);
-  if (cache.size <= ACCOUNT_ID_CACHE_MAX) {
-    return;
-  }
-  const oldest = cache.keys().next();
-  if (!oldest.done) {
-    cache.delete(oldest.value);
-  }
+function setNormalizeCache<T>(
+	cache: Map<string, T>,
+	key: string,
+	value: T,
+): void {
+	cache.set(key, value);
+	if (cache.size <= ACCOUNT_ID_CACHE_MAX) {
+		return;
+	}
+	const oldest = cache.keys().next();
+	if (!oldest.done) {
+		cache.delete(oldest.value);
+	}
 }

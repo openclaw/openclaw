@@ -5,11 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const spawnMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawn: spawnMock,
-  };
+	const actual =
+		await vi.importActual<typeof import("node:child_process")>(
+			"node:child_process",
+		);
+	return {
+		...actual,
+		spawn: spawnMock,
+	};
 });
 
 type ExecModule = typeof import("./exec.js");
@@ -17,64 +20,64 @@ type ExecModule = typeof import("./exec.js");
 let runCommandWithTimeout: ExecModule["runCommandWithTimeout"];
 
 function createFakeSpawnedChild() {
-  const child = new EventEmitter() as EventEmitter & ChildProcess;
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  let killed = false;
-  const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => {
-    killed = true;
-    return true;
-  });
-  Object.defineProperty(child, "killed", {
-    get: () => killed,
-    configurable: true,
-  });
-  Object.defineProperty(child, "pid", {
-    value: 12345,
-    configurable: true,
-  });
-  child.stdout = stdout as ChildProcess["stdout"];
-  child.stderr = stderr as ChildProcess["stderr"];
-  child.stdin = null;
-  child.kill = kill as ChildProcess["kill"];
-  return { child, stdout, stderr, kill };
+	const child = new EventEmitter() as EventEmitter & ChildProcess;
+	const stdout = new EventEmitter();
+	const stderr = new EventEmitter();
+	let killed = false;
+	const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => {
+		killed = true;
+		return true;
+	});
+	Object.defineProperty(child, "killed", {
+		get: () => killed,
+		configurable: true,
+	});
+	Object.defineProperty(child, "pid", {
+		value: 12345,
+		configurable: true,
+	});
+	child.stdout = stdout as ChildProcess["stdout"];
+	child.stderr = stderr as ChildProcess["stderr"];
+	child.stdin = null;
+	child.kill = kill as ChildProcess["kill"];
+	return { child, stdout, stderr, kill };
 }
 
 describe("runCommandWithTimeout no-output timer", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runCommandWithTimeout } = await import("./exec.js"));
-  });
+	beforeEach(async () => {
+		vi.resetModules();
+		({ runCommandWithTimeout } = await import("./exec.js"));
+	});
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
 
-  it("resets no-output timeout when spawned child keeps emitting stdout", async () => {
-    vi.useFakeTimers();
-    const fake = createFakeSpawnedChild();
-    spawnMock.mockReturnValue(fake.child);
+	it("resets no-output timeout when spawned child keeps emitting stdout", async () => {
+		vi.useFakeTimers();
+		const fake = createFakeSpawnedChild();
+		spawnMock.mockReturnValue(fake.child);
 
-    const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], {
-      timeoutMs: 1_000,
-      noOutputTimeoutMs: 80,
-    });
+		const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], {
+			timeoutMs: 1_000,
+			noOutputTimeoutMs: 80,
+		});
 
-    fake.stdout.emit("data", Buffer.from("."));
-    await vi.advanceTimersByTimeAsync(40);
-    fake.stdout.emit("data", Buffer.from("."));
-    await vi.advanceTimersByTimeAsync(40);
-    fake.stdout.emit("data", Buffer.from("."));
-    await vi.advanceTimersByTimeAsync(20);
+		fake.stdout.emit("data", Buffer.from("."));
+		await vi.advanceTimersByTimeAsync(40);
+		fake.stdout.emit("data", Buffer.from("."));
+		await vi.advanceTimersByTimeAsync(40);
+		fake.stdout.emit("data", Buffer.from("."));
+		await vi.advanceTimersByTimeAsync(20);
 
-    fake.child.emit("close", 0, null);
-    const result = await runPromise;
+		fake.child.emit("close", 0, null);
+		const result = await runPromise;
 
-    expect(result.code ?? 0).toBe(0);
-    expect(result.termination).toBe("exit");
-    expect(result.noOutputTimedOut).toBe(false);
-    expect(result.stdout).toBe("...");
-    expect(fake.kill).not.toHaveBeenCalled();
-  });
+		expect(result.code ?? 0).toBe(0);
+		expect(result.termination).toBe("exit");
+		expect(result.noOutputTimedOut).toBe(false);
+		expect(result.stdout).toBe("...");
+		expect(fake.kill).not.toHaveBeenCalled();
+	});
 });

@@ -1,4 +1,4 @@
 export {
-  resolveBlueBubblesGroupRequireMention,
-  resolveBlueBubblesGroupToolPolicy,
+	resolveBlueBubblesGroupRequireMention,
+	resolveBlueBubblesGroupToolPolicy,
 } from "./src/group-policy.js";

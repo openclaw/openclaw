@@ -14,18 +14,18 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement } from "lit/decorators.js";
-import { Root } from "./root.js";
 import { classMap } from "lit/directives/class-map.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
 
 @customElement("a2ui-card")
 export class Card extends Root {
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       * {
         box-sizing: border-box;
       }
@@ -49,16 +49,18 @@ export class Card extends Root {
         }
       }
     `,
-  ];
+	];
 
-  render() {
-    return html` <section
+	render() {
+		return html` <section
       class=${classMap(this.theme.components.Card)}
-      style=${this.theme.additionalStyles?.Card
-        ? styleMap(this.theme.additionalStyles?.Card)
-        : nothing}
+      style=${
+				this.theme.additionalStyles?.Card
+					? styleMap(this.theme.additionalStyles?.Card)
+					: nothing
+			}
     >
       <slot></slot>
     </section>`;
-  }
+	}
 }

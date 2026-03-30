@@ -7,51 +7,53 @@ import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderIdForAuth } from "./provider-id.js";
 
 export type EnvApiKeyResult = {
-  apiKey: string;
-  source: string;
+	apiKey: string;
+	source: string;
 };
 
 export function resolveEnvApiKey(
-  provider: string,
-  env: NodeJS.ProcessEnv = process.env,
+	provider: string,
+	env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
-  const normalized = normalizeProviderIdForAuth(provider);
-  const applied = new Set(getShellEnvAppliedKeys());
-  const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = normalizeOptionalSecretInput(env[envVar]);
-    if (!value) {
-      return null;
-    }
-    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
-    return { apiKey: value, source };
-  };
+	const normalized = normalizeProviderIdForAuth(provider);
+	const applied = new Set(getShellEnvAppliedKeys());
+	const pick = (envVar: string): EnvApiKeyResult | null => {
+		const value = normalizeOptionalSecretInput(env[envVar]);
+		if (!value) {
+			return null;
+		}
+		const source = applied.has(envVar)
+			? `shell env: ${envVar}`
+			: `env: ${envVar}`;
+		return { apiKey: value, source };
+	};
 
-  const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
-  if (candidates) {
-    for (const envVar of candidates) {
-      const resolved = pick(envVar);
-      if (resolved) {
-        return resolved;
-      }
-    }
-  }
+	const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
+	if (candidates) {
+		for (const envVar of candidates) {
+			const resolved = pick(envVar);
+			if (resolved) {
+				return resolved;
+			}
+		}
+	}
 
-  if (normalized === "google-vertex") {
-    const envKey = getEnvApiKey(normalized);
-    if (!envKey) {
-      return null;
-    }
-    return { apiKey: envKey, source: "gcloud adc" };
-  }
+	if (normalized === "google-vertex") {
+		const envKey = getEnvApiKey(normalized);
+		if (!envKey) {
+			return null;
+		}
+		return { apiKey: envKey, source: "gcloud adc" };
+	}
 
-  if (normalized === "anthropic-vertex") {
-    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
-    // Return a sentinel so the model resolver still treats this provider as available.
-    if (hasAnthropicVertexAvailableAuth(env)) {
-      return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
-    }
-    return null;
-  }
+	if (normalized === "anthropic-vertex") {
+		// Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
+		// Return a sentinel so the model resolver still treats this provider as available.
+		if (hasAnthropicVertexAvailableAuth(env)) {
+			return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
+		}
+		return null;
+	}
 
-  return null;
+	return null;
 }

@@ -7,34 +7,33 @@
  * - audit-extra.async.ts: Filesystem/plugin checks (async I/O)
  */
 
-// Sync collectors
-export {
-  collectAttackSurfaceSummaryFindings,
-  collectExposureMatrixFindings,
-  collectGatewayHttpNoAuthFindings,
-  collectGatewayHttpSessionKeyOverrideFindings,
-  collectHooksHardeningFindings,
-  collectLikelyMultiUserSetupFindings,
-  collectMinimalProfileOverrideFindings,
-  collectModelHygieneFindings,
-  collectNodeDangerousAllowCommandFindings,
-  collectNodeDenyCommandPatternFindings,
-  collectSandboxDangerousConfigFindings,
-  collectSandboxDockerNoopFindings,
-  collectSecretsInConfigFindings,
-  collectSmallModelRiskFindings,
-  collectSyncedFolderFindings,
-  type SecurityAuditFinding,
-} from "./audit-extra.sync.js";
-
 // Async collectors
 export {
-  collectSandboxBrowserHashLabelFindings,
-  collectIncludeFilePermFindings,
-  collectInstalledSkillsCodeSafetyFindings,
-  collectPluginsCodeSafetyFindings,
-  collectPluginsTrustFindings,
-  collectStateDeepFilesystemFindings,
-  collectWorkspaceSkillSymlinkEscapeFindings,
-  readConfigSnapshotForAudit,
+	collectIncludeFilePermFindings,
+	collectInstalledSkillsCodeSafetyFindings,
+	collectPluginsCodeSafetyFindings,
+	collectPluginsTrustFindings,
+	collectSandboxBrowserHashLabelFindings,
+	collectStateDeepFilesystemFindings,
+	collectWorkspaceSkillSymlinkEscapeFindings,
+	readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";
+// Sync collectors
+export {
+	collectAttackSurfaceSummaryFindings,
+	collectExposureMatrixFindings,
+	collectGatewayHttpNoAuthFindings,
+	collectGatewayHttpSessionKeyOverrideFindings,
+	collectHooksHardeningFindings,
+	collectLikelyMultiUserSetupFindings,
+	collectMinimalProfileOverrideFindings,
+	collectModelHygieneFindings,
+	collectNodeDangerousAllowCommandFindings,
+	collectNodeDenyCommandPatternFindings,
+	collectSandboxDangerousConfigFindings,
+	collectSandboxDockerNoopFindings,
+	collectSecretsInConfigFindings,
+	collectSmallModelRiskFindings,
+	collectSyncedFolderFindings,
+	type SecurityAuditFinding,
+} from "./audit-extra.sync.js";

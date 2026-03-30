@@ -1,1 +1,4 @@
-export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
+export {
+	extractKeywords,
+	isQueryStopWordToken,
+} from "./host/query-expansion.js";

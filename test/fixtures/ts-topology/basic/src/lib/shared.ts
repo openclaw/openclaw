@@ -1,23 +1,23 @@
 export function sharedThing() {
-  return "shared";
+	return "shared";
 }
 
 export function singleOwnerHelper() {
-  return "single-owner";
+	return "single-owner";
 }
 
 export function aliasedThing() {
-  return "aliased";
+	return "aliased";
 }
 
 export function testOnlyThing() {
-  return "test-only";
+	return "test-only";
 }
 
 export function unusedThing() {
-  return "unused";
+	return "unused";
 }
 
 export type SharedType = {
-  value: string;
+	value: string;
 };

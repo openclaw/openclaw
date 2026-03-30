@@ -1,29 +1,31 @@
 export type FeishuMessageApiResponse = {
-  code?: number;
-  msg?: string;
-  data?: {
-    message_id?: string;
-  };
+	code?: number;
+	msg?: string;
+	data?: {
+		message_id?: string;
+	};
 };
 
 export function assertFeishuMessageApiSuccess(
-  response: FeishuMessageApiResponse,
-  errorPrefix: string,
+	response: FeishuMessageApiResponse,
+	errorPrefix: string,
 ) {
-  if (response.code !== 0) {
-    throw new Error(`${errorPrefix}: ${response.msg || `code ${response.code}`}`);
-  }
+	if (response.code !== 0) {
+		throw new Error(
+			`${errorPrefix}: ${response.msg || `code ${response.code}`}`,
+		);
+	}
 }
 
 export function toFeishuSendResult(
-  response: FeishuMessageApiResponse,
-  chatId: string,
+	response: FeishuMessageApiResponse,
+	chatId: string,
 ): {
-  messageId: string;
-  chatId: string;
+	messageId: string;
+	chatId: string;
 } {
-  return {
-    messageId: response.data?.message_id ?? "unknown",
-    chatId,
-  };
+	return {
+		messageId: response.data?.message_id ?? "unknown",
+		chatId,
+	};
 }

@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-import { Component, computed, input } from '@angular/core';
-import { DynamicComponent } from '../rendering/dynamic-component';
-import { Primitives } from '@a2ui/lit/0.8';
+import type { Primitives } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: 'a2ui-multiple-choice',
-  template: `
+	selector: "a2ui-multiple-choice",
+	template: `
     <section [class]="theme.components.MultipleChoice.container">
       <label [class]="theme.components.MultipleChoice.label" [for]="selectId">{{
         description()
@@ -39,7 +39,7 @@ import { Primitives } from '@a2ui/lit/0.8';
       </select>
     </section>
   `,
-  styles: `
+	styles: `
     :host {
       display: block;
       flex: var(--weight);
@@ -54,24 +54,29 @@ import { Primitives } from '@a2ui/lit/0.8';
   `,
 })
 export class MultipleChoice extends DynamicComponent {
-  readonly options = input.required<{ label: Primitives.StringValue; value: string }[]>();
-  readonly value = input.required<Primitives.StringValue | null>();
-  readonly description = input.required<string>();
+	readonly options =
+		input.required<{ label: Primitives.StringValue; value: string }[]>();
+	readonly value = input.required<Primitives.StringValue | null>();
+	readonly description = input.required<string>();
 
-  protected readonly selectId = super.getUniqueId('a2ui-multiple-choice');
-  protected selectValue = computed(() => super.resolvePrimitive(this.value()));
+	protected readonly selectId = super.getUniqueId("a2ui-multiple-choice");
+	protected selectValue = computed(() => super.resolvePrimitive(this.value()));
 
-  protected handleChange(event: Event) {
-    const path = this.value()?.path;
+	protected handleChange(event: Event) {
+		const path = this.value()?.path;
 
-    if (!(event.target instanceof HTMLSelectElement) || !event.target.value || !path) {
-      return;
-    }
+		if (
+			!(event.target instanceof HTMLSelectElement) ||
+			!event.target.value ||
+			!path
+		) {
+			return;
+		}
 
-    this.processor.setData(
-      this.component(),
-      this.processor.resolvePath(path, this.component().dataContextPath),
-      event.target.value,
-    );
-  }
+		this.processor.setData(
+			this.component(),
+			this.processor.resolvePath(path, this.component().dataContextPath),
+			event.target.value,
+		);
+	}
 }

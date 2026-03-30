@@ -14,30 +14,35 @@ const execFileAsync = promisify(execFile);
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
 
 function isWindowsBatchCommand(resolvedCommand: string): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const ext = path.extname(resolvedCommand).toLowerCase();
-  return ext === ".cmd" || ext === ".bat";
+	if (process.platform !== "win32") {
+		return false;
+	}
+	const ext = path.extname(resolvedCommand).toLowerCase();
+	return ext === ".cmd" || ext === ".bat";
 }
 
 function escapeForCmdExe(arg: string): string {
-  // Reject cmd metacharacters to avoid injection when we must pass a single command line.
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(
-      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
-        "Pass an explicit shell-wrapper argv at the call site instead.",
-    );
-  }
-  // Quote when needed; double inner quotes for cmd parsing.
-  if (!arg.includes(" ") && !arg.includes('"')) {
-    return arg;
-  }
-  return `"${arg.replace(/"/g, '""')}"`;
+	// Reject cmd metacharacters to avoid injection when we must pass a single command line.
+	if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+		throw new Error(
+			`Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
+				"Pass an explicit shell-wrapper argv at the call site instead.",
+		);
+	}
+	// Quote when needed; double inner quotes for cmd parsing.
+	if (!arg.includes(" ") && !arg.includes('"')) {
+		return arg;
+	}
+	return `"${arg.replace(/"/g, '""')}"`;
 }
 
-function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
-  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+function buildCmdExeCommandLine(
+	resolvedCommand: string,
+	args: string[],
+): string {
+	return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(
+		" ",
+	);
 }
 
 /**
@@ -46,29 +51,34 @@ function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string
  * spawn node.exe instead of npm.cmd.
  */
 function resolveNpmArgvForWindows(argv: string[]): string[] | null {
-  if (process.platform !== "win32" || argv.length === 0) {
-    return null;
-  }
-  const basename = path
-    .basename(argv[0])
-    .toLowerCase()
-    .replace(/\.(cmd|exe|bat)$/, "");
-  const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
-  if (!cliName) {
-    return null;
-  }
-  const nodeDir = path.dirname(process.execPath);
-  const cliPath = path.join(nodeDir, "node_modules", "npm", "bin", cliName);
-  if (!fs.existsSync(cliPath)) {
-    // Bun-based runs don't ship npm-cli.js next to process.execPath.
-    // Fall back to npm.cmd/npx.cmd so we still route through cmd wrapper
-    // (avoids direct .cmd spawn EINVAL on patched Node).
-    const command = argv[0] ?? "";
-    const ext = path.extname(command).toLowerCase();
-    const shimmedCommand = ext ? command : `${command}.cmd`;
-    return [shimmedCommand, ...argv.slice(1)];
-  }
-  return [process.execPath, cliPath, ...argv.slice(1)];
+	if (process.platform !== "win32" || argv.length === 0) {
+		return null;
+	}
+	const basename = path
+		.basename(argv[0])
+		.toLowerCase()
+		.replace(/\.(cmd|exe|bat)$/, "");
+	const cliName =
+		basename === "npx"
+			? "npx-cli.js"
+			: basename === "npm"
+				? "npm-cli.js"
+				: null;
+	if (!cliName) {
+		return null;
+	}
+	const nodeDir = path.dirname(process.execPath);
+	const cliPath = path.join(nodeDir, "node_modules", "npm", "bin", cliName);
+	if (!fs.existsSync(cliPath)) {
+		// Bun-based runs don't ship npm-cli.js next to process.execPath.
+		// Fall back to npm.cmd/npx.cmd so we still route through cmd wrapper
+		// (avoids direct .cmd spawn EINVAL on patched Node).
+		const command = argv[0] ?? "";
+		const ext = path.extname(command).toLowerCase();
+		const shimmedCommand = ext ? command : `${command}.cmd`;
+		return [shimmedCommand, ...argv.slice(1)];
+	}
+	return [process.execPath, cliPath, ...argv.slice(1)];
 }
 
 /**
@@ -77,337 +87,361 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
  * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
  */
 function resolveCommand(command: string): string {
-  return resolveWindowsCommandShim({
-    command,
-    cmdCommands: ["pnpm", "yarn"],
-  });
+	return resolveWindowsCommandShim({
+		command,
+		cmdCommands: ["pnpm", "yarn"],
+	});
 }
 
 export function shouldSpawnWithShell(params: {
-  resolvedCommand: string;
-  platform: NodeJS.Platform;
+	resolvedCommand: string;
+	platform: NodeJS.Platform;
 }): boolean {
-  // SECURITY: never enable `shell` for argv-based execution.
-  // `shell` routes through cmd.exe on Windows, which turns untrusted argv values
-  // (like chat prompts passed as CLI args) into command-injection primitives.
-  // If you need a shell, use an explicit shell-wrapper argv (e.g. `cmd.exe /c ...`)
-  // and validate/escape at the call site.
-  void params;
-  return false;
+	// SECURITY: never enable `shell` for argv-based execution.
+	// `shell` routes through cmd.exe on Windows, which turns untrusted argv values
+	// (like chat prompts passed as CLI args) into command-injection primitives.
+	// If you need a shell, use an explicit shell-wrapper argv (e.g. `cmd.exe /c ...`)
+	// and validate/escape at the call site.
+	void params;
+	return false;
 }
 
 // Simple promise-wrapped execFile with optional verbosity logging.
 export async function runExec(
-  command: string,
-  args: string[],
-  opts: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
+	command: string,
+	args: string[],
+	opts:
+		| number
+		| { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
 ): Promise<{ stdout: string; stderr: string }> {
-  const options =
-    typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
-      : {
-          timeout: opts.timeoutMs,
-          maxBuffer: opts.maxBuffer,
-          cwd: opts.cwd,
-          encoding: "utf8" as const,
-        };
-  try {
-    const argv = [command, ...args];
-    let execCommand: string;
-    let execArgs: string[];
-    if (process.platform === "win32") {
-      const resolved = resolveNpmArgvForWindows(argv);
-      if (resolved) {
-        execCommand = resolved[0] ?? "";
-        execArgs = resolved.slice(1);
-      } else {
-        execCommand = resolveCommand(command);
-        execArgs = args;
-      }
-    } else {
-      execCommand = resolveCommand(command);
-      execArgs = args;
-    }
-    const useCmdWrapper = isWindowsBatchCommand(execCommand);
-    const { stdout, stderr } = useCmdWrapper
-      ? await execFileAsync(
-          process.env.ComSpec ?? "cmd.exe",
-          ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
-          { ...options, windowsVerbatimArguments: true },
-        )
-      : await execFileAsync(execCommand, execArgs, options);
-    if (shouldLogVerbose()) {
-      if (stdout.trim()) {
-        logDebug(stdout.trim());
-      }
-      if (stderr.trim()) {
-        logError(stderr.trim());
-      }
-    }
-    return { stdout, stderr };
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logError(danger(`Command failed: ${command} ${args.join(" ")}`));
-    }
-    throw err;
-  }
+	const options =
+		typeof opts === "number"
+			? { timeout: opts, encoding: "utf8" as const }
+			: {
+					timeout: opts.timeoutMs,
+					maxBuffer: opts.maxBuffer,
+					cwd: opts.cwd,
+					encoding: "utf8" as const,
+				};
+	try {
+		const argv = [command, ...args];
+		let execCommand: string;
+		let execArgs: string[];
+		if (process.platform === "win32") {
+			const resolved = resolveNpmArgvForWindows(argv);
+			if (resolved) {
+				execCommand = resolved[0] ?? "";
+				execArgs = resolved.slice(1);
+			} else {
+				execCommand = resolveCommand(command);
+				execArgs = args;
+			}
+		} else {
+			execCommand = resolveCommand(command);
+			execArgs = args;
+		}
+		const useCmdWrapper = isWindowsBatchCommand(execCommand);
+		const { stdout, stderr } = useCmdWrapper
+			? await execFileAsync(
+					process.env.ComSpec ?? "cmd.exe",
+					["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
+					{ ...options, windowsVerbatimArguments: true },
+				)
+			: await execFileAsync(execCommand, execArgs, options);
+		if (shouldLogVerbose()) {
+			if (stdout.trim()) {
+				logDebug(stdout.trim());
+			}
+			if (stderr.trim()) {
+				logError(stderr.trim());
+			}
+		}
+		return { stdout, stderr };
+	} catch (err) {
+		if (shouldLogVerbose()) {
+			logError(danger(`Command failed: ${command} ${args.join(" ")}`));
+		}
+		throw err;
+	}
 }
 
 export type SpawnResult = {
-  pid?: number;
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  killed: boolean;
-  termination: "exit" | "timeout" | "no-output-timeout" | "signal";
-  noOutputTimedOut?: boolean;
+	pid?: number;
+	stdout: string;
+	stderr: string;
+	code: number | null;
+	signal: NodeJS.Signals | null;
+	killed: boolean;
+	termination: "exit" | "timeout" | "no-output-timeout" | "signal";
+	noOutputTimedOut?: boolean;
 };
 
 export type CommandOptions = {
-  timeoutMs: number;
-  cwd?: string;
-  input?: string;
-  env?: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
-  noOutputTimeoutMs?: number;
+	timeoutMs: number;
+	cwd?: string;
+	input?: string;
+	env?: NodeJS.ProcessEnv;
+	windowsVerbatimArguments?: boolean;
+	noOutputTimeoutMs?: number;
 };
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 
 export function resolveCommandEnv(params: {
-  argv: string[];
-  env?: NodeJS.ProcessEnv;
-  baseEnv?: NodeJS.ProcessEnv;
+	argv: string[];
+	env?: NodeJS.ProcessEnv;
+	baseEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
-  const baseEnv = params.baseEnv ?? process.env;
-  const argv = params.argv;
-  const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
-      return true;
-    }
-    if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
-      return script.includes("npm-cli.js");
-    }
-    return false;
-  })();
+	const baseEnv = params.baseEnv ?? process.env;
+	const argv = params.argv;
+	const shouldSuppressNpmFund = (() => {
+		const cmd = path.basename(argv[0] ?? "");
+		if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
+			return true;
+		}
+		if (cmd === "node" || cmd === "node.exe") {
+			const script = argv[1] ?? "";
+			return script.includes("npm-cli.js");
+		}
+		return false;
+	})();
 
-  const mergedEnv = params.env ? { ...baseEnv, ...params.env } : { ...baseEnv };
-  const resolvedEnv = Object.fromEntries(
-    Object.entries(mergedEnv)
-      .filter(([, value]) => value !== undefined)
-      .map(([key, value]) => [key, String(value)]),
-  );
-  if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) {
-      resolvedEnv.NPM_CONFIG_FUND = "false";
-    }
-    if (resolvedEnv.npm_config_fund == null) {
-      resolvedEnv.npm_config_fund = "false";
-    }
-  }
-  return markOpenClawExecEnv(resolvedEnv);
+	const mergedEnv = params.env ? { ...baseEnv, ...params.env } : { ...baseEnv };
+	const resolvedEnv = Object.fromEntries(
+		Object.entries(mergedEnv)
+			.filter(([, value]) => value !== undefined)
+			.map(([key, value]) => [key, String(value)]),
+	);
+	if (shouldSuppressNpmFund) {
+		if (resolvedEnv.NPM_CONFIG_FUND == null) {
+			resolvedEnv.NPM_CONFIG_FUND = "false";
+		}
+		if (resolvedEnv.npm_config_fund == null) {
+			resolvedEnv.npm_config_fund = "false";
+		}
+	}
+	return markOpenClawExecEnv(resolvedEnv);
 }
 
 export async function runCommandWithTimeout(
-  argv: string[],
-  optionsOrTimeout: number | CommandOptions,
+	argv: string[],
+	optionsOrTimeout: number | CommandOptions,
 ): Promise<SpawnResult> {
-  const options: CommandOptions =
-    typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
-  const { windowsVerbatimArguments } = options;
-  const hasInput = input !== undefined;
-  const resolvedEnv = resolveCommandEnv({ argv, env });
+	const options: CommandOptions =
+		typeof optionsOrTimeout === "number"
+			? { timeoutMs: optionsOrTimeout }
+			: optionsOrTimeout;
+	const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+	const { windowsVerbatimArguments } = options;
+	const hasInput = input !== undefined;
+	const resolvedEnv = resolveCommandEnv({ argv, env });
 
-  const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
-  const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
-  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
-  const usesWindowsExitCodeShim =
-    process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
-  const child = spawn(
-    useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
-    useCmdWrapper
-      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
-      : finalArgv.slice(1),
-    {
-      stdio,
-      cwd,
-      env: resolvedEnv,
-      windowsVerbatimArguments: useCmdWrapper ? true : windowsVerbatimArguments,
-      ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
-        ? { shell: true }
-        : {}),
-    },
-  );
-  // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
-  return await new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timedOut = false;
-    let noOutputTimedOut = false;
-    let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-    let closeFallbackTimer: NodeJS.Timeout | null = null;
-    let noOutputTimer: NodeJS.Timeout | null = null;
-    const shouldTrackOutputTimeout =
-      typeof noOutputTimeoutMs === "number" &&
-      Number.isFinite(noOutputTimeoutMs) &&
-      noOutputTimeoutMs > 0;
+	const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+	const finalArgv =
+		process.platform === "win32"
+			? (resolveNpmArgvForWindows(argv) ?? argv)
+			: argv;
+	const resolvedCommand =
+		finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
+	const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+	const usesWindowsExitCodeShim =
+		process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
+	const child = spawn(
+		useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+		useCmdWrapper
+			? [
+					"/d",
+					"/s",
+					"/c",
+					buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1)),
+				]
+			: finalArgv.slice(1),
+		{
+			stdio,
+			cwd,
+			env: resolvedEnv,
+			windowsVerbatimArguments: useCmdWrapper ? true : windowsVerbatimArguments,
+			...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
+				? { shell: true }
+				: {}),
+		},
+	);
+	// Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
+	return await new Promise((resolve, reject) => {
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		let timedOut = false;
+		let noOutputTimedOut = false;
+		let childExitState: {
+			code: number | null;
+			signal: NodeJS.Signals | null;
+		} | null = null;
+		let closeFallbackTimer: NodeJS.Timeout | null = null;
+		let noOutputTimer: NodeJS.Timeout | null = null;
+		const shouldTrackOutputTimeout =
+			typeof noOutputTimeoutMs === "number" &&
+			Number.isFinite(noOutputTimeoutMs) &&
+			noOutputTimeoutMs > 0;
 
-    const clearNoOutputTimer = () => {
-      if (!noOutputTimer) {
-        return;
-      }
-      clearTimeout(noOutputTimer);
-      noOutputTimer = null;
-    };
+		const clearNoOutputTimer = () => {
+			if (!noOutputTimer) {
+				return;
+			}
+			clearTimeout(noOutputTimer);
+			noOutputTimer = null;
+		};
 
-    const clearCloseFallbackTimer = () => {
-      if (!closeFallbackTimer) {
-        return;
-      }
-      clearTimeout(closeFallbackTimer);
-      closeFallbackTimer = null;
-    };
+		const clearCloseFallbackTimer = () => {
+			if (!closeFallbackTimer) {
+				return;
+			}
+			clearTimeout(closeFallbackTimer);
+			closeFallbackTimer = null;
+		};
 
-    const armNoOutputTimer = () => {
-      if (!shouldTrackOutputTimeout || settled) {
-        return;
-      }
-      clearNoOutputTimer();
-      noOutputTimer = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-        noOutputTimedOut = true;
-        if (typeof child.kill === "function") {
-          child.kill("SIGKILL");
-        }
-      }, Math.floor(noOutputTimeoutMs));
-    };
+		const armNoOutputTimer = () => {
+			if (!shouldTrackOutputTimeout || settled) {
+				return;
+			}
+			clearNoOutputTimer();
+			noOutputTimer = setTimeout(() => {
+				if (settled) {
+					return;
+				}
+				noOutputTimedOut = true;
+				if (typeof child.kill === "function") {
+					child.kill("SIGKILL");
+				}
+			}, Math.floor(noOutputTimeoutMs));
+		};
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (typeof child.kill === "function") {
-        child.kill("SIGKILL");
-      }
-    }, timeoutMs);
-    armNoOutputTimer();
+		const timer = setTimeout(() => {
+			timedOut = true;
+			if (typeof child.kill === "function") {
+				child.kill("SIGKILL");
+			}
+		}, timeoutMs);
+		armNoOutputTimer();
 
-    if (hasInput && child.stdin) {
-      child.stdin.write(input ?? "");
-      child.stdin.end();
-    }
+		if (hasInput && child.stdin) {
+			child.stdin.write(input ?? "");
+			child.stdin.end();
+		}
 
-    child.stdout?.on("data", (d) => {
-      stdout += d.toString();
-      armNoOutputTimer();
-    });
-    child.stderr?.on("data", (d) => {
-      stderr += d.toString();
-      armNoOutputTimer();
-    });
-    child.on("error", (err) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      clearNoOutputTimer();
-      clearCloseFallbackTimer();
-      reject(err);
-    });
-    child.on("exit", (code, signal) => {
-      childExitState = { code, signal };
-      if (settled || closeFallbackTimer) {
-        return;
-      }
-      closeFallbackTimer = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      }, 250);
-    });
-    const resolveFromClose = (code: number | null, signal: NodeJS.Signals | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      clearNoOutputTimer();
-      clearCloseFallbackTimer();
-      const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
-      const resolvedCode =
-        childExitState?.code ??
-        code ??
-        child.exitCode ??
-        (usesWindowsExitCodeShim &&
-        resolvedSignal == null &&
-        !timedOut &&
-        !noOutputTimedOut &&
-        !child.killed
-          ? 0
-          : null);
-      const termination = noOutputTimedOut
-        ? "no-output-timeout"
-        : timedOut
-          ? "timeout"
-          : resolvedSignal != null
-            ? "signal"
-            : "exit";
-      const normalizedCode =
-        termination === "timeout" || termination === "no-output-timeout"
-          ? resolvedCode === 0
-            ? 124
-            : resolvedCode
-          : resolvedCode;
-      resolve({
-        pid: child.pid ?? undefined,
-        stdout,
-        stderr,
-        code: normalizedCode,
-        signal: resolvedSignal,
-        killed: child.killed,
-        termination,
-        noOutputTimedOut,
-      });
-    };
-    child.on("close", (code, signal) => {
-      if (
-        process.platform !== "win32" ||
-        childExitState != null ||
-        code != null ||
-        signal != null ||
-        child.exitCode != null ||
-        child.signalCode != null
-      ) {
-        resolveFromClose(code, signal);
-        return;
-      }
+		child.stdout?.on("data", (d) => {
+			stdout += d.toString();
+			armNoOutputTimer();
+		});
+		child.stderr?.on("data", (d) => {
+			stderr += d.toString();
+			armNoOutputTimer();
+		});
+		child.on("error", (err) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timer);
+			clearNoOutputTimer();
+			clearCloseFallbackTimer();
+			reject(err);
+		});
+		child.on("exit", (code, signal) => {
+			childExitState = { code, signal };
+			if (settled || closeFallbackTimer) {
+				return;
+			}
+			closeFallbackTimer = setTimeout(() => {
+				if (settled) {
+					return;
+				}
+				child.stdout?.destroy();
+				child.stderr?.destroy();
+			}, 250);
+		});
+		const resolveFromClose = (
+			code: number | null,
+			signal: NodeJS.Signals | null,
+		) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timer);
+			clearNoOutputTimer();
+			clearCloseFallbackTimer();
+			const resolvedSignal =
+				childExitState?.signal ?? signal ?? child.signalCode ?? null;
+			const resolvedCode =
+				childExitState?.code ??
+				code ??
+				child.exitCode ??
+				(usesWindowsExitCodeShim &&
+				resolvedSignal == null &&
+				!timedOut &&
+				!noOutputTimedOut &&
+				!child.killed
+					? 0
+					: null);
+			const termination = noOutputTimedOut
+				? "no-output-timeout"
+				: timedOut
+					? "timeout"
+					: resolvedSignal != null
+						? "signal"
+						: "exit";
+			const normalizedCode =
+				termination === "timeout" || termination === "no-output-timeout"
+					? resolvedCode === 0
+						? 124
+						: resolvedCode
+					: resolvedCode;
+			resolve({
+				pid: child.pid ?? undefined,
+				stdout,
+				stderr,
+				code: normalizedCode,
+				signal: resolvedSignal,
+				killed: child.killed,
+				termination,
+				noOutputTimedOut,
+			});
+		};
+		child.on("close", (code, signal) => {
+			if (
+				process.platform !== "win32" ||
+				childExitState != null ||
+				code != null ||
+				signal != null ||
+				child.exitCode != null ||
+				child.signalCode != null
+			) {
+				resolveFromClose(code, signal);
+				return;
+			}
 
-      const startedAt = Date.now();
-      const waitForExitState = () => {
-        if (settled) {
-          return;
-        }
-        if (childExitState != null || child.exitCode != null || child.signalCode != null) {
-          resolveFromClose(code, signal);
-          return;
-        }
-        if (Date.now() - startedAt >= WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS) {
-          resolveFromClose(code, signal);
-          return;
-        }
-        setTimeout(waitForExitState, WINDOWS_CLOSE_STATE_POLL_MS);
-      };
-      waitForExitState();
-    });
-  });
+			const startedAt = Date.now();
+			const waitForExitState = () => {
+				if (settled) {
+					return;
+				}
+				if (
+					childExitState != null ||
+					child.exitCode != null ||
+					child.signalCode != null
+				) {
+					resolveFromClose(code, signal);
+					return;
+				}
+				if (Date.now() - startedAt >= WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS) {
+					resolveFromClose(code, signal);
+					return;
+				}
+				setTimeout(waitForExitState, WINDOWS_CLOSE_STATE_POLL_MS);
+			};
+			waitForExitState();
+		});
+	});
 }

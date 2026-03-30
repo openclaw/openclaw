@@ -7,47 +7,47 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { resolveSessionAuthProfileOverride } from "./session-override.js";
 
 async function writeAuthStore(agentDir: string) {
-  const authPath = path.join(agentDir, "auth-profiles.json");
-  const payload = {
-    version: 1,
-    profiles: {
-      "zai:work": { type: "api_key", provider: "zai", key: "sk-test" },
-    },
-    order: {
-      zai: ["zai:work"],
-    },
-  };
-  await fs.writeFile(authPath, JSON.stringify(payload), "utf-8");
+	const authPath = path.join(agentDir, "auth-profiles.json");
+	const payload = {
+		version: 1,
+		profiles: {
+			"zai:work": { type: "api_key", provider: "zai", key: "sk-test" },
+		},
+		order: {
+			zai: ["zai:work"],
+		},
+	};
+	await fs.writeFile(authPath, JSON.stringify(payload), "utf-8");
 }
 
 describe("resolveSessionAuthProfileOverride", () => {
-  it("keeps user override when provider alias differs", async () => {
-    await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
-      const agentDir = path.join(stateDir, "agent");
-      await fs.mkdir(agentDir, { recursive: true });
-      await writeAuthStore(agentDir);
+	it("keeps user override when provider alias differs", async () => {
+		await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
+			const agentDir = path.join(stateDir, "agent");
+			await fs.mkdir(agentDir, { recursive: true });
+			await writeAuthStore(agentDir);
 
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: "zai:work",
-        authProfileOverrideSource: "user",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
+			const sessionEntry: SessionEntry = {
+				sessionId: "s1",
+				updatedAt: Date.now(),
+				authProfileOverride: "zai:work",
+				authProfileOverrideSource: "user",
+			};
+			const sessionStore = { "agent:main:main": sessionEntry };
 
-      const resolved = await resolveSessionAuthProfileOverride({
-        cfg: {} as OpenClawConfig,
-        provider: "z.ai",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
+			const resolved = await resolveSessionAuthProfileOverride({
+				cfg: {} as OpenClawConfig,
+				provider: "z.ai",
+				agentDir,
+				sessionEntry,
+				sessionStore,
+				sessionKey: "agent:main:main",
+				storePath: undefined,
+				isNewSession: false,
+			});
 
-      expect(resolved).toBe("zai:work");
-      expect(sessionEntry.authProfileOverride).toBe("zai:work");
-    });
-  });
+			expect(resolved).toBe("zai:work");
+			expect(sessionEntry.authProfileOverride).toBe("zai:work");
+		});
+	});
 });

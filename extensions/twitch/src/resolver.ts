@@ -7,31 +7,35 @@
 
 import { ApiClient } from "@twurple/api";
 import { StaticAuthProvider } from "@twurple/auth";
-import type { ChannelResolveKind, ChannelResolveResult } from "./types.js";
-import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
+import type {
+	ChannelLogSink,
+	ChannelResolveKind,
+	ChannelResolveResult,
+	TwitchAccountConfig,
+} from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
 /**
  * Normalize a Twitch username - strip @ prefix and convert to lowercase
  */
 function normalizeUsername(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("@")) {
-    return trimmed.slice(1).toLowerCase();
-  }
-  return trimmed.toLowerCase();
+	const trimmed = input.trim();
+	if (trimmed.startsWith("@")) {
+		return trimmed.slice(1).toLowerCase();
+	}
+	return trimmed.toLowerCase();
 }
 
 /**
  * Create a logger that includes the Twitch prefix
  */
 function createLogger(logger?: ChannelLogSink): ChannelLogSink {
-  return {
-    info: (msg: string) => logger?.info(msg),
-    warn: (msg: string) => logger?.warn(msg),
-    error: (msg: string) => logger?.error(msg),
-    debug: (msg: string) => logger?.debug?.(msg) ?? (() => {}),
-  };
+	return {
+		info: (msg: string) => logger?.info(msg),
+		warn: (msg: string) => logger?.warn(msg),
+		error: (msg: string) => logger?.error(msg),
+		debug: (msg: string) => logger?.debug?.(msg) ?? (() => {}),
+	};
 }
 
 /**
@@ -44,94 +48,103 @@ function createLogger(logger?: ChannelLogSink): ChannelLogSink {
  * @returns Promise resolving to array of ChannelResolveResult
  */
 export async function resolveTwitchTargets(
-  inputs: string[],
-  account: TwitchAccountConfig,
-  kind: ChannelResolveKind,
-  logger?: ChannelLogSink,
+	inputs: string[],
+	account: TwitchAccountConfig,
+	_kind: ChannelResolveKind,
+	logger?: ChannelLogSink,
 ): Promise<ChannelResolveResult[]> {
-  const log = createLogger(logger);
+	const log = createLogger(logger);
 
-  if (!account.clientId || !account.accessToken) {
-    log.error("Missing Twitch client ID or accessToken");
-    return inputs.map((input) => ({
-      input,
-      resolved: false,
-      note: "missing Twitch credentials",
-    }));
-  }
+	if (!account.clientId || !account.accessToken) {
+		log.error("Missing Twitch client ID or accessToken");
+		return inputs.map((input) => ({
+			input,
+			resolved: false,
+			note: "missing Twitch credentials",
+		}));
+	}
 
-  const normalizedToken = normalizeToken(account.accessToken);
+	const normalizedToken = normalizeToken(account.accessToken);
 
-  const authProvider = new StaticAuthProvider(account.clientId, normalizedToken);
-  const apiClient = new ApiClient({ authProvider });
+	const authProvider = new StaticAuthProvider(
+		account.clientId,
+		normalizedToken,
+	);
+	const apiClient = new ApiClient({ authProvider });
 
-  const results: ChannelResolveResult[] = [];
+	const results: ChannelResolveResult[] = [];
 
-  for (const input of inputs) {
-    const normalized = normalizeUsername(input);
+	for (const input of inputs) {
+		const normalized = normalizeUsername(input);
 
-    if (!normalized) {
-      results.push({
-        input,
-        resolved: false,
-        note: "empty input",
-      });
-      continue;
-    }
+		if (!normalized) {
+			results.push({
+				input,
+				resolved: false,
+				note: "empty input",
+			});
+			continue;
+		}
 
-    const looksLikeUserId = /^\d+$/.test(normalized);
+		const looksLikeUserId = /^\d+$/.test(normalized);
 
-    try {
-      if (looksLikeUserId) {
-        const user = await apiClient.users.getUserById(normalized);
+		try {
+			if (looksLikeUserId) {
+				const user = await apiClient.users.getUserById(normalized);
 
-        if (user) {
-          results.push({
-            input,
-            resolved: true,
-            id: user.id,
-            name: user.name,
-          });
-          log.debug?.(`Resolved user ID ${normalized} -> ${user.name}`);
-        } else {
-          results.push({
-            input,
-            resolved: false,
-            note: "user ID not found",
-          });
-          log.warn(`User ID ${normalized} not found`);
-        }
-      } else {
-        const user = await apiClient.users.getUserByName(normalized);
+				if (user) {
+					results.push({
+						input,
+						resolved: true,
+						id: user.id,
+						name: user.name,
+					});
+					log.debug?.(`Resolved user ID ${normalized} -> ${user.name}`);
+				} else {
+					results.push({
+						input,
+						resolved: false,
+						note: "user ID not found",
+					});
+					log.warn(`User ID ${normalized} not found`);
+				}
+			} else {
+				const user = await apiClient.users.getUserByName(normalized);
 
-        if (user) {
-          results.push({
-            input,
-            resolved: true,
-            id: user.id,
-            name: user.name,
-            note: user.displayName !== user.name ? `display: ${user.displayName}` : undefined,
-          });
-          log.debug?.(`Resolved username ${normalized} -> ${user.id} (${user.name})`);
-        } else {
-          results.push({
-            input,
-            resolved: false,
-            note: "username not found",
-          });
-          log.warn(`Username ${normalized} not found`);
-        }
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      results.push({
-        input,
-        resolved: false,
-        note: `API error: ${errorMessage}`,
-      });
-      log.error(`Failed to resolve ${input}: ${errorMessage}`);
-    }
-  }
+				if (user) {
+					results.push({
+						input,
+						resolved: true,
+						id: user.id,
+						name: user.name,
+						note:
+							user.displayName !== user.name
+								? `display: ${user.displayName}`
+								: undefined,
+					});
+					log.debug?.(
+						`Resolved username ${normalized} -> ${user.id} (${user.name})`,
+					);
+				} else {
+					results.push({
+						input,
+						resolved: false,
+						note: "username not found",
+					});
+					log.warn(`Username ${normalized} not found`);
+				}
+			}
+		} catch (error) {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			results.push({
+				input,
+				resolved: false,
+				note: `API error: ${errorMessage}`,
+			});
+			log.error(`Failed to resolve ${input}: ${errorMessage}`);
+		}
+	}
 
-  return results;
+	return results;
 }

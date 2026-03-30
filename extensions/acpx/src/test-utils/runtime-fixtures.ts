@@ -7,10 +7,10 @@ import { ACPX_PINNED_VERSION } from "../config.js";
 import { AcpxRuntime } from "../runtime.js";
 
 export const NOOP_LOGGER = {
-  info: (_message: string) => {},
-  warn: (_message: string) => {},
-  error: (_message: string) => {},
-  debug: (_message: string) => {},
+	info: (_message: string) => {},
+	warn: (_message: string) => {},
+	error: (_message: string) => {},
+	debug: (_message: string) => {},
 };
 
 const tempDirs: string[] = [];
@@ -336,92 +336,95 @@ process.exit(2);
 `;
 
 export async function createMockRuntimeFixture(params?: {
-  permissionMode?: ResolvedAcpxPluginConfig["permissionMode"];
-  queueOwnerTtlSeconds?: number;
-  mcpServers?: ResolvedAcpxPluginConfig["mcpServers"];
+	permissionMode?: ResolvedAcpxPluginConfig["permissionMode"];
+	queueOwnerTtlSeconds?: number;
+	mcpServers?: ResolvedAcpxPluginConfig["mcpServers"];
 }): Promise<{
-  runtime: AcpxRuntime;
-  logPath: string;
-  config: ResolvedAcpxPluginConfig;
+	runtime: AcpxRuntime;
+	logPath: string;
+	config: ResolvedAcpxPluginConfig;
 }> {
-  const scriptPath = await ensureMockCliScriptPath();
-  const dir = path.dirname(scriptPath);
-  const logPath = path.join(dir, `calls-${logFileSequence++}.log`);
-  process.env.MOCK_ACPX_LOG = logPath;
+	const scriptPath = await ensureMockCliScriptPath();
+	const dir = path.dirname(scriptPath);
+	const logPath = path.join(dir, `calls-${logFileSequence++}.log`);
+	process.env.MOCK_ACPX_LOG = logPath;
 
-  const config: ResolvedAcpxPluginConfig = {
-    command: scriptPath,
-    allowPluginLocalInstall: false,
-    stripProviderAuthEnvVars: false,
-    installCommand: "n/a",
-    cwd: dir,
-    permissionMode: params?.permissionMode ?? "approve-all",
-    nonInteractivePermissions: "fail",
-    pluginToolsMcpBridge: false,
-    strictWindowsCmdWrapper: true,
-    queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
-    mcpServers: params?.mcpServers ?? {},
-  };
+	const config: ResolvedAcpxPluginConfig = {
+		command: scriptPath,
+		allowPluginLocalInstall: false,
+		stripProviderAuthEnvVars: false,
+		installCommand: "n/a",
+		cwd: dir,
+		permissionMode: params?.permissionMode ?? "approve-all",
+		nonInteractivePermissions: "fail",
+		pluginToolsMcpBridge: false,
+		strictWindowsCmdWrapper: true,
+		queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
+		mcpServers: params?.mcpServers ?? {},
+	};
 
-  return {
-    runtime: new AcpxRuntime(config, {
-      queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds,
-      logger: NOOP_LOGGER,
-    }),
-    logPath,
-    config,
-  };
+	return {
+		runtime: new AcpxRuntime(config, {
+			queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds,
+			logger: NOOP_LOGGER,
+		}),
+		logPath,
+		config,
+	};
 }
 
 async function ensureMockCliScriptPath(): Promise<string> {
-  if (sharedMockCliScriptPath) {
-    return await sharedMockCliScriptPath;
-  }
-  sharedMockCliScriptPath = (async () => {
-    const dir = await mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-acpx-runtime-test-"),
-    );
-    tempDirs.push(dir);
-    const scriptPath = path.join(dir, "mock-acpx.cjs");
-    await writeFile(scriptPath, MOCK_CLI_SCRIPT, "utf8");
-    await chmod(scriptPath, 0o755);
-    return scriptPath;
-  })();
-  return await sharedMockCliScriptPath;
+	if (sharedMockCliScriptPath) {
+		return await sharedMockCliScriptPath;
+	}
+	sharedMockCliScriptPath = (async () => {
+		const dir = await mkdtemp(
+			path.join(
+				resolvePreferredOpenClawTmpDir(),
+				"openclaw-acpx-runtime-test-",
+			),
+		);
+		tempDirs.push(dir);
+		const scriptPath = path.join(dir, "mock-acpx.cjs");
+		await writeFile(scriptPath, MOCK_CLI_SCRIPT, "utf8");
+		await chmod(scriptPath, 0o755);
+		return scriptPath;
+	})();
+	return await sharedMockCliScriptPath;
 }
 
 export async function readMockRuntimeLogEntries(
-  logPath: string,
+	logPath: string,
 ): Promise<Array<Record<string, unknown>>> {
-  if (!fs.existsSync(logPath)) {
-    return [];
-  }
-  const raw = await readFile(logPath, "utf8");
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+	if (!fs.existsSync(logPath)) {
+		return [];
+	}
+	const raw = await readFile(logPath, "utf8");
+	return raw
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
-  delete process.env.MOCK_ACPX_LOG;
-  delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
-  delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-  delete process.env.MOCK_ACPX_STATUS_STATUS;
-  delete process.env.MOCK_ACPX_STATUS_SUMMARY;
-  sharedMockCliScriptPath = null;
-  logFileSequence = 0;
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      continue;
-    }
-    await rm(dir, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 10,
-    });
-  }
+	delete process.env.MOCK_ACPX_LOG;
+	delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+	delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+	delete process.env.MOCK_ACPX_STATUS_STATUS;
+	delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+	sharedMockCliScriptPath = null;
+	logFileSequence = 0;
+	while (tempDirs.length > 0) {
+		const dir = tempDirs.pop();
+		if (!dir) {
+			continue;
+		}
+		await rm(dir, {
+			recursive: true,
+			force: true,
+			maxRetries: 10,
+			retryDelay: 10,
+		});
+	}
 }

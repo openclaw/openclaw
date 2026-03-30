@@ -10,59 +10,59 @@ const LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
 const describeLive = LIVE && GEMINI_KEY ? describe : describe.skip;
 
 describeLive("gemini live switch", () => {
-  const googleModels = ["gemini-3-pro-preview", "gemini-2.5-pro"] as const;
+	const googleModels = ["gemini-3-pro-preview", "gemini-2.5-pro"] as const;
 
-  for (const modelId of googleModels) {
-    it(`handles unsigned tool calls from Antigravity when switching to ${modelId}`, async () => {
-      const now = Date.now();
-      const model = getModel("google", modelId);
+	for (const modelId of googleModels) {
+		it(`handles unsigned tool calls from Antigravity when switching to ${modelId}`, async () => {
+			const now = Date.now();
+			const model = getModel("google", modelId);
 
-      const res = await completeSimple(
-        model,
-        {
-          messages: [
-            {
-              role: "user",
-              content: "Reply with ok.",
-              timestamp: now,
-            },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "toolCall",
-                  id: "call_1",
-                  name: "bash",
-                  arguments: { command: "ls -la" },
-                  // No thoughtSignature: simulates Claude via Antigravity.
-                },
-              ],
-              api: "google-gemini-cli",
-              provider: "google-antigravity",
-              model: "claude-sonnet-4-20250514",
-              usage: makeZeroUsageSnapshot(),
-              stopReason: "stop",
-              timestamp: now,
-            },
-          ],
-          tools: [
-            {
-              name: "bash",
-              description: "Run shell command",
-              parameters: Type.Object({
-                command: Type.String(),
-              }),
-            },
-          ],
-        },
-        {
-          apiKey: GEMINI_KEY,
-          reasoning: "low",
-          maxTokens: 128,
-        },
-      );
+			const res = await completeSimple(
+				model,
+				{
+					messages: [
+						{
+							role: "user",
+							content: "Reply with ok.",
+							timestamp: now,
+						},
+						{
+							role: "assistant",
+							content: [
+								{
+									type: "toolCall",
+									id: "call_1",
+									name: "bash",
+									arguments: { command: "ls -la" },
+									// No thoughtSignature: simulates Claude via Antigravity.
+								},
+							],
+							api: "google-gemini-cli",
+							provider: "google-antigravity",
+							model: "claude-sonnet-4-20250514",
+							usage: makeZeroUsageSnapshot(),
+							stopReason: "stop",
+							timestamp: now,
+						},
+					],
+					tools: [
+						{
+							name: "bash",
+							description: "Run shell command",
+							parameters: Type.Object({
+								command: Type.String(),
+							}),
+						},
+					],
+				},
+				{
+					apiKey: GEMINI_KEY,
+					reasoning: "low",
+					maxTokens: 128,
+				},
+			);
 
-      expect(res.stopReason).not.toBe("error");
-    }, 20000);
-  }
+			expect(res.stopReason).not.toBe("error");
+		}, 20000);
+	}
 });

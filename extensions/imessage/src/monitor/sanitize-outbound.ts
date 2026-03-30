@@ -14,18 +14,18 @@ const ROLE_TURN_MARKER_RE = /\b(?:user|system|assistant)\s*:\s*$/gm;
  * model-specific internal separator stripping.
  */
 export function sanitizeOutboundText(text: string): string {
-  if (!text) {
-    return text;
-  }
+	if (!text) {
+		return text;
+	}
 
-  let cleaned = stripAssistantInternalScaffolding(text);
+	let cleaned = stripAssistantInternalScaffolding(text);
 
-  cleaned = cleaned.replace(INTERNAL_SEPARATOR_RE, "");
-  cleaned = cleaned.replace(ASSISTANT_ROLE_MARKER_RE, "");
-  cleaned = cleaned.replace(ROLE_TURN_MARKER_RE, "");
+	cleaned = cleaned.replace(INTERNAL_SEPARATOR_RE, "");
+	cleaned = cleaned.replace(ASSISTANT_ROLE_MARKER_RE, "");
+	cleaned = cleaned.replace(ROLE_TURN_MARKER_RE, "");
 
-  // Collapse excessive blank lines left after stripping.
-  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
+	// Collapse excessive blank lines left after stripping.
+	cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
 
-  return cleaned;
+	return cleaned;
 }

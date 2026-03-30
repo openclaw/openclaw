@@ -3,19 +3,21 @@ import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const EMPTY_STORE: AuthProfileStore = {
-  version: 1,
-  profiles: {},
+	version: 1,
+	profiles: {},
 };
 
 describe("formatAuthDoctorHint", () => {
-  it("guides removed qwen portal users to model studio onboarding", async () => {
-    const hint = await formatAuthDoctorHint({
-      store: EMPTY_STORE,
-      provider: "qwen-portal",
-    });
+	it("guides removed qwen portal users to model studio onboarding", async () => {
+		const hint = await formatAuthDoctorHint({
+			store: EMPTY_STORE,
+			provider: "qwen-portal",
+		});
 
-    expect(hint).toContain("openclaw onboard --auth-choice modelstudio-api-key");
-    expect(hint).toContain("modelstudio-api-key-cn");
-    expect(hint).not.toContain("--provider modelstudio");
-  });
+		expect(hint).toContain(
+			"openclaw onboard --auth-choice modelstudio-api-key",
+		);
+		expect(hint).toContain("modelstudio-api-key-cn");
+		expect(hint).not.toContain("--provider modelstudio");
+	});
 });

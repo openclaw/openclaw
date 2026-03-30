@@ -14,18 +14,18 @@
  limitations under the License.
  */
 
-import { html, css, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement } from "lit/decorators.js";
-import { Root } from "./root.js";
-import { styleMap } from "lit/directives/style-map.js";
 import { classMap } from "lit/directives/class-map.js";
+import { styleMap } from "lit/directives/style-map.js";
+import { Root } from "./root.js";
 import { structuralStyles } from "./styles.js";
 
 @customElement("a2ui-divider")
 export class Divider extends Root {
-  static styles = [
-    structuralStyles,
-    css`
+	static styles = [
+		structuralStyles,
+		css`
       :host {
         display: block;
         min-height: 0;
@@ -38,14 +38,16 @@ export class Divider extends Root {
         border: none;
       }
     `,
-  ];
+	];
 
-  render() {
-    return html`<hr
+	render() {
+		return html`<hr
       class=${classMap(this.theme.components.Divider)}
-      style=${this.theme.additionalStyles?.Divider
-        ? styleMap(this.theme.additionalStyles?.Divider)
-        : nothing}
+      style=${
+				this.theme.additionalStyles?.Divider
+					? styleMap(this.theme.additionalStyles?.Divider)
+					: nothing
+			}
     />`;
-  }
+	}
 }

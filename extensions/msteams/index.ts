@@ -6,9 +6,9 @@ export { msteamsPlugin } from "./src/channel.js";
 export { setMSTeamsRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
-  id: "msteams",
-  name: "Microsoft Teams",
-  description: "Microsoft Teams channel plugin (Bot Framework)",
-  plugin: msteamsPlugin,
-  setRuntime: setMSTeamsRuntime,
+	id: "msteams",
+	name: "Microsoft Teams",
+	description: "Microsoft Teams channel plugin (Bot Framework)",
+	plugin: msteamsPlugin,
+	setRuntime: setMSTeamsRuntime,
 });

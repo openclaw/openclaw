@@ -5,11 +5,12 @@ export const connectOverCdpMock: MockFn = vi.fn();
 export const getChromeWebSocketUrlMock: MockFn = vi.fn();
 
 vi.mock("playwright-core", () => ({
-  chromium: {
-    connectOverCDP: (...args: unknown[]) => connectOverCdpMock(...args),
-  },
+	chromium: {
+		connectOverCDP: (...args: unknown[]) => connectOverCdpMock(...args),
+	},
 }));
 
 vi.mock("./chrome.js", () => ({
-  getChromeWebSocketUrl: (...args: unknown[]) => getChromeWebSocketUrlMock(...args),
+	getChromeWebSocketUrl: (...args: unknown[]) =>
+		getChromeWebSocketUrlMock(...args),
 }));

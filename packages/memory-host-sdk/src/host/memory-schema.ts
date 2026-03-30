@@ -1,20 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
 
 export function ensureMemoryIndexSchema(params: {
-  db: DatabaseSync;
-  embeddingCacheTable: string;
-  cacheEnabled: boolean;
-  ftsTable: string;
-  ftsEnabled: boolean;
-  ftsTokenizer?: "unicode61" | "trigram";
+	db: DatabaseSync;
+	embeddingCacheTable: string;
+	cacheEnabled: boolean;
+	ftsTable: string;
+	ftsEnabled: boolean;
+	ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
-  params.db.exec(`
+	params.db.exec(`
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
   `);
-  params.db.exec(`
+	params.db.exec(`
     CREATE TABLE IF NOT EXISTS files (
       path TEXT PRIMARY KEY,
       source TEXT NOT NULL DEFAULT 'memory',
@@ -23,7 +23,7 @@ export function ensureMemoryIndexSchema(params: {
       size INTEGER NOT NULL
     );
   `);
-  params.db.exec(`
+	params.db.exec(`
     CREATE TABLE IF NOT EXISTS chunks (
       id TEXT PRIMARY KEY,
       path TEXT NOT NULL,
@@ -37,8 +37,8 @@ export function ensureMemoryIndexSchema(params: {
       updated_at INTEGER NOT NULL
     );
   `);
-  if (params.cacheEnabled) {
-    params.db.exec(`
+	if (params.cacheEnabled) {
+		params.db.exec(`
       CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
@@ -50,53 +50,58 @@ export function ensureMemoryIndexSchema(params: {
         PRIMARY KEY (provider, model, provider_key, hash)
       );
     `);
-    params.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${params.embeddingCacheTable}(updated_at);`,
-    );
-  }
+		params.db.exec(
+			`CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${params.embeddingCacheTable}(updated_at);`,
+		);
+	}
 
-  let ftsAvailable = false;
-  let ftsError: string | undefined;
-  if (params.ftsEnabled) {
-    try {
-      const tokenizer = params.ftsTokenizer ?? "unicode61";
-      const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
-      params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
-          `  text,\n` +
-          `  id UNINDEXED,\n` +
-          `  path UNINDEXED,\n` +
-          `  source UNINDEXED,\n` +
-          `  model UNINDEXED,\n` +
-          `  start_line UNINDEXED,\n` +
-          `  end_line UNINDEXED\n` +
-          `${tokenizeClause});`,
-      );
-      ftsAvailable = true;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      ftsAvailable = false;
-      ftsError = message;
-    }
-  }
+	let ftsAvailable = false;
+	let ftsError: string | undefined;
+	if (params.ftsEnabled) {
+		try {
+			const tokenizer = params.ftsTokenizer ?? "unicode61";
+			const tokenizeClause =
+				tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
+			params.db.exec(
+				`CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
+					`  text,\n` +
+					`  id UNINDEXED,\n` +
+					`  path UNINDEXED,\n` +
+					`  source UNINDEXED,\n` +
+					`  model UNINDEXED,\n` +
+					`  start_line UNINDEXED,\n` +
+					`  end_line UNINDEXED\n` +
+					`${tokenizeClause});`,
+			);
+			ftsAvailable = true;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			ftsAvailable = false;
+			ftsError = message;
+		}
+	}
 
-  ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
-  ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
-  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
-  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+	ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
+	ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+	params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
+	params.db.exec(
+		`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`,
+	);
 
-  return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
+	return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
 
 function ensureColumn(
-  db: DatabaseSync,
-  table: "files" | "chunks",
-  column: string,
-  definition: string,
+	db: DatabaseSync,
+	table: "files" | "chunks",
+	column: string,
+	definition: string,
 ): void {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (rows.some((row) => row.name === column)) {
-    return;
-  }
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+		name: string;
+	}>;
+	if (rows.some((row) => row.name === column)) {
+		return;
+	}
+	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

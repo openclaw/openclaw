@@ -2,17 +2,17 @@ import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 
 export type MatrixResolvedConfig = {
-  homeserver: string;
-  userId: string;
-  accessToken?: string;
-  deviceId?: string;
-  password?: string;
-  deviceName?: string;
-  initialSyncLimit?: number;
-  encryption?: boolean;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
+	homeserver: string;
+	userId: string;
+	accessToken?: string;
+	deviceId?: string;
+	password?: string;
+	deviceName?: string;
+	initialSyncLimit?: number;
+	encryption?: boolean;
+	allowPrivateNetwork?: boolean;
+	ssrfPolicy?: SsrFPolicy;
+	dispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
 /**
@@ -24,27 +24,27 @@ export type MatrixResolvedConfig = {
  * still need to be recreated together with the new access token.
  */
 export type MatrixAuth = {
-  accountId: string;
-  homeserver: string;
-  userId: string;
-  accessToken: string;
-  password?: string;
-  deviceId?: string;
-  deviceName?: string;
-  initialSyncLimit?: number;
-  encryption?: boolean;
-  allowPrivateNetwork?: boolean;
-  ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
+	accountId: string;
+	homeserver: string;
+	userId: string;
+	accessToken: string;
+	password?: string;
+	deviceId?: string;
+	deviceName?: string;
+	initialSyncLimit?: number;
+	encryption?: boolean;
+	allowPrivateNetwork?: boolean;
+	ssrfPolicy?: SsrFPolicy;
+	dispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
 export type MatrixStoragePaths = {
-  rootDir: string;
-  storagePath: string;
-  cryptoPath: string;
-  metaPath: string;
-  recoveryKeyPath: string;
-  idbSnapshotPath: string;
-  accountKey: string;
-  tokenHash: string;
+	rootDir: string;
+	storagePath: string;
+	cryptoPath: string;
+	metaPath: string;
+	recoveryKeyPath: string;
+	idbSnapshotPath: string;
+	accountKey: string;
+	tokenHash: string;
 };

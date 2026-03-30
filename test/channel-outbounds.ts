@@ -1,30 +1,30 @@
 import type { ChannelOutboundAdapter } from "../src/channels/plugins/types.js";
 import {
-  loadBundledPluginPublicSurfaceSync,
-  loadBundledPluginTestApiSync,
+	loadBundledPluginPublicSurfaceSync,
+	loadBundledPluginTestApiSync,
 } from "../src/test-utils/bundled-plugin-public-surface.js";
 
 export const { discordOutbound } = loadBundledPluginTestApiSync<{
-  discordOutbound: ChannelOutboundAdapter;
+	discordOutbound: ChannelOutboundAdapter;
 }>("discord");
 export const { imessageOutbound } = loadBundledPluginPublicSurfaceSync<{
-  imessageOutbound: ChannelOutboundAdapter;
+	imessageOutbound: ChannelOutboundAdapter;
 }>({
-  pluginId: "imessage",
-  artifactBasename: "src/outbound-adapter.js",
+	pluginId: "imessage",
+	artifactBasename: "src/outbound-adapter.js",
 });
 export const { signalOutbound } = loadBundledPluginTestApiSync<{
-  signalOutbound: ChannelOutboundAdapter;
+	signalOutbound: ChannelOutboundAdapter;
 }>("signal");
 export const { slackOutbound } = loadBundledPluginTestApiSync<{
-  slackOutbound: ChannelOutboundAdapter;
+	slackOutbound: ChannelOutboundAdapter;
 }>("slack");
 export const { telegramOutbound } = loadBundledPluginPublicSurfaceSync<{
-  telegramOutbound: ChannelOutboundAdapter;
+	telegramOutbound: ChannelOutboundAdapter;
 }>({
-  pluginId: "telegram",
-  artifactBasename: "src/outbound-adapter.js",
+	pluginId: "telegram",
+	artifactBasename: "src/outbound-adapter.js",
 });
 export const { whatsappOutbound } = loadBundledPluginTestApiSync<{
-  whatsappOutbound: ChannelOutboundAdapter;
+	whatsappOutbound: ChannelOutboundAdapter;
 }>("whatsapp");

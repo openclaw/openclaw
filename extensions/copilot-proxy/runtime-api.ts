@@ -1,6 +1,6 @@
-export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 export type {
-  OpenClawPluginApi,
-  ProviderAuthContext,
-  ProviderAuthResult,
+	OpenClawPluginApi,
+	ProviderAuthContext,
+	ProviderAuthResult,
 } from "openclaw/plugin-sdk/core";
+export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";

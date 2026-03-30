@@ -2,7 +2,8 @@ import * as speechRuntime from "../plugin-sdk/speech-runtime.js";
 
 export const buildTtsSystemPromptHint = speechRuntime.buildTtsSystemPromptHint;
 export const getLastTtsAttempt = speechRuntime.getLastTtsAttempt;
-export const getResolvedSpeechProviderConfig = speechRuntime.getResolvedSpeechProviderConfig;
+export const getResolvedSpeechProviderConfig =
+	speechRuntime.getResolvedSpeechProviderConfig;
 export const getTtsMaxLength = speechRuntime.getTtsMaxLength;
 export const getTtsProvider = speechRuntime.getTtsProvider;
 export const isSummarizationEnabled = speechRuntime.isSummarizationEnabled;
@@ -26,11 +27,11 @@ export const textToSpeechTelephony = speechRuntime.textToSpeechTelephony;
 export const _test = speechRuntime._test;
 
 export type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-  TtsResult,
-  TtsSynthesisResult,
-  TtsTelephonyResult,
+	ResolvedTtsConfig,
+	ResolvedTtsModelOverrides,
+	TtsDirectiveOverrides,
+	TtsDirectiveParseResult,
+	TtsResult,
+	TtsSynthesisResult,
+	TtsTelephonyResult,
 } from "../plugin-sdk/speech-runtime.js";

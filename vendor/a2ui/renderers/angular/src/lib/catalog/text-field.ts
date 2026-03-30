@@ -14,13 +14,13 @@
  limitations under the License.
  */
 
-import { computed, Component, input } from '@angular/core';
-import { Primitives, Types } from '@a2ui/lit/0.8';
-import { DynamicComponent } from '../rendering/dynamic-component';
+import type { Primitives, Types } from "@a2ui/lit/0.8";
+import { Component, computed, input } from "@angular/core";
+import { DynamicComponent } from "../rendering/dynamic-component";
 
 @Component({
-  selector: 'a2ui-text-field',
-  styles: `
+	selector: "a2ui-text-field",
+	styles: `
     :host {
       display: flex;
       flex: var(--weight);
@@ -42,7 +42,7 @@ import { DynamicComponent } from '../rendering/dynamic-component';
       margin-bottom: 4px;
     }
   `,
-  template: `
+	template: `
     @let resolvedLabel = this.resolvedLabel();
 
     <section [class]="theme.components.TextField.container">
@@ -66,21 +66,30 @@ import { DynamicComponent } from '../rendering/dynamic-component';
   `,
 })
 export class TextField extends DynamicComponent {
-  readonly text = input.required<Primitives.StringValue | null>();
-  readonly label = input.required<Primitives.StringValue | null>();
-  readonly inputType = input.required<Types.ResolvedTextField['type'] | null>();
+	readonly text = input.required<Primitives.StringValue | null>();
+	readonly label = input.required<Primitives.StringValue | null>();
+	readonly inputType = input.required<Types.ResolvedTextField["type"] | null>();
 
-  protected inputValue = computed(() => super.resolvePrimitive(this.text()) || '');
-  protected resolvedLabel = computed(() => super.resolvePrimitive(this.label()));
-  protected inputId = super.getUniqueId('a2ui-input');
+	protected inputValue = computed(
+		() => super.resolvePrimitive(this.text()) || "",
+	);
+	protected resolvedLabel = computed(() =>
+		super.resolvePrimitive(this.label()),
+	);
+	protected inputId = super.getUniqueId("a2ui-input");
 
-  protected handleInput(event: Event) {
-    const path = this.text()?.path;
+	protected handleInput(event: Event) {
+		const path = this.text()?.path;
 
-    if (!(event.target instanceof HTMLInputElement) || !path) {
-      return;
-    }
+		if (!(event.target instanceof HTMLInputElement) || !path) {
+			return;
+		}
 
-    this.processor.setData(this.component(), path, event.target.value, this.surfaceId());
-  }
+		this.processor.setData(
+			this.component(),
+			path,
+			event.target.value,
+			this.surfaceId(),
+		);
+	}
 }

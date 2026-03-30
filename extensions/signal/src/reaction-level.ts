@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  resolveReactionLevel,
-  type ReactionLevel,
-  type ResolvedReactionLevel,
+	type ReactionLevel,
+	type ResolvedReactionLevel,
+	resolveReactionLevel,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 
@@ -19,16 +19,16 @@ export type ResolvedSignalReactionLevel = ResolvedReactionLevel;
  * - "extensive": Agent can react liberally
  */
 export function resolveSignalReactionLevel(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
+	cfg: OpenClawConfig;
+	accountId?: string;
 }): ResolvedSignalReactionLevel {
-  const account = resolveSignalAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  return resolveReactionLevel({
-    value: account.config.reactionLevel,
-    defaultLevel: "minimal",
-    invalidFallback: "minimal",
-  });
+	const account = resolveSignalAccount({
+		cfg: params.cfg,
+		accountId: params.accountId,
+	});
+	return resolveReactionLevel({
+		value: account.config.reactionLevel,
+		defaultLevel: "minimal",
+		invalidFallback: "minimal",
+	});
 }
