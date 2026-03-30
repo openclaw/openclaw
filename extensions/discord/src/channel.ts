@@ -4,12 +4,7 @@ import {
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import {
-  buildPluginApprovalRequestMessage,
-  buildPluginApprovalResolvedMessage,
-  type PluginApprovalRequest,
-  type PluginApprovalResolved,
-} from "openclaw/plugin-sdk/approval-runtime";
+import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
@@ -34,13 +29,13 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
-import type { DiscordComponentMessageSpec } from "./components.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
 } from "./directory-config.js";
 import {
   getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalApprover,
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
@@ -96,7 +91,6 @@ async function loadDiscordProbeRuntime() {
 
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
-const DISCORD_EXEC_APPROVAL_KEY = "execapproval";
 
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
   channelKey: "discord",
@@ -123,147 +117,6 @@ function formatDiscordIntents(intents?: {
     `guildMembers=${intents.guildMembers ?? "unknown"}`,
     `presence=${intents.presence ?? "unknown"}`,
   ].join(" ");
-}
-
-function encodeCustomIdValue(value: string): string {
-  return encodeURIComponent(value);
-}
-
-function buildDiscordExecApprovalCustomId(
-  approvalId: string,
-  action: "allow-once" | "allow-always" | "deny",
-): string {
-  return [
-    `${DISCORD_EXEC_APPROVAL_KEY}:id=${encodeCustomIdValue(approvalId)}`,
-    `action=${action}`,
-  ].join(";");
-}
-
-function formatDiscordApprovalPreview(value: string, maxChars: number): string {
-  const trimmed = value
-    .replace(/@everyone/gi, "@\u200beveryone")
-    .replace(/@here/gi, "@\u200bhere")
-    .replace(/<@/g, "<@\u200b")
-    .replace(/<#/g, "<#\u200b")
-    .trim();
-  const raw = trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}...` : trimmed;
-  return raw.replace(/`/g, "\u200b`");
-}
-
-function buildDiscordPluginPendingComponentSpec(params: {
-  request: PluginApprovalRequest;
-}): DiscordComponentMessageSpec {
-  const request = params.request.request;
-  const severity = request.severity ?? "warning";
-  const severityLabel =
-    severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning";
-  const accentColor =
-    severity === "critical" ? "#ED4245" : severity === "info" ? "#5865F2" : "#FAA61A";
-  const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
-  const metadataLines: string[] = [`- Severity: ${severityLabel}`];
-  if (request.toolName) {
-    metadataLines.push(`- Tool: ${request.toolName}`);
-  }
-  if (request.pluginId) {
-    metadataLines.push(`- Plugin: ${request.pluginId}`);
-  }
-  if (request.agentId) {
-    metadataLines.push(`- Agent: ${request.agentId}`);
-  }
-  return {
-    container: { accentColor },
-    blocks: [
-      { type: "text", text: "## Plugin Approval Required" },
-      { type: "text", text: "A plugin action needs your approval." },
-      { type: "separator", divider: true, spacing: "small" },
-      {
-        type: "text",
-        text: `### Title\n\`\`\`\n${formatDiscordApprovalPreview(request.title, 500)}\n\`\`\``,
-      },
-      {
-        type: "text",
-        text: `### Description\n${formatDiscordApprovalPreview(request.description, 1000)}`,
-      },
-      { type: "text", text: metadataLines.join("\n") },
-      {
-        type: "actions",
-        buttons: [
-          {
-            label: "Allow once",
-            style: "success",
-            internalCustomId: buildDiscordExecApprovalCustomId(params.request.id, "allow-once"),
-          },
-          {
-            label: "Always allow",
-            style: "primary",
-            internalCustomId: buildDiscordExecApprovalCustomId(params.request.id, "allow-always"),
-          },
-          {
-            label: "Deny",
-            style: "danger",
-            internalCustomId: buildDiscordExecApprovalCustomId(params.request.id, "deny"),
-          },
-        ],
-      },
-      { type: "separator", divider: false, spacing: "small" },
-      { type: "text", text: `-# Expires <t:${expiresAtSeconds}:R> · ID: ${params.request.id}` },
-    ],
-  };
-}
-
-function buildDiscordPluginResolvedComponentSpec(params: {
-  resolved: PluginApprovalResolved;
-}): DiscordComponentMessageSpec | undefined {
-  const request = params.resolved.request;
-  if (!request) {
-    return undefined;
-  }
-  const decisionLabel =
-    params.resolved.decision === "allow-once"
-      ? "Allowed (once)"
-      : params.resolved.decision === "allow-always"
-        ? "Allowed (always)"
-        : "Denied";
-  const accentColor =
-    params.resolved.decision === "deny"
-      ? "#ED4245"
-      : params.resolved.decision === "allow-always"
-        ? "#5865F2"
-        : "#57F287";
-  const metadataLines: string[] = [];
-  if (request.toolName) {
-    metadataLines.push(`- Tool: ${request.toolName}`);
-  }
-  if (request.pluginId) {
-    metadataLines.push(`- Plugin: ${request.pluginId}`);
-  }
-  if (request.agentId) {
-    metadataLines.push(`- Agent: ${request.agentId}`);
-  }
-  return {
-    container: { accentColor },
-    blocks: [
-      { type: "text", text: `## Plugin Approval: ${decisionLabel}` },
-      {
-        type: "text",
-        text: params.resolved.resolvedBy ? `Resolved by ${params.resolved.resolvedBy}` : "Resolved",
-      },
-      { type: "separator", divider: true, spacing: "small" },
-      {
-        type: "text",
-        text: `### Title\n\`\`\`\n${formatDiscordApprovalPreview(request.title, 500)}\n\`\`\``,
-      },
-      {
-        type: "text",
-        text: `### Description\n${formatDiscordApprovalPreview(request.description, 1000)}`,
-      },
-      ...(metadataLines.length > 0
-        ? [{ type: "text" as const, text: metadataLines.join("\n") }]
-        : []),
-      { type: "separator", divider: false, spacing: "small" },
-      { type: "text", text: `-# ID: ${params.resolved.id}` },
-    ],
-  };
 }
 
 const discordMessageActions: ChannelMessageActionAdapter = {
@@ -298,19 +151,19 @@ function buildDiscordCrossContextComponents(params: {
   return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
 }
 
-function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  return listDiscordAccountIds(cfg).some((accountId) => {
-    const execApprovals = resolveDiscordAccount({ cfg, accountId }).config.execApprovals;
-    if (
-      !execApprovals?.enabled ||
-      getDiscordExecApprovalApprovers({ cfg, accountId }).length === 0
-    ) {
-      return false;
-    }
-    const target = execApprovals.target ?? "dm";
-    return target === "dm" || target === "both";
-  });
-}
+const discordNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
+  channel: "discord",
+  channelLabel: "Discord",
+  listAccountIds: listDiscordAccountIds,
+  hasApprovers: ({ cfg, accountId }) =>
+    getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0,
+  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
+    isDiscordExecApprovalApprover({ cfg, accountId, senderId }),
+  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
+    isDiscordExecApprovalClientEnabled({ cfg, accountId }),
+  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
+    resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ?? "dm",
+});
 
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
   resolveRecord: (account: ResolvedDiscordAccount) => account.config.guilds,
@@ -491,70 +344,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           hint: "<channelId|user:ID|channel:ID>",
         },
       },
-      execApprovals: {
-        getInitiatingSurfaceState: ({ cfg, accountId }) =>
-          getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0
-            ? { kind: "enabled" }
-            : { kind: "disabled" },
-        shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
-          shouldSuppressLocalDiscordExecApprovalPrompt({
-            cfg,
-            accountId,
-            payload,
-          }),
-        hasConfiguredDmRoute: ({ cfg }) => hasDiscordExecApprovalDmRoute(cfg),
-        shouldSuppressForwardingFallback: ({ cfg, target }) =>
-          (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
-          isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
-        buildPluginPendingPayload: ({ cfg, request, target, nowMs }) => {
-          const text = formatDiscordApprovalPreview(
-            buildPluginApprovalRequestMessage(request, nowMs),
-            10_000,
-          );
-          const execApproval = {
-            approvalId: request.id,
-            approvalSlug: request.id.slice(0, 8),
-            allowedDecisions: ["allow-once", "allow-always", "deny"] as const,
-          };
-          const normalizedChannel = normalizeMessageChannel(target.channel) ?? target.channel;
-          const interactiveEnabled =
-            normalizedChannel === "discord" &&
-            isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId });
-          if (!interactiveEnabled) {
-            return {
-              text,
-              channelData: {
-                execApproval,
-              },
-            };
-          }
-          return {
-            text,
-            channelData: {
-              execApproval,
-              discord: {
-                components: buildDiscordPluginPendingComponentSpec({ request }),
-              },
-            },
-          };
-        },
-        buildPluginResolvedPayload: ({ resolved }) => {
-          const componentSpec = buildDiscordPluginResolvedComponentSpec({ resolved });
-          const text = formatDiscordApprovalPreview(
-            buildPluginApprovalResolvedMessage(resolved),
-            10_000,
-          );
-          return componentSpec
-            ? {
-                text,
-                channelData: {
-                  discord: {
-                    components: componentSpec,
-                  },
-                },
-              }
-            : { text };
-        },
+      auth: discordNativeApprovalAdapter.auth,
+      approvals: {
+        delivery: discordNativeApprovalAdapter.delivery,
       },
       directory: createChannelDirectoryAdapter({
         listPeers: async (params) => listDiscordDirectoryPeersFromConfig(params),
@@ -860,6 +652,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         chunker: null,
         textChunkLimit: 2000,
         pollMaxOptions: 10,
+        shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+          shouldSuppressLocalDiscordExecApprovalPrompt({
+            cfg,
+            accountId,
+            payload,
+          }),
         resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
       },
       attachedResults: {

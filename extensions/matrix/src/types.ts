@@ -70,6 +70,8 @@ export type MatrixConfig = {
   homeserver?: string;
   /** Allow Matrix homeserver traffic to private/internal hosts. */
   allowPrivateNetwork?: boolean;
+  /** Optional HTTP(S) proxy URL for Matrix connections (e.g. http://127.0.0.1:7890). */
+  proxy?: string;
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */

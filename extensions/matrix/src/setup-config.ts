@@ -208,6 +208,7 @@ export function applyMatrixSetupAccountConfig(params: {
       enabled: true,
       homeserver: null,
       allowPrivateNetwork: null,
+      proxy: null,
       userId: null,
       accessToken: null,
       password: null,
@@ -226,6 +227,7 @@ export function applyMatrixSetupAccountConfig(params: {
       typeof params.input.allowPrivateNetwork === "boolean"
         ? params.input.allowPrivateNetwork
         : undefined,
+    proxy: params.input.proxy?.trim() || undefined,
     userId: password && !userId ? null : userId,
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),

@@ -3,7 +3,6 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
 import { createNonExitingRuntime } from "../../../src/runtime.js";
-import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import type {
   WizardMultiSelectParams,
   WizardPrompter,
@@ -26,6 +25,13 @@ const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>(
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn<EnsureAuthProfileStore>());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn<ListProfilesForProvider>());
+const providerAuthContractModules = vi.hoisted(() => ({
+  githubCopilotIndexModuleUrl: new URL(
+    "../../../extensions/github-copilot/index.ts",
+    import.meta.url,
+  ).href,
+  openAIIndexModuleUrl: new URL("../../../extensions/openai/index.ts", import.meta.url).href,
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-login", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-login")>();
@@ -45,18 +51,9 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   };
 });
 
-const { default: githubCopilotPlugin } = loadBundledPluginPublicSurfaceSync<{
-  default: Parameters<typeof registerProviders>[0];
-}>({
-  pluginId: "github-copilot",
-  artifactBasename: "index.js",
-});
-const { default: openAIPlugin } = loadBundledPluginPublicSurfaceSync<{
-  default: Parameters<typeof registerProviders>[0];
-}>({
-  pluginId: "openai",
-  artifactBasename: "index.js",
-});
+async function importBundledProviderPlugin<T>(moduleUrl: string): Promise<T> {
+  return (await import(`${moduleUrl}?t=${Date.now()}`)) as T;
+}
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
@@ -166,6 +163,9 @@ export function describeOpenAICodexProviderAuthContract() {
     installSharedAuthProfileStoreHooks(state);
 
     async function expectStableFallbackProfile(params: { access: string; profileId: string }) {
+      const { default: openAIPlugin } = await importBundledProviderPlugin<{
+        default: Parameters<typeof registerProviders>[0];
+      }>(providerAuthContractModules.openAIIndexModuleUrl);
       const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         refresh: "refresh-token",
@@ -183,12 +183,15 @@ export function describeOpenAICodexProviderAuthContract() {
       );
     }
 
-    function getProvider() {
+    async function getProvider() {
+      const { default: openAIPlugin } = await importBundledProviderPlugin<{
+        default: Parameters<typeof registerProviders>[0];
+      }>(providerAuthContractModules.openAIIndexModuleUrl);
       return requireProvider(registerProviders(openAIPlugin), "openai-codex");
     }
 
     it("keeps OAuth auth results provider-owned", async () => {
-      const provider = getProvider();
+      const provider = await getProvider();
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         email: "user@example.com",
         refresh: "refresh-token",
@@ -210,7 +213,7 @@ export function describeOpenAICodexProviderAuthContract() {
     });
 
     it("backfills OAuth email from the JWT profile claim", async () => {
-      const provider = getProvider();
+      const provider = await getProvider();
       const access = createJwt({
         "https://api.openai.com/profile": {
           email: "jwt-user@example.com",
@@ -274,7 +277,7 @@ export function describeOpenAICodexProviderAuthContract() {
     });
 
     it("falls back to the default profile when JWT parsing yields no identity", async () => {
-      const provider = getProvider();
+      const provider = await getProvider();
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         refresh: "refresh-token",
         access: "not-a-jwt-token",
@@ -294,7 +297,7 @@ export function describeOpenAICodexProviderAuthContract() {
     });
 
     it("keeps OAuth failures non-fatal at the provider layer", async () => {
-      const provider = getProvider();
+      const provider = await getProvider();
       loginOpenAICodexOAuthMock.mockRejectedValueOnce(new Error("oauth failed"));
 
       await expect(provider.auth[0]?.run(buildAuthContext() as never)).resolves.toEqual({
@@ -312,12 +315,15 @@ export function describeGithubCopilotProviderAuthContract() {
   describe("github-copilot provider auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
 
-    function getProvider() {
+    async function getProvider() {
+      const { default: githubCopilotPlugin } = await importBundledProviderPlugin<{
+        default: Parameters<typeof registerProviders>[0];
+      }>(providerAuthContractModules.githubCopilotIndexModuleUrl);
       return requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
     }
 
     it("keeps device auth results provider-owned", async () => {
-      const provider = getProvider();
+      const provider = await getProvider();
       state.authStore.profiles["github-copilot:github"] = {
         type: "token",
         provider: "github-copilot",
@@ -362,7 +368,7 @@ export function describeGithubCopilotProviderAuthContract() {
     });
 
     it("keeps auth gated on interactive TTYs", async () => {
-      const provider = getProvider();
+      const provider = await getProvider();
       const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
       const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
       const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
