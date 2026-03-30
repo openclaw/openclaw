@@ -2353,6 +2353,51 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("syncs native command target session when pre_route overrides the route", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "agent:codex-acp:session-override",
+      },
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-original",
+      AccountId: "router-a",
+      MessageSid: "msg-pre-route-native-target-1",
+      CommandBody: "/new hello",
+      BodyForCommands: "/new hello",
+      BodyForAgent: "/new hello",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(sessionStoreMocks.resolveSessionStoreEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex-acp:session-override",
+      }),
+    );
+  });
+
   it("continues dispatch when pre_route blocks past timeout", async () => {
     setNoAbort();
     vi.useFakeTimers();

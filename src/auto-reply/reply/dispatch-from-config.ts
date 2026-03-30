@@ -269,13 +269,18 @@ export async function dispatchReplyFromConfig(params: {
       if (preRouteResult.routeOverride.accountId) {
         resolvedAccountId = preRouteResult.routeOverride.accountId;
       } else {
-        const overrideEntry = resolveSessionStoreLookup(
-          {
-            ...ctx,
-            SessionKey: resolvedSessionKey,
-          },
-          cfg,
-        ).entry;
+        const overrideLookupCtx: FinalizedMsgContext =
+          ctx.CommandSource === "native"
+            ? {
+                ...ctx,
+                SessionKey: resolvedSessionKey,
+                CommandTargetSessionKey: resolvedSessionKey,
+              }
+            : {
+                ...ctx,
+                SessionKey: resolvedSessionKey,
+              };
+        const overrideEntry = resolveSessionStoreLookup(overrideLookupCtx, cfg).entry;
         const storedAccountId =
           typeof overrideEntry?.lastAccountId === "string"
             ? overrideEntry.lastAccountId
@@ -287,13 +292,23 @@ export async function dispatchReplyFromConfig(params: {
     }
   }
 
+  const shouldSyncNativeCommandTargetSession =
+    ctx.CommandSource === "native" &&
+    resolvedSessionKey !== (ctx.CommandTargetSessionKey?.trim() || undefined);
   const effectiveCtx: FinalizedMsgContext =
-    resolvedSessionKey === ctx.SessionKey && resolvedAccountId === ctx.AccountId
+    resolvedSessionKey === ctx.SessionKey &&
+    resolvedAccountId === ctx.AccountId &&
+    !shouldSyncNativeCommandTargetSession
       ? ctx
       : {
           ...ctx,
           SessionKey: resolvedSessionKey,
           AccountId: resolvedAccountId,
+          ...(shouldSyncNativeCommandTargetSession
+            ? {
+                CommandTargetSessionKey: resolvedSessionKey,
+              }
+            : {}),
         };
   const sessionKey = effectiveCtx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
