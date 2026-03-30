@@ -4,6 +4,7 @@ import { formatCliCommand } from "../command-format.js";
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
   error: vi.fn<(line: string) => void>(),
+  writeJson: vi.fn<(value: unknown) => void>(),
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -75,6 +76,7 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    runtime.writeJson.mockReset();
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -120,5 +122,34 @@ describe("printDaemonStatus", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(formatCliCommand("openclaw gateway restart")),
     );
+  });
+
+  it("redacts dashboard token fragment from JSON status output", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+          controlUiAccessUrl: "http://127.0.0.1:18789/#token=supersecret",
+        },
+        extraServices: [],
+      },
+      { json: true },
+    );
+
+    expect(runtime.writeJson).toHaveBeenCalledTimes(1);
+    const payload = runtime.writeJson.mock.calls[0][0] as {
+      gateway?: { controlUiAccessUrl?: string };
+    };
+    expect(payload.gateway?.controlUiAccessUrl).toBe("http://127.0.0.1:18789/");
   });
 });
