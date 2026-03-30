@@ -90,6 +90,7 @@ type ToolStartRecord = {
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
+const READ_TOOL_PATH_ARG_KEYS = ["path", "file_path", "file", "filePath"] as const;
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
@@ -104,6 +105,19 @@ export function countActiveToolExecutions(runId: string): number {
     }
   }
   return count;
+}
+
+function readFirstStringRecordValue(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return "";
 }
 
 function isCronAddAction(args: unknown): boolean {
@@ -664,17 +678,7 @@ export function handleToolExecutionStart(
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-      const filePathValue =
-        typeof record.path === "string"
-          ? record.path
-          : typeof record.file_path === "string"
-            ? record.file_path
-            : typeof record.file === "string"
-              ? record.file
-              : typeof record.filePath === "string"
-                ? record.filePath
-                : "";
-      const filePath = filePathValue.trim();
+      const filePath = readFirstStringRecordValue(record, READ_TOOL_PATH_ARG_KEYS).trim();
       if (!filePath) {
         const argsPreview = readStringValue(args)?.slice(0, 200);
         ctx.log.warn(
