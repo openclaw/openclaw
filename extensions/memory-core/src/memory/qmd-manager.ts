@@ -563,6 +563,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     return legacyName || null;
   }
 
+  /** Resolve on-disk roots for QMD URIs that use agent-scoped collection ids (e.g. `vault-main` → config `vault`). */
+  private collectionRootFor(collection: string): CollectionRoot | null {
+    const direct = this.collectionRoots.get(collection);
+    if (direct) {
+      return direct;
+    }
+    const legacy = this.deriveLegacyCollectionName(collection);
+    if (legacy) {
+      return this.collectionRoots.get(legacy) ?? null;
+    }
+    return null;
+  }
+
   private canMigrateLegacyCollection(
     collection: ManagedCollection,
     listedLegacy: ListedCollection,
@@ -1989,7 +2002,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private toCollectionRelativePath(collection: string, filePath: string): string | null {
-    const root = this.collectionRoots.get(collection);
+    const root = this.collectionRootFor(collection);
     if (!root) {
       return null;
     }
@@ -2128,7 +2141,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       let total = 0;
       for (const row of rows) {
-        const root = this.collectionRoots.get(row.collection);
+        const root = this.collectionRootFor(row.collection);
         const source = root?.kind ?? "memory";
         const entry = bySource.get(source) ?? { files: 0, chunks: 0 };
         entry.files += row.c ?? 0;
@@ -2170,7 +2183,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     collection: string,
     collectionRelativePath: string,
   ): { rel: string; abs: string; source: MemorySource } | null {
-    const root = this.collectionRoots.get(collection);
+    const root = this.collectionRootFor(collection);
     if (!root) {
       return null;
     }
@@ -2230,7 +2243,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!collection || rest.length === 0) {
         throw new Error("invalid qmd path");
       }
-      const root = this.collectionRoots.get(collection);
+      const root = this.collectionRootFor(collection);
       if (!root) {
         throw new Error(`unknown qmd collection: ${collection}`);
       }

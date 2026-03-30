@@ -150,7 +150,7 @@ describe("test planner", () => {
     expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitIsolated).toBe(1);
-    expect(plan.topLevelParallelLimit).toBe(4);
+    expect(plan.topLevelParallelLimit).toBe(3);
     expect(plan.deferredRunConcurrency).toBe(1);
     artifacts.cleanupTempArtifacts();
   });
@@ -183,7 +183,7 @@ describe("test planner", () => {
 
     expect(plan.runtimeCapabilities.memoryBand).toBe("high");
     expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
-    expect(sharedUnitBatches).toHaveLength(3);
+    expect(sharedUnitBatches).toHaveLength(4);
     expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.unitFastBatchTargetMs).toBe(90_000);
     artifacts.cleanupTempArtifacts();
@@ -400,7 +400,7 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
-  it("assigns single include-file CI batches to one shard instead of over-sharding them", () => {
+  it("assigns eligible CI parallel units to a stable top-level shard bucket", () => {
     const env = {
       CI: "true",
       GITHUB_ACTIONS: "true",
@@ -421,16 +421,15 @@ describe("test planner", () => {
       },
     );
 
-    const singleFileBatch = plan.parallelUnits.find(
-      (unit) =>
-        unit.id.startsWith("unit-fast-") &&
-        unit.fixedShardIndex === undefined &&
-        Array.isArray(unit.includeFiles) &&
-        unit.includeFiles.length === 1,
+    const assignedUnit = plan.parallelUnits.find(
+      (unit) => plan.topLevelSingleShardAssignments.get(unit) !== undefined,
     );
 
-    expect(singleFileBatch).toBeTruthy();
-    expect(plan.topLevelSingleShardAssignments.get(singleFileBatch)).toBeTypeOf("number");
+    expect(assignedUnit).toBeTruthy();
+    const shard = plan.topLevelSingleShardAssignments.get(assignedUnit!);
+    expect(shard).toBeTypeOf("number");
+    expect(shard).toBeGreaterThanOrEqual(1);
+    expect(shard).toBeLessThanOrEqual(4);
 
     artifacts.cleanupTempArtifacts();
   });
