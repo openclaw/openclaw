@@ -116,6 +116,46 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     });
   });
 
+  it("propagates immediate waitForCompactionRetry failures", async () => {
+    await withFakeTimers(async () => {
+      const waitError = new Error("compaction wait failed");
+      const waitForCompactionRetry = vi.fn(async () => {
+        throw waitError;
+      });
+      const params = buildAggregateTimeoutParams({ waitForCompactionRetry });
+
+      await expect(waitForCompactionRetryWithAggregateTimeout(params)).rejects.toThrow(
+        "compaction wait failed",
+      );
+
+      expectClearedTimeoutState(params.onTimeout, false);
+    });
+  });
+
+  it("handles waitForCompactionRetry rejection after timeout wins", async () => {
+    await withFakeTimers(async () => {
+      let rejectWait: ((error: Error) => void) | undefined;
+      const waitForCompactionRetry = vi.fn(
+        async () =>
+          await new Promise<void>((_resolve, reject) => {
+            rejectWait = reject;
+          }),
+      );
+      const params = buildAggregateTimeoutParams({ waitForCompactionRetry });
+
+      const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await resultPromise;
+
+      rejectWait?.(new Error("cancelled after timeout"));
+      await Promise.resolve();
+
+      expect(result.timedOut).toBe(true);
+      expectClearedTimeoutState(params.onTimeout, true);
+    });
+  });
+
   it("propagates abort errors from abortable and clears timer", async () => {
     await withFakeTimers(async () => {
       const abortError = new Error("aborted");

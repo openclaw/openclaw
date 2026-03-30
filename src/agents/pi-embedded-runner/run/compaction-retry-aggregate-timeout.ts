@@ -13,7 +13,12 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
   const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1, Math.floor(timeoutMsRaw)) : 1;
 
   let timedOut = false;
-  const waitPromise = params.waitForCompactionRetry().then(() => "done" as const);
+  // Reflect the retry promise so late rejections after a timeout stay handled
+  // without masking failures that settle before the timeout path wins.
+  const waitPromise = params.waitForCompactionRetry().then(
+    () => ({ kind: "done" as const }),
+    (error: unknown) => ({ kind: "rejected" as const, error }),
+  );
 
   while (true) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -27,8 +32,11 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
         ]),
       );
 
-      if (result === "done") {
-        break;
+      if (result !== "timeout") {
+        if (result.kind === "done") {
+          break;
+        }
+        throw result.error;
       }
 
       // Keep extending the timeout window while compaction is actively running.
