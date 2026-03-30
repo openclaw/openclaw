@@ -39,19 +39,6 @@ export type RoomHistoryTracker = {
   recordPending: (roomId: string, entry: HistoryEntry) => void;
 
   /**
-   * Get pending history for an agent: all messages in the room since the
-   * agent's last watermark, capped at `limit` most-recent entries.
-   * Call this BEFORE recordTrigger so the trigger itself is not included.
-   */
-  getPendingHistory: (agentId: string, roomId: string, limit: number) => HistoryEntry[];
-
-  /**
-   * Append the trigger message to the room queue and return a snapshot index.
-   * The snapshot index must be passed to consumeHistory after the agent replies.
-   */
-  recordTrigger: (roomId: string, entry: HistoryEntry) => number;
-
-  /**
    * Capture pending history and append the trigger as one idempotent operation.
    * Retries of the same Matrix event reuse the original prepared history window.
    */
@@ -75,6 +62,18 @@ export type RoomHistoryTracker = {
   ) => void;
 };
 
+export type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
+  /**
+   * Test-only helper for inspecting pending room history directly.
+   */
+  getPendingHistory: (agentId: string, roomId: string, limit: number) => HistoryEntry[];
+
+  /**
+   * Test-only helper for manually appending a trigger entry and snapshot index.
+   */
+  recordTrigger: (roomId: string, entry: HistoryEntry) => number;
+};
+
 type RoomQueue = {
   entries: HistoryEntry[];
   /** Absolute index of entries[0] — increases as old entries are trimmed. */
@@ -82,12 +81,12 @@ type RoomQueue = {
   preparedTriggers: Map<string, PreparedTriggerResult>;
 };
 
-export function createRoomHistoryTracker(
+function createRoomHistoryTrackerInternal(
   maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
   maxRoomQueues = DEFAULT_MAX_ROOM_QUEUES,
   maxWatermarkEntries = MAX_WATERMARK_ENTRIES,
   maxPreparedTriggerEntries = MAX_PREPARED_TRIGGER_ENTRIES,
-): RoomHistoryTracker {
+): RoomHistoryTrackerTestApi {
   const roomQueues = new Map<string, RoomQueue>();
   /** Maps `${agentId}:${roomId}` → absolute consumed-up-to index */
   const agentWatermarks = new Map<string, number>();
@@ -245,4 +244,37 @@ export function createRoomHistoryTracker(
       }
     },
   };
+}
+
+export function createRoomHistoryTracker(
+  maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+  maxRoomQueues = DEFAULT_MAX_ROOM_QUEUES,
+  maxWatermarkEntries = MAX_WATERMARK_ENTRIES,
+  maxPreparedTriggerEntries = MAX_PREPARED_TRIGGER_ENTRIES,
+): RoomHistoryTracker {
+  const tracker = createRoomHistoryTrackerInternal(
+    maxQueueSize,
+    maxRoomQueues,
+    maxWatermarkEntries,
+    maxPreparedTriggerEntries,
+  );
+  return {
+    recordPending: tracker.recordPending,
+    prepareTrigger: tracker.prepareTrigger,
+    consumeHistory: tracker.consumeHistory,
+  };
+}
+
+export function createRoomHistoryTrackerForTests(
+  maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+  maxRoomQueues = DEFAULT_MAX_ROOM_QUEUES,
+  maxWatermarkEntries = MAX_WATERMARK_ENTRIES,
+  maxPreparedTriggerEntries = MAX_PREPARED_TRIGGER_ENTRIES,
+): RoomHistoryTrackerTestApi {
+  return createRoomHistoryTrackerInternal(
+    maxQueueSize,
+    maxRoomQueues,
+    maxWatermarkEntries,
+    maxPreparedTriggerEntries,
+  );
 }

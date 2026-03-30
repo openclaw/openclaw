@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createRoomHistoryTracker } from "./room-history.js";
+import { createRoomHistoryTrackerForTests } from "./room-history.js";
 
 const ROOM = "!room:test";
 const AGENT = "agent_a";
@@ -18,7 +18,7 @@ function entry(body: string) {
 
 describe("createRoomHistoryTracker — watermark monotonicity", () => {
   it("consumeHistory is monotone: out-of-order completion does not regress the watermark", () => {
-    const tracker = createRoomHistoryTracker();
+    const tracker = createRoomHistoryTrackerForTests();
 
     // Queue: [msg1, msg2, trigger1, msg3, trigger2]
     tracker.recordPending(ROOM, entry("msg1"));
@@ -44,7 +44,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
   });
 
   it("prepareTrigger reuses the original history window for a retried event", () => {
-    const tracker = createRoomHistoryTracker();
+    const tracker = createRoomHistoryTrackerForTests();
 
     tracker.recordPending(ROOM, { sender: "user", body: "msg1", messageId: "$m1" });
     const first = tracker.prepareTrigger(AGENT, ROOM, 100, {
@@ -66,7 +66,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
   });
 
   it("refreshes watermark recency before capped-map eviction", () => {
-    const tracker = createRoomHistoryTracker(200, 10, 2);
+    const tracker = createRoomHistoryTrackerForTests(200, 10, 2);
     const room1 = "!room1:test";
     const room2 = "!room2:test";
     const room3 = "!room3:test";
@@ -93,7 +93,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
   });
 
   it("refreshes prepared-trigger recency before capped eviction on retry hits", () => {
-    const tracker = createRoomHistoryTracker(200, 10, 5000, 2);
+    const tracker = createRoomHistoryTrackerForTests(200, 10, 5000, 2);
     const room1 = "!room1:test";
 
     tracker.prepareTrigger(AGENT, room1, 100, {
@@ -130,7 +130,7 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
 
 describe("createRoomHistoryTracker — roomQueues eviction", () => {
   it("evicts the oldest room (FIFO) when the room count exceeds the cap", () => {
-    const tracker = createRoomHistoryTracker(200, 3);
+    const tracker = createRoomHistoryTrackerForTests(200, 3);
 
     const room1 = "!room1:test";
     const room2 = "!room2:test";
@@ -153,7 +153,7 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
   });
 
   it("re-accessing an evicted room starts a fresh empty queue", () => {
-    const tracker = createRoomHistoryTracker(200, 2);
+    const tracker = createRoomHistoryTrackerForTests(200, 2);
 
     const room1 = "!room1:test";
     const room2 = "!room2:test";
@@ -170,7 +170,7 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
   });
 
   it("clears stale room watermarks when an evicted room is recreated", () => {
-    const tracker = createRoomHistoryTracker(200, 1);
+    const tracker = createRoomHistoryTrackerForTests(200, 1);
     const room1 = "!room1:test";
     const room2 = "!room2:test";
 
@@ -189,7 +189,7 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
   });
 
   it("ignores late consumeHistory calls after the room queue was evicted", () => {
-    const tracker = createRoomHistoryTracker(200, 1);
+    const tracker = createRoomHistoryTrackerForTests(200, 1);
     const room1 = "!room1:test";
     const room2 = "!room2:test";
 
