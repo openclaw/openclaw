@@ -1507,13 +1507,6 @@ export async function runEmbeddedPiAgent(
       } finally {
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
-        if (params.cleanupBundleMcpOnRunEnd === true) {
-          await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
-            log.warn(
-              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${describeUnknownError(error)}`,
-            );
-          });
-        }
         await research.emit({
           kind: "run.end",
           payload: {
@@ -1524,6 +1517,13 @@ export async function runEmbeddedPiAgent(
           },
         });
         await research.close();
+        if (params.cleanupBundleMcpOnRunEnd === true) {
+          await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
+            log.warn(
+              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${describeUnknownError(error)}`,
+            );
+          });
+        }
       }
     }),
   );

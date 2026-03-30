@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 - Gateway: `sessions.recall` reads evidence from the **same indexed transcript file** as the FTS hit (optional `transcriptRelPath` on search results) instead of always using the first existing candidate path.
 - Gateway: `sessions.search` session listing uses **`includeGlobal` / `includeUnknown`** so gateway row-kind filters (`global`, `unknown`) can match.
+
 - Replay: `startReplayControlServer` defaults **`enabled`** from **`loadConfig()`** + `research.enabled` (previously `isResearchEnabled()` with no config was always false).
 - Skills hub: `readHubLockfile` **drops** malformed `skills` rows missing required fields (`name`, `source`, `url`, `ref`, `contentHash`, `scan`) instead of passing through partial objects.
 - Image generation/build: write stable runtime alias files into `dist/` and route provider-auth runtime lookups through those aliases so image-generation providers keep resolving auth/runtime modules after rebuilds instead of crashing on missing hashed chunk files.

@@ -247,6 +247,10 @@ export async function updateManagedSkills(params: {
           ok: false,
           message: "error" in updateResult ? updateResult.error : "update failed",
         });
+        if (hadExistingSkill) {
+          await fs.rm(skillDir, { recursive: true, force: true }).catch(() => undefined);
+          await fs.cp(backupDir, skillDir, { recursive: true });
+        }
         continue;
       }
       const summary = await scanDirectoryWithSummary(skillDir);

@@ -210,9 +210,34 @@ describe("requestExecApprovalDecision", () => {
       host: "gateway",
       security: "allowlist",
       ask: "on-miss",
+      sessionId: "session-1",
+      agentRunId: "run-1",
     });
 
     expect(result).toBe("deny");
     expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
+    const kinds = vi
+      .mocked(emitStandaloneResearchEvent)
+      .mock.calls.map((c) => (c[0]?.event as { kind?: string } | undefined)?.kind);
+    expect(kinds).toEqual(["approval.request", "approval.deny"]);
+    const denyCall = vi.mocked(emitStandaloneResearchEvent).mock.calls.find((c) => {
+      const first = c[0];
+      if (!first || !first.event) {
+        return false;
+      }
+      return (first.event as { kind?: string }).kind === "approval.deny";
+    });
+    expect(denyCall?.[0]).toMatchObject({
+      runId: "run-1",
+      sessionId: "session-1",
+      event: {
+        kind: "approval.deny",
+        payload: expect.objectContaining({
+          approvalId: "approval-id",
+          agentRunId: "run-1",
+          decision: "deny",
+        }),
+      },
+    });
   });
 });
