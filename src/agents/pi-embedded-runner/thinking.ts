@@ -53,13 +53,15 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
 }
 
 /**
- * Strip `thinkingSignature` from `type: "thinking"` content blocks without
- * removing the blocks themselves.
+ * Strip pi-ai replay signatures (`thinkingSignature` on thinking blocks,
+ * `textSignature` on text blocks) from assistant messages.
  *
- * This prevents pi-ai's `convertResponsesMessages` from replaying reasoning
- * items (which some providers like Azure OpenAI reject) while preserving the
- * thinking text for display.
+ * `thinkingSignature` causes pi-ai's `convertResponsesMessages` to replay
+ * reasoning items.  `textSignature` embeds the original message-item ID so
+ * the provider can enforce reasoning/message pairing.  Providers like Azure
+ * OpenAI reject either of these replay artifacts, so both must be removed.
  *
+ * The block content itself is preserved for display.
  * Returns the original array reference when nothing was changed.
  */
 export function stripThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
@@ -73,11 +75,11 @@ export function stripThinkingSignatures(messages: AgentMessage[]): AgentMessage[
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
     for (const block of msg.content) {
-      const b = block as { type?: unknown; thinkingSignature?: unknown };
-      if (b && typeof b === "object" && b.type === "thinking" && b.thinkingSignature) {
+      const b = block as { type?: unknown; thinkingSignature?: unknown; textSignature?: unknown };
+      if (b && typeof b === "object" && (b.thinkingSignature || b.textSignature)) {
         touched = true;
         changed = true;
-        const { thinkingSignature: _, ...rest } = b as Record<string, unknown>;
+        const { thinkingSignature: _t, textSignature: _s, ...rest } = b as Record<string, unknown>;
         nextContent.push(rest as unknown as AssistantContentBlock);
         continue;
       }
