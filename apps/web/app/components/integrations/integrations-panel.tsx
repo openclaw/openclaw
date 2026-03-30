@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Switch } from "../ui/switch";
 import type {
   DenchIntegrationId,
+  IntegrationRepairEntry,
   DenchIntegrationState,
   IntegrationRuntimeRefresh,
   IntegrationsState,
@@ -18,6 +20,12 @@ type ActionNotice = {
 type IntegrationToggleResponse = IntegrationsState & {
   integration: DenchIntegrationId;
   changed: boolean;
+  refresh: IntegrationRuntimeRefresh;
+};
+type IntegrationRepairResponse = IntegrationsState & {
+  changed: boolean;
+  repairs: IntegrationRepairEntry[];
+  repairedIds: Array<"exa" | "apollo">;
   refresh: IntegrationRuntimeRefresh;
 };
 
@@ -212,6 +220,7 @@ export function IntegrationsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<DenchIntegrationId | null>(null);
+  const [repairing, setRepairing] = useState(false);
   const [notice, setNotice] = useState<ActionNotice | null>(null);
 
   const fetchIntegrations = useCallback(async () => {
@@ -236,6 +245,14 @@ export function IntegrationsPanel() {
   }, [fetchIntegrations]);
 
   const integrations = useMemo(() => data?.integrations ?? [], [data]);
+  const needsRepair = useMemo(
+    () => integrations.some(
+      (integration) =>
+        (integration.id === "exa" || integration.id === "apollo") &&
+        integration.health.pluginMissing,
+    ),
+    [integrations],
+  );
 
   const applyState = useCallback((nextState: IntegrationsState) => {
     setData(nextState);
@@ -282,21 +299,74 @@ export function IntegrationsPanel() {
     }
   }, [applyState]);
 
+  const handleRepair = useCallback(async () => {
+    setRepairing(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/integrations/repair", {
+        method: "POST",
+      });
+      const payload = (await response.json()) as IntegrationRepairResponse | { error?: string };
+      if (!response.ok) {
+        throw new Error("error" in payload && payload.error ? payload.error : "Failed to repair integrations.");
+      }
+
+      applyState(payload);
+      if (payload.changed && payload.refresh.restarted) {
+        const repairedNames = payload.repairedIds.length > 0 ? payload.repairedIds.join(", ") : "profiles";
+        setNotice({
+          tone: "success",
+          message: `Repair completed for ${repairedNames} and the ${payload.refresh.profile} gateway restarted successfully.`,
+        });
+      } else if (payload.changed) {
+        setNotice({
+          tone: "warning",
+          message: `Repair updated the profile, but the gateway restart did not complete: ${payload.refresh.error ?? "unknown error"}.`,
+        });
+      } else {
+        setNotice({
+          tone: "success",
+          message: "No repair changes were needed for this profile.",
+        });
+      }
+    } catch (err) {
+      setNotice({
+        tone: "warning",
+        message: err instanceof Error ? err.message : "Failed to repair integrations.",
+      });
+    } finally {
+      setRepairing(false);
+    }
+  }, [applyState]);
+
   return (
     <div className="mx-auto max-w-5xl p-6">
-      <div className="mb-6">
-        <h1
-          className="font-instrument text-3xl tracking-tight"
-          style={{ color: "var(--color-text)" }}
-        >
-          Integrations
-        </h1>
-        <p
-          className="mt-1 text-sm"
-          style={{ color: "var(--color-text-muted)" }}
-        >
-          Manage Dench-managed integrations and search ownership in one place.
-        </p>
+      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1
+            className="font-instrument text-3xl tracking-tight"
+            style={{ color: "var(--color-text)" }}
+          >
+            Integrations
+          </h1>
+          <p
+            className="mt-1 text-sm"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            Manage Dench-managed integrations and search ownership in one place.
+          </p>
+        </div>
+
+        {needsRepair && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void handleRepair()}
+            disabled={repairing}
+          >
+            {repairing ? "Repairing..." : "Repair older profiles"}
+          </Button>
+        )}
       </div>
 
       {loading && (
@@ -314,6 +384,11 @@ export function IntegrationsPanel() {
             <CardTitle>Could not load integrations</CardTitle>
             <CardDescription>{error}</CardDescription>
           </CardHeader>
+          <CardContent>
+            <Button type="button" variant="outline" onClick={() => void fetchIntegrations()}>
+              Retry
+            </Button>
+          </CardContent>
         </Card>
       )}
 

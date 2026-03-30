@@ -167,4 +167,173 @@ describe("IntegrationsPanel", () => {
       expect(screen.getByText("Apollo Enrichment updated and the dench gateway restarted successfully.")).toBeInTheDocument();
     });
   });
+
+  it("offers repair for older profiles when a plugin is missing", async () => {
+    const user = userEvent.setup();
+    const initialPayload = {
+      metadata: {
+        schemaVersion: 1,
+        exa: {
+          ownsSearch: false,
+          fallbackProvider: "duckduckgo",
+        },
+      },
+      search: {
+        builtIn: {
+          enabled: true,
+          denied: false,
+          provider: "duckduckgo",
+        },
+        effectiveOwner: "web_search",
+      },
+      integrations: [
+        {
+          id: "exa",
+          label: "Exa Search",
+          enabled: false,
+          available: false,
+          gatewayBaseUrl: "https://gateway.merseoriginals.com",
+          auth: { configured: true, source: "config" },
+          plugin: {
+            pluginId: "exa-search",
+            configured: false,
+            enabled: false,
+            allowlisted: false,
+            loadPathConfigured: false,
+            installRecorded: false,
+            installPath: null,
+            installPathExists: false,
+            sourcePath: null,
+          },
+          managedByDench: true,
+          healthIssues: ["missing_plugin_entry", "plugin_install_missing"],
+          health: {
+            status: "disabled",
+            pluginMissing: true,
+            pluginInstalledButDisabled: false,
+            configMismatch: true,
+            missingAuth: false,
+            missingGatewayOverride: false,
+          },
+        },
+        {
+          id: "apollo",
+          label: "Apollo Enrichment",
+          enabled: false,
+          available: false,
+          gatewayBaseUrl: "https://gateway.merseoriginals.com",
+          auth: { configured: true, source: "config" },
+          plugin: {
+            pluginId: "apollo-enrichment",
+            configured: true,
+            enabled: false,
+            allowlisted: true,
+            loadPathConfigured: true,
+            installRecorded: true,
+            installPath: "/tmp/apollo",
+            installPathExists: true,
+            sourcePath: "/repo/apollo",
+          },
+          managedByDench: true,
+          healthIssues: ["plugin_disabled"],
+          health: {
+            status: "disabled",
+            pluginMissing: false,
+            pluginInstalledButDisabled: true,
+            configMismatch: false,
+            missingAuth: false,
+            missingGatewayOverride: false,
+          },
+        },
+        {
+          id: "elevenlabs",
+          label: "ElevenLabs",
+          enabled: true,
+          available: true,
+          gatewayBaseUrl: "https://gateway.merseoriginals.com",
+          auth: { configured: true, source: "config" },
+          plugin: null,
+          managedByDench: true,
+          healthIssues: [],
+          health: {
+            status: "healthy",
+            pluginMissing: false,
+            pluginInstalledButDisabled: false,
+            configMismatch: false,
+            missingAuth: false,
+            missingGatewayOverride: false,
+          },
+          overrideActive: true,
+        },
+      ],
+    };
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : (input as URL).href;
+      const method = init?.method ?? "GET";
+      if (url === "/api/integrations" && method === "GET") {
+        return new Response(JSON.stringify(initialPayload));
+      }
+      if (url === "/api/integrations/repair" && method === "POST") {
+        return new Response(JSON.stringify({
+          changed: true,
+          repairs: [
+            {
+              id: "exa",
+              pluginId: "exa-search",
+              assetAvailable: true,
+              assetCopied: true,
+              repaired: true,
+              issues: [],
+            },
+          ],
+          repairedIds: ["exa"],
+          refresh: {
+            attempted: true,
+            restarted: true,
+            error: null,
+            profile: "dench",
+          },
+          ...initialPayload,
+          integrations: initialPayload.integrations.map((integration) =>
+            integration.id === "exa"
+              ? {
+                ...integration,
+                healthIssues: [],
+                health: {
+                  ...integration.health,
+                  status: "disabled",
+                  pluginMissing: false,
+                  configMismatch: false,
+                },
+                plugin: {
+                  ...integration.plugin,
+                  configured: true,
+                  allowlisted: true,
+                  loadPathConfigured: true,
+                  installRecorded: true,
+                  installPath: "/tmp/exa",
+                  installPathExists: true,
+                  sourcePath: "/repo/exa",
+                },
+              }
+              : integration
+          ),
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    }) as typeof fetch;
+
+    render(<IntegrationsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Repair older profiles" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Repair older profiles" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Repair completed for exa and the dench gateway restarted successfully.")).toBeInTheDocument();
+    });
+  });
 });
