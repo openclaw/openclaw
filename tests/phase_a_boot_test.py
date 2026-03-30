@@ -64,7 +64,7 @@ async def test_boot():
         import src.llm_gateway as gw_mod
         gw_mod.configure(config)
         assert gw_mod._configured, "_configured flag not set after configure()"
-        record_ok("llm_gateway", f"Configured (force_cloud={gw_mod._force_cloud})")
+        record_ok("llm_gateway", "Configured (cloud-only)")
 
         # Call configure() again — should be no-op
         gw_mod.configure(config)

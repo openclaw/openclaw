@@ -1,19 +1,14 @@
 """
 Unified LLM Gateway — single entry point for ALL LLM inference across OpenClaw Bot.
 
-Consolidates 6 previously scattered call-sites:
-  1. pipeline_executor._call_vllm()
-  2. intent_classifier.py (hardcoded OpenRouter/vLLM)
-  3. deep_research.py (_llm_call_openrouter / _llm_call_vllm)
-  4. memory_mcp.py (direct vLLM localhost:8000)
-  5. ai/agents/_shared.py (bare vLLM POST)
-  6. bot_commands.cmd_test_all_models (vLLM direct)
+Routes all requests through OpenRouter cloud API.
+
+Consolidates previously scattered call-sites into a single gateway.
 
 Architecture:
-  route_llm() → SmartModelRouter (optional) → OpenRouter (primary) → vLLM (fallback)
+  route_llm() → SmartModelRouter (optional) → OpenRouter
 
 Integrates: SmartModelRouter, AdaptiveTokenBudget, InferenceMetricsCollector.
-Respects force_cloud mode: never hits localhost when cloud-only.
 """
 
 from __future__ import annotations
@@ -36,9 +31,7 @@ logger = structlog.get_logger("LLMGateway")
 # Singleton-ish config holder (set once at gateway boot)
 # ---------------------------------------------------------------------------
 _gateway_config: Dict[str, Any] = {}
-_force_cloud: bool = False
 _openrouter_config: Dict[str, Any] = {}
-_vllm_url: str = "http://localhost:8000/v1"
 
 # Lazy-init inference components (singletons — initialized once by configure())
 _smart_router = None
@@ -170,7 +163,7 @@ def configure(config: Dict[str, Any]) -> None:
     Must be called once during startup (from OpenClawGateway.run()).
     Subsequent calls are no-ops to prevent double initialization.
     """
-    global _gateway_config, _force_cloud, _openrouter_config, _vllm_url
+    global _gateway_config, _openrouter_config
     global _smart_router, _token_budget, _metrics_collector, _approval_config
     global _configured
 
@@ -179,20 +172,12 @@ def configure(config: Dict[str, Any]) -> None:
         return
 
     _gateway_config = config
-    _vllm_url = config.get("system", {}).get("vllm_base_url", "http://localhost:8000/v1").rstrip("/")
 
     # HITL configuration
     _approval_config.update(config.get("hitl", {}))
 
     or_cfg = config.get("system", {}).get("openrouter", {})
     _openrouter_config = or_cfg
-
-    _force_cloud = (
-        or_cfg.get("enabled", False)
-        and or_cfg.get("force_cloud", False)
-        and not or_cfg.get("use_local_models", True)
-        and bool(or_cfg.get("api_key", ""))
-    )
 
     # --- SmartModelRouter ---
     try:
@@ -202,15 +187,11 @@ def configure(config: Dict[str, Any]) -> None:
         router_cfg = config.get("system", {}).get("model_router", {})
         profiles: Dict[str, Any] = {}
         for task_type, model_name in router_cfg.items():
-            # In force_cloud mode, skip models that look like local paths (contain AWQ/GPTQ/GGUF)
-            if _force_cloud and any(tag in model_name.upper() for tag in ("AWQ", "GPTQ", "GGUF")):
-                logger.debug("Skipping local model in cloud-only mode", model=model_name)
-                continue
             if model_name not in profiles:
                 is_fast = "7b" in model_name.lower() or "mini" in model_name.lower()
                 profiles[model_name] = ModelProfile(
                     name=model_name,
-                    vram_gb=4.0 if is_fast else 9.5,
+                    vram_gb=0.0,
                     capabilities=[task_type],
                     speed_tier="fast" if is_fast else "medium",
                     quality_tier="medium" if is_fast else "high",
@@ -227,10 +208,8 @@ def configure(config: Dict[str, Any]) -> None:
     try:
         from src.ai.inference.budget import AdaptiveTokenBudget
 
-        vram_gb = config.get("system", {}).get("hardware", {}).get("vram_gb", 16.0)
         _token_budget = AdaptiveTokenBudget(
-            default_max_tokens=config.get("system", {}).get("vllm_max_model_len", 8192),
-            vram_gb=vram_gb,
+            default_max_tokens=config.get("system", {}).get("max_model_tokens", 8192),
         )
     except Exception as e:
         logger.warning("LLMGateway: AdaptiveTokenBudget init failed", error=str(e))
@@ -245,8 +224,7 @@ def configure(config: Dict[str, Any]) -> None:
 
     _configured = True
     logger.info(
-        "LLMGateway configured",
-        force_cloud=_force_cloud,
+        "LLMGateway configured (cloud-only)",
         openrouter_enabled=or_cfg.get("enabled", False),
     )
 
@@ -395,11 +373,6 @@ async def route_llm(
                 if result:
                     used_provider = "openrouter"
 
-    if not result and not _force_cloud:
-        result = await _call_vllm_local(messages, selected_model, max_tokens, temperature)
-        if result:
-            used_provider = "vllm"
-
     if not result:
         logger.warning("LLMGateway: all providers failed", model=selected_model, task_type=task_type)
         result = ""
@@ -442,8 +415,8 @@ def get_token_budget():
 
 
 def is_cloud_only() -> bool:
-    """Return True if gateway is in cloud-only mode."""
-    return _force_cloud
+    """Return True if gateway is in cloud-only mode (always True)."""
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +464,7 @@ async def _call_openrouter(
         return ""
 
     # Free-tier enforcement: reject models without :free suffix to prevent 402
-    if _force_cloud and ":free" not in model:
+    if ":free" not in model:
         logger.warning("Free-tier guard: model missing :free suffix, auto-appending", model=model)
         model = model + ":free"
 
@@ -578,52 +551,5 @@ async def _call_openrouter(
                 await asyncio.sleep(2 ** attempt)
                 continue
             logger.warning("OpenRouter failed after retries", error=str(e))
-
-    return ""
-
-
-async def _call_vllm_local(
-    messages: List[Dict[str, str]],
-    model: str,
-    max_tokens: int,
-    temperature: float,
-    retries: int = 2,
-) -> str:
-    """Call local vLLM server with retry."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-
-    for attempt in range(retries):
-        try:
-            timeout = aiohttp.ClientTimeout(total=120)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    f"{_vllm_url}/chat/completions",
-                    json=payload,
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        content = (
-                            data.get("choices", [{}])[0]
-                            .get("message", {})
-                            .get("content", "")
-                        )
-                        return content.strip()
-                    if attempt < retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            if attempt < retries - 1:
-                logger.warning("vLLM error", error=str(e), attempt=attempt)
-                await asyncio.sleep(2 ** attempt)
-                continue
-            logger.warning("vLLM failed after retries", error=str(e))
 
     return ""
