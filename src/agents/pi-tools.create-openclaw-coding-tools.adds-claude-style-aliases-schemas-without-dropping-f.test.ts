@@ -158,4 +158,26 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+
+  it("still rejects blank legacy oldText values", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-edit-blank-"));
+    try {
+      const filePath = path.join(tmpDir, "legacy-blank.js");
+      await fs.writeFile(filePath, "const value = 'old';\n", "utf8");
+
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { editTool } = expectReadWriteEditTools(tools);
+
+      await expect(
+        editTool.execute("tool-legacy-edit-blank", {
+          path: "legacy-blank.js",
+          oldText: "   ",
+          newText: "new",
+        }),
+      ).rejects.toThrow(/oldText|edits/i);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
 });

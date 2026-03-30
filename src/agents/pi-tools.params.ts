@@ -28,16 +28,13 @@ export const CLAUDE_PARAM_GROUPS = {
         if (Array.isArray(record.edits)) {
           return record.edits.length > 0;
         }
-        const hasOldText =
-          typeof record.oldText === "string" ||
-          typeof record.old_string === "string" ||
-          typeof record.old_text === "string" ||
-          typeof record.oldString === "string";
-        const hasNewText =
-          typeof record.newText === "string" ||
-          typeof record.new_string === "string" ||
-          typeof record.new_text === "string" ||
-          typeof record.newString === "string";
+        const readNonEmptyString = (...keys: string[]) =>
+          keys.some((key) => {
+            const value = record[key];
+            return typeof value === "string" && value.trim().length > 0;
+          });
+        const hasOldText = readNonEmptyString("oldText", "old_string", "old_text", "oldString");
+        const hasNewText = readNonEmptyString("newText", "new_string", "new_text", "newString");
         return hasOldText && hasNewText;
       },
     },

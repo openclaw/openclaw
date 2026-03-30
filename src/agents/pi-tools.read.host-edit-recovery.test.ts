@@ -213,4 +213,39 @@ describe("edit tool recovery hardening", () => {
       text: `Successfully replaced text in ${filePath}.`,
     });
   });
+
+  it("recovers success for canonical edits[] after a post-write throw", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, 'const value = "foo";\r\n', "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, 'const value = "foobar";\r\n', "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          {
+            oldText: 'const value = "foo";\n',
+            newText: 'const value = "foobar";\n',
+          },
+        ],
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Successfully replaced text in ${filePath}.`,
+    });
+  });
+
 });

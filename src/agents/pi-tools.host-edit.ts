@@ -36,13 +36,28 @@ function readStringParam(record: Record<string, unknown> | undefined, ...keys: s
   return undefined;
 }
 
+function readCanonicalEditPair(record: Record<string, unknown> | undefined) {
+  const firstEdit = Array.isArray(record?.edits) ? record.edits[0] : undefined;
+  if (!firstEdit || typeof firstEdit !== "object") {
+    return {};
+  }
+  const editRecord = firstEdit as Record<string, unknown>;
+  return {
+    oldText: readStringParam(editRecord, "oldText", "old_string", "old_text", "oldString"),
+    newText: readStringParam(editRecord, "newText", "new_string", "new_text", "newString"),
+  };
+}
+
 function readEditToolParams(params: unknown): EditToolParams {
   const record =
     params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+  const canonical = readCanonicalEditPair(record);
   return {
-    pathParam: readStringParam(record, "path", "file_path", "file"),
-    oldText: readStringParam(record, "oldText", "old_string", "old_text", "oldString"),
-    newText: readStringParam(record, "newText", "new_string", "new_text", "newString"),
+    pathParam: readStringParam(record, "path", "file_path", "file", "filePath"),
+    oldText:
+      readStringParam(record, "oldText", "old_string", "old_text", "oldString") ?? canonical.oldText,
+    newText:
+      readStringParam(record, "newText", "new_string", "new_text", "newString") ?? canonical.newText,
   };
 }
 
