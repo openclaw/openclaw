@@ -689,6 +689,7 @@ export async function preflightDiscordMessage(
 
   if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
     logDebug(`[discord-preflight] drop: member not allowed`);
+    // Keep stable Discord user IDs out of routine deny-path logs.
     logVerbose("Blocked discord guild sender (not in users/roles allowlist)");
     return null;
   }
