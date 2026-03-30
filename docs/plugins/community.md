@@ -71,6 +71,19 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
+### Pompelmi Attachment Firewall
+
+Minimal native OpenClaw file preflight plugin powered by Pompelmi. Scans local
+file/path inputs before tool execution and can allow, warn, or block
+suspicious or malicious attachments.
+
+- **npm:** `@pompelmi/openclaw-attachment-firewall`
+- **repo:** [github.com/pompelmi/openclaw-attachment-firewall](https://github.com/pompelmi/openclaw-attachment-firewall)
+
+```bash
+openclaw plugins install @pompelmi/openclaw-attachment-firewall
+```
+
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
