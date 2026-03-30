@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveDiscordRuntimeGroupPolicy } from "../../../plugin-sdk/discord-surface.js";
-import { resolveIMessageRuntimeGroupPolicy } from "../../../plugin-sdk/imessage-policy.js";
-import { resolveSlackRuntimeGroupPolicy } from "../../../plugin-sdk/slack-surface.js";
-import { resolveTelegramRuntimeGroupPolicy } from "../../../plugin-sdk/telegram-runtime-surface.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
 import { whatsappAccessControlTesting } from "../../../plugin-sdk/whatsapp-surface.js";
 import {
   evaluateZaloGroupAccess,
@@ -11,7 +8,7 @@ import {
 import { installChannelRuntimeGroupPolicyFallbackSuite } from "./suites.js";
 
 describe("channel runtime group policy contract", () => {
-  type ResolvedGroupPolicy = ReturnType<typeof resolveDiscordRuntimeGroupPolicy>;
+  type ResolvedGroupPolicy = ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
 
   function expectResolvedGroupPolicyCase(
     resolved: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">,
@@ -31,12 +28,12 @@ describe("channel runtime group policy contract", () => {
 
   function expectResolvedDiscordGroupPolicyCase(params: {
     providerConfigPresent: Parameters<
-      typeof resolveDiscordRuntimeGroupPolicy
+      typeof resolveOpenProviderRuntimeGroupPolicy
     >[0]["providerConfigPresent"];
-    groupPolicy: Parameters<typeof resolveDiscordRuntimeGroupPolicy>[0]["groupPolicy"];
+    groupPolicy: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0]["groupPolicy"];
     expected: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">;
   }) {
-    expectResolvedGroupPolicyCase(resolveDiscordRuntimeGroupPolicy(params), params.expected);
+    expectResolvedGroupPolicyCase(resolveOpenProviderRuntimeGroupPolicy(params), params.expected);
   }
 
   function expectAllowedZaloGroupAccessCase(
@@ -52,7 +49,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("slack", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: resolveSlackRuntimeGroupPolicy,
+      resolve: resolveOpenProviderRuntimeGroupPolicy,
       configuredLabel: "keeps open default when channels.slack is configured",
       defaultGroupPolicyUnderTest: "open",
       missingConfigLabel: "fails closed when channels.slack is missing and no defaults are set",
@@ -62,7 +59,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("telegram", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: resolveTelegramRuntimeGroupPolicy,
+      resolve: resolveOpenProviderRuntimeGroupPolicy,
       configuredLabel: "keeps open fallback when channels.telegram is configured",
       defaultGroupPolicyUnderTest: "disabled",
       missingConfigLabel: "fails closed when channels.telegram is missing and no defaults are set",
@@ -82,7 +79,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("imessage", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: resolveIMessageRuntimeGroupPolicy,
+      resolve: resolveOpenProviderRuntimeGroupPolicy,
       configuredLabel: "keeps open fallback when channels.imessage is configured",
       defaultGroupPolicyUnderTest: "disabled",
       missingConfigLabel: "fails closed when channels.imessage is missing and no defaults are set",
@@ -92,7 +89,7 @@ describe("channel runtime group policy contract", () => {
 
   describe("discord", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: resolveDiscordRuntimeGroupPolicy,
+      resolve: resolveOpenProviderRuntimeGroupPolicy,
       configuredLabel: "keeps open default when channels.discord is configured",
       defaultGroupPolicyUnderTest: "open",
       missingConfigLabel: "fails closed when channels.discord is missing and no defaults are set",
