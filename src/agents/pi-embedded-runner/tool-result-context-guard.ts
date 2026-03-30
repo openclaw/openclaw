@@ -190,6 +190,9 @@ function enforceToolResultContextBudgetInPlace(params: {
 export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
+  /** Optional async callback invoked after the original transformContext but before
+   *  budget enforcement. Plugins use this to compress/rewrite messages (e.g. SCCS). */
+  pluginTransform?: (messages: AgentMessage[]) => Promise<AgentMessage[] | undefined>;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const contextBudgetChars = Math.max(
@@ -213,9 +216,19 @@ export function installToolResultContextGuard(params: {
   const originalTransformContext = mutableAgent.transformContext;
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
-    const transformed = originalTransformContext
+    let transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
+
+    // Run plugin transform (e.g., SCCS compression) before budget enforcement.
+    if (params.pluginTransform) {
+      const pluginMessages = await params.pluginTransform(
+        Array.isArray(transformed) ? transformed : messages,
+      );
+      if (pluginMessages) {
+        transformed = pluginMessages;
+      }
+    }
 
     const contextMessages = Array.isArray(transformed) ? transformed : messages;
     enforceToolResultContextBudgetInPlace({

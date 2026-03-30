@@ -853,6 +853,21 @@ export async function runEmbeddedAttempt(
             params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
           ),
         ),
+        pluginTransform: hookRunner?.hasHooks("transform_context")
+          ? async (messages: AgentMessage[]) => {
+              const result = await hookRunner.runTransformContext(
+                { messages },
+                {
+                  runId: params.runId,
+                  agentId: sessionAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                },
+              );
+              return (result?.messages as AgentMessage[]) ?? messages;
+            }
+          : undefined,
       });
       const cacheTrace = createCacheTrace({
         cfg: params.config,
