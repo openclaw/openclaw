@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { Command, Option } from "commander";
 import { resolveStateDir } from "../config/paths.js";
-import { writeTextAtomic } from "../infra/json-files.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -378,8 +377,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       console.log(`${action} completion in ${profilePath}...`);
     }
 
-    // Atomic write — a crash mid-write could corrupt the user's shell profile
-    await writeTextAtomic(profilePath, update.next, { mode: 0o644 });
+    await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
       console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
     }
