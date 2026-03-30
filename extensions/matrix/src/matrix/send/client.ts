@@ -36,5 +36,8 @@ export async function withResolvedMatrixClient<T>(
       readiness: "started",
     },
     run,
+    // Started one-off send clients should flush sync/crypto state before CLI
+    // shutdown paths can tear down the process.
+    "persist",
   );
 }

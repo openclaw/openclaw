@@ -57,6 +57,7 @@ describe("withResolvedMatrixClient", () => {
     await expectOneOffSharedMatrixClient({
       prepareForOneOffCalls: 0,
       startCalls: 1,
+      releaseMode: "persist",
     });
     expect(result).toBe("ok");
   });
@@ -72,7 +73,9 @@ describe("withResolvedMatrixClient", () => {
 
     expect(result).toBe("ok");
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
+    expect(activeClient.start).toHaveBeenCalledTimes(1);
     expect(activeClient.stop).not.toHaveBeenCalled();
+    expect(activeClient.stopAndPersist).not.toHaveBeenCalled();
   });
 
   it("uses the effective account id when auth resolution is implicit", async () => {
@@ -88,6 +91,7 @@ describe("withResolvedMatrixClient", () => {
       accountId: "ops",
       prepareForOneOffCalls: 0,
       startCalls: 1,
+      releaseMode: "persist",
     });
   });
 
@@ -118,7 +122,7 @@ describe("withResolvedMatrixClient", () => {
       }),
     ).rejects.toThrow("boom");
 
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "persist");
   });
 
   it("starts one-off clients before outbound sends so encrypted rooms can reuse live crypto state", async () => {
