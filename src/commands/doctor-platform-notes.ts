@@ -45,13 +45,11 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
 }
 
 function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
-  const localToken =
-    typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token : undefined;
   const localPassword = cfg.gateway?.auth?.password;
   const remoteToken = cfg.gateway?.remote?.token;
   const remotePassword = cfg.gateway?.remote?.password;
   return Boolean(
-    hasConfiguredSecretInput(localToken) ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(localPassword, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(remoteToken, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults),
@@ -75,21 +73,6 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 
   const getenv = deps?.getenv ?? launchctlGetenv;
-  const deprecatedLaunchctlEntries = [
-    ["CLAWDBOT_GATEWAY_TOKEN", await getenv("CLAWDBOT_GATEWAY_TOKEN")],
-    ["CLAWDBOT_GATEWAY_PASSWORD", await getenv("CLAWDBOT_GATEWAY_PASSWORD")],
-  ].filter((entry): entry is [string, string] => Boolean(entry[1]?.trim()));
-  if (deprecatedLaunchctlEntries.length > 0) {
-    const lines = [
-      "- Deprecated launchctl environment variables detected (ignored).",
-      ...deprecatedLaunchctlEntries.map(
-        ([key]) =>
-          `- \`${key}\` is set; use \`OPENCLAW_${key.slice(key.indexOf("_") + 1)}\` instead.`,
-      ),
-    ];
-    (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
-  }
-
   const tokenEntries = [
     ["OPENCLAW_GATEWAY_TOKEN", await getenv("OPENCLAW_GATEWAY_TOKEN")],
   ] as const;
@@ -120,28 +103,6 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   ].filter((line): line is string => Boolean(line));
 
   (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
-}
-
-export function noteDeprecatedLegacyEnvVars(
-  env: NodeJS.ProcessEnv = process.env,
-  deps?: { noteFn?: typeof note },
-) {
-  const entries = Object.entries(env)
-    .filter(([key, value]) => key.startsWith("CLAWDBOT_") && value?.trim())
-    .map(([key]) => key);
-  if (entries.length === 0) {
-    return;
-  }
-
-  const lines = [
-    "- Deprecated legacy environment variables detected (ignored).",
-    "- Use OPENCLAW_* equivalents instead:",
-    ...entries.map((key) => {
-      const suffix = key.slice(key.indexOf("_") + 1);
-      return `  ${key} -> OPENCLAW_${suffix}`;
-    }),
-  ];
-  (deps?.noteFn ?? note)(lines.join("\n"), "Environment");
 }
 
 function isTruthyEnvValue(value: string | undefined): boolean {

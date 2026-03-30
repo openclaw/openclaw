@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type NodeInvokeCall = {
@@ -14,7 +13,6 @@ type NodeInvokeCall = {
 };
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
-let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
 
 const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
@@ -33,16 +31,6 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   }
   if (opts.method === "node.invoke") {
     lastNodeInvokeCall = opts;
-    const command = opts.params?.command;
-    if (command === "system.run.prepare") {
-      const params = (opts.params?.params ?? {}) as {
-        command?: unknown[];
-        rawCommand?: unknown;
-        cwd?: unknown;
-        agentId?: unknown;
-      };
-      return buildSystemRunPreparePayload(params);
-    }
     return {
       payload: {
         stdout: "",
@@ -53,44 +41,21 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
       },
     };
   }
-  if (opts.method === "exec.approvals.node.get") {
-    return {
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "hash",
-      file: {
-        version: 1,
-        defaults: {
-          security: "allowlist",
-          ask: "on-miss",
-          askFallback: "deny",
-        },
-        agents: {},
-      },
-    };
-  }
-  if (opts.method === "exec.approval.request") {
-    lastApprovalRequestCall = opts as { params?: Record<string, unknown> };
-    return { decision: "allow-once" };
-  }
   return { ok: true };
 });
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime,
-}));
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
 }));
 
 describe("nodes-cli coverage", () => {
@@ -104,8 +69,6 @@ describe("nodes-cli coverage", () => {
     }
     return last;
   };
-
-  const getApprovalRequestCall = () => lastApprovalRequestCall;
 
   const runNodesCommand = async (args: string[]) => {
     await sharedProgram.parseAsync(args, { from: "user" });
@@ -124,87 +87,23 @@ describe("nodes-cli coverage", () => {
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
     lastNodeInvokeCall = null;
-    lastApprovalRequestCall = null;
   });
 
-  it("invokes system.run with parsed params", async () => {
-    const invoke = await runNodesCommand([
-      "nodes",
-      "run",
-      "--node",
-      "mac-1",
-      "--cwd",
-      "/tmp",
-      "--env",
-      "FOO=bar",
-      "--command-timeout",
-      "1200",
-      "--needs-screen-recording",
-      "--invoke-timeout",
-      "5000",
-      "echo",
-      "hi",
-    ]);
-
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.idempotencyKey).toBe("rk_test");
-    expect(invoke?.params?.command).toBe("system.run");
-    expect(invoke?.params?.params).toEqual({
-      command: ["echo", "hi"],
-      rawCommand: null,
-      cwd: "/tmp",
-      env: { FOO: "bar" },
-      timeoutMs: 1200,
-      needsScreenRecording: true,
-      agentId: "main",
-      approved: true,
-      approvalDecision: "allow-once",
-      runId: expect.any(String),
-    });
-    expect(invoke?.params?.timeoutMs).toBe(5000);
-    const approval = getApprovalRequestCall();
-    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
-    expect(approval?.params?.["systemRunPlan"]).toEqual({
-      argv: ["echo", "hi"],
-      cwd: "/tmp",
-      rawCommand: null,
-      agentId: "main",
-      sessionKey: null,
+  it("does not register the removed run wrapper", async () => {
+    await expect(
+      sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
+    ).rejects.toMatchObject({
+      code: "commander.unknownCommand",
     });
   });
 
-  it("invokes system.run with raw command", async () => {
-    const invoke = await runNodesCommand([
-      "nodes",
-      "run",
-      "--agent",
-      "main",
-      "--node",
-      "mac-1",
-      "--raw",
-      "echo hi",
-    ]);
-
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.idempotencyKey).toBe("rk_test");
-    expect(invoke?.params?.command).toBe("system.run");
-    expect(invoke?.params?.params).toMatchObject({
-      command: ["/bin/sh", "-lc", "echo hi"],
-      rawCommand: "echo hi",
-      agentId: "main",
-      approved: true,
-      approvalDecision: "allow-once",
-      runId: expect.any(String),
-    });
-    const approval = getApprovalRequestCall();
-    expect(approval?.params?.["commandArgv"]).toEqual(["/bin/sh", "-lc", "echo hi"]);
-    expect(approval?.params?.["systemRunPlan"]).toEqual({
-      argv: ["/bin/sh", "-lc", "echo hi"],
-      cwd: null,
-      rawCommand: "echo hi",
-      agentId: "main",
-      sessionKey: null,
-    });
+  it("blocks system.run on nodes invoke", async () => {
+    await expect(
+      sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
   });
 
   it("invokes system.notify with provided fields", async () => {

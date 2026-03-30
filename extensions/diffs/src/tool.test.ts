@@ -1,25 +1,25 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
+import { createDiffStoreHarness } from "./test-helpers.js";
 import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
 
 describe("diffs tool", () => {
-  let rootDir: string;
   let store: DiffArtifactStore;
+  let cleanupRootDir: () => Promise<void>;
 
   beforeEach(async () => {
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-diffs-tool-"));
-    store = new DiffArtifactStore({ rootDir });
+    ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness("openclaw-diffs-tool-"));
   });
 
   afterEach(async () => {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await cleanupRootDir();
   });
 
   it("returns a viewer URL in view mode", async () => {
@@ -57,7 +57,7 @@ describe("diffs tool", () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("/plugins/diffs/assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -95,23 +95,11 @@ describe("diffs tool", () => {
   });
 
   it("renders PDF output when fileFormat is pdf", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(
-        async ({
-          outputPath,
-          image,
-        }: {
-          outputPath: string;
-          image: { format: string; qualityPreset: string; scale: number; maxWidth: number };
-        }) => {
-          expect(image.format).toBe("pdf");
-          expect(outputPath).toMatch(/preview\.pdf$/);
-          await fs.mkdir(path.dirname(outputPath), { recursive: true });
-          await fs.writeFile(outputPath, Buffer.from("%PDF-1.7"));
-          return outputPath;
-        },
-      ),
-    };
+    const screenshotter = createPdfScreenshotter({
+      assertOutputPath: (outputPath) => {
+        expect(outputPath).toMatch(/preview\.pdf$/);
+      },
+    });
 
     const tool = createDiffsTool({
       api: createApi(),
@@ -148,9 +136,9 @@ describe("diffs tool", () => {
       mode: "file",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expectArtifactOnlyFileResult(screenshotter, result);
+    expect((result?.details as Record<string, unknown>).artifactId).toEqual(expect.any(String));
+    expect((result?.details as Record<string, unknown>).expiresAt).toEqual(expect.any(String));
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
@@ -208,22 +196,7 @@ describe("diffs tool", () => {
   });
 
   it("accepts deprecated format alias for fileFormat", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(
-        async ({
-          outputPath,
-          image,
-        }: {
-          outputPath: string;
-          image: { format: string; qualityPreset: string; scale: number; maxWidth: number };
-        }) => {
-          expect(image.format).toBe("pdf");
-          await fs.mkdir(path.dirname(outputPath), { recursive: true });
-          await fs.writeFile(outputPath, Buffer.from("%PDF-1.7"));
-          return outputPath;
-        },
-      ),
-    };
+    const screenshotter = createPdfScreenshotter();
 
     const tool = createDiffsTool({
       api: createApi(),
@@ -255,9 +228,7 @@ describe("diffs tool", () => {
       after: "two\n",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expectArtifactOnlyFileResult(screenshotter, result);
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -347,6 +318,12 @@ describe("diffs tool", () => {
         fontFamily: "JetBrains Mono",
         fontSize: 17,
       },
+      context: {
+        agentId: "main",
+        sessionId: "session-123",
+        messageChannel: "discord",
+        agentAccountId: "default",
+      },
     });
 
     const result = await tool.execute?.("tool-5", {
@@ -357,19 +334,25 @@ describe("diffs tool", () => {
 
     expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
     expect((result?.details as Record<string, unknown>).mode).toBe("view");
+    expect((result?.details as Record<string, unknown>).context).toEqual({
+      agentId: "main",
+      sessionId: "session-123",
+      messageChannel: "discord",
+      agentAccountId: "default",
+    });
 
     const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
     const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="light"');
     expect(html).toContain("--diffs-font-size: 17px;");
-    expect(html).toContain('--diffs-font-family: "JetBrains Mono"');
+    expect(html).toContain("JetBrains Mono");
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("/plugins/diffs/assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -412,10 +395,33 @@ describe("diffs tool", () => {
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="dark"');
   });
+
+  it("routes tool context into artifact details for file mode", async () => {
+    const screenshotter = createPngScreenshotter();
+    const tool = createToolWithScreenshotter(store, screenshotter, DEFAULT_DIFFS_TOOL_DEFAULTS, {
+      agentId: "reviewer",
+      sessionId: "session-456",
+      messageChannel: "telegram",
+      agentAccountId: "work",
+    });
+
+    const result = await tool.execute?.("tool-context-file", {
+      before: "one\n",
+      after: "two\n",
+      mode: "file",
+    });
+
+    expect((result?.details as Record<string, unknown>).context).toEqual({
+      agentId: "reviewer",
+      sessionId: "session-456",
+      messageChannel: "telegram",
+      agentAccountId: "work",
+    });
+  });
 });
 
 function createApi(): OpenClawPluginApi {
-  return {
+  return createTestPluginApi({
     id: "diffs",
     name: "Diffs",
     description: "Diffs",
@@ -427,38 +433,36 @@ function createApi(): OpenClawPluginApi {
       },
     },
     runtime: {} as OpenClawPluginApi["runtime"],
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-    },
-    registerTool() {},
-    registerHook() {},
-    registerHttpRoute() {},
-    registerChannel() {},
-    registerGatewayMethod() {},
-    registerCli() {},
-    registerService() {},
-    registerProvider() {},
-    registerCommand() {},
-    resolvePath(input: string) {
-      return input;
-    },
-    on() {},
-  };
+  }) as OpenClawPluginApi;
 }
 
 function createToolWithScreenshotter(
   store: DiffArtifactStore,
   screenshotter: DiffScreenshotter,
   defaults = DEFAULT_DIFFS_TOOL_DEFAULTS,
+  context: OpenClawPluginToolContext | undefined = {
+    agentId: "main",
+    sessionId: "session-123",
+    messageChannel: "discord",
+    agentAccountId: "default",
+  },
 ) {
   return createDiffsTool({
     api: createApi(),
     store,
     defaults,
     screenshotter,
+    context,
   });
+}
+
+function expectArtifactOnlyFileResult(
+  screenshotter: DiffScreenshotter,
+  result: { details?: unknown } | null | undefined,
+) {
+  expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
+  expect((result?.details as Record<string, unknown>).mode).toBe("file");
+  expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
 }
 
 function createPngScreenshotter(
@@ -489,6 +493,23 @@ function createPngScreenshotter(
   return {
     screenshotHtml,
   };
+}
+
+function createPdfScreenshotter(
+  params: {
+    assertOutputPath?: (outputPath: string) => void;
+  } = {},
+): DiffScreenshotter {
+  const screenshotHtml: DiffScreenshotter["screenshotHtml"] = vi.fn(
+    async ({ outputPath, image }: { outputPath: string; image: DiffRenderOptions["image"] }) => {
+      expect(image.format).toBe("pdf");
+      params.assertOutputPath?.(outputPath);
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.writeFile(outputPath, Buffer.from("%PDF-1.7"));
+      return outputPath;
+    },
+  );
+  return { screenshotHtml };
 }
 
 function readTextContent(result: unknown, index: number): string {

@@ -1,4 +1,8 @@
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
+import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
@@ -34,33 +38,19 @@ function resolveCredentials(
 }
 
 function normalizeRoomToken(to: string): string {
-  const trimmed = to.trim();
-  if (!trimmed) {
-    throw new Error("Room token is required for Nextcloud Talk sends");
-  }
-
-  let normalized = trimmed;
-  if (normalized.startsWith("nextcloud-talk:")) {
-    normalized = normalized.slice("nextcloud-talk:".length).trim();
-  } else if (normalized.startsWith("nc:")) {
-    normalized = normalized.slice("nc:".length).trim();
-  }
-
-  if (normalized.startsWith("room:")) {
-    normalized = normalized.slice("room:".length).trim();
-  }
-
+  const normalized = stripNextcloudTalkTargetPrefix(to);
   if (!normalized) {
     throw new Error("Room token is required for Nextcloud Talk sends");
   }
   return normalized;
 }
 
-export async function sendMessageNextcloudTalk(
-  to: string,
-  text: string,
-  opts: NextcloudTalkSendOpts = {},
-): Promise<NextcloudTalkSendResult> {
+function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
+  cfg: CoreConfig;
+  account: ReturnType<typeof resolveNextcloudTalkAccount>;
+  baseUrl: string;
+  secret: string;
+} {
   const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
@@ -70,21 +60,41 @@ export async function sendMessageNextcloudTalk(
     { baseUrl: opts.baseUrl, secret: opts.secret },
     account,
   );
+  return { cfg, account, baseUrl, secret };
+}
+
+function recordNextcloudTalkOutboundActivity(accountId: string): void {
+  try {
+    getNextcloudTalkRuntime().channel.activity.record({
+      channel: "nextcloud-talk",
+      accountId,
+      direction: "outbound",
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "Nextcloud Talk runtime not initialized") {
+      throw error;
+    }
+  }
+}
+
+export async function sendMessageNextcloudTalk(
+  to: string,
+  text: string,
+  opts: NextcloudTalkSendOpts = {},
+): Promise<NextcloudTalkSendResult> {
+  const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const roomToken = normalizeRoomToken(to);
 
   if (!text?.trim()) {
     throw new Error("Message must be non-empty for Nextcloud Talk sends");
   }
 
-  const tableMode = getNextcloudTalkRuntime().channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "nextcloud-talk",
     accountId: account.accountId,
   });
-  const message = getNextcloudTalkRuntime().channel.text.convertMarkdownTables(
-    text.trim(),
-    tableMode,
-  );
+  const message = convertMarkdownTables(text.trim(), tableMode);
 
   const body: Record<string, unknown> = {
     message,
@@ -105,69 +115,74 @@ export async function sendMessageNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/message`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "OCS-APIRequest": "true",
-      "X-Nextcloud-Talk-Bot-Random": random,
-      "X-Nextcloud-Talk-Bot-Signature": signature,
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "OCS-APIRequest": "true",
+        "X-Nextcloud-Talk-Bot-Random": random,
+        "X-Nextcloud-Talk-Bot-Signature": signature,
+      },
+      body: bodyStr,
     },
-    body: bodyStr,
+    auditContext: "nextcloud-talk-send",
+    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    const status = response.status;
-    let errorMsg = `Nextcloud Talk send failed (${status})`;
+  try {
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      const status = response.status;
+      let errorMsg = `Nextcloud Talk send failed (${status})`;
 
-    if (status === 400) {
-      errorMsg = `Nextcloud Talk: bad request - ${errorBody || "invalid message format"}`;
-    } else if (status === 401) {
-      errorMsg = "Nextcloud Talk: authentication failed - check bot secret";
-    } else if (status === 403) {
-      errorMsg = "Nextcloud Talk: forbidden - bot may not have permission in this room";
-    } else if (status === 404) {
-      errorMsg = `Nextcloud Talk: room not found (token=${roomToken})`;
-    } else if (errorBody) {
-      errorMsg = `Nextcloud Talk send failed: ${errorBody}`;
+      if (status === 400) {
+        errorMsg = `Nextcloud Talk: bad request - ${errorBody || "invalid message format"}`;
+      } else if (status === 401) {
+        errorMsg = "Nextcloud Talk: authentication failed - check bot secret";
+      } else if (status === 403) {
+        errorMsg = "Nextcloud Talk: forbidden - bot may not have permission in this room";
+      } else if (status === 404) {
+        errorMsg = `Nextcloud Talk: room not found (token=${roomToken})`;
+      } else if (errorBody) {
+        errorMsg = `Nextcloud Talk send failed: ${errorBody}`;
+      }
+
+      throw new Error(errorMsg);
     }
 
-    throw new Error(errorMsg);
-  }
-
-  let messageId = "unknown";
-  let timestamp: number | undefined;
-  try {
-    const data = (await response.json()) as {
-      ocs?: {
-        data?: {
-          id?: number | string;
-          timestamp?: number;
+    let messageId = "unknown";
+    let timestamp: number | undefined;
+    try {
+      const data = (await response.json()) as {
+        ocs?: {
+          data?: {
+            id?: number | string;
+            timestamp?: number;
+          };
         };
       };
-    };
-    if (data.ocs?.data?.id != null) {
-      messageId = String(data.ocs.data.id);
+      if (data.ocs?.data?.id != null) {
+        messageId = String(data.ocs.data.id);
+      }
+      if (typeof data.ocs?.data?.timestamp === "number") {
+        timestamp = data.ocs.data.timestamp;
+      }
+    } catch {
+      // Response parsing failed, but message was sent.
     }
-    if (typeof data.ocs?.data?.timestamp === "number") {
-      timestamp = data.ocs.data.timestamp;
+
+    if (opts.verbose) {
+      console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
     }
-  } catch {
-    // Response parsing failed, but message was sent.
+
+    recordNextcloudTalkOutboundActivity(account.accountId);
+
+    return { messageId, roomToken, timestamp };
+  } finally {
+    await release();
   }
-
-  if (opts.verbose) {
-    console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
-  }
-
-  getNextcloudTalkRuntime().channel.activity.record({
-    channel: "nextcloud-talk",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  return { messageId, roomToken, timestamp };
 }
 
 export async function sendReactionNextcloudTalk(
@@ -176,15 +191,7 @@ export async function sendReactionNextcloudTalk(
   reaction: string,
   opts: Omit<NextcloudTalkSendOpts, "replyTo"> = {},
 ): Promise<{ ok: true }> {
-  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
-  const account = resolveNextcloudTalkAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const { baseUrl, secret } = resolveCredentials(
-    { baseUrl: opts.baseUrl, secret: opts.secret },
-    account,
-  );
+  const { account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const normalizedToken = normalizeRoomToken(roomToken);
 
   const body = JSON.stringify({ reaction });
@@ -196,21 +203,30 @@ export async function sendReactionNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${normalizedToken}/reaction/${messageId}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "OCS-APIRequest": "true",
-      "X-Nextcloud-Talk-Bot-Random": random,
-      "X-Nextcloud-Talk-Bot-Signature": signature,
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "OCS-APIRequest": "true",
+        "X-Nextcloud-Talk-Bot-Random": random,
+        "X-Nextcloud-Talk-Bot-Signature": signature,
+      },
+      body,
     },
-    body,
+    auditContext: "nextcloud-talk-reaction",
+    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
-  }
+  try {
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
+    }
 
-  return { ok: true };
+    return { ok: true };
+  } finally {
+    await release();
+  }
 }

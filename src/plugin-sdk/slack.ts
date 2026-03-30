@@ -1,52 +1,89 @@
-export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
-export type { ResolvedSlackAccount } from "../slack/accounts.js";
-export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
-
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-
-export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-
+export type { SlackAccountConfig } from "../config/types.slack.js";
+export type { InspectedSlackAccount, ResolvedSlackAccount } from "./slack-surface.js";
+export type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "./channel-plugin-common.js";
 export {
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
   applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../channels/plugins/setup-helpers.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export {
+  buildChannelConfigSchema,
   deleteAccountFromConfigSection,
+  emptyPluginConfigSchema,
+  formatPairingApproveHint,
+  getChatChannelMeta,
+  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
   setAccountEnabledInConfigSection,
-} from "../channels/plugins/config-helpers.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
+} from "./channel-plugin-common.js";
+export { formatDocsLink } from "../terminal/links.js";
 
-export { getChatChannelMeta } from "../channels/registry.js";
 export {
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-  resolveSlackReplyToMode,
-} from "../slack/accounts.js";
-export {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+  resolveConfiguredFromRequiredCredentialStatuses,
+} from "../channels/account-snapshot-fields.js";
 export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
 } from "../channels/plugins/normalize/slack.js";
-export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
-export { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
-
+export {
+  listSlackDirectoryGroupsFromConfig,
+  listSlackDirectoryPeersFromConfig,
+} from "./slack-surface.js";
 export {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "../config/runtime-group-policy.js";
-export {
-  resolveSlackGroupRequireMention,
-  resolveSlackGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
-export { slackOnboardingAdapter } from "../channels/plugins/onboarding/slack.js";
+export { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./slack-surface.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 
-export { handleSlackMessageAction } from "./slack-message-actions.js";
+export {
+  listEnabledSlackAccounts,
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
+  resolveSlackReplyToMode,
+} from "./slack-surface.js";
+export { isSlackInteractiveRepliesEnabled } from "./slack-surface.js";
+export { inspectSlackAccount } from "./slack-surface.js";
+export { parseSlackTarget, resolveSlackChannelId } from "./slack-targets.js";
+export { extractSlackToolSend, listSlackMessageActions } from "./slack-surface.js";
+export { buildSlackThreadingToolContext } from "./slack-surface.js";
+export { resolveSlackAutoThreadId } from "./slack-surface.js";
+export { parseSlackBlocksInput } from "./slack-surface.js";
+export { handleSlackHttpRequest } from "./slack-surface.js";
+export { createSlackWebClient } from "./slack-surface.js";
+export { normalizeAllowListLower } from "./slack-surface.js";
+export {
+  handleSlackAction,
+  listSlackDirectoryGroupsLive,
+  listSlackDirectoryPeersLive,
+  monitorSlackProvider,
+  probeSlack,
+  resolveSlackChannelAllowlist,
+  resolveSlackUserAllowlist,
+  sendMessageSlack,
+} from "./slack-runtime-surface.js";
+export {
+  deleteSlackMessage,
+  downloadSlackFile,
+  editSlackMessage,
+  getSlackMemberInfo,
+  listSlackEmojis,
+  listSlackPins,
+  listSlackReactions,
+  pinSlackMessage,
+  reactSlackMessage,
+  readSlackMessages,
+  removeOwnSlackReactions,
+  removeSlackReaction,
+  sendSlackMessage,
+  unpinSlackMessage,
+} from "./slack-surface.js";
+export { recordSlackThreadParticipation } from "./slack-surface.js";
+export type { SlackActionContext } from "./slack-runtime-surface.js";

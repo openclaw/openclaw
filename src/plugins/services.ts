@@ -5,7 +5,6 @@ import type { PluginRegistry } from "./registry.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
-
 function createPluginLogger(): PluginLogger {
   return {
     info: (msg) => log.info(msg),
@@ -54,7 +53,11 @@ export async function startPluginServices(params: {
         stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
       });
     } catch (err) {
-      log.error(`plugin service failed (${service.id}): ${String(err)}`);
+      const error = err as Error;
+      const stack = error?.stack?.trim();
+      log.error(
+        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}${stack ? `\n${stack}` : ""}`,
+      );
     }
   }
 

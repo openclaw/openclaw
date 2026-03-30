@@ -5,7 +5,7 @@ metadata:
   {
     "openclaw":
       {
-        "emoji": "𝕏",
+        "emoji": "🐦",
         "requires": { "bins": ["xurl"] },
         "install":
           [

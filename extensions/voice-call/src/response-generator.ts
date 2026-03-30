@@ -4,14 +4,17 @@
  */
 
 import crypto from "node:crypto";
+import type { SessionEntry } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
-import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
+import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
 export type VoiceResponseParams = {
   /** Voice call config */
   voiceConfig: VoiceCallConfig;
   /** Core OpenClaw config */
   coreConfig: CoreConfig;
+  /** Injected host agent runtime */
+  agentRuntime: CoreAgentDeps;
   /** Call ID for session tracking */
   callId: string;
   /** Caller's phone number */
@@ -27,10 +30,144 @@ export type VoiceResponseResult = {
   error?: string;
 };
 
-type SessionEntry = {
-  sessionId: string;
-  updatedAt: number;
+type VoiceResponsePayload = {
+  text?: string;
+  isError?: boolean;
+  isReasoning?: boolean;
 };
+
+const VOICE_SPOKEN_OUTPUT_CONTRACT = [
+  "Output format requirements:",
+  '- Return only valid JSON in this exact shape: {"spoken":"..."}',
+  "- Do not include markdown, code fences, planning text, or extra keys.",
+  '- Put exactly what should be spoken to the caller into "spoken".',
+  '- If there is nothing to say, return {"spoken":""}.',
+].join("\n");
+
+function normalizeSpokenText(value: string): string | null {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function tryParseSpokenJson(text: string): string | null {
+  const candidates: string[] = [];
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  candidates.push(trimmed);
+
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1]) {
+    candidates.push(fenced[1]);
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as { spoken?: unknown };
+      if (typeof parsed?.spoken !== "string") {
+        continue;
+      }
+      return normalizeSpokenText(parsed.spoken) ?? "";
+    } catch {
+      // Continue trying other candidates.
+    }
+  }
+
+  const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+  if (!inlineSpokenMatch) {
+    return null;
+  }
+
+  try {
+    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
+    return normalizeSpokenText(decoded) ?? "";
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
+  const lower = paragraph.toLowerCase();
+  if (!lower) {
+    return false;
+  }
+
+  if (lower.startsWith("thinking process")) {
+    return true;
+  }
+  if (lower.startsWith("reasoning:") || lower.startsWith("analysis:")) {
+    return true;
+  }
+  if (
+    lower.startsWith("the user ") &&
+    (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))
+  ) {
+    return true;
+  }
+  if (
+    lower.includes("this is a natural continuation of the conversation") ||
+    lower.includes("keep the conversation flowing")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function sanitizePlainSpokenText(text: string): string | null {
+  const withoutCodeFences = text.replace(/```[\s\S]*?```/g, " ").trim();
+  if (!withoutCodeFences) {
+    return null;
+  }
+
+  const paragraphs = withoutCodeFences
+    .split(/\n\s*\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
+    paragraphs.shift();
+  }
+
+  return normalizeSpokenText(paragraphs.join(" "));
+}
+
+function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string | null {
+  const spokenSegments: string[] = [];
+
+  for (const payload of payloads) {
+    if (payload.isError || payload.isReasoning) {
+      continue;
+    }
+
+    const rawText = payload.text?.trim() ?? "";
+    if (!rawText) {
+      continue;
+    }
+
+    const structured = tryParseSpokenJson(rawText);
+    if (structured !== null) {
+      if (structured.length > 0) {
+        spokenSegments.push(structured);
+      }
+      continue;
+    }
+
+    const plain = sanitizePlainSpokenText(rawText);
+    if (plain) {
+      spokenSegments.push(plain);
+    }
+  }
+
+  return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
+}
 
 /**
  * Generate a voice response using the embedded Pi agent with full tool support.
@@ -39,20 +176,10 @@ type SessionEntry = {
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
-  const { voiceConfig, callId, from, transcript, userMessage, coreConfig } = params;
+  const { voiceConfig, callId, from, transcript, userMessage, coreConfig, agentRuntime } = params;
 
   if (!coreConfig) {
     return { text: null, error: "Core config unavailable for voice response" };
-  }
-
-  let deps: Awaited<ReturnType<typeof loadCoreAgentDeps>>;
-  try {
-    deps = await loadCoreAgentDeps();
-  } catch (err) {
-    return {
-      text: null,
-      error: err instanceof Error ? err.message : "Unable to load core agent dependencies",
-    };
   }
   const cfg = coreConfig;
 
@@ -62,15 +189,15 @@ export async function generateVoiceResponse(
   const agentId = "main";
 
   // Resolve paths
-  const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
-  const agentDir = deps.resolveAgentDir(cfg, agentId);
-  const workspaceDir = deps.resolveAgentWorkspaceDir(cfg, agentId);
+  const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
+  const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
+  const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
 
   // Ensure workspace exists
-  await deps.ensureAgentWorkspace({ dir: workspaceDir });
+  await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
   // Load or create session entry
-  const sessionStore = deps.loadSessionStore(storePath);
+  const sessionStore = agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
   let sessionEntry = sessionStore[sessionKey] as SessionEntry | undefined;
 
@@ -80,25 +207,27 @@ export async function generateVoiceResponse(
       updatedAt: now,
     };
     sessionStore[sessionKey] = sessionEntry;
-    await deps.saveSessionStore(storePath, sessionStore);
+    await agentRuntime.session.saveSessionStore(storePath, sessionStore);
   }
 
   const sessionId = sessionEntry.sessionId;
-  const sessionFile = deps.resolveSessionFilePath(sessionId, sessionEntry, {
+  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
     agentId,
   });
 
   // Resolve model from config
-  const modelRef = voiceConfig.responseModel || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
+  const modelRef =
+    voiceConfig.responseModel || `${agentRuntime.defaults.provider}/${agentRuntime.defaults.model}`;
   const slashIndex = modelRef.indexOf("/");
-  const provider = slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
+  const provider =
+    slashIndex === -1 ? agentRuntime.defaults.provider : modelRef.slice(0, slashIndex);
   const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
 
   // Resolve thinking level
-  const thinkLevel = deps.resolveThinkingDefault({ cfg, provider, model });
+  const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
   // Resolve agent identity for personalized prompt
-  const identity = deps.resolveAgentIdentity(cfg, agentId);
+  const identity = agentRuntime.resolveAgentIdentity(cfg, agentId);
   const agentName = identity?.name?.trim() || "assistant";
 
   // Build system prompt with conversation history
@@ -113,13 +242,14 @@ export async function generateVoiceResponse(
       .join("\n");
     extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
   }
+  extraSystemPrompt = `${extraSystemPrompt}\n\n${VOICE_SPOKEN_OUTPUT_CONTRACT}`;
 
   // Resolve timeout
-  const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
+  const timeoutMs = voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
-    const result = await deps.runEmbeddedPiAgent({
+    const result = await agentRuntime.runEmbeddedPiAgent({
       sessionId,
       sessionKey,
       messageProvider: "voice",
@@ -138,13 +268,7 @@ export async function generateVoiceResponse(
       agentDir,
     });
 
-    // Extract text from payloads
-    const texts = (result.payloads ?? [])
-      .filter((p) => p.text && !p.isError)
-      .map((p) => p.text?.trim())
-      .filter(Boolean);
-
-    const text = texts.join(" ") || null;
+    const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);
 
     if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
