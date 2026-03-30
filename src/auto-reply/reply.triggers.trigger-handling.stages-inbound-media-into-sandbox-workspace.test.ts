@@ -53,6 +53,20 @@ async function writeInboundMedia(
   return mediaPath;
 }
 
+function setupWorkspaceFallback(home: string): {
+  cfg: ReturnType<typeof createSandboxMediaStageConfig>;
+  workspaceDir: string;
+} {
+  const cfg = createSandboxMediaStageConfig(home);
+  // Override: sandbox off, workspaceOnly enabled
+  cfg.agents!.defaults!.sandbox = undefined;
+  cfg.tools = { fs: { workspaceOnly: true } };
+  const workspaceDir = join(home, "openclaw");
+  // Return null from ensureSandboxWorkspaceForSession (sandbox off)
+  vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue(null);
+  return { cfg, workspaceDir };
+}
+
 describe("stageSandboxMedia", () => {
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
@@ -147,6 +161,58 @@ describe("stageSandboxMedia", () => {
       });
 
       await expect(fs.readFile(victimPath, "utf8")).resolves.toBe("ORIGINAL");
+      expect(ctx.MediaPath).toBe(mediaPath);
+      expect(sessionCtx.MediaPath).toBe(mediaPath);
+    });
+  });
+
+  it("stages media into workspace when sandbox is off and workspaceOnly is true", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = setupWorkspaceFallback(home);
+
+      const mediaPath = await writeInboundMedia(home, "photo.jpg", "image-data");
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:wa:+1234",
+        workspaceDir,
+      });
+
+      const expectedRelative = "media/inbound/photo.jpg";
+      expect(ctx.MediaPath).toBe(expectedRelative);
+      expect(sessionCtx.MediaPath).toBe(expectedRelative);
+      await expect(
+        fs.stat(join(workspaceDir, "media", "inbound", "photo.jpg")),
+      ).resolves.toBeTruthy();
+      const content = await fs.readFile(
+        join(workspaceDir, "media", "inbound", "photo.jpg"),
+        "utf8",
+      );
+      expect(content).toBe("image-data");
+    });
+  });
+
+  it("does not stage media into workspace when sandbox is off and workspaceOnly is false", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = setupWorkspaceFallback(home);
+      // Override: workspaceOnly disabled
+      cfg.tools = { fs: { workspaceOnly: false } };
+
+      const mediaPath = await writeInboundMedia(home, "photo.jpg", "image-data");
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:wa:+1234",
+        workspaceDir,
+      });
+
+      // Path should remain absolute (no staging needed)
       expect(ctx.MediaPath).toBe(mediaPath);
       expect(sessionCtx.MediaPath).toBe(mediaPath);
     });
