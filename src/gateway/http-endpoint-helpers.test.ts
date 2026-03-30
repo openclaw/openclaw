@@ -5,8 +5,8 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 
 vi.mock("./http-auth-helpers.js", () => {
   return {
-    authorizeGatewayBearerRequestOrReply: vi.fn(),
-    resolveGatewayRequestedOperatorScopes: vi.fn(),
+    authorizeGatewayBearerRequest: vi.fn(),
+    resolveGatewayCompatibilityHttpOperatorScopes: vi.fn(),
   };
 });
 
@@ -24,8 +24,8 @@ vi.mock("./method-scopes.js", () => {
   };
 });
 
-const { authorizeGatewayBearerRequestOrReply } = await import("./http-auth-helpers.js");
-const { resolveGatewayRequestedOperatorScopes } = await import("./http-auth-helpers.js");
+const { authorizeGatewayBearerRequest } = await import("./http-auth-helpers.js");
+const { resolveGatewayCompatibilityHttpOperatorScopes } = await import("./http-auth-helpers.js");
 const { readJsonBodyOrError, sendJson, sendMethodNotAllowed } = await import("./http-common.js");
 const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
 
@@ -60,7 +60,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns undefined when auth fails", async () => {
-    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(false);
+    vi.mocked(authorizeGatewayBearerRequest).mockResolvedValue(null);
     const result = await handleGatewayPostJsonEndpoint(
       {
         url: "/v1/ok",
@@ -74,7 +74,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns body when auth succeeds and JSON parsing succeeds", async () => {
-    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(true);
+    vi.mocked(authorizeGatewayBearerRequest).mockResolvedValue({ ok: true, method: "token" });
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
     const result = await handleGatewayPostJsonEndpoint(
       {
@@ -89,8 +89,10 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns undefined and replies when required operator scope is missing", async () => {
-    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(true);
-    vi.mocked(resolveGatewayRequestedOperatorScopes).mockReturnValue(["operator.approvals"]);
+    vi.mocked(authorizeGatewayBearerRequest).mockResolvedValue({ ok: true, method: "token" });
+    vi.mocked(resolveGatewayCompatibilityHttpOperatorScopes).mockReturnValue([
+      "operator.approvals",
+    ]);
     vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({
       allowed: false,
       missingScope: "operator.write",
