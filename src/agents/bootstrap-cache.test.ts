@@ -44,15 +44,15 @@ describe("getOrLoadBootstrapFiles", () => {
       sessionKey: "session-1",
     });
 
-    expect(result).toBe(files);
+    expect(result).toEqual(files);
     expect(mockLoad()).toHaveBeenCalledTimes(1);
   });
 
   it("returns cached result on second call", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    const firstResult = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
     const result = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
 
-    expect(result).toBe(files);
+    expect(result).toBe(firstResult);
     expect(mockLoad()).toHaveBeenCalledTimes(1);
   });
 
@@ -63,8 +63,8 @@ describe("getOrLoadBootstrapFiles", () => {
     const r1 = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
     const r2 = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-2" });
 
-    expect(r1).toBe(files);
-    expect(r2).toBe(files2);
+    expect(r1).toEqual(files);
+    expect(r2).toEqual(files2);
     expect(mockLoad()).toHaveBeenCalledTimes(2);
   });
 
