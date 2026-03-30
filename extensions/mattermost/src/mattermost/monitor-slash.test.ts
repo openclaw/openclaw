@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn());
 const parseStrictPositiveInteger = vi.hoisted(() => vi.fn());
@@ -10,15 +10,19 @@ const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("./runtime-api.js", () => ({
   listSkillCommandsForAgents,
   parseStrictPositiveInteger,
 }));
 
-vi.mock("./client.js", () => ({
-  fetchMattermostUserTeams,
-  normalizeMattermostBaseUrl,
-}));
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    fetchMattermostUserTeams,
+    normalizeMattermostBaseUrl,
+  };
+});
 
 vi.mock("./slash-commands.js", () => ({
   DEFAULT_COMMAND_SPECS: [
@@ -36,6 +40,19 @@ vi.mock("./slash-state.js", () => ({
 }));
 
 describe("mattermost monitor slash", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    listSkillCommandsForAgents.mockReset();
+    parseStrictPositiveInteger.mockReset();
+    fetchMattermostUserTeams.mockReset();
+    normalizeMattermostBaseUrl.mockClear();
+    isSlashCommandsEnabled.mockReset();
+    registerSlashCommands.mockReset();
+    resolveCallbackUrl.mockReset();
+    resolveSlashCommandConfig.mockReset();
+    activateSlashCommands.mockReset();
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });

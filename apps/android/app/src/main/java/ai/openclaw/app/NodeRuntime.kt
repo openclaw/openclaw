@@ -24,7 +24,6 @@ import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +33,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -141,6 +139,7 @@ class NodeRuntime(
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
     readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    smsSearchPossible = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.hasTelephonyFeature() },
     callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
@@ -166,6 +165,8 @@ class NodeRuntime(
     locationEnabled = { locationMode.value != LocationMode.Off },
     sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
     readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    smsFeatureEnabled = { BuildConfig.OPENCLAW_ENABLE_SMS },
+    smsTelephonyAvailable = { sms.hasTelephonyFeature() },
     callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
@@ -195,7 +196,12 @@ class NodeRuntime(
   private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
 
-  private val _mainSessionKey = MutableStateFlow("main")
+  private fun resolveNodeMainSessionKey(agentId: String? = gatewayDefaultAgentId): String {
+    val deviceId = identityStore.loadOrCreate().deviceId
+    return buildNodeMainSessionKey(deviceId, agentId)
+  }
+
+  private val _mainSessionKey = MutableStateFlow(resolveNodeMainSessionKey())
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val cameraHudSeq = AtomicLong(0)
@@ -243,7 +249,7 @@ class NodeRuntime(
         _serverName.value = name
         _remoteAddress.value = remote
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        applyMainSessionKey(mainSessionKey)
+        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainSessionKey))
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
@@ -259,9 +265,6 @@ class NodeRuntime(
         _serverName.value = null
         _remoteAddress.value = null
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        if (!isCanonicalMainSessionKey(_mainSessionKey.value)) {
-          _mainSessionKey.value = "main"
-        }
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -320,9 +323,11 @@ class NodeRuntime(
       session = operatorSession,
       json = json,
       supportsChatSubscribe = false,
-    )
+    ).also {
+      it.applyMainSessionKey(_mainSessionKey.value)
+    }
   private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
-    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // Reuse the existing TalkMode speech engine for native Android TTS playback
     // without enabling the legacy talk capture loop.
     TalkModeManager(
       context = appContext,
@@ -404,13 +409,12 @@ class NodeRuntime(
     )
   }
 
-  private fun applyMainSessionKey(candidate: String?) {
-    val trimmed = normalizeMainKey(candidate) ?: return
-    if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
-    if (_mainSessionKey.value == trimmed) return
-    _mainSessionKey.value = trimmed
-    talkMode.setMainSessionKey(trimmed)
-    chat.applyMainSessionKey(trimmed)
+  private fun syncMainSessionKey(agentId: String?) {
+    val resolvedKey = resolveNodeMainSessionKey(agentId)
+    if (_mainSessionKey.value == resolvedKey) return
+    _mainSessionKey.value = resolvedKey
+    talkMode.setMainSessionKey(resolvedKey)
+    chat.applyMainSessionKey(resolvedKey)
     updateHomeCanvasState()
   }
 
@@ -533,6 +537,17 @@ class NodeRuntime(
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
+    prefs.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
+    prefs.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
+    prefs.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   private var didAutoConnect = false
 
@@ -683,6 +698,34 @@ class NodeRuntime(
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setNotificationForwardingEnabled(value: Boolean) {
+    prefs.setNotificationForwardingEnabled(value)
+  }
+
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    prefs.setNotificationForwardingMode(mode)
+  }
+
+  fun setNotificationForwardingPackages(packages: List<String>) {
+    prefs.setNotificationForwardingPackages(packages)
+  }
+
+  fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ): Boolean {
+    return prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  }
+
+  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    prefs.setNotificationForwardingMaxEventsPerMinute(value)
+  }
+
+  fun setNotificationForwardingSessionKey(value: String?) {
+    prefs.setNotificationForwardingSessionKey(value)
   }
 
   fun setVoiceScreenActive(active: Boolean) {
@@ -960,9 +1003,7 @@ class NodeRuntime(
       val config = root?.get("config").asObjectOrNull()
       val ui = config?.get("ui").asObjectOrNull()
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      val sessionCfg = config?.get("session").asObjectOrNull()
-      val mainKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull())
-      applyMainSessionKey(mainKey)
+      syncMainSessionKey(gatewayDefaultAgentId)
 
       val parsed = parseHexColorArgb(raw)
       _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
@@ -995,7 +1036,7 @@ class NodeRuntime(
 
       gatewayDefaultAgentId = defaultAgentId.ifEmpty { null }
       gatewayAgents = agents
-      applyMainSessionKey(mainKey)
+      syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId)
       updateHomeCanvasState()
     } catch (_: Throwable) {
       // ignore

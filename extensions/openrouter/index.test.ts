@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+} from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -28,7 +28,7 @@ describe("openrouter plugin", () => {
     expect(providers).toHaveLength(1);
     expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders).toHaveLength(0);
+    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(imageProviders).toHaveLength(0);
   });
 });

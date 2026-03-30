@@ -85,11 +85,6 @@ export type ApproveDevicePairingResult =
   | { status: "forbidden"; missingScope: string }
   | null;
 
-type ApprovedDevicePairingResult = Extract<
-  NonNullable<ApproveDevicePairingResult>,
-  { status: "approved" }
->;
-
 type DevicePairingStateFile = {
   pendingById: Record<string, DevicePairingPendingRequest>;
   pairedByDeviceId: Record<string, PairedDevice>;
@@ -155,6 +150,40 @@ function mergeRoles(...items: Array<string | string[] | undefined>): string[] | 
     return undefined;
   }
   return [...roles];
+}
+
+function listActiveTokenRoles(
+  tokens: Record<string, DeviceAuthToken> | undefined,
+): string[] | undefined {
+  if (!tokens) {
+    return undefined;
+  }
+  return mergeRoles(
+    Object.values(tokens)
+      .filter((entry) => !entry.revokedAtMs)
+      .map((entry) => entry.role),
+  );
+}
+
+export function listEffectivePairedDeviceRoles(
+  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
+): string[] {
+  const activeTokenRoles = listActiveTokenRoles(device.tokens);
+  if (device.tokens) {
+    return activeTokenRoles ?? [];
+  }
+  return mergeRoles(device.roles, device.role) ?? [];
+}
+
+export function hasEffectivePairedDeviceRole(
+  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
+  role: string,
+): boolean {
+  const normalized = normalizeRole(role);
+  if (!normalized) {
+    return false;
+  }
+  return listEffectivePairedDeviceRoles(device).includes(normalized);
 }
 
 function mergeScopes(...items: Array<string[] | undefined>): string[] | undefined {
@@ -445,7 +474,7 @@ export async function requestDevicePairing(
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
-): Promise<ApprovedDevicePairingResult | null>;
+): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
   options: { callerScopes?: readonly string[] },
@@ -468,10 +497,16 @@ export async function approveDevicePairing(
       return null;
     }
     const approvalRole = resolvePendingApprovalRole(pending);
-    if (approvalRole && options?.callerScopes) {
+    if (approvalRole) {
       const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
         scope.startsWith(OPERATOR_SCOPE_PREFIX),
       );
+      if (!options?.callerScopes) {
+        return {
+          status: "forbidden",
+          missingScope: requestedOperatorScopes[0] ?? "callerScopes-required",
+        };
+      }
       const missingScope = resolveMissingRequestedScope({
         role: approvalRole,
         requestedScopes: requestedOperatorScopes,

@@ -1032,7 +1032,16 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
+                  {
+                    "group": "Memory",
+                    "pages": [
+                      "concepts/memory",
+                      "concepts/memory-builtin",
+                      "concepts/memory-qmd",
+                      "concepts/memory-honcho",
+                      "concepts/memory-search"
+                    ]
+                  },
                   "concepts/compaction"
                 ]
               },
@@ -1146,6 +1155,7 @@
                     ]
                   },
                   "tools/btw",
+                  "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec",
@@ -1431,7 +1441,14 @@
                   },
                   {
                     "group": "Utility",
-                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                    "pages": [
+                      "cli/acp",
+                      "cli/clawbot",
+                      "cli/completion",
+                      "cli/dns",
+                      "cli/docs",
+                      "cli/mcp"
+                    ]
                   }
                 ]
               },

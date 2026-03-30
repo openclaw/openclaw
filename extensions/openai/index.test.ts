@@ -4,33 +4,37 @@ import path from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/speech-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../src/config/config.js";
-import { loadConfig } from "../../src/config/config.js";
-import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
-import type { ResolvedTtsConfig } from "../../src/tts/tts.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+} from "../../test/helpers/plugins/provider-registration.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
-  getOAuthApiKey: vi.fn(),
+  refreshOpenAICodexToken: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: runtimeMocks.getOAuthApiKey,
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai/oauth")>();
+  return {
+    ...actual,
+    refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
+  };
+});
 
-import { getOAuthApiKey as getCodexOAuthApiKey } from "./openai-codex-provider.runtime.js";
+import { refreshOpenAICodexToken } from "./openai-codex-provider.runtime.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
@@ -137,31 +141,13 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
       allowNormalization: true,
       allowSeed: true,
     },
-    elevenlabs: {
-      baseUrl: "https://api.elevenlabs.io",
-      voiceId: "",
-      modelId: "eleven_multilingual_v2",
-      voiceSettings: {
-        stability: 0.5,
-        similarityBoost: 0.75,
-        style: 0,
-        useSpeakerBoost: true,
-        speed: 1,
+    providerConfigs: {
+      openai: {
+        apiKey: OPENAI_API_KEY,
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
       },
-    },
-    openai: {
-      apiKey: OPENAI_API_KEY,
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o-mini-tts",
-      voice: "alloy",
-    },
-    edge: {
-      enabled: false,
-      voice: "en-US-AriaNeural",
-      lang: "en-US",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      outputFormatConfigured: false,
-      saveSubtitles: false,
     },
     maxTextLength: 4_000,
     timeoutMs: 30_000,
@@ -271,33 +257,21 @@ describe("openai plugin", () => {
     ).rejects.toThrow("does not support reference-image edits");
   });
 
-  it("bootstraps the env proxy dispatcher before refreshing oauth credentials", async () => {
+  it("bootstraps the env proxy dispatcher before refreshing codex oauth credentials", async () => {
     const refreshed = {
-      newCredentials: {
-        access: "next-access",
-        refresh: "next-refresh",
-        expires: Date.now() + 60_000,
-      },
+      access: "next-access",
+      refresh: "next-refresh",
+      expires: Date.now() + 60_000,
     };
-    runtimeMocks.getOAuthApiKey.mockResolvedValue(refreshed);
+    runtimeMocks.refreshOpenAICodexToken.mockResolvedValue(refreshed);
 
-    await expect(
-      getCodexOAuthApiKey("openai-codex", {
-        "openai-codex": {
-          provider: "openai-codex",
-          type: "oauth",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now(),
-        },
-      }),
-    ).resolves.toBe(refreshed);
+    await expect(refreshOpenAICodexToken("refresh-token")).resolves.toBe(refreshed);
 
     expect(runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
-    expect(runtimeMocks.getOAuthApiKey).toHaveBeenCalledOnce();
+    expect(runtimeMocks.refreshOpenAICodexToken).toHaveBeenCalledOnce();
     expect(
       runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
-    ).toBeLessThan(runtimeMocks.getOAuthApiKey.mock.invocationCallOrder[0]);
+    ).toBeLessThan(runtimeMocks.refreshOpenAICodexToken.mock.invocationCallOrder[0]);
   });
 });
 
@@ -358,8 +332,9 @@ describeLive("openai plugin live", () => {
     const audioFile = await speechProvider.synthesize({
       text: "OpenClaw integration test OK.",
       cfg,
-      config: ttsConfig,
+      providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
+      timeoutMs: ttsConfig.timeoutMs,
     });
     expect(audioFile.outputFormat).toBe("mp3");
     expect(audioFile.fileExtension).toBe(".mp3");
@@ -368,7 +343,8 @@ describeLive("openai plugin live", () => {
     const telephony = await speechProvider.synthesizeTelephony?.({
       text: "Telephony check OK.",
       cfg,
-      config: ttsConfig,
+      providerConfig: ttsConfig.providerConfigs.openai ?? {},
+      timeoutMs: ttsConfig.timeoutMs,
     });
     expect(telephony?.outputFormat).toBe("pcm");
     expect(telephony?.sampleRate).toBe(24_000);
@@ -386,8 +362,9 @@ describeLive("openai plugin live", () => {
     const synthesized = await speechProvider.synthesize({
       text: "OpenClaw integration test OK.",
       cfg,
-      config: ttsConfig,
+      providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
+      timeoutMs: ttsConfig.timeoutMs,
     });
 
     const transcription = await mediaProvider.transcribeAudio?.({

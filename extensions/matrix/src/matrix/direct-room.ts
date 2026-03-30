@@ -45,22 +45,73 @@ export async function readJoinedMatrixMembers(
   }
 }
 
+export async function hasDirectMatrixMemberFlag(
+  client: MatrixClient,
+  roomId: string,
+  userId?: string | null,
+): Promise<boolean> {
+  const normalizedUserId = trimMaybeString(userId);
+  if (!normalizedUserId) {
+    return false;
+  }
+  try {
+    const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
+    return state?.is_direct === true;
+  } catch {
+    return false;
+  }
+}
+
+export type MatrixDirectRoomEvidence = {
+  joinedMembers: string[] | null;
+  strict: boolean;
+  viaMemberState: boolean;
+};
+
+export async function inspectMatrixDirectRoomEvidence(params: {
+  client: MatrixClient;
+  roomId: string;
+  remoteUserId: string;
+  selfUserId?: string | null;
+}): Promise<MatrixDirectRoomEvidence> {
+  const selfUserId =
+    params.selfUserId !== undefined
+      ? trimMaybeString(params.selfUserId)
+      : trimMaybeString(await params.client.getUserId().catch(() => null));
+  const joinedMembers = await readJoinedMatrixMembers(params.client, params.roomId);
+  const strict = isStrictDirectMembership({
+    selfUserId,
+    remoteUserId: params.remoteUserId,
+    joinedMembers,
+  });
+  if (!strict) {
+    return {
+      joinedMembers,
+      strict: false,
+      viaMemberState: false,
+    };
+  }
+  return {
+    joinedMembers,
+    strict,
+    viaMemberState:
+      (await hasDirectMatrixMemberFlag(params.client, params.roomId, params.remoteUserId)) ||
+      (await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId)),
+  };
+}
+
 export async function isStrictDirectRoom(params: {
   client: MatrixClient;
   roomId: string;
   remoteUserId: string;
   selfUserId?: string | null;
 }): Promise<boolean> {
-  const selfUserId =
-    trimMaybeString(params.selfUserId) ??
-    trimMaybeString(await params.client.getUserId().catch(() => null));
-  if (!selfUserId) {
-    return false;
-  }
-  const joinedMembers = await readJoinedMatrixMembers(params.client, params.roomId);
-  return isStrictDirectMembership({
-    selfUserId,
-    remoteUserId: params.remoteUserId,
-    joinedMembers,
-  });
+  return (
+    await inspectMatrixDirectRoomEvidence({
+      client: params.client,
+      roomId: params.roomId,
+      remoteUserId: params.remoteUserId,
+      selfUserId: params.selfUserId,
+    })
+  ).strict;
 }

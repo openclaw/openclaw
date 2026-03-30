@@ -1,22 +1,22 @@
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
     isWSL2Sync: vi.fn(() => false),
   };
 });
 
-let isWSL2Sync: typeof import("openclaw/plugin-sdk/infra-runtime").isWSL2Sync;
+let isWSL2Sync: typeof import("openclaw/plugin-sdk/runtime-env").isWSL2Sync;
 let resetTelegramNetworkConfigStateForTests: typeof import("./network-config.js").resetTelegramNetworkConfigStateForTests;
 let resolveTelegramAutoSelectFamilyDecision: typeof import("./network-config.js").resolveTelegramAutoSelectFamilyDecision;
 let resolveTelegramDnsResultOrderDecision: typeof import("./network-config.js").resolveTelegramDnsResultOrderDecision;
 
 async function loadModule() {
   vi.resetModules();
-  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/infra-runtime"));
+  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env"));
   ({
     resetTelegramNetworkConfigStateForTests,
     resolveTelegramAutoSelectFamilyDecision,
@@ -132,7 +132,7 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
       },
     ])("$name", ({ env, network, expected, wsl2 = true }) => {
       if (!isWSL2Sync) {
-        throw new Error("infra-runtime mock not loaded");
+        throw new Error("runtime-env mock not loaded");
       }
       vi.mocked(isWSL2Sync).mockReturnValue(wsl2);
       const decision = resolveTelegramAutoSelectFamilyDecision({

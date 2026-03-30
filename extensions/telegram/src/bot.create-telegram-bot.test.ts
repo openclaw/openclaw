@@ -4,8 +4,8 @@ import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
-import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
+import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
+import { useFrozenTime, useRealTime } from "../../../test/helpers/plugins/frozen-time.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
   answerCallbackQuerySpy,
@@ -34,13 +34,15 @@ const {
   throttlerSpy,
   useSpy,
 } = harness;
-let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
-let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
-let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
+const { resolveTelegramFetch } = await import("./fetch.js");
+const {
+  createTelegramBot: createTelegramBotBase,
+  getTelegramSequentialKey,
+  setTelegramBotRuntimeForTest,
+} = await import("./bot.js");
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
-let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -80,15 +82,6 @@ async function withConfigPathAsync<T>(cfg: unknown, fn: () => Promise<T>): Promi
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
-  });
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ resolveTelegramFetch } = await import("./fetch.js"));
-    ({
-      createTelegramBot: createTelegramBotBase,
-      getTelegramSequentialKey,
-      setTelegramBotRuntimeForTest,
-    } = await import("./bot.js"));
   });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
@@ -351,6 +344,43 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+  it("preserves native command source for prefixed callback_query payloads", async () => {
+    loadConfig.mockReturnValue({
+      commands: { text: false, native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-native-1",
+        data: "tgcmd:/fast status",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.CommandBody).toBe("/fast status");
+    expect(payload.CommandSource).toBe("native");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
   });
   it("reloads callback model routing bindings without recreating the bot", async () => {
     const buildModelsProviderDataMock =
