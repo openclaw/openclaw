@@ -1,16 +1,15 @@
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { logDebug, logWarn } from "../logger.js";
-import { describeSseMcpServerLaunchConfig, resolveSseMcpServerLaunchConfig } from "./mcp-sse.js";
-import {
-  describeStdioMcpServerLaunchConfig,
-  resolveStdioMcpServerLaunchConfig,
-} from "./mcp-stdio.js";
+import { logDebug } from "../logger.js";
+import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 export type ResolvedMcpTransport = {
   transport: Transport;
   description: string;
+  transportType: "stdio" | "sse" | "streamable-http";
+  connectionTimeoutMs: number;
   detachStderr?: () => void;
 };
 
@@ -60,64 +59,51 @@ function buildSseEventSourceFetch(headers: Record<string, string>) {
   };
 }
 
-function resolveSseTransport(serverName: string, rawServer: unknown): ResolvedMcpTransport | null {
-  const sseLaunch = resolveSseMcpServerLaunchConfig(rawServer, {
-    onDroppedHeader: (key) => {
-      logWarn(
-        `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
-      );
-    },
-    onMalformedHeaders: () => {
-      logWarn(
-        `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
-      );
-    },
-  });
-  if (!sseLaunch.ok) {
-    return null;
-  }
-  const headers: Record<string, string> = {
-    ...sseLaunch.config.headers,
-  };
-  const hasHeaders = Object.keys(headers).length > 0;
-  return {
-    transport: new SSEClientTransport(new URL(sseLaunch.config.url), {
-      requestInit: hasHeaders ? { headers } : undefined,
-      eventSourceInit: hasHeaders ? { fetch: buildSseEventSourceFetch(headers) } : undefined,
-    }),
-    description: describeSseMcpServerLaunchConfig(sseLaunch.config),
-  };
-}
-
 export function resolveMcpTransport(
   serverName: string,
   rawServer: unknown,
 ): ResolvedMcpTransport | null {
-  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer);
-  if (stdioLaunch.ok) {
+  const resolved = resolveMcpTransportConfig(serverName, rawServer);
+  if (!resolved) {
+    return null;
+  }
+  if (resolved.kind === "stdio") {
     const transport = new StdioClientTransport({
-      command: stdioLaunch.config.command,
-      args: stdioLaunch.config.args,
-      env: stdioLaunch.config.env,
-      cwd: stdioLaunch.config.cwd,
+      command: resolved.command,
+      args: resolved.args,
+      env: resolved.env,
+      cwd: resolved.cwd,
       stderr: "pipe",
     });
     return {
       transport,
-      description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
+      description: resolved.description,
+      transportType: "stdio",
+      connectionTimeoutMs: resolved.connectionTimeoutMs,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
-
-  const sseTransport = resolveSseTransport(serverName, rawServer);
-  if (sseTransport) {
-    return sseTransport;
+  if (resolved.transportType === "streamable-http") {
+    return {
+      transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
+        requestInit: resolved.headers ? { headers: resolved.headers } : undefined,
+      }),
+      description: resolved.description,
+      transportType: "streamable-http",
+      connectionTimeoutMs: resolved.connectionTimeoutMs,
+    };
   }
-
-  const sseLaunch = resolveSseMcpServerLaunchConfig(rawServer);
-  const sseReason = sseLaunch.ok ? "not an SSE server" : sseLaunch.reason;
-  logWarn(
-    `bundle-mcp: skipped server "${serverName}" because ${stdioLaunch.reason} and ${sseReason}.`,
-  );
-  return null;
+  const headers: Record<string, string> = {
+    ...resolved.headers,
+  };
+  const hasHeaders = Object.keys(headers).length > 0;
+  return {
+    transport: new SSEClientTransport(new URL(resolved.url), {
+      requestInit: hasHeaders ? { headers } : undefined,
+      eventSourceInit: hasHeaders ? { fetch: buildSseEventSourceFetch(headers) } : undefined,
+    }),
+    description: resolved.description,
+    transportType: "sse",
+    connectionTimeoutMs: resolved.connectionTimeoutMs,
+  };
 }

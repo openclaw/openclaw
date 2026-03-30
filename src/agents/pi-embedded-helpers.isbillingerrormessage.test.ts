@@ -916,6 +916,12 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
       ),
     ).toBe("timeout");
+    // Anthropic "unexpected error" variant (#57010)
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"An unexpected error occurred while processing the response"}}',
+      ),
+    ).toBe("timeout");
   });
   it("does not classify non-transient api_error payloads as timeout", () => {
     // Context overflow - not transient

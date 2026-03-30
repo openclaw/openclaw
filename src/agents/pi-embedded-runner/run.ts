@@ -29,6 +29,7 @@ import {
   hasDifferentLiveSessionModelSelection,
   LiveSessionModelSwitchError,
   resolveLiveSessionModelSelection,
+  shouldTrackPersistedLiveSessionModelSelection,
   consumeLiveSessionModelSwitch,
 } from "../live-model-switch.js";
 import {
@@ -39,6 +40,7 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
 import {
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
@@ -263,6 +265,10 @@ export async function runEmbeddedPiAgent(
           defaultProvider: provider,
           defaultModel: modelId,
         });
+      const shouldTrackPersistedLiveSelection = shouldTrackPersistedLiveSessionModelSelection(
+        resolveCurrentLiveSelection(),
+        resolvePersistedLiveSelection(),
+      );
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -470,7 +476,9 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = resolvePersistedLiveSelection();
+          const nextSelection = shouldTrackPersistedLiveSelection
+            ? resolvePersistedLiveSelection()
+            : null;
           if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
             log.info(
               `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
@@ -529,6 +537,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             images: params.images,
+            imageOrder: params.imageOrder,
             clientTools: params.clientTools,
             disableTools: params.disableTools,
             provider,
@@ -672,9 +681,10 @@ export async function runEmbeddedPiAgent(
           }
           const failedOrAbortedAttempt =
             aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection = failedOrAbortedAttempt
-            ? resolvePersistedLiveSelection()
-            : null;
+          const persistedSelection =
+            failedOrAbortedAttempt && shouldTrackPersistedLiveSelection
+              ? resolvePersistedLiveSelection()
+              : null;
           if (
             failedOrAbortedAttempt &&
             canRestartForLiveSwitch &&
@@ -1497,6 +1507,13 @@ export async function runEmbeddedPiAgent(
       } finally {
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
+        if (params.cleanupBundleMcpOnRunEnd === true) {
+          await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
+            log.warn(
+              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${describeUnknownError(error)}`,
+            );
+          });
+        }
         await research.emit({
           kind: "run.end",
           payload: {

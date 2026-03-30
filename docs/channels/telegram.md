@@ -812,6 +812,8 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
     Approvers must be numeric Telegram user IDs. Telegram becomes an exec approval client when `enabled` is true and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's numeric owner config (`allowFrom` and direct-message `defaultTo`). Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
+    Telegram also renders the shared approval buttons used by other chat channels. The native Telegram adapter mainly adds approver DM routing, channel/topic fanout, and typing hints before delivery.
+
     Delivery rules:
 
     - `target: "dm"` sends approval prompts only to resolved approver DMs
@@ -982,6 +984,8 @@ Telegram-specific high-signal fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

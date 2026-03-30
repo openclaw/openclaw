@@ -23,6 +23,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
     mockWriteConfigFile(cfg, options),
+  replaceConfigFile: (params: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: { unsetPaths?: string[][] };
+  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -51,8 +55,10 @@ function buildSnapshot(params: {
     exists: true,
     raw: JSON.stringify(params.resolved),
     parsed: params.resolved,
+    sourceConfig: params.resolved,
     resolved: params.resolved,
     valid: true,
+    runtimeConfig: params.config,
     config: params.config,
     issues: [],
     warnings: [],
@@ -89,8 +95,10 @@ function makeInvalidSnapshot(params: {
     exists: true,
     raw: "{}",
     parsed: {},
+    sourceConfig: {},
     resolved: {},
     valid: false,
+    runtimeConfig: {},
     config: {},
     issues: params.issues,
     warnings: [],
@@ -416,8 +424,10 @@ describe("config cli", () => {
         raw: null,
         parsed: {},
         resolved: {},
+        sourceConfig: {},
         valid: true,
         config: {},
+        runtimeConfig: {},
         issues: [],
         warnings: [],
         legacyIssues: [],

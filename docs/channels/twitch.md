@@ -377,3 +377,11 @@ Example:
 - **500 characters** per message (auto-chunked at word boundaries)
 - Markdown is stripped before chunking
 - No rate limiting (uses Twitch's built-in rate limits)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

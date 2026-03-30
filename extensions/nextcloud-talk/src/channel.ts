@@ -31,6 +31,7 @@ import {
   resolveNextcloudTalkAccount,
   type ResolvedNextcloudTalkAccount,
 } from "./accounts.js";
+import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { monitorNextcloudTalkProvider } from "./monitor.js";
 import {
@@ -139,6 +140,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
             },
           }),
       },
+      auth: nextcloudTalkApprovalAuth,
       groups: {
         resolveRequireMention: ({ cfg, accountId, groupId }) => {
           const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
