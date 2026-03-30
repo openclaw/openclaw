@@ -62,6 +62,7 @@ import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
 import {
+  buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
@@ -85,6 +86,7 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -127,6 +129,22 @@ export type RegisterTelegramHandlerParams = {
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
 };
+
+export function buildTelegramNativeCommandCallbackData(commandText: string): string {
+  return `${TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX}${commandText}`;
+}
+
+export function parseTelegramNativeCommandCallbackData(data?: string | null): string | null {
+  if (!data) {
+    return null;
+  }
+  const trimmed = data.trim();
+  if (!trimmed.startsWith(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX)) {
+    return null;
+  }
+  const commandText = trimmed.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();
+  return commandText.startsWith("/") ? commandText : null;
+}
 
 export type RegisterTelegramNativeCommandsParams = {
   bot: Bot;
@@ -642,6 +660,7 @@ export const registerTelegramNativeCommands = ({
         }
         const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
         const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+        const originatingTo = buildTelegramRoutingTarget(chatId, threadSpec);
         const executionCfg = getRuntimeConfigSnapshot() ?? cfg;
 
         const commandDefinition = findCommandByNativeName(command.name, "telegram");
@@ -677,7 +696,9 @@ export const registerTelegramNativeCommands = ({
                 };
                 return {
                   text: choice.label,
-                  callback_data: buildCommandTextFromArgs(commandDefinition, args),
+                  callback_data: buildTelegramNativeCommandCallbackData(
+                    buildCommandTextFromArgs(commandDefinition, args),
+                  ),
                 };
               }),
             );
@@ -768,7 +789,7 @@ export const registerTelegramNativeCommands = ({
           IsForum: isForum,
           // Originating context for sub-agent announce routing
           OriginatingChannel: "telegram" as const,
-          OriginatingTo: `telegram:${chatId}`,
+          OriginatingTo: originatingTo,
         });
 
         await recordInboundSessionMetaSafe({

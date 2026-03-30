@@ -4,7 +4,7 @@ import type {
   ChannelConfigRuntimeSchema,
   ChannelConfigSchema,
 } from "../channels/plugins/types.plugin.js";
-import { BUNDLED_PLUGIN_METADATA } from "../plugins/bundled-plugin-metadata.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { MSTeamsConfigSchema } from "./zod-schema.providers-core.js";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
@@ -42,7 +42,7 @@ function buildBundledChannelMaps(
     }
   }
 
-  for (const entry of BUNDLED_PLUGIN_METADATA) {
+  for (const entry of listBundledPluginMetadata({ includeChannelConfigs: true })) {
     const channelConfigs = entry.manifest.channelConfigs;
     if (!channelConfigs) {
       continue;
@@ -72,9 +72,11 @@ function buildBundledChannelMaps(
 
 function readBundledChannelPlugins(): readonly BundledChannelPluginShape[] | undefined {
   try {
-    return Array.isArray(bundledChannelModule.bundledChannelPlugins)
-      ? (bundledChannelModule.bundledChannelPlugins as readonly BundledChannelPluginShape[])
-      : undefined;
+    if (typeof bundledChannelModule.listBundledChannelPlugins !== "function") {
+      return undefined;
+    }
+    const plugins = bundledChannelModule.listBundledChannelPlugins();
+    return Array.isArray(plugins) ? (plugins as readonly BundledChannelPluginShape[]) : undefined;
   } catch (error) {
     // Circular bundled channel imports can transiently hit TDZ during test/bootstrap
     // initialization. Fall back to metadata/static schemas until the registry is ready.

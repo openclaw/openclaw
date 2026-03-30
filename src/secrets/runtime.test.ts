@@ -98,6 +98,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;
@@ -125,7 +126,7 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 describe("secrets runtime snapshot", () => {
   beforeAll(async () => {
     vi.resetModules();
-    ({ clearConfigCache } = await import("../config/config.js"));
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({
       activateSecretsRuntimeSnapshot,
       clearSecretsRuntimeSnapshot,
@@ -143,6 +144,7 @@ describe("secrets runtime snapshot", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
@@ -2421,6 +2423,165 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow(
       'Environment variable "DISCORD_ENABLED_OVERRIDE_TTS_MISSING" is missing or empty.',
     );
+  });
+
+  it("resolves SecretRef objects for active acpx MCP env vars", async () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            config: {
+              mcpServers: {
+                github: {
+                  command: "npx",
+                  env: {
+                    GITHUB_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "GH_TOKEN_SECRET",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        GH_TOKEN_SECRET: "ghp-object-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const sourceEntries = snapshot.sourceConfig.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const sourceMcpServers = sourceEntries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    const entries = snapshot.config.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const mcpServers = entries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+
+    expect(mcpServers?.github?.env?.GITHUB_TOKEN).toBe("ghp-object-token");
+    expect(sourceMcpServers?.github?.env?.GITHUB_TOKEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GH_TOKEN_SECRET",
+    });
+  });
+
+  it("resolves inline env-template refs for active acpx MCP env vars", async () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            config: {
+              mcpServers: {
+                github: {
+                  command: "npx",
+                  env: {
+                    GITHUB_TOKEN: "${GH_TOKEN_SECRET}",
+                    SECOND_TOKEN: "${SECOND_SECRET}",
+                    LITERAL: "literal-value",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        GH_TOKEN_SECRET: "ghp-inline-token",
+        SECOND_SECRET: "ghp-second-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const entries = snapshot.config.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const mcpServers = entries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    expect(mcpServers?.github?.env?.GITHUB_TOKEN).toBe("ghp-inline-token");
+    expect(mcpServers?.github?.env?.SECOND_TOKEN).toBe("ghp-second-token");
+    expect(mcpServers?.github?.env?.LITERAL).toBe("literal-value");
+  });
+
+  it("treats bundled acpx MCP env refs as inactive until the plugin is enabled", async () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          acpx: {
+            config: {
+              mcpServers: {
+                github: {
+                  command: "npx",
+                  env: {
+                    GITHUB_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "GH_TOKEN_SECRET",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      snapshot.warnings.some(
+        (warning) =>
+          warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" &&
+          warning.path === "plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN",
+      ),
+    ).toBe(true);
+
+    const entries = snapshot.config.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const mcpServers = entries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    expect(mcpServers?.github?.env?.GITHUB_TOKEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GH_TOKEN_SECRET",
+    });
   });
 
   it("does not write inherited auth stores during runtime secret activation", async () => {

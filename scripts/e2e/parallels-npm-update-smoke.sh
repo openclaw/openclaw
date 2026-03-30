@@ -6,7 +6,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
 LINUX_VM="Ubuntu 24.04.3 ARM64"
-OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+PROVIDER="openai"
+API_KEY_ENV=""
+AUTH_CHOICE=""
+AUTH_KEY_FLAG=""
+MODEL_ID=""
 PACKAGE_SPEC=""
 JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
@@ -19,7 +23,7 @@ HOST_PORT=""
 LATEST_VERSION=""
 CURRENT_HEAD=""
 CURRENT_HEAD_SHORT=""
-OPENAI_API_KEY_VALUE=""
+API_KEY_VALUE=""
 
 MACOS_FRESH_STATUS="skip"
 WINDOWS_FRESH_STATUS="skip"
@@ -59,7 +63,11 @@ Usage: bash scripts/e2e/parallels-npm-update-smoke.sh [options]
 
 Options:
   --package-spec <npm-spec>  Baseline npm package spec. Default: openclaw@latest
-  --openai-api-key-env <var> Host env var name for OpenAI API key. Default: OPENAI_API_KEY
+  --provider <openai|anthropic|minimax>
+                             Provider auth/model lane. Default: openai
+  --api-key-env <var>        Host env var name for provider API key.
+                             Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
+  --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
 EOF
@@ -74,8 +82,12 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_SPEC="$2"
       shift 2
       ;;
-    --openai-api-key-env)
-      OPENAI_API_KEY_ENV="$2"
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --api-key-env|--openai-api-key-env)
+      API_KEY_ENV="$2"
       shift 2
       ;;
     --json)
@@ -92,8 +104,32 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
-[[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+case "$PROVIDER" in
+  openai)
+    AUTH_CHOICE="openai-api-key"
+    AUTH_KEY_FLAG="openai-api-key"
+    MODEL_ID="openai/gpt-5.4"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
+    ;;
+  anthropic)
+    AUTH_CHOICE="apiKey"
+    AUTH_KEY_FLAG="anthropic-api-key"
+    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
+    ;;
+  *)
+    die "invalid --provider: $PROVIDER"
+    ;;
+esac
+
+API_KEY_VALUE="${!API_KEY_ENV:-}"
+[[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
 
 resolve_linux_vm_name() {
   local json requested
@@ -173,6 +209,9 @@ param(
   [Parameter(Mandatory = $true)][string]$TgzUrl,
   [Parameter(Mandatory = $true)][string]$HeadShort,
   [Parameter(Mandatory = $true)][string]$SessionId,
+  [Parameter(Mandatory = $true)][string]$ModelId,
+  [Parameter(Mandatory = $true)][string]$ProviderKeyEnv,
+  [Parameter(Mandatory = $true)][string]$ProviderKey,
   [Parameter(Mandatory = $true)][string]$LogPath,
   [Parameter(Mandatory = $true)][string]$DonePath
 )
@@ -186,16 +225,23 @@ function Invoke-Logged {
     [Parameter(Mandatory = $true)][scriptblock]$Command
   )
 
+  $output = $null
   $previousErrorActionPreference = $ErrorActionPreference
   $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    & $Command *>> $LogPath
+    # Merge native stderr into stdout before logging so npm/openclaw warnings do not
+    # surface as PowerShell error records and abort a healthy in-place update.
+    $output = & $Command *>&1
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
     $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($null -ne $output) {
+    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
   }
 
   if ($exitCode -ne 0) {
@@ -214,7 +260,7 @@ function Invoke-CaptureLogged {
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    $output = & $Command 2>&1
+    $output = & $Command *>&1
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
@@ -236,6 +282,7 @@ try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
   Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
   Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
@@ -243,7 +290,7 @@ try {
   if ($version -notmatch [regex]::Escape($HeadShort)) {
     throw "version mismatch: expected substring $HeadShort"
   }
-  Invoke-Logged 'openclaw models set' { & $openclaw models set openai/gpt-5.4 }
+  Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
   # Restart the gateway/service before verifying status or the next agent turn.
   Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
@@ -372,6 +419,9 @@ run_windows_script_via_log() {
   local tgz_url="$2"
   local head_short="$3"
   local session_id="$4"
+  local model_id="$5"
+  local provider_key_env="$6"
+  local provider_key="$7"
   local runner_name log_name done_name done_status launcher_state
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
   runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
@@ -394,6 +444,9 @@ Start-Process powershell.exe -ArgumentList @(
   '-TgzUrl', '$tgz_url',
   '-HeadShort', '$head_short',
   '-SessionId', '$session_id',
+  '-ModelId', '$model_id',
+  '-ProviderKeyEnv', '$provider_key_env',
+  '-ProviderKey', '$provider_key',
   '-LogPath', \$log,
   '-DonePath', \$done
 ) -WindowStyle Hidden | Out-Null
@@ -476,9 +529,9 @@ case "\$version" in
     exit 1
     ;;
 esac
-/opt/homebrew/bin/openclaw models set openai/gpt-5.4
+/opt/homebrew/bin/openclaw models set "$MODEL_ID"
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
-/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$MACOS_VM" --current-user /bin/bash /tmp/openclaw-main-update.sh
 }
@@ -487,7 +540,14 @@ run_windows_update() {
   local tgz_url="$1"
   local head_short="$2"
   local script_url="$3"
-  run_windows_script_via_log "$script_url" "$tgz_url" "$head_short" "parallels-npm-update-windows-$head_short"
+  run_windows_script_via_log \
+    "$script_url" \
+    "$tgz_url" \
+    "$head_short" \
+    "parallels-npm-update-windows-$head_short" \
+    "$MODEL_ID" \
+    "$API_KEY_ENV" \
+    "$API_KEY_VALUE"
 }
 
 run_linux_update() {
@@ -508,10 +568,10 @@ case "\$version" in
     exit 1
     ;;
 esac
-openclaw models set openai/gpt-5.4
+openclaw models set "$MODEL_ID"
 openclaw agent --local --agent main --session-id parallels-npm-update-linux-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
-  prlctl exec "$LINUX_VM" /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh
+  prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh
 }
 
 write_summary_json() {
@@ -523,6 +583,7 @@ import sys
 
 summary = {
     "packageSpec": os.environ["SUMMARY_PACKAGE_SPEC"],
+    "provider": os.environ["SUMMARY_PROVIDER"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
     "currentHead": os.environ["SUMMARY_CURRENT_HEAD"],
     "runDir": os.environ["SUMMARY_RUN_DIR"],
@@ -543,7 +604,7 @@ summary = {
         "linux": {
             "status": os.environ["SUMMARY_LINUX_UPDATE_STATUS"],
             "version": os.environ["SUMMARY_LINUX_UPDATE_VERSION"],
-            "mode": "local-with-openai-env",
+            "mode": "local-with-provider-env",
         },
     },
 }
@@ -567,18 +628,24 @@ fi
 say "Run fresh npm baseline: $PACKAGE_SPEC"
 bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
   --mode fresh \
+  --provider "$PROVIDER" \
+  --api-key-env "$API_KEY_ENV" \
   --target-package-spec "$PACKAGE_SPEC" \
   --json >"$RUN_DIR/macos-fresh.log" 2>&1 &
 macos_fresh_pid=$!
 
 bash "$ROOT_DIR/scripts/e2e/parallels-windows-smoke.sh" \
   --mode fresh \
+  --provider "$PROVIDER" \
+  --api-key-env "$API_KEY_ENV" \
   --target-package-spec "$PACKAGE_SPEC" \
   --json >"$RUN_DIR/windows-fresh.log" 2>&1 &
 windows_fresh_pid=$!
 
 bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
   --mode fresh \
+  --provider "$PROVIDER" \
+  --api-key-env "$API_KEY_ENV" \
   --target-package-spec "$PACKAGE_SPEC" \
   --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
 linux_fresh_pid=$!
@@ -619,6 +686,7 @@ WINDOWS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/windows-update.log")"
 LINUX_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/linux-update.log")"
 
 SUMMARY_PACKAGE_SPEC="$PACKAGE_SPEC" \
+SUMMARY_PROVIDER="$PROVIDER" \
 SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
 SUMMARY_CURRENT_HEAD="$CURRENT_HEAD_SHORT" \
 SUMMARY_RUN_DIR="$RUN_DIR" \

@@ -2033,6 +2033,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       path: {
                         type: "string",
                       },
+                      fts: {
+                        type: "object",
+                        properties: {
+                          tokenizer: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "unicode61",
+                              },
+                              {
+                                type: "string",
+                                const: "trigram",
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
                       vector: {
                         type: "object",
                         properties: {
@@ -2281,6 +2299,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              llm: {
+                type: "object",
+                properties: {
+                  idleTimeoutSeconds: {
+                    description:
+                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
                   },
                 },
                 additionalProperties: false,
@@ -3596,6 +3627,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         path: {
                           type: "string",
                         },
+                        fts: {
+                          type: "object",
+                          properties: {
+                            tokenizer: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "unicode61",
+                                },
+                                {
+                                  type: "string",
+                                  const: "trigram",
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                         vector: {
                           type: "object",
                           properties: {
@@ -4587,7 +4636,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       properties: {
                         host: {
                           type: "string",
-                          enum: ["sandbox", "gateway", "node"],
+                          enum: ["auto", "sandbox", "gateway", "node"],
                         },
                         security: {
                           type: "string",
@@ -5632,6 +5681,101 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              x_search: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  apiKey: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        oneOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "env",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "file",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "exec",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  model: {
+                    type: "string",
+                  },
+                  inlineCitations: {
+                    type: "boolean",
+                  },
+                  maxTurns: {
+                    type: "integer",
+                    minimum: -9007199254740991,
+                    maximum: 9007199254740991,
+                  },
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  cacheTtlMinutes: {
+                    type: "number",
+                    minimum: 0,
                   },
                 },
                 additionalProperties: false,
@@ -7074,7 +7218,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               host: {
                 type: "string",
-                enum: ["sandbox", "gateway", "node"],
+                enum: ["auto", "sandbox", "gateway", "node"],
               },
               security: {
                 type: "string",
@@ -9221,44 +9365,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "boolean",
                 },
                 channel: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      const: "last",
-                    },
-                    {
-                      type: "string",
-                      const: "whatsapp",
-                    },
-                    {
-                      type: "string",
-                      const: "telegram",
-                    },
-                    {
-                      type: "string",
-                      const: "discord",
-                    },
-                    {
-                      type: "string",
-                      const: "irc",
-                    },
-                    {
-                      type: "string",
-                      const: "slack",
-                    },
-                    {
-                      type: "string",
-                      const: "signal",
-                    },
-                    {
-                      type: "string",
-                      const: "imessage",
-                    },
-                    {
-                      type: "string",
-                      const: "msteams",
-                    },
-                  ],
+                  type: "string",
+                  minLength: 1,
                 },
                 to: {
                   type: "string",
@@ -10779,6 +10887,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 ],
               },
+              searchTool: {
+                type: "string",
+                minLength: 1,
+              },
               includeDefaultMemory: {
                 type: "boolean",
               },
@@ -11011,6 +11123,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 url: {
                   type: "string",
                   format: "uri",
+                },
+                headers: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "boolean",
+                      },
+                    ],
+                  },
                 },
               },
               additionalProperties: {},
@@ -12509,8 +12640,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["tools"],
     },
     "tools.exec.host": {
-      label: "Exec Host",
-      help: "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+      label: "Exec Target",
+      help: 'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
       tags: ["tools"],
     },
     "tools.exec.security": {
@@ -12827,7 +12958,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.web.fetch.firecrawl.baseUrl": {
       label: "Firecrawl Base URL",
       help: "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
-      tags: ["tools"],
+      tags: ["tools", "url-secret"],
     },
     "tools.web.fetch.firecrawl.onlyMainContent": {
       label: "Firecrawl Main Content Only",
@@ -12843,6 +12974,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Firecrawl Timeout (sec)",
       help: "Timeout in seconds for Firecrawl requests.",
       tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.enabled": {
+      label: "Enable X Search Tool",
+      help: "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.apiKey": {
+      label: "xAI API Key",
+      help: "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.x_search.model": {
+      label: "X Search Model",
+      help: 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.x_search.inlineCitations": {
+      label: "X Search Inline Citations",
+      help: "Keep inline citations from xAI in x_search responses when available (default: false).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.maxTurns": {
+      label: "X Search Max Turns",
+      help: "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.timeoutSeconds": {
+      label: "X Search Timeout (sec)",
+      help: "Timeout in seconds for x_search requests.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.cacheTtlMinutes": {
+      label: "X Search Cache TTL (min)",
+      help: "Cache TTL in minutes for x_search results.",
+      tags: ["performance", "storage", "tools"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
@@ -12896,7 +13063,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Gateway APNs Relay Base URL",
       help: "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
       placeholder: "https://relay.example.com",
-      tags: ["network", "advanced"],
+      tags: ["network", "advanced", "url-secret"],
     },
     "gateway.push.apns.relay.timeoutMs": {
       label: "Gateway APNs Relay Timeout (ms)",
@@ -13236,7 +13403,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.memorySearch.remote.baseUrl": {
       label: "Remote Embedding Base URL",
       help: "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
-      tags: ["advanced"],
+      tags: ["advanced", "url-secret"],
     },
     "agents.defaults.memorySearch.remote.apiKey": {
       label: "Remote Embedding API Key",
@@ -13457,6 +13624,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "memory.qmd.searchMode": {
       label: "QMD Search Mode",
       help: 'Selects the QMD retrieval path: "query" uses standard query flow, "search" uses search-oriented retrieval, and "vsearch" emphasizes vector retrieval. Keep default unless tuning relevance quality.',
+      tags: ["storage"],
+    },
+    "memory.qmd.searchTool": {
+      label: "QMD Search Tool Override",
+      help: "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
       tags: ["storage"],
     },
     "memory.qmd.includeDefaultMemory": {
@@ -13687,7 +13859,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "models.providers.*.baseUrl": {
       label: "Model Provider Base URL",
       help: "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
-      tags: ["models"],
+      tags: ["models", "url-secret"],
     },
     "models.providers.*.apiKey": {
       label: "Model Provider API Key",
@@ -15256,7 +15428,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "plugins.installs.*.installPath": {
       label: "Plugin Install Path",
-      help: "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      help: "Resolved install directory for the installed plugin bundle.",
       tags: ["storage"],
     },
     "plugins.installs.*.version": {
@@ -15374,11 +15546,60 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
+    "mcp.servers.*.headers.*": {
+      sensitive: true,
+      tags: ["security"],
+    },
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
     },
+    "agents.list[].memorySearch.remote.baseUrl": {
+      tags: ["advanced", "url-secret"],
+    },
+    "tools.web.search.brave.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.firecrawl.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.gemini.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.grok.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.kimi.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.perplexity.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.media.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.image.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.image.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.audio.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.audio.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.video.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.video.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "mcp.servers.*.url": {
+      tags: ["advanced", "url-secret"],
+    },
   },
-  version: "2026.3.27",
+  version: "2026.3.30",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

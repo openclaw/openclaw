@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { BUNDLED_PLUGIN_LIVE_TEST_GLOB } from "./scripts/lib/bundled-plugin-paths.mjs";
 import baseConfig from "./vitest.config.ts";
 
 const base = baseConfig as unknown as Record<string, unknown>;
@@ -13,7 +14,7 @@ export default defineConfig({
     // Vitest's buffered per-test console capture.
     disableConsoleIntercept: true,
     maxWorkers: 1,
-    include: ["src/**/*.live.test.ts", "extensions/**/*.live.test.ts"],
+    include: ["src/**/*.live.test.ts", BUNDLED_PLUGIN_LIVE_TEST_GLOB],
     exclude,
   },
 });

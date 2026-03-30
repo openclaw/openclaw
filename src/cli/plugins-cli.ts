@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
@@ -542,12 +542,16 @@ export function registerPluginsCli(program: Command) {
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const cfg = loadConfig();
+      const snapshot = await readConfigFileSnapshot();
+      const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
       const enableResult = enablePluginInConfig(cfg, id);
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
-      await writeConfigFile(next);
+      await replaceConfigFile({
+        nextConfig: next,
+        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      });
       logSlotWarnings(slotResult.warnings);
       if (enableResult.enabled) {
         defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
@@ -565,9 +569,13 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const cfg = loadConfig();
+      const snapshot = await readConfigFileSnapshot();
+      const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
       const next = setPluginEnabledInConfig(cfg, id, false);
-      await writeConfigFile(next);
+      await replaceConfigFile({
+        nextConfig: next,
+        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      });
       defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
     });
 
@@ -580,7 +588,8 @@ export function registerPluginsCli(program: Command) {
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
-      const cfg = loadConfig();
+      const snapshot = await readConfigFileSnapshot();
+      const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
       const report = buildPluginStatusReport({ config: cfg });
       const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
       const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
@@ -686,7 +695,10 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn(warning));
       }
 
-      await writeConfigFile(result.config);
+      await replaceConfigFile({
+        nextConfig: result.config,
+        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      });
 
       const removed: string[] = [];
       if (result.actions.entry) {

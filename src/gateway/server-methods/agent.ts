@@ -21,12 +21,17 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
+import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { createRunningTaskRun } from "../../tasks/task-executor.js";
+import {
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -184,6 +189,28 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
+  if (params.ingressOpts.sessionKey?.trim()) {
+    try {
+      createRunningTaskRun({
+        runtime: "cli",
+        sourceId: params.runId,
+        requesterSessionKey: params.ingressOpts.sessionKey,
+        requesterOrigin: normalizeDeliveryContext({
+          channel: params.ingressOpts.channel,
+          to: params.ingressOpts.to,
+          accountId: params.ingressOpts.accountId,
+          threadId: params.ingressOpts.threadId,
+        }),
+        childSessionKey: params.ingressOpts.sessionKey,
+        runId: params.runId,
+        task: params.ingressOpts.message,
+        deliveryStatus: "not_applicable",
+        startedAt: Date.now(),
+      });
+    } catch {
+      // Best-effort only: background task tracking must not block agent runs.
+    }
+  }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
       const payload = {
@@ -453,7 +480,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // Inject timestamp into user-authored messages that don't already have one.
     // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
     // formatting in a separate code path — they never reach this handler.
-    // See: https://github.com/moltbot/moltbot/issues/3658
+    // See: https://github.com/openclaw/openclaw/issues/3658
     if (!skipTimestampInjection) {
       message = injectTimestamp(message, timestampOptsFromConfig(cfg));
     }
@@ -617,6 +644,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
     let effectivePlan = deliveryPlan;
+    let deliveryDowngradeReason: string | null = null;
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
       const cfgResolved = cfgForAgent ?? cfg;
@@ -631,8 +659,16 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedAccountId,
         };
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+        const shouldDowngrade = shouldDowngradeDeliveryToSessionOnly({
+          wantsDelivery,
+          bestEffortDeliver,
+          resolvedChannel,
+        });
+        if (!shouldDowngrade) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+          return;
+        }
+        deliveryDowngradeReason = String(err);
       }
     }
 
@@ -650,15 +686,27 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
+      const shouldDowngrade = shouldDowngradeDeliveryToSessionOnly({
+        wantsDelivery,
+        bestEffortDeliver,
+        resolvedChannel,
+      });
+      if (!shouldDowngrade) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+          ),
+        );
+        return;
+      }
+      context.logGateway.info(
+        deliveryDowngradeReason
+          ? `agent delivery downgraded to session-only (bestEffortDeliver): ${deliveryDowngradeReason}`
+          : "agent delivery downgraded to session-only (bestEffortDeliver): no deliverable channel",
       );
-      return;
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);

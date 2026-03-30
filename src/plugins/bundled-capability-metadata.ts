@@ -1,4 +1,4 @@
-import { BUNDLED_PLUGIN_METADATA } from "./bundled-plugin-metadata.js";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 export type BundledPluginContractSnapshot = {
   pluginId: string;
@@ -26,16 +26,17 @@ function uniqueStrings(values: readonly string[] | undefined): string[] {
 }
 
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  BUNDLED_PLUGIN_METADATA.map(({ manifest }) => ({
-    pluginId: manifest.id,
-    cliBackendIds: uniqueStrings(manifest.cliBackends),
-    providerIds: uniqueStrings(manifest.providers),
-    speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
-    mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
-    imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
-    webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
-    toolNames: uniqueStrings(manifest.contracts?.tools),
-  }))
+  listBundledPluginMetadata()
+    .map(({ manifest }) => ({
+      pluginId: manifest.id,
+      cliBackendIds: uniqueStrings(manifest.cliBackends),
+      providerIds: uniqueStrings(manifest.providers),
+      speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
+      mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
+      imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
+      webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
+      toolNames: uniqueStrings(manifest.contracts?.tools),
+    }))
     .filter(
       (entry) =>
         entry.cliBackendIds.length > 0 ||
@@ -100,18 +101,22 @@ export const BUNDLED_PROVIDER_PLUGIN_ID_ALIASES = Object.fromEntries(
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
-  BUNDLED_PLUGIN_METADATA.flatMap(({ manifest }) =>
-    (manifest.legacyPluginIds ?? []).map(
-      (legacyPluginId) => [legacyPluginId, manifest.id] as const,
-    ),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
+  listBundledPluginMetadata()
+    .flatMap(({ manifest }) =>
+      (manifest.legacyPluginIds ?? []).map(
+        (legacyPluginId) => [legacyPluginId, manifest.id] as const,
+      ),
+    )
+    .toSorted(([left], [right]) => left.localeCompare(right)),
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  BUNDLED_PLUGIN_METADATA.flatMap(({ manifest }) =>
-    (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
-      providerId,
-      manifest.id,
-    ]),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
+  listBundledPluginMetadata()
+    .flatMap(({ manifest }) =>
+      (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
+        providerId,
+        manifest.id,
+      ]),
+    )
+    .toSorted(([left], [right]) => left.localeCompare(right)),
 ) as Readonly<Record<string, string>>;
