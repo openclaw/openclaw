@@ -5,7 +5,7 @@ import {
   keepHttpServerTaskAlive,
   runPassiveAccountLifecycle,
   waitUntilAbort,
-} from "./channel-lifecycle.js";
+} from "./channel-lifecycle.core.js";
 
 type FakeServer = EventEmitter & {
   close: (callback?: () => void) => void;

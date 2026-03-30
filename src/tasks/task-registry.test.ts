@@ -7,6 +7,7 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { installInMemoryTaskAndFlowRegistryRuntime } from "../test-utils/task-flow-registry-runtime.js";
 import { createFlowRecord, getFlowById, resetFlowRegistryForTests } from "./flow-registry.js";
 import {
   createTaskRecord,
@@ -123,8 +124,8 @@ describe("task-registry", () => {
     }
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
-    resetTaskRegistryForTests();
-    resetFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
@@ -699,7 +700,9 @@ describe("task-registry", () => {
   it("adopts parent flow linkage when collapsing onto an earlier ACP record", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetFlowRegistryForTests({ persist: false });
+      installInMemoryTaskAndFlowRegistryRuntime();
 
       const directTask = createTaskRecord({
         runtime: "acp",

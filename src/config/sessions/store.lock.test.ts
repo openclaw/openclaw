@@ -1,32 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearSessionStoreCacheForTest,
+  resetSessionStoreLockRuntimeForTests,
+  setSessionWriteLockAcquirerForTests,
+  withSessionStoreLockForTest,
+} from "./store.js";
 
 const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async () => ({ release: vi.fn(async () => {}) })),
 );
 
-let withSessionStoreLockForTest: typeof import("./store.js").withSessionStoreLockForTest;
-let clearSessionStoreCacheForTest: typeof import("./store.js").clearSessionStoreCacheForTest;
-
-async function loadFreshStoreModule() {
-  vi.resetModules();
-  vi.doMock("../../agents/session-write-lock.js", async (importOriginal) => {
-    const original = await importOriginal<typeof import("../../agents/session-write-lock.js")>();
-    return {
-      ...original,
-      acquireSessionWriteLock: acquireSessionWriteLockMock,
-    };
-  });
-  ({ withSessionStoreLockForTest, clearSessionStoreCacheForTest } = await import("./store.js"));
-}
-
 describe("withSessionStoreLock", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     acquireSessionWriteLockMock.mockClear();
-    await loadFreshStoreModule();
+    setSessionWriteLockAcquirerForTests(acquireSessionWriteLockMock);
   });
 
   afterEach(() => {
     clearSessionStoreCacheForTest();
+    resetSessionStoreLockRuntimeForTests();
     vi.restoreAllMocks();
   });
 
