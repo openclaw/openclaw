@@ -8,6 +8,7 @@ let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExe
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
+let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
 describe("detectCursorKeyMode", () => {
   beforeEach(async () => {
@@ -38,6 +39,27 @@ describe("detectCursorKeyMode", () => {
     expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
     // Multiple toggles - last one wins
     expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
+  });
+});
+
+describe("resolveExecTarget", () => {
+  beforeEach(async () => {
+    ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
+  });
+
+  it("treats auto as a default strategy rather than a host allowlist", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
   });
 });
 

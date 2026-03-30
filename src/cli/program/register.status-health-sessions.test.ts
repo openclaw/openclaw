@@ -7,6 +7,7 @@ const healthCommand = vi.fn();
 const sessionsCommand = vi.fn();
 const sessionsCleanupCommand = vi.fn();
 const tasksListCommand = vi.fn();
+const tasksAuditCommand = vi.fn();
 const tasksShowCommand = vi.fn();
 const tasksNotifyCommand = vi.fn();
 const tasksCancelCommand = vi.fn();
@@ -32,6 +33,7 @@ vi.mock("../../commands/sessions-cleanup.js", () => ({
 
 vi.mock("../../commands/tasks.js", () => ({
   tasksListCommand,
+  tasksAuditCommand,
   tasksShowCommand,
   tasksNotifyCommand,
   tasksCancelCommand,
@@ -67,6 +69,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
+    tasksAuditCommand.mockResolvedValue(undefined);
     tasksShowCommand.mockResolvedValue(undefined);
     tasksNotifyCommand.mockResolvedValue(undefined);
     tasksCancelCommand.mockResolvedValue(undefined);
@@ -237,6 +240,30 @@ describe("registerStatusHealthSessionsCommands", () => {
       expect.objectContaining({
         lookup: "run-123",
         json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs tasks audit subcommand with filters", async () => {
+    await runCli([
+      "tasks",
+      "--json",
+      "audit",
+      "--severity",
+      "error",
+      "--code",
+      "stale_running",
+      "--limit",
+      "5",
+    ]);
+
+    expect(tasksAuditCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        severity: "error",
+        code: "stale_running",
+        limit: 5,
       }),
       runtime,
     );

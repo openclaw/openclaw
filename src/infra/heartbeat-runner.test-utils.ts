@@ -3,18 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime, type PluginRuntime } from "../plugins/runtime/index.js";
-import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-
-const { telegramPlugin, setTelegramRuntime } = loadBundledPluginTestApiSync<{
-  telegramPlugin: ChannelPlugin;
-  setTelegramRuntime: (runtime: PluginRuntime) => void;
-}>("telegram");
+import { heartbeatRunnerTelegramPlugin } from "./heartbeat-runner.test-channel-plugins.js";
 
 export type HeartbeatSessionSeed = {
   sessionId?: string;
@@ -103,9 +96,9 @@ export async function withTempTelegramHeartbeatSandbox<T>(
 }
 
 export function setupTelegramHeartbeatPluginRuntimeForTests() {
-  const runtime = createPluginRuntime();
-  setTelegramRuntime(runtime);
   setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    createTestRegistry([
+      { pluginId: "telegram", plugin: heartbeatRunnerTelegramPlugin, source: "test" },
+    ]),
   );
 }

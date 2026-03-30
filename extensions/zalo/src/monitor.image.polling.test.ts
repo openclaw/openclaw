@@ -5,11 +5,14 @@ import {
   createImageUpdate,
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
+} from "../test-support/lifecycle-test-support.js";
+import {
   getUpdatesMock,
   getZaloRuntimeMock,
+  loadLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
-} from "../../../test/helpers/plugins/zalo-lifecycle.js";
+} from "../test-support/monitor-mocks-test-support.js";
 
 describe("Zalo polling image handling", () => {
   const {
@@ -20,13 +23,13 @@ describe("Zalo polling image handling", () => {
     saveMediaBufferMock,
   } = createImageLifecycleCore();
 
-  beforeEach(() => {
-    resetLifecycleTestState();
+  beforeEach(async () => {
+    await resetLifecycleTestState();
     getZaloRuntimeMock.mockReturnValue(core);
   });
 
-  afterEach(() => {
-    resetLifecycleTestState();
+  afterEach(async () => {
+    await resetLifecycleTestState();
   });
 
   it("downloads inbound image media from photo_url and preserves display_name", async () => {
@@ -37,7 +40,7 @@ describe("Zalo polling image handling", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await import("./monitor.js");
+    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -72,7 +75,7 @@ describe("Zalo polling image handling", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await import("./monitor.js");
+    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({

@@ -1,4 +1,5 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
+import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -9,6 +10,15 @@ import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./target
 
 function normalizeApproverId(value: string | number): string {
   return String(value).trim();
+}
+
+function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
+  const normalized = normalizeApproverId(value);
+  const chatId = normalizeTelegramChatId(normalized);
+  if (!chatId || chatId.startsWith("-")) {
+    return undefined;
+  }
+  return chatId;
 }
 
 export function resolveTelegramExecApprovalConfig(params: {
@@ -22,9 +32,13 @@ export function getTelegramExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  return (resolveTelegramExecApprovalConfig(params)?.approvers ?? [])
-    .map(normalizeApproverId)
-    .filter(Boolean);
+  const account = resolveTelegramAccount(params).config;
+  return resolveApprovalApprovers({
+    explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
+    allowFrom: account.allowFrom,
+    defaultTo: account.defaultTo ? String(account.defaultTo) : null,
+    normalizeApprover: normalizeTelegramDirectApproverId,
+  });
 }
 
 export function isTelegramExecApprovalClientEnabled(params: {
@@ -91,10 +105,7 @@ export function isTelegramExecApprovalAuthorizedSender(params: {
   accountId?: string | null;
   senderId?: string | null;
 }): boolean {
-  return (
-    (isTelegramExecApprovalClientEnabled(params) && isTelegramExecApprovalApprover(params)) ||
-    isTelegramExecApprovalTargetRecipient(params)
-  );
+  return isTelegramExecApprovalApprover(params) || isTelegramExecApprovalTargetRecipient(params);
 }
 
 export function resolveTelegramExecApprovalTarget(params: {
