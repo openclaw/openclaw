@@ -18,6 +18,7 @@ const hoisted = vi.hoisted(() => {
   const upsertAcpSessionMetaMock = vi.fn();
   const resolveSessionStorePathForAcpMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
+  const updateSessionStoreMock = vi.fn();
   const sessionBindingCapabilitiesMock = vi.fn();
   const sessionBindingBindMock = vi.fn();
   const sessionBindingListBySessionMock = vi.fn();
@@ -41,6 +42,7 @@ const hoisted = vi.hoisted(() => {
     upsertAcpSessionMetaMock,
     resolveSessionStorePathForAcpMock,
     loadSessionStoreMock,
+    updateSessionStoreMock,
     sessionBindingCapabilitiesMock,
     sessionBindingBindMock,
     sessionBindingListBySessionMock,
@@ -104,6 +106,7 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
+    updateSessionStore: (...args: unknown[]) => hoisted.updateSessionStoreMock(...args),
   };
 });
 
@@ -866,6 +869,9 @@ describe("/acp command", () => {
       storePath: "/tmp/sessions-acp.json",
     });
     hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
+    hoisted.updateSessionStoreMock.mockReset().mockImplementation(async (_storePath, update) => {
+      return update({});
+    });
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
       .mockReturnValue(createSessionBindingCapabilities());
@@ -1145,6 +1151,54 @@ describe("/acp command", () => {
         method: "sessions.patch",
       }),
     );
+  });
+
+  it("persists ACP spawn labels to the spawned session store instead of the requester store", async () => {
+    const commandParams = createConversationParams(
+      "/acp spawn codex --bind here --label codex-a2ui",
+      {
+        channel: "telegram",
+        originatingTo: "telegram:-1003841603622",
+        threadId: "777",
+      },
+    );
+    commandParams.storePath = "/tmp/requester-sessions.json";
+    commandParams.sessionStore = {
+      "agent:main:telegram:group:-1003841603622:topic:777": {
+        sessionId: "requester-session",
+        updatedAt: Date.now(),
+      },
+    };
+    hoisted.resolveSessionStorePathForAcpMock.mockReturnValue({
+      cfg: baseCfg,
+      storePath: "/tmp/codex-sessions.json",
+    });
+
+    const result = await handleAcpCommand(commandParams, true);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    const spawnedSessionKey = (
+      hoisted.ensureSessionMock.mock.calls[0]?.[0] as { sessionKey?: string } | undefined
+    )?.sessionKey;
+    expect(spawnedSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledWith(
+      "/tmp/codex-sessions.json",
+      expect.any(Function),
+    );
+    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalledWith(
+      "/tmp/requester-sessions.json",
+      expect.any(Function),
+    );
+    const updateFn = hoisted.updateSessionStoreMock.mock.calls[0]?.[1] as
+      | ((store: Record<string, { label?: string; updatedAt: number }>) => unknown)
+      | undefined;
+    const updated = updateFn?.({
+      [spawnedSessionKey ?? "missing"]: {
+        updatedAt: 1,
+      },
+    }) as { label?: string; updatedAt?: number } | undefined;
+    expect(updated?.label).toBe("codex-a2ui");
+    expect(updated?.updatedAt).toBeTypeOf("number");
   });
 
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {
