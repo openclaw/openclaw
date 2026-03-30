@@ -213,6 +213,50 @@ describe("createWebhookHandler", () => {
     expect(res._status).toBe(401);
   });
 
+  it("locks invalid-token guesses when the configured budget is exhausted", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "invalid-token-threshold-" + Date.now(),
+        rateLimitPerMinute: 5,
+      }),
+      deliver,
+      log,
+    });
+
+    for (let i = 0; i < 4; i += 1) {
+      const req = makeReq(
+        "POST",
+        makeFormBody({
+          token: `wrong-token-${i}`,
+          user_id: "123",
+          username: "testuser",
+          text: "Hello",
+        }),
+      );
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.30";
+      const res = makeRes();
+      await handler(req, res);
+      expect(res._status).toBe(401);
+    }
+
+    const lockedReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: "wrong-token-final",
+        user_id: "123",
+        username: "testuser",
+        text: "Hello",
+      }),
+    );
+    (lockedReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.30";
+    const lockedRes = makeRes();
+    await handler(lockedReq, lockedRes);
+
+    expect(lockedRes._status).toBe(429);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
     const weakToken = "00000129";
     const deliver = vi.fn().mockResolvedValue(null);

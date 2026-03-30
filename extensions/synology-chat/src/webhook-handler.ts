@@ -69,7 +69,7 @@ class InvalidTokenRateLimiter {
       return false;
     }
     const existing = this.normalizeState(key, nowMs);
-    return (existing?.count ?? 0) > this.limit;
+    return (existing?.count ?? 0) >= this.limit;
   }
 
   recordFailure(key: string, nowMs = Date.now()): boolean {
@@ -80,7 +80,7 @@ class InvalidTokenRateLimiter {
     const nextCount = (existing?.count ?? 0) + 1;
     const windowStartMs = existing?.windowStartMs ?? nowMs;
     this.touch(key, { count: nextCount, windowStartMs });
-    return nextCount > this.limit;
+    return nextCount >= this.limit;
   }
 
   clear(): void {
