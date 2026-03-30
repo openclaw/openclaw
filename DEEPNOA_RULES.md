@@ -21,8 +21,55 @@ These are intentional fork differences and should not be dropped during upstream
 - `/bot` relay and public intake routing used by `deepnoa.com/bot`.
 - Deepnoa scene / visitor linkage used by Deepnoa AI Office.
 - Deepnoa NAS tools and custom skills.
+- Sense worker remote execution integration.
+- NemoClaw-style async job submit / poll / runner workflow.
 
 If upstream changes touch these areas, prefer upstream's generic improvement first, then re-apply the Deepnoa behavior in a small follow-up patch.
+
+## Sense Worker Rules
+
+- OpenClaw acts as orchestrator. Sense acts as remote execution node.
+- Default Sense base URL: `http://192.168.11.11:8787`
+- Worker auth header: `X-Sense-Worker-Token`
+- Health may stay unauthenticated. `POST /execute` must stay token-protected.
+- Stable operator commands:
+  - `pnpm sense:summarize`
+  - `pnpm sense:draft`
+  - `pnpm sense:analyze`
+  - `pnpm sense:heavy`
+  - `pnpm sense:heavy:review`
+  - `pnpm sense:heavy:ollama`
+  - `pnpm sense:heavy:nemo`
+  - `pnpm sense:job-status`
+  - `pnpm sense:job-poll`
+  - `pnpm sense:nemo-runner`
+- `401 unauthorized` must stay visible. Do not silently fallback on auth failure.
+- Remote unavailable / timeout may fallback locally when the workflow already supports it.
+- Structured result handling should preserve:
+  - `worker_state`
+  - `structured_source`
+  - `normalized.summary`
+  - `normalized.key_points`
+  - `normalized.suggested_next_action`
+
+## Async Job Rules
+
+- `heavy_task mode=nemoclaw_job` should return async job envelopes, not inline pseudo summaries.
+- Job states should remain understandable from OpenClaw:
+  - `queued`
+  - `running`
+  - `done`
+  - `job_not_found`
+- `nemoclaw_runner.py` is the current external execution-node shim.
+- Runner result schema should stay aligned with other structured task outputs:
+  - `summary`
+  - `key_points`
+  - `suggested_next_action`
+  - `raw_output`
+  - `runner`
+  - `exit_code`
+- When the runner is processing a leased job, heartbeat must continue until complete or shutdown.
+- If a runner stops unexpectedly, reclaim should happen on the Sense side rather than by OpenClaw guessing.
 
 ## Inquiry Intake Rules
 

@@ -1,0 +1,13 @@
+{
+  "id": "sense-worker",
+  "name": "Sense Worker",
+  "description": "Optional HTTP tool for offloading tasks to a Sense worker node over LAN.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": { "type": "string" },
+      "timeoutMs": { "type": "number" }
+    }
+  }
+}

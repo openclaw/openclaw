@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/sense-worker",
+  "version": "2026.3.18",
+  "private": true,
+  "description": "OpenClaw optional tool for delegating tasks to the Sense worker node",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
