@@ -288,13 +288,11 @@ contracts for models, speech, media understanding, and web search, a vendor can
 own all of its surfaces in one place:
 
 ```ts
-import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk";
+import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildOpenAISpeechProvider,
-  createPluginBackedWebSearchProvider,
   describeImageWithModel,
   transcribeOpenAiCompatibleAudio,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/media-understanding";
 
 const plugin: OpenClawPluginDefinition = {
   id: "exampleai",
@@ -305,12 +303,10 @@ const plugin: OpenClawPluginDefinition = {
       // auth/model catalog/runtime hooks
     });
 
-    api.registerSpeechProvider(
-      buildOpenAISpeechProvider({
-        id: "exampleai",
-        // vendor speech config
-      }),
-    );
+    api.registerSpeechProvider({
+      id: "exampleai",
+      // vendor speech config — implement the SpeechProviderPlugin interface directly
+    });
 
     api.registerMediaUnderstandingProvider({
       id: "exampleai",
@@ -936,7 +932,7 @@ Route fields:
 
 Notes:
 
-- `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
+- `api.registerHttpHandler(...)` was removed and will cause a plugin-load error. Use `api.registerHttpRoute(...)` instead.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
