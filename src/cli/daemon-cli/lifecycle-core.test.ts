@@ -272,6 +272,19 @@ describe("runServiceRestart token drift", () => {
 
     const payload = readJsonLog<{ warnings?: string[] }>();
     expect(payload.warnings).toBeUndefined();
+    expect(service.restart).toHaveBeenCalled();
+  });
+
+  it("silently skips drift check when password is a SecretRef", async () => {
+    mockResolveGatewayTokenForDriftCheck.mockImplementation(() => {
+      throw new GatewaySecretRefUnavailableError("gateway.auth.password");
+    });
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toBeUndefined();
+    expect(service.restart).toHaveBeenCalled();
   });
 
   it("re-throws non-SecretRef errors during drift check", async () => {

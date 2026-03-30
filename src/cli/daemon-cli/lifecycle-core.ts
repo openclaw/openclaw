@@ -415,9 +415,10 @@ export async function runServiceRestart(params: {
         }
       }
     } catch (err) {
-      // SecretRef-backed tokens are externally managed (e.g. macOS Keychain);
+      // SecretRef-backed credentials are externally managed (e.g. macOS Keychain);
       // drift checking does not apply — silently skip instead of warning.
-      if (!isGatewaySecretRefUnavailableError(err, "gateway.auth.token")) {
+      // This covers both gateway.auth.token and gateway.auth.password paths.
+      if (!isGatewaySecretRefUnavailableError(err)) {
         throw err;
       }
     }
