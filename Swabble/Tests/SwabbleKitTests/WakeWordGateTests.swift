@@ -9,11 +9,11 @@ import Testing
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
-                ("clawd", 0.2, 0.1),
+                ("nexus", 0.2, 0.1),
                 ("do", 0.35, 0.1),
                 ("thing", 0.5, 0.1),
             ])
-        let config = WakeWordGateConfig(triggers: ["clawd"], minPostTriggerGap: 0.3)
+        let config = WakeWordGateConfig(triggers: ["nexus"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config) == nil)
     }
 
@@ -23,11 +23,11 @@ import Testing
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
-                ("clawd", 0.2, 0.1),
+                ("nexus", 0.2, 0.1),
                 ("do", 0.9, 0.1),
                 ("thing", 1.1, 0.1),
             ])
-        let config = WakeWordGateConfig(triggers: ["clawd"], minPostTriggerGap: 0.3)
+        let config = WakeWordGateConfig(triggers: ["nexus"], minPostTriggerGap: 0.3)
         let match = WakeWordGate.match(transcript: transcript, segments: segments, config: config)
         #expect(match?.command == "do thing")
     }
@@ -38,7 +38,7 @@ import Testing
             transcript: transcript,
             words: [
                 ("hey", 0.0, 0.1),
-                ("clawd", 0.2, 0.1),
+                ("nexus", 0.2, 0.1),
                 ("do", 0.8, 0.1),
                 ("it", 1.0, 0.1),
             ])
@@ -53,7 +53,7 @@ import Testing
         let foreignRange = other.range(of: "do")
         let segments = [
             WakeWordSegment(text: "hey", start: 0.0, duration: 0.1, range: transcript.range(of: "hey")),
-            WakeWordSegment(text: "clawd", start: 0.2, duration: 0.1, range: transcript.range(of: "clawd")),
+            WakeWordSegment(text: "nexus", start: 0.2, duration: 0.1, range: transcript.range(of: "nexus")),
             WakeWordSegment(text: "do", start: 0.9, duration: 0.1, range: foreignRange),
             WakeWordSegment(text: "thing", start: 1.1, duration: 0.1, range: nil),
         ]

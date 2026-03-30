@@ -41,7 +41,7 @@ export const BLOCKED_HOST_PATHS = [
   "/private/var/log",
 ];
 
-const BLOCKED_HOME_SUBPATHS = [".aws", ".config", ".kube", ".openclaw", ".ssh"] as const;
+const BLOCKED_HOME_SUBPATHS = [".aws", ".config", ".kube", ".nexus-agent", ".ssh"] as const;
 let cachedBlockedHostPaths:
   | {
       key: string;

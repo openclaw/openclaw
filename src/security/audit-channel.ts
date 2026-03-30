@@ -464,7 +464,7 @@ export async function collectChannelSecurityFindings(params: {
         addDiscordNameBasedEntries({
           target: discordNameBasedAllowEntries,
           values: storeAllowFrom,
-          source: "~/.openclaw/credentials/discord-allowFrom.json",
+          source: "~/.nexus-agent/credentials/discord-allowFrom.json",
           isDiscordMutableAllowEntry,
         });
         const discordGuildEntries =

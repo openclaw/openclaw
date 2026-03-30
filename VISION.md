@@ -1,16 +1,14 @@
-## OpenClaw Vision
+## Nexus Agent Vision
 
-OpenClaw is the AI that actually does things.
-It runs on your devices, in your channels, with your rules.
+Nexus Agent is the autonomous agent layer for the Nexus AI ecosystem.
+It runs on your hardware, in your channels, behind your Tailscale mesh.
 
 This document explains the current state and direction of the project.
-We are still early, so iteration is fast.
 Project overview and developer docs: [`README.md`](README.md)
 Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
-OpenClaw started as a personal playground to learn AI and build something genuinely useful:
-an assistant that can run real tasks on a real computer.
-It evolved through several names and shells: Warelay -> Clawdbot -> Moltbot -> OpenClaw.
+Nexus Agent is a fork of OpenClaw, rebranded and customized for the Nexus infrastructure.
+It provides heartbeat reasoning, scheduled tasks, event hooks, and multi-channel communication.
 
 The goal: a personal assistant that is easy to use, supports a wide range of platforms, and respects privacy and security.
 

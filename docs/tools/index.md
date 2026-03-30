@@ -73,7 +73,6 @@ For image work, use `image` for analysis and `image_generate` for generation or 
 
 Plugins can register additional tools. Some examples:
 
-- [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
 - [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
 - [Diffs](/tools/diffs) — diff viewer and renderer
 - [OpenProse](/prose) — markdown-first workflow orchestration

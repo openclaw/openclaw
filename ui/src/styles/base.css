@@ -1,56 +1,56 @@
 :root {
-  /* Background - Deep, rich dark with layered depth */
-  --bg: #0e1015;
-  --bg-accent: #13151b;
-  --bg-elevated: #191c24;
-  --bg-hover: #1f2330;
-  --bg-muted: #1f2330;
+  /* Background - Nexus deep space */
+  --bg: #08090d;
+  --bg-accent: #0f1117;
+  --bg-elevated: #161922;
+  --bg-hover: #1c1f2a;
+  --bg-muted: #1c1f2a;
 
-  /* Card / Surface - Clear hierarchy between levels */
-  --card: #161920;
-  --card-foreground: #f0f0f2;
+  /* Card / Surface - Nexus layered depth */
+  --card: #0f1117;
+  --card-foreground: #e0e3ec;
   --card-highlight: rgba(255, 255, 255, 0.04);
-  --popover: #191c24;
-  --popover-foreground: #f0f0f2;
+  --popover: #161922;
+  --popover-foreground: #e0e3ec;
 
   /* Panel */
-  --panel: #0e1015;
-  --panel-strong: #191c24;
-  --panel-hover: #1f2330;
-  --chrome: rgba(14, 16, 21, 0.96);
-  --chrome-strong: rgba(14, 16, 21, 0.98);
+  --panel: #08090d;
+  --panel-strong: #161922;
+  --panel-hover: #1c1f2a;
+  --chrome: rgba(8, 9, 13, 0.96);
+  --chrome-strong: rgba(8, 9, 13, 0.98);
 
-  /* Text - Clean contrast */
-  --text: #d4d4d8;
-  --text-strong: #f4f4f5;
-  --chat-text: #d4d4d8;
-  --muted: #838387;
-  --muted-strong: #75757d;
-  --muted-foreground: #838387;
+  /* Text - Nexus-Iris */
+  --text: #e0e3ec;
+  --text-strong: #fafaf9;
+  --chat-text: #e0e3ec;
+  --muted: #6b7394;
+  --muted-strong: #5a6380;
+  --muted-foreground: #6b7394;
 
-  /* Border - Whisper-thin, barely there */
-  --border: #1e2028;
-  --border-strong: #2e3040;
-  --border-hover: #3e4050;
-  --input: #1e2028;
-  --ring: #ff5c5c;
+  /* Border - Nexus subtle */
+  --border: #232838;
+  --border-strong: #2e3448;
+  --border-hover: #3e4560;
+  --input: #232838;
+  --ring: #8b5cf6;
 
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.2);
-  --primary: #ff5c5c;
+  /* Accent - Nexus purple (idle) */
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --accent-muted: #8b5cf6;
+  --accent-subtle: rgba(139, 92, 246, 0.1);
+  --accent-foreground: #fafaf9;
+  --accent-glow: rgba(139, 92, 246, 0.2);
+  --primary: #8b5cf6;
   --primary-foreground: #ffffff;
 
-  /* Secondary */
-  --secondary: #161920;
-  --secondary-foreground: #f0f0f2;
-  --accent-2: #14b8a6;
-  --accent-2-muted: rgba(20, 184, 166, 0.7);
-  --accent-2-subtle: rgba(20, 184, 166, 0.1);
+  /* Secondary - Nexus cyan (think) */
+  --secondary: #0f1117;
+  --secondary-foreground: #e0e3ec;
+  --accent-2: #06b6d4;
+  --accent-2-muted: rgba(6, 182, 212, 0.7);
+  --accent-2-subtle: rgba(6, 182, 212, 0.1);
 
   /* Semantic */
   --ok: #22c55e;
@@ -67,7 +67,7 @@
   --info: #3b82f6;
 
   /* Focus */
-  --focus: rgba(255, 92, 92, 0.2);
+  --focus: rgba(139, 92, 246, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
@@ -143,20 +143,20 @@
   --border-hover: #aeaeb2;
   --input: #e5e5ea;
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.08);
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-muted: #7c3aed;
+  --accent-subtle: rgba(124, 58, 237, 0.08);
   --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.1);
-  --primary: #dc2626;
+  --accent-glow: rgba(124, 58, 237, 0.1);
+  --primary: #7c3aed;
   --primary-foreground: #ffffff;
 
   --secondary: #f1f3f5;
   --secondary-foreground: #3c3c43;
-  --accent-2: #0d9488;
-  --accent-2-muted: rgba(13, 148, 136, 0.75);
-  --accent-2-subtle: rgba(13, 148, 136, 0.08);
+  --accent-2: #0891b2;
+  --accent-2-muted: rgba(8, 145, 178, 0.75);
+  --accent-2-subtle: rgba(8, 145, 178, 0.08);
 
   --ok: #15803d;
   --ok-muted: rgba(21, 128, 61, 0.75);
@@ -171,7 +171,7 @@
   --danger-subtle: rgba(220, 38, 38, 0.08);
   --info: #2563eb;
 
-  --focus: rgba(220, 38, 38, 0.15);
+  --focus: rgba(124, 58, 237, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
@@ -514,7 +514,7 @@ html.theme-transition::view-transition-new(theme) {
   }
 }
 
-openclaw-app {
+nexus-app {
   display: block;
   position: relative;
   z-index: 1;

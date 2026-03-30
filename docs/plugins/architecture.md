@@ -913,7 +913,7 @@ Notes:
 ```ts
 const result = await api.runtime.imageGeneration.generate({
   config: api.config,
-  args: { prompt: "A friendly lobster mascot", size: "1024x1024" },
+  args: { prompt: "A friendly spider mascot", size: "1024x1024" },
 });
 
 const providers = api.runtime.imageGeneration.listProviders({

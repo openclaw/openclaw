@@ -2,7 +2,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../../local-storage.ts";
 import "../app.ts";
-import type { OpenClawApp } from "../app.ts";
+import type { NexusApp } from "../app.ts";
 
 class MockWebSocket {
   static CONNECTING = 0;
@@ -23,7 +23,7 @@ class MockWebSocket {
 
 export function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
-  const app = document.createElement("openclaw-app") as OpenClawApp;
+  const app = document.createElement("nexus-app") as NexusApp;
   document.body.append(app);
   app.connected = true;
   app.requestUpdate();

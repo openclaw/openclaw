@@ -364,29 +364,28 @@ export const icons = {
       />
     </svg>
   `,
-  lobster: html`
+  spider: html`
     <svg viewBox="0 0 120 120" fill="none">
       <defs>
-        <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#ff4d4d" />
-          <stop offset="100%" stop-color="#991b1b" />
+        <linearGradient id="nx-g" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#8b5cf6" />
+          <stop offset="100%" stop-color="#06b6d4" />
         </linearGradient>
       </defs>
-      <path
-        d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z"
-        fill="url(#lob-g)"
-      />
-      <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#lob-g)" />
-      <path
-        d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
-        fill="url(#lob-g)"
-      />
-      <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-      <circle cx="45" cy="35" r="6" fill="#050810" />
-      <circle cx="75" cy="35" r="6" fill="#050810" />
-      <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
-      <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
+      <ellipse cx="60" cy="44" rx="16" ry="14" fill="url(#nx-g)" />
+      <ellipse cx="60" cy="72" rx="20" ry="18" fill="url(#nx-g)" />
+      <path d="M44 38Q20 20 10 28" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round" />
+      <path d="M44 44Q16 36 8 48" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round" />
+      <path d="M44 50Q18 54 10 68" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round" />
+      <path d="M42 64Q22 72 14 88" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round" />
+      <path d="M76 38Q100 20 110 28" stroke="#06b6d4" stroke-width="3" stroke-linecap="round" />
+      <path d="M76 44Q104 36 112 48" stroke="#06b6d4" stroke-width="3" stroke-linecap="round" />
+      <path d="M76 50Q102 54 110 68" stroke="#06b6d4" stroke-width="3" stroke-linecap="round" />
+      <path d="M78 64Q98 72 106 88" stroke="#06b6d4" stroke-width="3" stroke-linecap="round" />
+      <circle cx="52" cy="38" r="4" fill="#08090d" />
+      <circle cx="68" cy="38" r="4" fill="#08090d" />
+      <circle cx="53" cy="37" r="1.8" fill="#fbbf24" />
+      <circle cx="69" cy="37" r="1.8" fill="#fbbf24" />
     </svg>
   `,
   refresh: html`

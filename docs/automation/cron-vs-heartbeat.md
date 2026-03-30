@@ -197,12 +197,12 @@ openclaw cron add --name "Weekly review" --cron "0 9 * * 1" --session isolated -
 openclaw cron add --name "Call back" --at "2h" --session main --system-event "Call back the client" --wake now
 ```
 
-## Lobster: Deterministic workflows with approvals
+## Deterministic workflows with approvals
 
-Lobster is the workflow runtime for **multi-step tool pipelines** that need deterministic execution and explicit approvals.
-Use it when the task is more than a single agent turn, and you want a resumable workflow with human checkpoints.
+For **multi-step tool pipelines** that need deterministic execution and explicit approvals,
+use the workflow runtime when the task is more than a single agent turn and you want a resumable workflow with human checkpoints.
 
-### When Lobster fits
+### When workflow pipelines fit
 
 - **Multi-step automation**: You need a fixed pipeline of tool calls, not a one-off prompt.
 - **Approval gates**: Side effects should pause until you approve, then resume.
@@ -211,19 +211,10 @@ Use it when the task is more than a single agent turn, and you want a resumable 
 ### How it pairs with heartbeat and cron
 
 - **Heartbeat/cron** decide _when_ a run happens.
-- **Lobster** defines _what steps_ happen once the run starts.
+- **Workflow pipelines** define _what steps_ happen once the run starts.
 
-For scheduled workflows, use cron or heartbeat to trigger an agent turn that calls Lobster.
-For ad-hoc workflows, call Lobster directly.
-
-### Operational notes (from the code)
-
-- Lobster runs as a **local subprocess** (`lobster` CLI) in tool mode and returns a **JSON envelope**.
-- If the tool returns `needs_approval`, you resume with a `resumeToken` and `approve` flag.
-- The tool is an **optional plugin**; enable it additively via `tools.alsoAllow: ["lobster"]` (recommended).
-- Lobster expects the `lobster` CLI to be available on `PATH`.
-
-See [Lobster](/tools/lobster) for full usage and examples.
+For scheduled workflows, use cron or heartbeat to trigger an agent turn that calls the workflow runtime.
+For ad-hoc workflows, call the workflow runtime directly.
 
 ## Main Session vs Isolated Session
 

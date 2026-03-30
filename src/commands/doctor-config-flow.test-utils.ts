@@ -11,10 +11,10 @@ export async function runDoctorConfigWithInput<T>(params: {
   }) => Promise<T>;
 }) {
   return withTempHome(async (home) => {
-    const configDir = path.join(home, ".openclaw");
+    const configDir = path.join(home, ".nexus-agent");
     await fs.mkdir(configDir, { recursive: true });
     await fs.writeFile(
-      path.join(configDir, "openclaw.json"),
+      path.join(configDir, "nexus-agent.json"),
       JSON.stringify(params.config, null, 2),
       "utf-8",
     );

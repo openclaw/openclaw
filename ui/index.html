@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenClaw Control</title>
+    <title>Nexus Agent Control</title>
     <meta name="color-scheme" content="dark light" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -24,7 +24,7 @@
           var keys = Object.keys(localStorage);
           var raw;
           for (var i = 0; i < keys.length; i++) {
-            if (keys[i].indexOf("openclaw.control.settings.v1") === 0) {
+            if (keys[i].indexOf("nexus.control.settings.v1") === 0 || keys[i].indexOf("openclaw.control.settings.v1") === 0) {
               raw = localStorage.getItem(keys[i]);
               if (raw) break;
             }
@@ -63,7 +63,7 @@
     </script>
   </head>
   <body>
-    <openclaw-app></openclaw-app>
+    <nexus-app></nexus-app>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
