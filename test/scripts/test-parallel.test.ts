@@ -277,8 +277,8 @@ describe("scripts/test-parallel lane planning", () => {
     );
 
     expect(output).toContain("mode=local intent=normal memoryBand=mid");
-    expect(output).toContain("unit-fast filters=all maxWorkers=");
-    expect(output).toMatch(/extensions(?:-batch-1)? filters=all maxWorkers=/);
+    expect(output).toMatch(/unit-fast(?:-batch-\d+)? filters=\d+ maxWorkers=/);
+    expect(output).toMatch(/extensions(?:-batch-\d+)? filters=\d+ maxWorkers=/);
   });
 
   it("uses higher shared extension worker counts on high-memory local hosts", () => {
@@ -304,8 +304,8 @@ describe("scripts/test-parallel lane planning", () => {
 
     expect(midSharedBatches.length).toBeGreaterThan(0);
     expect(highSharedBatches.length).toBeGreaterThan(0);
-    expect(midSharedBatches.every((line) => line.includes("filters=all maxWorkers=3"))).toBe(true);
-    expect(highSharedBatches.every((line) => line.includes("filters=all maxWorkers=5"))).toBe(true);
+    expect(midSharedBatches.every((line) => /filters=\d+ maxWorkers=3/.test(line))).toBe(true);
+    expect(highSharedBatches.every((line) => /filters=\d+ maxWorkers=5/.test(line))).toBe(true);
     expect(highSharedBatches.length).toBeLessThanOrEqual(midSharedBatches.length);
   });
 
@@ -320,7 +320,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(firstChannelIsolated).toBeGreaterThanOrEqual(0);
     expect(firstExtensionBatch).toBeGreaterThan(firstChannelIsolated);
     expect(firstChannelBatch).toBeGreaterThan(firstExtensionBatch);
-    expect(output).toContain("channels-batch-1 filters=all maxWorkers=5");
+    expect(output).toMatch(/channels-batch-1 filters=\d+ maxWorkers=5/);
   });
 
   it("uses coarser unit-fast batching for high-memory local multi-surface runs", () => {

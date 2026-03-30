@@ -19,6 +19,17 @@ import {
   SINGLE_RUN_ONLY_FLAGS,
 } from "./vitest-args.mjs";
 
+const countUnitEntryFilters = (unit) => {
+  const explicitFilterCount = countExplicitEntryFilters(unit.args);
+  if (explicitFilterCount !== null) {
+    return explicitFilterCount;
+  }
+  if (Array.isArray(unit.includeFiles) && unit.includeFiles.length > 0) {
+    return unit.includeFiles.length;
+  }
+  return null;
+};
+
 const parseEnvNumber = (env, name, fallback) => {
   const parsed = Number.parseInt(env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -1116,7 +1127,7 @@ const buildTopLevelSingleShardAssignments = (context, units) => {
     if (unit.fixedShardIndex !== undefined) {
       return false;
     }
-    const explicitFilterCount = countExplicitEntryFilters(unit.args);
+    const explicitFilterCount = countUnitEntryFilters(unit);
     if (explicitFilterCount === null) {
       return false;
     }
@@ -1364,7 +1375,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
 }
 
 export const formatExecutionUnitSummary = (unit) =>
-  `${unit.id} filters=${String(countExplicitEntryFilters(unit.args) || "all")} maxWorkers=${String(
+  `${unit.id} filters=${String(countUnitEntryFilters(unit) || "all")} maxWorkers=${String(
     unit.maxWorkers ?? "default",
   )} surface=${unit.surface} isolate=${unit.isolate ? "yes" : "no"} pool=${unit.pool}`;
 
