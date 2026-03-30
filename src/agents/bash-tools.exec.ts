@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  type ExecHost,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -21,10 +26,10 @@ import {
   applyPathPrepend,
   applyShellPath,
   normalizeExecAsk,
-  normalizeExecHost,
   normalizeExecSecurity,
+  normalizeExecTarget,
   normalizePathPrepend,
-  renderExecHostLabel,
+  resolveExecTarget,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
   execSchema,
@@ -329,20 +334,13 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      // Keep the implicit host aligned with the active runtime: host-first unless a sandbox
-      // runtime is actually available for this session, while still honoring explicit overrides.
-      const configuredHost = defaults?.host ?? (defaults?.sandbox ? "sandbox" : "gateway");
-      const requestedHost = normalizeExecHost(params.host) ?? null;
-      let host: ExecHost = requestedHost ?? configuredHost;
-      if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
-        throw new Error(
-          `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
-            `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
-        );
-      }
-      if (elevatedRequested) {
-        host = "gateway";
-      }
+      const target = resolveExecTarget({
+        configuredTarget: defaults?.host,
+        requestedTarget: normalizeExecTarget(params.host),
+        elevatedRequested,
+        sandboxAvailable: Boolean(defaults?.sandbox),
+      });
+      const host: ExecHost = target.effectiveHost;
 
       const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
       const requestedSecurity = normalizeExecSecurity(params.security);
@@ -360,13 +358,11 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      const sandboxHostConfigured = defaults?.host === "sandbox" || requestedHost === "sandbox";
-      // Never fall through to direct host exec when sandbox was selected explicitly.
-      if (host === "sandbox" && !sandbox && sandboxHostConfigured) {
+      if (target.selectedTarget === "sandbox" && !sandbox) {
         throw new Error(
           [
-            "exec host resolved to sandbox, but sandbox runtime is unavailable for this session.",
-            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
+            "exec host=sandbox requires a sandbox runtime for this session.",
+            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
           ].join("\n"),
         );
       }

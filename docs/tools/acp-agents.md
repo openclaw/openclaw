@@ -672,6 +672,13 @@ Notes:
 
 See [Plugins](/tools/plugin).
 
+### Automatic dependency install
+
+When you install OpenClaw globally with `npm install -g openclaw`, the acpx
+runtime dependencies (platform-specific binaries) are installed automatically
+via a postinstall hook. If the automatic install fails, the gateway still starts
+normally and reports the missing dependency through `openclaw acp doctor`.
+
 ### Plugin tools MCP bridge
 
 By default, ACPX sessions do **not** expose OpenClaw plugin-registered tools to

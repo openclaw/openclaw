@@ -142,7 +142,7 @@ describe("directive behavior", () => {
         },
       });
       expect(fastText).toContain("Current fast mode: on (config)");
-      expect(fastText).toContain("Options: on, off.");
+      expect(fastText).toContain("Options: status, on, off.");
 
       const verboseText = await runCommand(home, "/verbose", {
         defaults: { verboseDefault: "on" },
@@ -171,10 +171,10 @@ describe("directive behavior", () => {
         },
       });
       expect(execText).toContain(
-        "Current exec defaults: host=gateway, security=allowlist, ask=always, node=mac-1.",
+        "Current exec defaults: host=gateway, effective=gateway, security=allowlist, ask=always, node=mac-1.",
       );
       expect(execText).toContain(
-        "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+        "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
       );
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
@@ -197,6 +197,23 @@ describe("directive behavior", () => {
 
       const fastText = await runCommand(home, "/fast");
       expect(fastText).toContain("Current fast mode: off");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+  it("treats /fast status like the no-argument status query", async () => {
+    await withTempHome(async (home) => {
+      const statusText = await runCommand(home, "/fast status", {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-5": {
+              params: { fastMode: true },
+            },
+          },
+        },
+      });
+
+      expect(statusText).toContain("Current fast mode: on (config)");
+      expect(statusText).toContain("Options: status, on, off.");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });

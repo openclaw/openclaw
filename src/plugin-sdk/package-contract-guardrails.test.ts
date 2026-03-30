@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveNpmRunner } from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
 import { pluginSdkEntrypoints } from "./entrypoints.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,6 +15,7 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "src/plugin-sdk/subpaths.test.ts",
 ] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
+const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function collectPluginSdkPackageExports(): string[] {
   const packageJson = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
@@ -93,27 +95,43 @@ function createRootPackageRequire() {
   return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
 }
 
-function resolvePackageManagerCommand(name: "npm" | "pnpm"): string {
-  return process.platform === "win32" ? `${name}.cmd` : name;
-}
-
 function packOpenClawToTempDir(packDir: string): string {
-  const raw = execFileSync(
-    resolvePackageManagerCommand("npm"),
-    ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-      maxBuffer: 32 * 1024 * 1024,
+  const npmRunner = resolveNpmRunner({
+    npmArgs: ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+  });
+  const raw = execFileSync(npmRunner.command, npmRunner.args, {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...npmRunner.env,
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
     },
-  );
+    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
+    shell: npmRunner.shell,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+  });
   const parsed = JSON.parse(raw) as Array<{ filename?: string }>;
   const filename = parsed[0]?.filename?.trim();
   if (!filename) {
     throw new Error(`npm pack did not return a filename: ${raw}`);
   }
   return join(packDir, filename);
+}
+
+function readPackedRootPackageJson(archivePath: string): {
+  dependencies?: Record<string, string>;
+} {
+  return JSON.parse(
+    execFileSync("tar", ["-xOf", archivePath, "package/package.json"], {
+      encoding: "utf8",
+      maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  ) as {
+    dependencies?: Record<string, string>;
+  };
 }
 
 function readGeneratedFacadeTypeMap(): string {
@@ -125,6 +143,59 @@ function readGeneratedFacadeTypeMap(): string {
 
 function buildLegacyPluginSourceAlias(): string {
   return ["openclaw", ["plugin", "source"].join("-")].join("/") + "/";
+}
+
+function collectExtensionFiles(dir: string): string[] {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.name === "dist" || entry.name === "node_modules") {
+      continue;
+    }
+    const nextPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectExtensionFiles(nextPath));
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name)) {
+      continue;
+    }
+    files.push(nextPath);
+  }
+  return files;
+}
+
+function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPattern = /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']((?:\.\.\/)+src\/[^"']+)["']/g;
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    if (
+      /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
+      /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+      /\.test\.[cm]?tsx?$/.test(repoRelativePath)
+    ) {
+      continue;
+    }
+    const extensionRootMatch = /^(.*?\/extensions\/[^/]+)/.exec(file.replaceAll("\\", "/"));
+    const extensionRoot = extensionRootMatch?.[1];
+    const source = readFileSync(file, "utf8");
+    for (const match of source.matchAll(importPattern)) {
+      const specifier = match[1];
+      if (!specifier) {
+        continue;
+      }
+      const resolvedSpecifier = resolve(dirname(file), specifier).replaceAll("\\", "/");
+      if (extensionRoot && resolvedSpecifier.startsWith(`${extensionRoot}/`)) {
+        continue;
+      }
+      leaks.push({
+        file: repoRelativePath,
+        specifier,
+      });
+    }
+  }
+  return leaks;
 }
 
 describe("plugin-sdk package contract guardrails", () => {
@@ -175,56 +246,29 @@ describe("plugin-sdk package contract guardrails", () => {
 
   it("resolves matrix crypto WASM from the root runtime surface", () => {
     const rootRequire = createRootPackageRequire();
+    // Normalize filesystem separators so the package assertion stays portable.
+    const resolvedPath = rootRequire
+      .resolve("@matrix-org/matrix-sdk-crypto-wasm")
+      .replaceAll("\\", "/");
 
-    expect(rootRequire.resolve("@matrix-org/matrix-sdk-crypto-wasm")).toContain(
-      "@matrix-org/matrix-sdk-crypto-wasm",
-    );
+    expect(resolvedPath).toContain("@matrix-org/matrix-sdk-crypto-wasm");
   });
 
-  it("resolves matrix crypto WASM from an installed packed artifact", () => {
+  it("keeps matrix crypto WASM in the packed artifact manifest", () => {
     const tempRoot = mkdtempSync(join(os.tmpdir(), "openclaw-matrix-wasm-pack-"));
     try {
       const packDir = join(tempRoot, "pack");
-      const consumerDir = join(tempRoot, "consumer");
       mkdirSync(packDir, { recursive: true });
-      mkdirSync(consumerDir, { recursive: true });
-      writeFileSync(
-        join(consumerDir, "package.json"),
-        `${JSON.stringify({ name: "matrix-wasm-smoke", private: true }, null, 2)}\n`,
-        "utf8",
-      );
 
       const archivePath = packOpenClawToTempDir(packDir);
-
-      execFileSync(
-        resolvePackageManagerCommand("pnpm"),
-        ["add", "--prefer-offline", "--ignore-scripts", archivePath],
-        {
-          cwd: consumerDir,
-          encoding: "utf8",
-          env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-
-      const installedPackageJsonPath = join(
-        consumerDir,
-        "node_modules",
-        "openclaw",
-        "package.json",
-      );
-      const installedPackageJson = JSON.parse(readFileSync(installedPackageJsonPath, "utf8")) as {
-        dependencies?: Record<string, string>;
-      };
-      const installedRequire = createRequire(pathToFileURL(installedPackageJsonPath).href);
+      const packedPackageJson = readPackedRootPackageJson(archivePath);
       const matrixPackageJson = readMatrixPackageJson();
 
-      expect(installedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
+      expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
         matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
       );
-      expect(installedRequire.resolve("@matrix-org/matrix-sdk-crypto-wasm")).toContain(
-        "@matrix-org/matrix-sdk-crypto-wasm",
-      );
+      expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
+      expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBeUndefined();
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -233,5 +277,9 @@ describe("plugin-sdk package contract guardrails", () => {
   it("keeps generated facade types on package-style module specifiers", () => {
     expect(readGeneratedFacadeTypeMap()).not.toContain("../../extensions/");
     expect(readGeneratedFacadeTypeMap()).not.toContain(buildLegacyPluginSourceAlias());
+  });
+
+  it("keeps extension sources on public sdk or local package seams", () => {
+    expect(collectExtensionCoreImportLeaks()).toEqual([]);
   });
 });

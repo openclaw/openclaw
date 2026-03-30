@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.29",
+  "version": "2026.3.30",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -30,7 +30,6 @@
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
-    "!docs/internal/**",
     "skills/",
     "scripts/postinstall-bundled-plugins.mjs"
   ],
@@ -490,26 +489,6 @@
       "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
     },
-    "./plugin-sdk/imessage": {
-      "types": "./dist/plugin-sdk/imessage.d.ts",
-      "default": "./dist/plugin-sdk/imessage.js"
-    },
-    "./plugin-sdk/imessage-core": {
-      "types": "./dist/plugin-sdk/imessage-core.d.ts",
-      "default": "./dist/plugin-sdk/imessage-core.js"
-    },
-    "./plugin-sdk/imessage-policy": {
-      "types": "./dist/plugin-sdk/imessage-policy.d.ts",
-      "default": "./dist/plugin-sdk/imessage-policy.js"
-    },
-    "./plugin-sdk/imessage-runtime": {
-      "types": "./dist/plugin-sdk/imessage-runtime.d.ts",
-      "default": "./dist/plugin-sdk/imessage-runtime.js"
-    },
-    "./plugin-sdk/imessage-targets": {
-      "types": "./dist/plugin-sdk/imessage-targets.d.ts",
-      "default": "./dist/plugin-sdk/imessage-targets.js"
-    },
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
@@ -862,10 +841,6 @@
       "types": "./dist/plugin-sdk/synthetic.d.ts",
       "default": "./dist/plugin-sdk/synthetic.js"
     },
-    "./plugin-sdk/telegram": {
-      "types": "./dist/plugin-sdk/telegram.d.ts",
-      "default": "./dist/plugin-sdk/telegram.js"
-    },
     "./plugin-sdk/telegram-account": {
       "types": "./dist/plugin-sdk/telegram-account.d.ts",
       "default": "./dist/plugin-sdk/telegram-account.js"
@@ -877,14 +852,6 @@
     "./plugin-sdk/telegram-core": {
       "types": "./dist/plugin-sdk/telegram-core.d.ts",
       "default": "./dist/plugin-sdk/telegram-core.js"
-    },
-    "./plugin-sdk/telegram-runtime": {
-      "types": "./dist/plugin-sdk/telegram-runtime.d.ts",
-      "default": "./dist/plugin-sdk/telegram-runtime.js"
-    },
-    "./plugin-sdk/telegram-runtime-surface": {
-      "types": "./dist/plugin-sdk/telegram-runtime-surface.d.ts",
-      "default": "./dist/plugin-sdk/telegram-runtime-surface.js"
     },
     "./plugin-sdk/telegram-surface": {
       "types": "./dist/plugin-sdk/telegram-surface.d.ts",
@@ -1041,8 +1008,8 @@
     "format:all": "pnpm format && pnpm format:swift",
     "format:check": "oxfmt --check --threads=1",
     "format:diff": "oxfmt --write && git --no-pager diff",
-    "format:docs": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' ':(exclude)docs/internal/**' | xargs oxfmt --write",
-    "format:docs:check": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' ':(exclude)docs/internal/**' | xargs oxfmt --check",
+    "format:docs": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' | xargs oxfmt --write",
+    "format:docs:check": "git ls-files 'docs/**/*.md' 'docs/**/*.mdx' 'README.md' | xargs oxfmt --check",
     "format:fix": "oxfmt --write",
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/OpenClawKit/Sources",
     "gateway:dev": "OPENCLAW_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway",
@@ -1177,7 +1144,6 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.17.1",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
-    "@aws-sdk/client-bedrock": "^3.1019.0",
     "@clack/prompts": "^1.1.0",
     "@homebridge/ciao": "^1.3.5",
     "@line/bot-sdk": "^10.6.0",

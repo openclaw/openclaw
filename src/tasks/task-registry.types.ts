@@ -1,11 +1,11 @@
 import type { DeliveryContext } from "../utils/delivery-context.js";
 
-export type TaskRuntime = "subagent" | "acp" | "cli";
+export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
 export type TaskStatus =
-  | "accepted"
+  | "queued"
   | "running"
-  | "done"
+  | "succeeded"
   | "failed"
   | "timed_out"
   | "cancelled"
@@ -21,9 +21,19 @@ export type TaskDeliveryStatus =
 
 export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
-export type TaskBindingTargetKind = "subagent" | "session";
+export type TaskTerminalOutcome = "succeeded" | "blocked";
 
-export type TaskSource = "sessions_spawn" | "background_cli" | "unknown";
+export type TaskStatusCounts = Record<TaskStatus, number>;
+export type TaskRuntimeCounts = Record<TaskRuntime, number>;
+
+export type TaskRegistrySummary = {
+  total: number;
+  active: number;
+  terminal: number;
+  failures: number;
+  byStatus: TaskStatusCounts;
+  byRuntime: TaskRuntimeCounts;
+};
 
 export type TaskEventKind = TaskStatus | "progress";
 
@@ -35,13 +45,14 @@ export type TaskEventRecord = {
 
 export type TaskRecord = {
   taskId: string;
-  source: TaskSource;
   runtime: TaskRuntime;
+  sourceId?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
   runId?: string;
-  bindingTargetKind?: TaskBindingTargetKind;
   label?: string;
   task: string;
   status: TaskStatus;
@@ -51,16 +62,13 @@ export type TaskRecord = {
   startedAt?: number;
   endedAt?: number;
   lastEventAt?: number;
+  cleanupAfter?: number;
   error?: string;
   progressSummary?: string;
   terminalSummary?: string;
+  terminalOutcome?: TaskTerminalOutcome;
   recentEvents?: TaskEventRecord[];
   lastNotifiedEventAt?: number;
-  transcriptPath?: string;
-  streamLogPath?: string;
-  backend?: string;
-  agentSessionId?: string;
-  backendSessionId?: string;
 };
 
 export type TaskRegistrySnapshot = {

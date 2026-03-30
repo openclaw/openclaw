@@ -21,6 +21,7 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Startup fails fast when an effectively active SecretRef cannot be resolved.
 - Reload uses atomic swap: full success, or keep the last-known-good snapshot.
 - Runtime requests read from the active in-memory snapshot only.
+- After the first successful config activation/load, runtime code paths keep reading that active in-memory snapshot until a successful reload swaps it.
 - Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
 
 This keeps secret-provider outages off hot request paths.

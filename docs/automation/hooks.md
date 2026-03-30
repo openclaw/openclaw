@@ -129,7 +129,7 @@ Example `package.json`:
 }
 ```
 
-Each entry points to a hook directory containing `HOOK.md` and `handler.ts` (or `index.ts`).
+Each entry points to a hook directory containing `HOOK.md` and a handler file. The loader tries `handler.ts`, `handler.js`, `index.ts`, `index.js` in order.
 Hook packs can ship dependencies; they will be installed under `~/.openclaw/hooks/<id>`.
 Each `openclaw.hooks` entry must stay inside the package directory after symlink
 resolution; entries that escape are rejected.
@@ -236,6 +236,9 @@ Each event includes:
     sessionId?: string,
     // Agent bootstrap events (agent:bootstrap):
     bootstrapFiles?: WorkspaceBootstrapFile[],
+    sessionKey?: string,           // routing session key
+    sessionId?: string,            // internal session UUID
+    agentId?: string,              // resolved agent ID
     // Message events (see Message Events section for full details):
     from?: string,             // message:received
     to?: string,               // message:sent
@@ -265,6 +268,25 @@ Triggered when agent commands are issued:
 Internal hook payloads emit these as `type: "session"` with `action: "compact:before"` / `action: "compact:after"`; listeners subscribe with the combined keys above.
 Specific handler registration uses the literal key format `${type}:${action}`. For these events, register `session:compact:before` and `session:compact:after`.
 
+`session:compact:before` context fields:
+
+- `sessionId`: internal session UUID
+- `missingSessionKey`: true when no session key was available
+- `messageCount`: number of messages before compaction
+- `tokenCount`: token count before compaction (may be absent)
+- `messageCountOriginal`: message count from the full untruncated session history
+- `tokenCountOriginal`: token count of the full original history (may be absent)
+
+`session:compact:after` context fields (in addition to `sessionId` and `missingSessionKey`):
+
+- `messageCount`: message count after compaction
+- `tokenCount`: token count after compaction (may be absent)
+- `compactedCount`: number of messages that were compacted/removed
+- `summaryLength`: character length of the generated compaction summary
+- `tokensBefore`: token count from before compaction (for delta calculation)
+- `tokensAfter`: token count after compaction
+- `firstKeptEntryId`: ID of the first message entry retained after compaction
+
 ### Agent Events
 
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
@@ -293,12 +315,16 @@ Session events include rich context about the session and changes:
     label?: string | null,           // Human-readable session label
 
     // AI model configuration
-    model?: string | null,           // Model override (e.g., "claude-opus-4-5")
+    model?: string | null,           // Model override (e.g., "claude-sonnet-4-6")
     thinkingLevel?: string | null,   // Thinking level ("off"|"low"|"med"|"high")
     verboseLevel?: string | null,    // Verbose output level
     reasoningLevel?: string | null,  // Reasoning mode override
     elevatedLevel?: string | null,   // Elevated mode override
-    responseUsage?: "off" | "tokens" | "full" | null, // Usage display mode
+    responseUsage?: "off" | "tokens" | "full" | "on" | null, // Usage display mode ("on" is backwards-compat alias for "full")
+    fastMode?: boolean | null,                    // Fast/turbo mode toggle
+    spawnedWorkspaceDir?: string | null,          // Workspace dir override for spawned subagents
+    subagentRole?: "orchestrator" | "leaf" | null, // Subagent role assignment
+    subagentControlScope?: "children" | "none" | null, // Scope of subagent control
 
     // Tool execution settings
     execHost?: string | null,        // Exec host (sandbox|gateway|node)
@@ -318,7 +344,7 @@ Session events include rich context about the session and changes:
 }
 ```
 
-**Security note:** Only privileged clients (including the Control UI) can trigger `session:patch` events. Standard WebChat clients are blocked from patching sessions (see PR #20800), so the hook will not fire from those connections.
+**Security note:** Only privileged clients (including the Control UI) can trigger `session:patch` events. Standard WebChat clients are blocked from patching sessions, so the hook will not fire from those connections.
 
 See `SessionsPatchParamsSchema` in `src/gateway/protocol/schema/sessions.ts` for the complete type definition.
 
@@ -540,7 +566,7 @@ Example event (plugin package install):
     "findings": [
       {
         "severity": "warn",
-        "code": "network_fetch",
+        "ruleId": "network_fetch",
         "file": "dist/index.js",
         "line": 88,
         "message": "Dynamic network fetch detected during install review."
@@ -574,12 +600,91 @@ Compaction lifecycle hooks exposed through the plugin hook runner:
 - **`before_compaction`**: Runs before compaction with count/token metadata
 - **`after_compaction`**: Runs after compaction with compaction summary metadata
 
+### Complete Plugin Hook Reference
+
+All 27 hooks registered via the Plugin SDK. Hooks marked **sequential** run in priority order and can modify results; **parallel** hooks are fire-and-forget.
+
+#### Model and prompt hooks
+
+| Hook                   | When                                         | Execution  | Returns                                                    |
+| ---------------------- | -------------------------------------------- | ---------- | ---------------------------------------------------------- |
+| `before_model_resolve` | Before model/provider lookup                 | Sequential | `{ modelOverride?, providerOverride? }`                    |
+| `before_prompt_build`  | After model resolved, session messages ready | Sequential | `{ systemPrompt?, prependContext?, appendSystemContext? }` |
+| `before_agent_start`   | Legacy combined hook (prefer the two above)  | Sequential | Union of both result shapes                                |
+| `llm_input`            | Immediately before the LLM API call          | Parallel   | `void`                                                     |
+| `llm_output`           | Immediately after LLM response received      | Parallel   | `void`                                                     |
+
+#### Agent lifecycle hooks
+
+| Hook                | When                                           | Execution | Returns |
+| ------------------- | ---------------------------------------------- | --------- | ------- |
+| `agent_end`         | After agent run completes (success or failure) | Parallel  | `void`  |
+| `before_reset`      | When `/new` or `/reset` clears a session       | Parallel  | `void`  |
+| `before_compaction` | Before compaction summarizes history           | Parallel  | `void`  |
+| `after_compaction`  | After compaction completes                     | Parallel  | `void`  |
+
+#### Session lifecycle hooks
+
+| Hook            | When                      | Execution | Returns |
+| --------------- | ------------------------- | --------- | ------- |
+| `session_start` | When a new session begins | Parallel  | `void`  |
+| `session_end`   | When a session ends       | Parallel  | `void`  |
+
+#### Message flow hooks
+
+| Hook                   | When                                              | Execution            | Returns                       |
+| ---------------------- | ------------------------------------------------- | -------------------- | ----------------------------- |
+| `inbound_claim`        | Before command/agent dispatch; first-claim wins   | Sequential           | `{ handled: boolean }`        |
+| `message_received`     | After an inbound message is received              | Parallel             | `void`                        |
+| `before_dispatch`      | After commands parsed, before model dispatch      | Sequential           | `{ handled: boolean, text? }` |
+| `message_sending`      | Before an outbound message is delivered           | Sequential           | `{ content?, cancel? }`       |
+| `message_sent`         | After an outbound message is delivered            | Parallel             | `void`                        |
+| `before_message_write` | Before a message is written to session transcript | **Sync**, sequential | `{ block?, message? }`        |
+
+#### Tool execution hooks
+
+| Hook                  | When                                          | Execution            | Returns                                               |
+| --------------------- | --------------------------------------------- | -------------------- | ----------------------------------------------------- |
+| `before_tool_call`    | Before each tool call                         | Sequential           | `{ params?, block?, blockReason?, requireApproval? }` |
+| `after_tool_call`     | After a tool call completes                   | Parallel             | `void`                                                |
+| `tool_result_persist` | Before a tool result is written to transcript | **Sync**, sequential | `{ message? }`                                        |
+
+#### Subagent hooks
+
+| Hook                       | When                                       | Execution  | Returns                           |
+| -------------------------- | ------------------------------------------ | ---------- | --------------------------------- |
+| `subagent_spawning`        | Before a subagent session is created       | Sequential | `{ status, threadBindingReady? }` |
+| `subagent_delivery_target` | After spawning, to resolve delivery target | Sequential | `{ origin? }`                     |
+| `subagent_spawned`         | After a subagent is fully spawned          | Parallel   | `void`                            |
+| `subagent_ended`           | When a subagent session terminates         | Parallel   | `void`                            |
+
+#### Gateway hooks
+
+| Hook            | When                                       | Execution | Returns |
+| --------------- | ------------------------------------------ | --------- | ------- |
+| `gateway_start` | After the gateway process is fully started | Parallel  | `void`  |
+| `gateway_stop`  | When the gateway is shutting down          | Parallel  | `void`  |
+
+#### Install hooks
+
+| Hook             | When                                                  | Execution  | Returns                               |
+| ---------------- | ----------------------------------------------------- | ---------- | ------------------------------------- |
+| `before_install` | After built-in security scan, before install proceeds | Sequential | `{ findings?, block?, blockReason? }` |
+
+<Note>
+Two hooks (`tool_result_persist` and `before_message_write`) are **synchronous only** — they must not return a Promise. Returning a Promise from these hooks is caught at runtime and the result is discarded with a warning.
+</Note>
+
+For full handler signatures and context types, see [Plugin Architecture](/plugins/architecture).
+
 ### Future Events
 
-Planned event types:
+The following event types are planned for the internal hook event stream.
+Note that `session_start` and `session_end` already exist as [Plugin Hook API](/plugins/architecture#provider-runtime-hooks) hooks
+but are not yet available as internal hook event keys in `HOOK.md` metadata:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
+- **`session:start`**: When a new session begins (planned for internal hook stream; available as plugin hook `session_start`)
+- **`session:end`**: When a session ends (planned for internal hook stream; available as plugin hook `session_end`)
 - **`agent:error`**: When an agent encounters an error
 
 ## Creating Custom Hooks
@@ -995,8 +1100,8 @@ metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
 
 The gateway logs hook loading at startup:
 
-```
-Registered hook: session-memory -> command:new
+```text
+Registered hook: session-memory -> command:new, command:reset
 Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup

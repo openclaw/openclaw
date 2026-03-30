@@ -15,20 +15,22 @@ import {
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryHookEvent,
 } from "./task-registry.store.js";
+import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
-  TaskBindingTargetKind,
   TaskDeliveryStatus,
   TaskEventKind,
   TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
+  TaskRegistrySummary,
   TaskRegistrySnapshot,
   TaskRuntime,
-  TaskSource,
   TaskStatus,
+  TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/registry");
+const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const tasks = new Map<string, TaskRecord>();
 const taskIdsByRunId = new Map<string, Set<string>>();
@@ -72,6 +74,24 @@ function persistTaskRegistry() {
   getTaskRegistryStore().saveSnapshot(tasks);
 }
 
+function persistTaskUpsert(task: TaskRecord) {
+  const store = getTaskRegistryStore();
+  if (store.upsertTask) {
+    store.upsertTask(task);
+    return;
+  }
+  store.saveSnapshot(tasks);
+}
+
+function persistTaskDelete(taskId: string) {
+  const store = getTaskRegistryStore();
+  if (store.deleteTask) {
+    store.deleteTask(taskId);
+    return;
+  }
+  store.saveSnapshot(tasks);
+}
+
 function ensureDeliveryStatus(requesterSessionKey: string): TaskDeliveryStatus {
   return requesterSessionKey.trim() ? "pending" : "parent_missing";
 }
@@ -91,6 +111,35 @@ function ensureNotifyPolicy(params: {
 function normalizeTaskSummary(value: string | null | undefined): string | undefined {
   const normalized = value?.replace(/\s+/g, " ").trim();
   return normalized || undefined;
+}
+
+function normalizeTaskStatus(value: TaskStatus | null | undefined): TaskStatus {
+  return value === "running" ||
+    value === "queued" ||
+    value === "succeeded" ||
+    value === "failed" ||
+    value === "timed_out" ||
+    value === "cancelled" ||
+    value === "lost"
+    ? value
+    : "queued";
+}
+
+function normalizeTaskTerminalOutcome(
+  value: TaskTerminalOutcome | null | undefined,
+): TaskTerminalOutcome | undefined {
+  return value === "succeeded" || value === "blocked" ? value : undefined;
+}
+
+function resolveTaskTerminalOutcome(params: {
+  status: TaskStatus;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}): TaskTerminalOutcome | undefined {
+  const normalized = normalizeTaskTerminalOutcome(params.terminalOutcome);
+  if (normalized) {
+    return normalized;
+  }
+  return params.status === "succeeded" ? "succeeded" : undefined;
 }
 
 const TASK_RECENT_EVENT_LIMIT = 12;
@@ -150,10 +199,8 @@ function getTasksByRunId(runId: string): TaskRecord[] {
 }
 
 function taskLookupPriority(task: TaskRecord): number {
-  const sourcePriority =
-    task.source === "sessions_spawn" ? 0 : task.source === "background_cli" ? 1 : 2;
   const runtimePriority = task.runtime === "cli" ? 1 : 0;
-  return sourcePriority * 10 + runtimePriority;
+  return runtimePriority;
 }
 
 function pickPreferredRunIdTask(matches: TaskRecord[]): TaskRecord | undefined {
@@ -171,12 +218,10 @@ function normalizeComparableText(value: string | undefined): string {
 }
 
 function findExistingTaskForCreate(params: {
-  source: TaskSource;
   runtime: TaskRuntime;
   requesterSessionKey: string;
   childSessionKey?: string;
   runId?: string;
-  bindingTargetKind?: TaskBindingTargetKind;
   label?: string;
   task: string;
 }): TaskRecord | undefined {
@@ -184,14 +229,11 @@ function findExistingTaskForCreate(params: {
   const exact = runId
     ? getTasksByRunId(runId).find(
         (task) =>
-          task.source === params.source &&
           task.runtime === params.runtime &&
           normalizeComparableText(task.requesterSessionKey) ===
             normalizeComparableText(params.requesterSessionKey) &&
           normalizeComparableText(task.childSessionKey) ===
             normalizeComparableText(params.childSessionKey) &&
-          normalizeComparableText(task.bindingTargetKind) ===
-            normalizeComparableText(params.bindingTargetKind) &&
           normalizeComparableText(task.label) === normalizeComparableText(params.label) &&
           normalizeComparableText(task.task) === normalizeComparableText(params.task),
       )
@@ -216,42 +258,45 @@ function findExistingTaskForCreate(params: {
   return pickPreferredRunIdTask(siblingMatches);
 }
 
-function sourceUpgradePriority(source: TaskSource): number {
-  return source === "sessions_spawn" ? 0 : source === "background_cli" ? 1 : 2;
-}
-
 function mergeExistingTaskForCreate(
   existing: TaskRecord,
   params: {
-    source: TaskSource;
     requesterOrigin?: TaskRecord["requesterOrigin"];
-    bindingTargetKind?: TaskBindingTargetKind;
+    sourceId?: string;
+    parentTaskId?: string;
+    agentId?: string;
     label?: string;
     task: string;
+    preferMetadata?: boolean;
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
-    streamLogPath?: string;
   },
 ): TaskRecord {
   const patch: Partial<TaskRecord> = {};
-  if (sourceUpgradePriority(params.source) < sourceUpgradePriority(existing.source)) {
-    patch.source = params.source;
-  }
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   if (requesterOrigin && !existing.requesterOrigin) {
     patch.requesterOrigin = requesterOrigin;
   }
-  if (params.bindingTargetKind && !existing.bindingTargetKind) {
-    patch.bindingTargetKind = params.bindingTargetKind;
+  if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
+    patch.sourceId = params.sourceId.trim();
   }
-  if (params.label?.trim() && !existing.label?.trim()) {
-    patch.label = params.label.trim();
+  if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
+    patch.parentTaskId = params.parentTaskId.trim();
   }
-  if (params.streamLogPath?.trim() && !existing.streamLogPath?.trim()) {
-    patch.streamLogPath = params.streamLogPath.trim();
+  if (params.agentId?.trim() && !existing.agentId?.trim()) {
+    patch.agentId = params.agentId.trim();
   }
-  if (params.source === "sessions_spawn" && existing.source !== "sessions_spawn") {
-    patch.task = params.task;
+  const nextLabel = params.label?.trim();
+  if (params.preferMetadata) {
+    if (nextLabel && normalizeComparableText(existing.label) !== nextLabel) {
+      patch.label = nextLabel;
+    }
+    const nextTask = params.task.trim();
+    if (nextTask && normalizeComparableText(existing.task) !== nextTask) {
+      patch.task = nextTask;
+    }
+  } else if (nextLabel && !existing.label?.trim()) {
+    patch.label = nextLabel;
   }
   if (params.deliveryStatus === "pending" && existing.deliveryStatus !== "delivered") {
     patch.deliveryStatus = "pending";
@@ -271,7 +316,8 @@ function mergeExistingTaskForCreate(
 }
 
 function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
-  return `task-terminal:${task.taskId}:${task.status}`;
+  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
+  return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
 }
 
 function restoreTaskRegistryOnce() {
@@ -302,17 +348,31 @@ export function ensureTaskRegistryReady() {
   ensureListener();
 }
 
+function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "timed_out" ||
+    status === "cancelled" ||
+    status === "lost"
+  );
+}
+
 function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | null {
   const current = tasks.get(taskId);
   if (!current) {
     return null;
   }
   const next = { ...current, ...patch };
+  if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
+    const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
+    next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
+  }
   tasks.set(taskId, next);
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
   }
-  persistTaskRegistry();
+  persistTaskUpsert(next);
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
@@ -333,7 +393,12 @@ function formatTaskTerminalEvent(task: TaskRecord): string {
         : task.task.trim() || "Background task");
   const runLabel = task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
   const summary = task.terminalSummary?.trim();
-  if (task.status === "done") {
+  if (task.status === "succeeded") {
+    if (task.terminalOutcome === "blocked") {
+      return summary
+        ? `Background task blocked: ${title}${runLabel}. ${summary}`
+        : `Background task blocked: ${title}${runLabel}.`;
+    }
     return summary
       ? `Background task done: ${title}${runLabel}. ${summary}`
       : `Background task done: ${title}${runLabel}.`;
@@ -377,6 +442,35 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
   return true;
 }
 
+function queueBlockedTaskFollowup(task: TaskRecord) {
+  if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
+    return false;
+  }
+  const requesterSessionKey = task.requesterSessionKey.trim();
+  if (!requesterSessionKey) {
+    return false;
+  }
+  const title =
+    task.label?.trim() ||
+    (task.runtime === "acp"
+      ? "ACP background task"
+      : task.runtime === "subagent"
+        ? "Subagent task"
+        : task.task.trim() || "Background task");
+  const runLabel = task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
+  const summary = task.terminalSummary?.trim() || "Task is blocked and needs follow-up.";
+  enqueueSystemEvent(`Task needs follow-up: ${title}${runLabel}. ${summary}`, {
+    sessionKey: requesterSessionKey,
+    contextKey: `task:${task.taskId}:blocked-followup`,
+    deliveryContext: task.requesterOrigin,
+  });
+  requestHeartbeatNow({
+    reason: "background-task-blocked",
+    sessionKey: requesterSessionKey,
+  });
+  return true;
+}
+
 function formatTaskStateChangeEvent(task: TaskRecord, event: TaskEventRecord): string | null {
   const title =
     task.label?.trim() ||
@@ -402,7 +496,7 @@ function shouldAutoDeliverTaskUpdate(task: TaskRecord): boolean {
     return false;
   }
   if (
-    task.status !== "done" &&
+    task.status !== "succeeded" &&
     task.status !== "failed" &&
     task.status !== "timed_out" &&
     task.status !== "lost" &&
@@ -417,7 +511,7 @@ function shouldAutoDeliverTaskStateChange(task: TaskRecord): boolean {
   return (
     task.notifyPolicy === "state_changes" &&
     task.deliveryStatus === "pending" &&
-    task.status !== "done" &&
+    task.status !== "succeeded" &&
     task.status !== "failed" &&
     task.status !== "timed_out" &&
     task.status !== "lost" &&
@@ -464,6 +558,9 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     if (!canDeliverTaskToRequesterOrigin(latest)) {
       try {
         queueTaskSystemEvent(latest, eventText);
+        if (latest.terminalOutcome === "blocked") {
+          queueBlockedTaskFollowup(latest);
+        }
         return updateTask(taskId, {
           deliveryStatus: "session_queued",
           lastEventAt: Date.now(),
@@ -498,6 +595,9 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
           idempotencyKey: taskTerminalDeliveryIdempotencyKey(latest),
         },
       });
+      if (latest.terminalOutcome === "blocked") {
+        queueBlockedTaskFollowup(latest);
+      }
       return updateTask(taskId, {
         deliveryStatus: "delivered",
         lastEventAt: Date.now(),
@@ -511,6 +611,9 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
       try {
         queueTaskSystemEvent(latest, eventText);
+        if (latest.terminalOutcome === "blocked") {
+          queueBlockedTaskFollowup(latest);
+        }
       } catch (fallbackError) {
         log.warn("Failed to queue background task fallback event", {
           taskId,
@@ -637,7 +740,7 @@ function ensureListener() {
         if (phase === "start") {
           patch.status = "running";
         } else if (phase === "end") {
-          patch.status = evt.data?.aborted === true ? "timed_out" : "done";
+          patch.status = evt.data?.aborted === true ? "timed_out" : "succeeded";
           patch.endedAt = endedAt ?? now;
         } else if (phase === "error") {
           patch.status = "failed";
@@ -654,7 +757,7 @@ function ensureListener() {
           summary:
             patch.status === "failed"
               ? (patch.error ?? current.error)
-              : patch.status === "done"
+              : patch.status === "succeeded"
                 ? current.terminalSummary
                 : undefined,
         });
@@ -669,27 +772,26 @@ function ensureListener() {
 }
 
 export function createTaskRecord(params: {
-  source: TaskSource;
   runtime: TaskRuntime;
+  sourceId?: string;
   requesterSessionKey: string;
   requesterOrigin?: TaskRecord["requesterOrigin"];
   childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
   runId?: string;
-  bindingTargetKind?: TaskBindingTargetKind;
   label?: string;
   task: string;
+  preferMetadata?: boolean;
   status?: TaskStatus;
   deliveryStatus?: TaskDeliveryStatus;
   notifyPolicy?: TaskNotifyPolicy;
   startedAt?: number;
   lastEventAt?: number;
+  cleanupAfter?: number;
   progressSummary?: string | null;
   terminalSummary?: string | null;
-  transcriptPath?: string;
-  streamLogPath?: string;
-  backend?: string;
-  agentSessionId?: string;
-  backendSessionId?: string;
+  terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord {
   ensureTaskRegistryReady();
   const existing = findExistingTaskForCreate(params);
@@ -698,7 +800,7 @@ export function createTaskRecord(params: {
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();
-  const status = params.status ?? "accepted";
+  const status = normalizeTaskStatus(params.status);
   const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(params.requesterSessionKey);
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
@@ -708,13 +810,14 @@ export function createTaskRecord(params: {
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
   const record: TaskRecord = {
     taskId,
-    source: params.source,
     runtime: params.runtime,
+    sourceId: params.sourceId?.trim() || undefined,
     requesterSessionKey: params.requesterSessionKey,
     requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
     childSessionKey: params.childSessionKey,
+    parentTaskId: params.parentTaskId?.trim() || undefined,
+    agentId: params.agentId?.trim() || undefined,
     runId: params.runId?.trim() || undefined,
-    bindingTargetKind: params.bindingTargetKind,
     label: params.label?.trim() || undefined,
     task: params.task,
     status,
@@ -723,12 +826,16 @@ export function createTaskRecord(params: {
     createdAt: now,
     startedAt: params.startedAt,
     lastEventAt,
+    cleanupAfter: params.cleanupAfter,
     progressSummary: normalizeTaskSummary(params.progressSummary),
     terminalSummary: normalizeTaskSummary(params.terminalSummary),
+    terminalOutcome: resolveTaskTerminalOutcome({
+      status,
+      terminalOutcome: params.terminalOutcome,
+    }),
     recentEvents: appendTaskEvent(
       {
         taskId,
-        source: params.source,
         runtime: params.runtime,
         requesterSessionKey: params.requesterSessionKey,
         task: params.task,
@@ -742,19 +849,21 @@ export function createTaskRecord(params: {
         kind: status,
       },
     ),
-    transcriptPath: params.transcriptPath,
-    streamLogPath: params.streamLogPath,
-    backend: params.backend,
-    agentSessionId: params.agentSessionId,
-    backendSessionId: params.backendSessionId,
   };
+  if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
+    record.cleanupAfter =
+      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
+  }
   tasks.set(taskId, record);
   addRunIdIndex(taskId, record.runId);
-  persistTaskRegistry();
+  persistTaskUpsert(record);
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
+  if (isTerminalTaskStatus(record.status)) {
+    void maybeDeliverTaskTerminalUpdate(taskId);
+  }
   return cloneTaskRecord(record);
 }
 
@@ -767,6 +876,7 @@ export function updateTaskStateByRunId(params: {
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
   eventSummary?: string | null;
 }) {
   ensureTaskRegistryReady();
@@ -781,10 +891,10 @@ export function updateTaskStateByRunId(params: {
       continue;
     }
     const patch: Partial<TaskRecord> = {};
-    const nextStatus = params.status ?? current.status;
+    const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
     const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
     if (params.status) {
-      patch.status = params.status;
+      patch.status = normalizeTaskStatus(params.status);
     }
     if (params.startedAt != null) {
       patch.startedAt = params.startedAt;
@@ -804,11 +914,17 @@ export function updateTaskStateByRunId(params: {
     if (params.terminalSummary !== undefined) {
       patch.terminalSummary = normalizeTaskSummary(params.terminalSummary);
     }
+    if (params.terminalOutcome !== undefined) {
+      patch.terminalOutcome = resolveTaskTerminalOutcome({
+        status: nextStatus,
+        terminalOutcome: params.terminalOutcome,
+      });
+    }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??
       (nextStatus === "failed"
         ? normalizeTaskSummary(params.error ?? current.error)
-        : nextStatus === "done"
+        : nextStatus === "succeeded"
           ? normalizeTaskSummary(params.terminalSummary ?? current.terminalSummary)
           : undefined);
     const shouldAppendEvent =
@@ -817,7 +933,10 @@ export function updateTaskStateByRunId(params: {
     if (shouldAppendEvent) {
       patch.recentEvents = appendTaskEvent(current, {
         at: eventAt,
-        kind: params.status && params.status !== current.status ? params.status : "progress",
+        kind:
+          params.status && normalizeTaskStatus(params.status) !== current.status
+            ? normalizeTaskStatus(params.status)
+            : "progress",
         summary: eventSummary,
       });
     }
@@ -864,7 +983,7 @@ export async function cancelTaskById(params: {
     return { found: false, cancelled: false, reason: "Task not found." };
   }
   if (
-    task.status === "done" ||
+    task.status === "succeeded" ||
     task.status === "failed" ||
     task.status === "timed_out" ||
     task.status === "lost" ||
@@ -950,6 +1069,11 @@ export function listTaskRecords(): TaskRecord[] {
     .toSorted((a, b) => b.createdAt - a.createdAt);
 }
 
+export function getTaskRegistrySummary(): TaskRegistrySummary {
+  ensureTaskRegistryReady();
+  return summarizeTaskRecords(tasks.values());
+}
+
 export function getTaskRegistrySnapshot(): TaskRegistrySnapshot {
   return {
     tasks: listTaskRecords(),
@@ -994,7 +1118,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   }
   tasks.delete(taskId);
   rebuildRunIdIndex();
-  persistTaskRegistry();
+  persistTaskDelete(taskId);
   emitTaskRegistryHookEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,

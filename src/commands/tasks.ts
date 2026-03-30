@@ -1,11 +1,19 @@
 import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  listTaskAuditFindings,
+  summarizeTaskAuditFindings,
+  type TaskAuditCode,
+  type TaskAuditFinding,
+  type TaskAuditSeverity,
+} from "../tasks/task-registry.audit.js";
 import { cancelTaskById, getTaskById, updateTaskNotifyPolicyById } from "../tasks/task-registry.js";
 import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
+import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -38,7 +46,7 @@ function formatTaskStatusCell(status: string, rich: boolean) {
   if (!rich) {
     return padded;
   }
-  if (status === "done") {
+  if (status === "succeeded") {
     return theme.success(padded);
   }
   if (status === "failed" || status === "lost" || status === "timed_out") {
@@ -53,7 +61,7 @@ function formatTaskStatusCell(status: string, rich: boolean) {
 function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const header = [
     "Task".padEnd(ID_PAD),
-    "Runtime".padEnd(RUNTIME_PAD),
+    "Kind".padEnd(RUNTIME_PAD),
     "Status".padEnd(STATUS_PAD),
     "Delivery".padEnd(DELIVERY_PAD),
     "Run".padEnd(RUN_PAD),
@@ -79,6 +87,65 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
       summary,
     ].join(" ");
     lines.push(line.trimEnd());
+  }
+  return lines;
+}
+
+function formatTaskListSummary(tasks: TaskRecord[]) {
+  const summary = summarizeTaskRecords(tasks);
+  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+}
+
+function formatAgeMs(ageMs: number | undefined): string {
+  if (typeof ageMs !== "number" || ageMs < 1000) {
+    return "fresh";
+  }
+  const totalSeconds = Math.floor(ageMs / 1000);
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (days > 0) {
+    return `${days}d${hours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m`;
+  }
+  return `${totalSeconds}s`;
+}
+
+function formatAuditRows(findings: TaskAuditFinding[], rich: boolean) {
+  const header = [
+    "Severity".padEnd(8),
+    "Code".padEnd(22),
+    "Task".padEnd(ID_PAD),
+    "Status".padEnd(STATUS_PAD),
+    "Age".padEnd(8),
+    "Detail",
+  ].join(" ");
+  const lines = [rich ? theme.heading(header) : header];
+  for (const finding of findings) {
+    const severity = finding.severity.padEnd(8);
+    const status = formatTaskStatusCell(finding.task.status, rich);
+    const severityCell = !rich
+      ? severity
+      : finding.severity === "error"
+        ? theme.error(severity)
+        : theme.warn(severity);
+    lines.push(
+      [
+        severityCell,
+        finding.code.padEnd(22),
+        shortToken(finding.task.taskId).padEnd(ID_PAD),
+        status,
+        formatAgeMs(finding.ageMs).padEnd(8),
+        truncate(finding.detail, 88),
+      ]
+        .join(" ")
+        .trimEnd(),
+    );
   }
   return lines;
 }
@@ -116,6 +183,7 @@ export async function tasksListCommand(
   }
 
   runtime.log(info(`Background tasks: ${tasks.length}`));
+  runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }
@@ -151,21 +219,24 @@ export async function tasksShowCommand(
   const lines = [
     "Background task:",
     `taskId: ${task.taskId}`,
-    `runtime: ${task.runtime}`,
+    `kind: ${task.runtime}`,
+    `sourceId: ${task.sourceId ?? "n/a"}`,
     `status: ${task.status}`,
+    `result: ${task.terminalOutcome ?? "n/a"}`,
     `delivery: ${task.deliveryStatus}`,
     `notify: ${task.notifyPolicy}`,
-    `source: ${task.source}`,
     `requesterSessionKey: ${task.requesterSessionKey}`,
     `childSessionKey: ${task.childSessionKey ?? "n/a"}`,
+    `parentTaskId: ${task.parentTaskId ?? "n/a"}`,
+    `agentId: ${task.agentId ?? "n/a"}`,
     `runId: ${task.runId ?? "n/a"}`,
-    `bindingTargetKind: ${task.bindingTargetKind ?? "n/a"}`,
     `label: ${task.label ?? "n/a"}`,
     `task: ${task.task}`,
     `createdAt: ${new Date(task.createdAt).toISOString()}`,
     `startedAt: ${task.startedAt ? new Date(task.startedAt).toISOString() : "n/a"}`,
     `endedAt: ${task.endedAt ? new Date(task.endedAt).toISOString() : "n/a"}`,
     `lastEventAt: ${task.lastEventAt ? new Date(task.lastEventAt).toISOString() : "n/a"}`,
+    `cleanupAfter: ${task.cleanupAfter ? new Date(task.cleanupAfter).toISOString() : "n/a"}`,
     ...(task.error ? [`error: ${task.error}`] : []),
     ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
@@ -177,10 +248,6 @@ export async function tasksShowCommand(
             }`,
         )
       : []),
-    ...(task.streamLogPath ? [`streamLogPath: ${task.streamLogPath}`] : []),
-    ...(task.transcriptPath ? [`transcriptPath: ${task.transcriptPath}`] : []),
-    ...(task.agentSessionId ? [`agentSessionId: ${task.agentSessionId}`] : []),
-    ...(task.backendSessionId ? [`backendSessionId: ${task.backendSessionId}`] : []),
   ];
   for (const line of lines) {
     runtime.log(line);
@@ -234,4 +301,78 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
   runtime.log(
     `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
   );
+}
+
+export async function tasksAuditCommand(
+  opts: {
+    json?: boolean;
+    severity?: TaskAuditSeverity;
+    code?: TaskAuditCode;
+    limit?: number;
+  },
+  runtime: RuntimeEnv,
+) {
+  const severityFilter = opts.severity?.trim() as TaskAuditSeverity | undefined;
+  const codeFilter = opts.code?.trim() as TaskAuditCode | undefined;
+  const allFindings = listTaskAuditFindings();
+  const findings = allFindings.filter((finding) => {
+    if (severityFilter && finding.severity !== severityFilter) {
+      return false;
+    }
+    if (codeFilter && finding.code !== codeFilter) {
+      return false;
+    }
+    return true;
+  });
+  const limit = typeof opts.limit === "number" && opts.limit > 0 ? opts.limit : undefined;
+  const displayed = limit ? findings.slice(0, limit) : findings;
+  const summary = summarizeTaskAuditFindings(allFindings);
+
+  if (opts.json) {
+    runtime.log(
+      JSON.stringify(
+        {
+          count: allFindings.length,
+          filteredCount: findings.length,
+          displayed: displayed.length,
+          filters: {
+            severity: severityFilter ?? null,
+            code: codeFilter ?? null,
+            limit: limit ?? null,
+          },
+          summary,
+          findings: displayed,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  runtime.log(
+    info(
+      `Task audit: ${summary.total} findings · ${summary.errors} errors · ${summary.warnings} warnings`,
+    ),
+  );
+  if (severityFilter || codeFilter) {
+    runtime.log(info(`Showing ${findings.length} matching findings.`));
+  }
+  if (severityFilter) {
+    runtime.log(info(`Severity filter: ${severityFilter}`));
+  }
+  if (codeFilter) {
+    runtime.log(info(`Code filter: ${codeFilter}`));
+  }
+  if (limit) {
+    runtime.log(info(`Limit: ${limit}`));
+  }
+  if (displayed.length === 0) {
+    runtime.log("No task audit findings.");
+    return;
+  }
+  const rich = isRich();
+  for (const line of formatAuditRows(displayed, rich)) {
+    runtime.log(line);
+  }
 }
