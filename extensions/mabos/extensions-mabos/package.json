@@ -16,9 +16,11 @@
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0",
+    "better-sqlite3": "^12.8.0",
     "typedb-driver-http": "^3.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "openclaw": "workspace:*",
     "typescript": "^5.4.0"
   },
