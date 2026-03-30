@@ -1096,6 +1096,115 @@ describe("system-event-triggered heartbeat session routing", () => {
     expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
   });
 
+  it("skip-restore preserves migrated events from a prior run (different migrationId)", async () => {
+    const tmpDir = await createCaseDir("hb-skip-prior-migration");
+    const storePath = path.join(tmpDir, "sessions.json");
+
+    const agentId = "main";
+    const heartbeatSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "group",
+      peerId: "-100heartbeat",
+    });
+    const dmSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "direct",
+      peerId: "222111000",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "telegram",
+            to: "-100heartbeat",
+            session: heartbeatSessionKey,
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveAgentMainSessionKey({ cfg, agentId })]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [dmSessionKey]: {
+          sessionId: "sid-dm",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "222111000",
+        },
+      }),
+    );
+
+    // Create an empty HEARTBEAT.md so the heartbeat is skipped
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "   \n");
+
+    // Simulate an older migration run that left a __migrated event in the
+    // heartbeat session (e.g. the run migrated events but failed before the
+    // auto-reply pipeline drained the queue).
+    enqueueSystemEvent("exec finished (old-run, code 0) :: stale job", {
+      sessionKey: heartbeatSessionKey,
+      contextKey: "exec:old-run",
+      skipDedup: true,
+      __migrated: "prior-migration-id-abc",
+    });
+
+    // Now enqueue a new event into the DM session for the current run
+    enqueueSystemEvent("exec finished (new-run, code 0) :: fresh job", {
+      sessionKey: dmSessionKey,
+      contextKey: "exec:new-run",
+    });
+
+    expect(peekSystemEventEntries(heartbeatSessionKey)).toHaveLength(1);
+    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(1);
+
+    const sendTelegram = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; chatId: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", chatId: "-100heartbeat" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "exec:new-run:exit",
+      sessionKey: dmSessionKey,
+      deps: createHeartbeatDeps(sendTelegram),
+    });
+
+    expect(res.status).toBe("skipped");
+    expect(res).toHaveProperty("reason", "empty-heartbeat-file");
+
+    // The OLD migrated event from the prior run must SURVIVE — it should
+    // NOT be removed by skip-restore since it belongs to a different
+    // migrationId.
+    const heartbeatEntries = peekSystemEventEntries(heartbeatSessionKey);
+    expect(heartbeatEntries).toHaveLength(1);
+    expect(heartbeatEntries[0].text).toContain("stale job");
+    expect(heartbeatEntries[0].__migrated).toBe("prior-migration-id-abc");
+
+    // The NEW migrated event must be restored to the originating DM session
+    const dmEntries = peekSystemEventEntries(dmSessionKey);
+    expect(dmEntries).toHaveLength(1);
+    expect(dmEntries[0].text).toContain("fresh job");
+  });
+
   it("skip-restore preserves pre-existing event when migrated event shares same contextKey+text", async () => {
     const tmpDir = await createCaseDir("hb-skip-stable-id");
     const storePath = path.join(tmpDir, "sessions.json");

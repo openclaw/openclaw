@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -462,6 +463,7 @@ async function resolveHeartbeatPreflight(params: {
   const originatingSessionKey = params.forcedSessionKey?.trim();
   let migratedEvents: SystemEvent[] = [];
   let preExistingHeartbeatEvents: SystemEvent[] = [];
+  const migrationId = crypto.randomUUID();
   if (originatingSessionKey && originatingSessionKey !== session.sessionKey) {
     const originEvents = drainSystemEventEntries(originatingSessionKey);
     const sessionScoped: SystemEvent[] = [];
@@ -499,6 +501,7 @@ async function resolveHeartbeatPreflight(params: {
         deliveryContext: event.deliveryContext,
         trusted: event.trusted,
         skipDedup: true,
+        ...(event.__migrated ? { __migrated: event.__migrated } : {}),
       });
     }
     for (const event of migratedEvents) {
@@ -508,7 +511,7 @@ async function resolveHeartbeatPreflight(params: {
         deliveryContext: event.deliveryContext,
         trusted: event.trusted,
         skipDedup: true,
-        __migrated: true,
+        __migrated: migrationId,
       });
     }
   }
@@ -554,18 +557,18 @@ async function resolveHeartbeatPreflight(params: {
       if (migratedEvents.length > 0 && originatingSessionKey) {
         const currentDestEvents = drainSystemEventEntries(session.sessionKey);
 
-        // Re-enqueue events that are NOT migrated (pre-existing + concurrent).
-        // Migrated events are identified by the __migrated marker set during
-        // enqueue, so pre-existing events with identical key+text are never
-        // accidentally removed.
+        // Re-enqueue events that were NOT migrated by THIS run.  Events
+        // tagged with a different migrationId (from a prior failed run) are
+        // left intact so they are not silently lost.
         for (const event of currentDestEvents) {
-          if (!event.__migrated) {
+          if (event.__migrated !== migrationId) {
             enqueueSystemEvent(event.text, {
               sessionKey: session.sessionKey,
               contextKey: event.contextKey,
               deliveryContext: event.deliveryContext,
               trusted: event.trusted,
               skipDedup: true,
+              ...(event.__migrated ? { __migrated: event.__migrated } : {}),
             });
           }
         }

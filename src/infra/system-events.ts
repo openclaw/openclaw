@@ -15,8 +15,8 @@ export type SystemEvent = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
-  /** Internal marker: event was migrated from another session during routing. */
-  __migrated?: boolean;
+  /** Internal marker: migrationId of the run that migrated this event. */
+  __migrated?: string;
 };
 
 const MAX_EVENTS = 20;
@@ -38,8 +38,8 @@ type SystemEventOptions = {
   trusted?: boolean;
   /** Bypass consecutive-duplicate suppression (used for cross-session migration). */
   skipDedup?: boolean;
-  /** Internal marker: event was migrated from another session during routing. */
-  __migrated?: boolean;
+  /** Internal marker: migrationId of the run that migrated this event. */
+  __migrated?: string;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -116,7 +116,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     trusted: options.trusted !== false,
-    ...(options.__migrated ? { __migrated: true } : {}),
+    ...(options.__migrated ? { __migrated: options.__migrated } : {}),
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
