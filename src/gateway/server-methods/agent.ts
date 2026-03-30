@@ -21,6 +21,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
+import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -658,7 +659,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedAccountId,
         };
       } catch (err) {
-        if (!bestEffortDeliver) {
+        const shouldDowngrade = shouldDowngradeDeliveryToSessionOnly({
+          wantsDelivery,
+          bestEffortDeliver,
+          resolvedChannel,
+        });
+        if (!shouldDowngrade) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
           return;
         }
@@ -682,7 +688,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-      if (!bestEffortDeliver) {
+      const shouldDowngrade = shouldDowngradeDeliveryToSessionOnly({
+        wantsDelivery,
+        bestEffortDeliver,
+        resolvedChannel,
+      });
+      if (!shouldDowngrade) {
         respond(
           false,
           undefined,

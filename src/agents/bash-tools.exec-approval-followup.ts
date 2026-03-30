@@ -1,4 +1,4 @@
-import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -54,17 +54,12 @@ export async function sendExecApprovalFollowup(
     return false;
   }
 
-  const normalizedChannel = normalizeMessageChannel(params.turnSourceChannel);
-  const channel =
-    normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
-      ? normalizedChannel
-      : undefined;
-  const to = params.turnSourceTo?.trim();
-  const hasDeliveryTarget = Boolean(channel && to);
-  const threadId =
-    params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
-      ? String(params.turnSourceThreadId)
-      : undefined;
+  const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
+    channel: params.turnSourceChannel,
+    to: params.turnSourceTo,
+    accountId: params.turnSourceAccountId,
+    threadId: params.turnSourceThreadId,
+  });
 
   await callGatewayTool(
     "agent",
@@ -72,12 +67,12 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: hasDeliveryTarget,
-      ...(hasDeliveryTarget ? { bestEffortDeliver: true as const } : {}),
-      channel: hasDeliveryTarget ? channel : undefined,
-      to: hasDeliveryTarget ? to : undefined,
-      accountId: hasDeliveryTarget ? params.turnSourceAccountId?.trim() || undefined : undefined,
-      threadId: hasDeliveryTarget ? threadId : undefined,
+      deliver: deliveryTarget.deliver,
+      ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
+      channel: deliveryTarget.channel,
+      to: deliveryTarget.to,
+      accountId: deliveryTarget.accountId,
+      threadId: deliveryTarget.threadId,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     },
     { expectFinal: true },

@@ -472,6 +472,56 @@ describe("exec approvals", () => {
     );
   });
 
+  it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-sidefx-"));
+    const markerPath = path.join(tempDir, "marker.txt");
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-gw-followup-webchat", {
+      command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
+      workdir: tempDir,
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(agentCalls[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliver: false,
+      }),
+    );
+
+    await expect
+      .poll(
+        async () => {
+          try {
+            return await fs.readFile(markerPath, "utf8");
+          } catch {
+            return "";
+          }
+        },
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBe("ok");
+  });
+
   it("uses a deny-specific followup prompt so prior output is not reused", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 

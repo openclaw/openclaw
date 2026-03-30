@@ -7,6 +7,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
@@ -473,22 +474,14 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage && completionDirectOrigin
         ? completionDirectOrigin
         : directOrigin;
-    const directChannel =
-      typeof effectiveDirectOrigin?.channel === "string"
-        ? effectiveDirectOrigin.channel.trim()
-        : "";
-    const directTo =
-      typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
-    const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      Boolean(directChannel) &&
-      Boolean(directTo) &&
-      !isInternalMessageChannel(directChannel);
-
-    const threadId =
-      effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
-        ? String(effectiveDirectOrigin.threadId)
-        : undefined;
+    const deliveryTarget = !params.requesterIsSubagent
+      ? resolveExternalBestEffortDeliveryTarget({
+          channel: effectiveDirectOrigin?.channel,
+          to: effectiveDirectOrigin?.to,
+          accountId: effectiveDirectOrigin?.accountId,
+          threadId: effectiveDirectOrigin?.threadId,
+        })
+      : { deliver: false };
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -506,13 +499,13 @@ async function sendSubagentAnnounceDirectly(params: {
           params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
-            deliver: shouldDeliverExternally,
+            deliver: deliveryTarget.deliver,
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
-            channel: !params.requesterIsSubagent ? directChannel || undefined : undefined,
-            accountId: !params.requesterIsSubagent ? effectiveDirectOrigin?.accountId : undefined,
-            to: !params.requesterIsSubagent ? directTo || undefined : undefined,
-            threadId: !params.requesterIsSubagent ? threadId : undefined,
+            channel: deliveryTarget.channel,
+            accountId: deliveryTarget.accountId,
+            to: deliveryTarget.to,
+            threadId: deliveryTarget.threadId,
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.sourceSessionKey,

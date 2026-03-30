@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(),
-}));
-
-import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
-import { callGatewayTool } from "./tools/gateway.js";
+let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
+let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 
 describe("sendExecApprovalFollowup", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("./tools/gateway.js", () => ({
+      callGatewayTool: vi.fn(),
+    }));
+    ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
+    ({ callGatewayTool } = await import("./tools/gateway.js"));
     vi.mocked(callGatewayTool).mockReset();
     vi.mocked(callGatewayTool).mockResolvedValue({});
   });

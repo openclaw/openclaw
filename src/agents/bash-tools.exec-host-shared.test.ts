@@ -1,19 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./bash-tools.exec-approval-followup.js", () => ({
-  sendExecApprovalFollowup: vi.fn(),
-}));
-
-vi.mock("../logger.js", () => ({
-  logWarn: vi.fn(),
-}));
-
-import { logWarn } from "../logger.js";
-import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
-import { sendExecApprovalFollowupResult } from "./bash-tools.exec-host-shared.js";
+let sendExecApprovalFollowupResult: typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
+let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
+let logWarn: typeof import("../logger.js").logWarn;
 
 describe("sendExecApprovalFollowupResult", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("./bash-tools.exec-approval-followup.js", () => ({
+      sendExecApprovalFollowup: vi.fn(),
+    }));
+    vi.doMock("../logger.js", () => ({
+      logWarn: vi.fn(),
+    }));
+    ({ sendExecApprovalFollowupResult } = await import("./bash-tools.exec-host-shared.js"));
+    ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
+    ({ logWarn } = await import("../logger.js"));
     vi.mocked(sendExecApprovalFollowup).mockReset();
     vi.mocked(logWarn).mockReset();
   });
