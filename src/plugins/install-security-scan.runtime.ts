@@ -93,7 +93,6 @@ async function scanDirectoryTarget(params: {
   includeFiles?: string[];
   logger: InstallScanLogger;
   path: string;
-  scanFailureMessage: string;
   suspiciousMessage: string;
   targetName: string;
   warningMessage: string;
@@ -116,7 +115,6 @@ async function scanDirectoryTarget(params: {
     }
     return builtinScan;
   } catch (err) {
-    params.logger.warn?.(params.scanFailureMessage.replace("{error}", String(err)));
     return buildBuiltinScanFromError(err);
   }
 }
@@ -153,7 +151,6 @@ function buildBlockedScanResult(params: {
 async function scanFileTarget(params: {
   logger: InstallScanLogger;
   path: string;
-  scanFailureMessage: string;
   suspiciousMessage: string;
   targetName: string;
   warningMessage: string;
@@ -163,7 +160,6 @@ async function scanFileTarget(params: {
     includeFiles: [params.path],
     logger: params.logger,
     path: directory,
-    scanFailureMessage: params.scanFailureMessage,
     suspiciousMessage: params.suspiciousMessage,
     targetName: params.targetName,
     warningMessage: params.warningMessage,
@@ -264,7 +260,6 @@ export async function scanBundleInstallSourceRuntime(params: {
   const builtinScan = await scanDirectoryTarget({
     logger: params.logger,
     path: params.sourceDir,
-    scanFailureMessage: `Bundle "${params.pluginId}" code safety scan failed ({error}). Installation blocked; run "openclaw security audit --deep" for details.`,
     suspiciousMessage: `Bundle "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
     targetName: params.pluginId,
     warningMessage: `WARNING: Bundle "${params.pluginId}" contains dangerous code patterns`,
@@ -329,7 +324,6 @@ export async function scanPackageInstallSourceRuntime(params: {
     includeFiles: forcedScanEntries,
     logger: params.logger,
     path: params.packageDir,
-    scanFailureMessage: `Plugin "${params.pluginId}" code safety scan failed ({error}). Installation blocked; run "openclaw security audit --deep" for details.`,
     suspiciousMessage: `Plugin "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
     targetName: params.pluginId,
     warningMessage: `WARNING: Plugin "${params.pluginId}" contains dangerous code patterns`,
@@ -373,7 +367,6 @@ export async function scanFileInstallSourceRuntime(params: {
   const builtinScan = await scanFileTarget({
     logger: params.logger,
     path: params.filePath,
-    scanFailureMessage: `Plugin file "${params.pluginId}" code safety scan failed ({error}). Installation blocked; run "openclaw security audit --deep" for details.`,
     suspiciousMessage: `Plugin file "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
     targetName: params.pluginId,
     warningMessage: `WARNING: Plugin file "${params.pluginId}" contains dangerous code patterns`,
