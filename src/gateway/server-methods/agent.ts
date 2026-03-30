@@ -42,12 +42,7 @@ import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -93,7 +88,7 @@ function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["
   return resolveSenderIsOwnerFromClient(client);
 }
 
-function resolveCliWorkspaceOverrideFromClient(
+function resolveTrustedWorkspaceOverrideFromClient(
   client: GatewayRequestHandlerOptions["client"],
   workspaceDir?: string,
 ): string | undefined {
@@ -101,11 +96,10 @@ function resolveCliWorkspaceOverrideFromClient(
   if (!trimmed) {
     return undefined;
   }
-  const info = client?.connect?.client;
-  const isCliCaller =
-    info?.id === GATEWAY_CLIENT_NAMES.CLI && info?.mode === GATEWAY_CLIENT_MODES.CLI;
-  if (!isCliCaller) {
-    throw new Error("invalid agent params: workspaceDir override is restricted to CLI agent runs");
+  if (!resolveSenderIsOwnerFromClient(client)) {
+    throw new Error(
+      "invalid agent params: workspaceDir override requires trusted owner authorization",
+    );
   }
   return trimmed;
 }
@@ -345,9 +339,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const providerOverride = allowModelOverride ? request.provider : undefined;
     const modelOverride = allowModelOverride ? request.model : undefined;
-    let cliWorkspaceOverride: string | undefined;
+    let trustedWorkspaceOverride: string | undefined;
     try {
-      cliWorkspaceOverride = resolveCliWorkspaceOverrideFromClient(client, request.workspaceDir);
+      trustedWorkspaceOverride = resolveTrustedWorkspaceOverrideFromClient(
+        client,
+        request.workspaceDir,
+      );
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
       return;
@@ -827,10 +824,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
         inputProvenance,
-        // Internal-only: allow workspace override only for trusted CLI runs,
-        // otherwise keep the existing spawned-session inheritance path.
+        // Internal-only: allow explicit workspace override only for trusted
+        // owner-authorized callers; otherwise keep the existing spawned-session
+        // inheritance path.
         workspaceDir:
-          cliWorkspaceOverride ??
+          trustedWorkspaceOverride ??
           resolveIngressWorkspaceOverrideForSpawnedRun({
             spawnedBy: spawnedByValue,
             workspaceDir: sessionEntry?.spawnedWorkspaceDir,

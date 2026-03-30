@@ -768,7 +768,7 @@ describe("gateway agent handler", () => {
     );
   });
 
-  it("rejects workspaceDir override for non-CLI callers", async () => {
+  it("rejects workspaceDir override for untrusted callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
@@ -788,12 +788,14 @@ describe("gateway agent handler", () => {
       false,
       undefined,
       expect.objectContaining({
-        message: expect.stringContaining("workspaceDir override is restricted to CLI agent runs"),
+        message: expect.stringContaining(
+          "workspaceDir override requires trusted owner authorization",
+        ),
       }),
     );
   });
 
-  it("forwards workspaceDir override for CLI callers only", async () => {
+  it("forwards workspaceDir override for trusted owner-authorized callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
 
@@ -808,6 +810,7 @@ describe("gateway agent handler", () => {
         reqId: "workspace-cli-forwarded-1",
         client: {
           connect: {
+            scopes: ["operator.admin"],
             client: { id: "cli", mode: "cli" },
           },
         } as AgentHandlerArgs["client"],
