@@ -185,7 +185,11 @@ function shouldFailClosedAgentGatewayError(err: unknown): boolean {
       : err instanceof Error
         ? err.message.toLowerCase()
         : "";
-  return message.includes("gateway timeout") || message.includes("gateway closed");
+  return (
+    message.includes("gateway timeout") ||
+    message.includes("gateway request timeout") ||
+    message.includes("gateway closed")
+  );
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {

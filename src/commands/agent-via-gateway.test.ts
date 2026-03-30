@@ -134,6 +134,20 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("fails closed on gateway request timeout for agent instead of falling back to embedded", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockRejectedValue(new Error("gateway request timeout for agent"));
+      mockLocalAgentReply();
+
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        /without embedded fallback/i,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
   it("fails closed on gateway closed instead of falling back to embedded", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway closed (1006 abnormal closure)"));
