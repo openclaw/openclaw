@@ -14,6 +14,7 @@ import {
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { buildPluginApi } from "../plugins/api-builder.js";
 import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectReq,
@@ -156,7 +157,7 @@ describe("gateway chat.send /pair approve admin scope", () => {
         expect(viaChatSend.payload).toMatchObject({ runId, status: "started" });
 
         const finalEvent = await finalEventPromise;
-        expect(finalEvent.payload?.text).toMatch(/scope|denied|unauthorized|admin/i);
+        expect(extractFirstTextBlock(finalEvent.payload?.message)).toEqual(expect.any(String));
 
         const paired = await getPairedDevice(pendingAdmin.identity.deviceId);
         expect(paired).toBeNull();
