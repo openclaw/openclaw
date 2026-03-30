@@ -29,6 +29,14 @@ vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: vi.fn(() => ({})),
+}));
+
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => ({})),
   resolveFreshSessionTotalTokens: vi.fn(() => undefined),
@@ -98,6 +106,8 @@ vi.mock("./status.link-channel.js", () => ({
 }));
 
 const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
+const { resolveStorePath } = await import("../config/sessions/paths.js");
+const { readSessionStoreReadOnly } = await import("../config/sessions/store-read.js");
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
 
@@ -141,6 +151,36 @@ describe("getStatusSummary", () => {
 
     expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
       expect.objectContaining({ allowAsyncLoad: false }),
+    );
+  });
+
+  it("ignores stale persisted session context tokens when summarizing rows", async () => {
+    vi.mocked(resolveStorePath).mockReturnValue("/tmp/sessions.json");
+    vi.mocked(readSessionStoreReadOnly).mockReturnValue({
+      "agent:main:main": {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        contextTokens: 4096,
+        totalTokens: 1024,
+      },
+    });
+
+    const { getStatusSummary, statusSummaryRuntime } = await loadStatusSummaryForTest();
+    await getStatusSummary({
+      config: {
+        agents: {
+          defaults: {
+            contextTokens: 32000,
+          },
+        },
+      } as never,
+    });
+
+    expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ contextTokensOverride: 4096 }),
+    );
+    expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
+      expect.objectContaining({ contextTokensOverride: 32000, allowAsyncLoad: false }),
     );
   });
 });

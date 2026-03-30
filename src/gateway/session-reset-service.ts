@@ -346,7 +346,7 @@ export async function performGatewaySessionReset(params: {
       chatType: currentEntry?.chatType,
       model: resolvedModel.model,
       modelProvider: resolvedModel.provider,
-      contextTokens: resetEntry?.contextTokens,
+      contextTokens: undefined,
       sendPolicy: currentEntry?.sendPolicy,
       queueMode: currentEntry?.queueMode,
       queueDebounceMs: currentEntry?.queueDebounceMs,

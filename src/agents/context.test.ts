@@ -41,10 +41,7 @@ describe("applyDiscoveredContextWindows", () => {
 });
 
 describe("applyConfiguredContextWindows", () => {
-  it("writes bare model id to cache; does not touch raw provider-qualified discovery entries", () => {
-    // Discovery stored a provider-qualified entry; config override goes into the
-    // bare key only. resolveContextTokensForModel now scans config directly, so
-    // there is no need (and no benefit) to also write a synthetic qualified key.
+  it("writes both provider-qualified and legacy bare keys for configured models", () => {
     const cache = new Map<string, number>([["openrouter/anthropic/claude-opus-4-6", 1_000_000]]);
     applyConfiguredContextWindows({
       cache,
@@ -58,16 +55,10 @@ describe("applyConfiguredContextWindows", () => {
     });
 
     expect(cache.get("anthropic/claude-opus-4-6")).toBe(200_000);
-    // Discovery entry is untouched — no synthetic write that could corrupt
-    // an unrelated provider's raw slash-containing model ID.
-    expect(cache.get("openrouter/anthropic/claude-opus-4-6")).toBe(1_000_000);
+    expect(cache.get("openrouter/anthropic/claude-opus-4-6")).toBe(200_000);
   });
 
-  it("does not write synthetic provider-qualified keys; only bare model ids go into cache", () => {
-    // applyConfiguredContextWindows must NOT write "google-gemini-cli/gemini-3.1-pro-preview"
-    // into the cache — that keyspace is reserved for raw discovery model IDs and
-    // a synthetic write would overwrite unrelated entries (e.g. OpenRouter's
-    // "google/gemini-2.5-pro" being clobbered by a Google provider config).
+  it("updates configured provider-qualified keys alongside the bare fallback key", () => {
     const cache = new Map<string, number>();
     cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576); // discovery entry
     applyConfiguredContextWindows({
@@ -81,10 +72,8 @@ describe("applyConfiguredContextWindows", () => {
       },
     });
 
-    // Bare key is written.
     expect(cache.get("gemini-3.1-pro-preview")).toBe(200_000);
-    // Discovery entry is NOT overwritten.
-    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(200_000);
   });
 
   it("adds config-only model context windows and ignores invalid entries", () => {
