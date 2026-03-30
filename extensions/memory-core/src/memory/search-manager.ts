@@ -1,5 +1,6 @@
 import {
   createSubsystemLogger,
+  resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -68,6 +69,7 @@ export async function getMemorySearchManager(params: {
     const qmdBinary = await checkQmdBinaryAvailability({
       command: resolved.qmd.command,
       env: process.env,
+      cwd: resolveAgentWorkspaceDir(params.cfg, params.agentId),
     });
     if (!qmdBinary.available) {
       log.warn(

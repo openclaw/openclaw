@@ -215,6 +215,19 @@ describe("getMemorySearchManager caching", () => {
     expect(searchResults).toHaveLength(1);
   });
 
+  it("probes qmd availability from the agent workspace", async () => {
+    const agentId = "workspace-probe";
+    const cfg = createQmdCfg(agentId);
+
+    await getMemorySearchManager({ cfg, agentId });
+
+    expect(checkQmdBinaryAvailability).toHaveBeenCalledWith({
+      command: "qmd",
+      env: process.env,
+      cwd: "/tmp/workspace",
+    });
+  });
+
   it("returns a cached qmd manager without probing the binary again", async () => {
     const agentId = "cached-qmd";
     const cfg = createQmdCfg(agentId);
