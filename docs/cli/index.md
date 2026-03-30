@@ -64,6 +64,7 @@ This page describes the current CLI behavior. If commands change, update this do
 
 - `--dev`: isolate state under `~/.openclaw-dev` and shift default ports.
 - `--profile <name>`: isolate state under `~/.openclaw-<name>`.
+- `--container <name>`: target a named container for execution.
 - `--no-color`: disable ANSI colors.
 - `--update`: shorthand for `openclaw update` (source installs only).
 - `-V`, `--version`, `-v`: print version and exit.
@@ -408,8 +409,11 @@ Options:
 - `--daemon-runtime <node|bun>`
 - `--skip-channels`
 - `--skip-skills`
+- `--skip-search`
 - `--skip-health`
 - `--skip-ui`
+- `--cloudflare-ai-gateway-account-id <id>`
+- `--cloudflare-ai-gateway-gateway-id <id>`
 - `--node-manager <npm|pnpm|bun>` (pnpm recommended; bun not recommended for Gateway runtime)
 - `--json`
 
@@ -861,10 +865,16 @@ Notes:
 
 Tail Gateway file logs via RPC.
 
-Notes:
+Options:
 
-- TTY sessions render a colorized, structured view; non-TTY falls back to plain text.
-- `--json` emits line-delimited JSON (one log event per line).
+- `--limit <n>`: maximum number of log lines to return
+- `--max-bytes <n>`: maximum bytes to read from the log file
+- `--follow`: follow the log file (tail -f style)
+- `--interval <ms>`: polling interval in ms when following
+- `--local-time`: display timestamps in local time
+- `--json`: emit line-delimited JSON
+- `--plain`: disable structured formatting
+- `--no-color`: disable ANSI colors
 
 Examples:
 
