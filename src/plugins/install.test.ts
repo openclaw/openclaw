@@ -870,6 +870,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe("Blocked by enterprise policy");
+      expect(result.code).toBeUndefined();
     }
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0]?.[0]).toMatchObject({

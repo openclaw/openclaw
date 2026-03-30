@@ -8,6 +8,7 @@ import {
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
@@ -214,6 +215,20 @@ function buildDirectoryInstallResult(params: {
   };
 }
 
+function buildBlockedInstallResult(params: {
+  blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
+}): Extract<InstallPluginResult, { ok: false }> {
+  return {
+    ok: false,
+    error: params.blocked.reason,
+    ...(params.blocked.code === "security_scan_failed"
+      ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
+      : params.blocked.code === "security_scan_blocked"
+        ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
+        : {}),
+  };
+}
+
 type PackageInstallCommonParams = {
   extensionsDir?: string;
   timeoutMs?: number;
@@ -396,14 +411,7 @@ async function installBundleFromSourceDir(
       version: manifestRes.manifest.version,
     });
     if (scanResult?.blocked) {
-      return {
-        ok: false,
-        error: scanResult.blocked.reason,
-        code:
-          scanResult.blocked.code === "security_scan_failed"
-            ? PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED
-            : PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
-      };
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
   } catch (err) {
     return {
@@ -584,14 +592,7 @@ async function installPluginFromPackageDir(
       version: typeof manifest.version === "string" ? manifest.version : undefined,
     });
     if (scanResult?.blocked) {
-      return {
-        ok: false,
-        error: scanResult.blocked.reason,
-        code:
-          scanResult.blocked.code === "security_scan_failed"
-            ? PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED
-            : PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
-      };
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
   } catch (err) {
     return {
@@ -756,14 +757,7 @@ export async function installPluginFromFile(params: {
       requestedSpecifier: installPolicyRequest.requestedSpecifier,
     });
     if (scanResult?.blocked) {
-      return {
-        ok: false,
-        error: scanResult.blocked.reason,
-        code:
-          scanResult.blocked.code === "security_scan_failed"
-            ? PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED
-            : PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
-      };
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
   } catch (err) {
     return {
