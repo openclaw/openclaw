@@ -35,4 +35,17 @@ describe("listGatewayAgentsBasic", () => {
 
     expect(result.agents).toEqual([{ id: "main", name: "Ops" }]);
   });
+
+  it("leaves the name unset when neither agents.list[].name nor identity.name is present", () => {
+    const cfg: OpenClawConfig = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, identity: {} }],
+      },
+    };
+
+    const result = listGatewayAgentsBasic(cfg);
+
+    expect(result.agents).toEqual([{ id: "main", name: undefined }]);
+  });
 });
