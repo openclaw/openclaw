@@ -167,6 +167,25 @@ describe("phone-control plugin", () => {
     });
   });
 
+  it("blocks non-webchat gateway callers with operator.write from mutating phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const armRes = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.write"],
+      });
+      expect(String(armRes?.text ?? "")).toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+
+      const disarmRes = await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.write"],
+      });
+      expect(String(disarmRes?.text ?? "")).toContain("requires operator.admin");
+    });
+  });
+
   it("allows internal operator.admin callers to mutate phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({
