@@ -205,7 +205,7 @@ async function loadFreshStoredOAuthCredential(params: {
   if (reloaded?.type !== "oauth" || reloaded.provider !== params.provider) {
     return null;
   }
-  if (Date.now() >= reloaded.expires) {
+  if (!Number.isFinite(reloaded.expires) || Date.now() >= reloaded.expires) {
     return null;
   }
   if (
@@ -312,7 +312,7 @@ async function refreshOAuthTokenFromStoreWithLock(params: {
       return null;
     }
 
-    if (Date.now() < cred.expires) {
+    if (Number.isFinite(cred.expires) && Date.now() < cred.expires) {
       return {
         apiKey: await buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
@@ -454,7 +454,7 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  if (Date.now() < cred.expires) {
+  if (Number.isFinite(cred.expires) && Date.now() < cred.expires) {
     return await buildOAuthProfileResult({
       provider: cred.provider,
       credentials: cred,
@@ -602,7 +602,7 @@ export async function resolveApiKeyForProfile(
       cred,
     }) ?? cred;
 
-  if (Date.now() < oauthCred.expires) {
+  if (Number.isFinite(oauthCred.expires) && Date.now() < oauthCred.expires) {
     return await buildOAuthProfileResult({
       provider: oauthCred.provider,
       credentials: oauthCred,
@@ -629,7 +629,7 @@ export async function resolveApiKeyForProfile(
   } catch (error) {
     const refreshedStore = ensureAuthProfileStore(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
-    if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
+    if (refreshed?.type === "oauth" && Number.isFinite(refreshed.expires) && Date.now() < refreshed.expires) {
       return await buildOAuthProfileResult({
         provider: refreshed.provider,
         credentials: refreshed,
@@ -663,7 +663,7 @@ export async function resolveApiKeyForProfile(
       try {
         const mainStore = ensureAuthProfileStore(undefined); // main agent (no agentDir)
         const mainCred = mainStore.profiles[profileId];
-        if (mainCred?.type === "oauth" && Date.now() < mainCred.expires) {
+        if (mainCred?.type === "oauth" && Number.isFinite(mainCred.expires) && Date.now() < mainCred.expires) {
           // Main agent has fresh credentials - copy them to this agent and use them
           refreshedStore.profiles[profileId] = { ...mainCred };
           saveAuthProfileStore(refreshedStore, params.agentDir);
