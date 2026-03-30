@@ -44,7 +44,9 @@ export const telegramCommandTestPlugin = {
   },
   config: telegramConfigAdapter,
   auth: telegramNativeApprovalAdapter.auth,
-  pairing: {},
+  pairing: {
+    idLabel: "telegramUserId",
+  },
   allowlist: buildDmGroupAccountAllowlistAdapter<ResolvedTelegramAccount>({
     channelId: "telegram",
     resolveAccount: resolveTelegramAccount,
