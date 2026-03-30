@@ -1039,11 +1039,6 @@ export async function runEmbeddedPiAgent(
               promptErrorDetails.reason ?? classifyFailoverReason(errorText);
             const promptProfileFailureReason =
               resolveAuthProfileFailureReason(promptFailoverReason);
-            await maybeMarkAuthProfileFailure({
-              profileId: lastProfileId,
-              reason: promptProfileFailureReason,
-              modelId,
-            });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText);
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
@@ -1065,9 +1060,30 @@ export async function runEmbeddedPiAgent(
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
+              // Mark the failed profile AFTER rotation (non-blocking, same
+              // rationale as assistant-side fix — avoid lock contention).
+              if (failedPromptProfileId && promptProfileFailureReason) {
+                maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                }).catch((err) =>
+                  log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
+                );
+              }
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
+            }
+            // Mark even when rotation fails — ensures cooldown is eventually set.
+            if (failedPromptProfileId && promptProfileFailureReason) {
+              maybeMarkAuthProfileFailure({
+                profileId: failedPromptProfileId,
+                reason: promptProfileFailureReason,
+                modelId,
+              }).catch((err) =>
+                log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
+              );
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,
@@ -1176,27 +1192,33 @@ export async function runEmbeddedPiAgent(
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
-            if (lastProfileId) {
-              const reason = timedOut ? "timeout" : assistantProfileFailureReason;
-              // Skip cooldown for timeouts: a timeout is model/network-specific,
-              // not an auth issue. Marking the profile would poison fallback models
-              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
-              await maybeMarkAuthProfileFailure({
-                profileId: lastProfileId,
-                reason,
-                modelId,
-              });
-              if (timedOut && !isProbeSession) {
-                log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
-              }
-              if (cloudCodeAssistFormatError) {
-                log.warn(
-                  `Profile ${lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
-                );
-              }
-            }
+            const failedProfileId = lastProfileId;
+            const failureReason = timedOut ? "timeout" : assistantProfileFailureReason;
 
+            // Rotate FIRST — don't block on cooldown marking. The file-locked
+            // markAuthProfileFailure can stall for minutes under contention
+            // (see #57155-followup), preventing rotation from executing at all
+            // for rate_limit errors. Since cooldown checks are per-profile,
+            // marking the failed profile doesn't affect the next profile's
+            // eligibility.
             const rotated = await advanceAuthProfile();
+
+            // Mark the failed profile AFTER rotation (non-blocking).
+            if (failedProfileId && failureReason && failureReason !== "timeout") {
+              maybeMarkAuthProfileFailure({
+                profileId: failedProfileId,
+                reason: failureReason,
+                modelId,
+              }).catch((err) => log.warn(`deferred profile failure mark failed: ${String(err)}`));
+            }
+            if (timedOut && !isProbeSession) {
+              log.warn(`Profile ${failedProfileId} timed out. Trying next account...`);
+            }
+            if (cloudCodeAssistFormatError) {
+              log.warn(
+                `Profile ${failedProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
+              );
+            }
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
