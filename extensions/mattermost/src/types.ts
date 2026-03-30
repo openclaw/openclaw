@@ -6,6 +6,16 @@ export type MattermostChatTypeKey = "direct" | "channel" | "group";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
+export type MattermostLegacyGroupConfig = {
+  enabled?: boolean;
+  allowFrom?: Array<string | number>;
+  requireMention?: boolean;
+  systemPrompt?: string;
+  skills?: string[];
+  tools?: unknown;
+  toolsBySender?: Record<string, unknown>;
+} & Record<string, unknown>;
+
 export type MattermostAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -43,6 +53,14 @@ export type MattermostAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group message policy (allowlist/open/disabled). */
   groupPolicy?: GroupPolicy;
+  /** Legacy group-specific overrides kept for backward compatibility. */
+  groups?: Record<string, MattermostLegacyGroupConfig>;
+  /** Legacy per-channel override map kept for backward compatibility. */
+  channelOverrides?: Record<string, Record<string, unknown>>;
+  /** Legacy session policy field kept for backward compatibility. */
+  sessionPolicy?: string | Record<string, unknown>;
+  /** Legacy channel attachments field kept for backward compatibility. */
+  attachments?: boolean | Record<string, unknown>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
