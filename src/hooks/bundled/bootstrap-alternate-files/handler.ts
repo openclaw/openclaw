@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { VALID_BOOTSTRAP_NAMES, type WorkspaceBootstrapFile } from "../../../agents/workspace.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { resolveUserPath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 
@@ -10,20 +10,9 @@ const HOOK_KEY = "bootstrap-alternate-files";
 const log = createSubsystemLogger("bootstrap-alternate-files");
 
 /**
- * Expand a leading `~` to the user home directory.
- * Returns the original string unchanged if it does not start with `~`.
- */
-function expandHomeTilde(filePath: string): string {
-  if (filePath.startsWith("~/") || filePath === "~") {
-    return path.join(os.homedir(), filePath.slice(1));
-  }
-  return filePath;
-}
-
-/**
  * Parse and validate the `files` config value.
  * Returns a map of bootstrap slot name → resolved absolute source path.
- * Entries with invalid slot names or non-string paths are logged and skipped.
+ * Entries with invalid slot names, non-string paths, or relative paths are logged and skipped.
  */
 function resolveAlternateFileMap(
   hookConfig: Record<string, unknown>,
@@ -44,8 +33,15 @@ function resolveAlternateFileMap(
       );
       continue;
     }
-    const resolved = path.resolve(expandHomeTilde(sourcePath.trim()));
-    result.set(slotName, resolved);
+    // Use the shared home-path resolver for consistent ~ and OPENCLAW_HOME handling.
+    const expanded = resolveUserPath(sourcePath.trim());
+    if (!path.isAbsolute(expanded)) {
+      log.warn(
+        `skipping "${slotName}": source path must be absolute after expansion (got "${expanded}") — relative paths are not supported`,
+      );
+      continue;
+    }
+    result.set(slotName, expanded);
   }
   return result;
 }
@@ -122,7 +118,8 @@ const bootstrapAlternateFilesHook: HookHandler = async (event) => {
   for (const slotName of alternates.keys()) {
     if (!updated.some((f) => f.name === slotName)) {
       log.warn(
-        `configured alternate for "${slotName}" has no matching slot in bootstrap files — the slot was not loaded (no local file exists for this bootstrap name)`,
+        `configured alternate for "${slotName}" has no matching slot in bootstrap files — ` +
+          `the slot was not loaded (no local file exists for this bootstrap name)`,
       );
     }
   }

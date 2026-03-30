@@ -208,6 +208,20 @@ describe("bootstrap-alternate-files hook", () => {
     expect(context.bootstrapFiles.map((f) => f.name)).toEqual(["AGENTS.md", "SOUL.md"]);
   });
 
+  it("rejects relative source paths with a warning", async () => {
+    const context = makeContext(
+      [makeBootstrapFile("SOUL.md", { missing: true })],
+      createAlternateConfig({ "SOUL.md": "relative/path/SOUL.md" }),
+    );
+
+    // Should not throw; the relative path is skipped so SOUL.md stays missing
+    await expect(
+      handler(createHookEvent("agent", "bootstrap", "agent:main:main", context)),
+    ).resolves.toBeUndefined();
+
+    expect(context.bootstrapFiles[0]?.missing).toBe(true);
+  });
+
   it("expands tilde in source paths", async () => {
     // Write a file in tmpDir and create a tilde path that points to it.
     // We can't easily test with a real home dir, so verify the file IS found
