@@ -214,6 +214,19 @@ class DeviceHandlerTest {
   }
 
   @Test
+  fun handleDevicePermissions_marksCallLogUnpromptableWhenFeatureDisabled() {
+    val handler = DeviceHandler(appContext(), callLogEnabled = false)
+
+    val result = handler.handleDevicePermissions(null)
+
+    assertTrue(result.ok)
+    val payload = parsePayload(result.payloadJson)
+    val callLog = payload.getValue("permissions").jsonObject.getValue("callLog").jsonObject
+    assertEquals("denied", callLog.getValue("status").jsonPrimitive.content)
+    assertTrue(!callLog.getValue("promptable").jsonPrimitive.boolean)
+  }
+
+  @Test
   fun handleDeviceHealth_returnsExpectedShape() {
     val handler = DeviceHandler(appContext())
 
