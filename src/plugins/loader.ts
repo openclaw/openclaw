@@ -67,6 +67,7 @@ import type {
   PluginFormat,
   PluginLogger,
 } from "./types.js";
+import { hasKind } from "./slots.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -1162,7 +1163,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (
       registrationMode === "full" &&
       candidate.origin === "bundled" &&
-      manifestRecord.kind === "memory"
+      hasKind(manifestRecord.kind, "memory")
     ) {
       const earlyMemoryDecision = resolveMemorySlotDecision({
         id: record.id,
@@ -1262,19 +1263,23 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     record.name = definition?.name ?? record.name;
     record.description = definition?.description ?? record.description;
     record.version = definition?.version ?? record.version;
-    const manifestKind = record.kind as string | undefined;
-    const exportKind = definition?.kind as string | undefined;
-    if (manifestKind && exportKind && exportKind !== manifestKind) {
+    const manifestKind = record.kind;
+    const exportKind = definition?.kind;
+    if (
+      manifestKind &&
+      exportKind &&
+      JSON.stringify(manifestKind) !== JSON.stringify(exportKind)
+    ) {
       registry.diagnostics.push({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `plugin kind mismatch (manifest uses "${manifestKind}", export uses "${exportKind}")`,
+        message: `plugin kind mismatch (manifest uses "${String(manifestKind)}", export uses "${String(exportKind)}")`,
       });
     }
     record.kind = definition?.kind ?? record.kind;
 
-    if (record.kind === "memory" && memorySlot === record.id) {
+    if (hasKind(record.kind, "memory") && memorySlot === record.id) {
       memorySlotMatched = true;
     }
 
@@ -1295,7 +1300,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      if (memoryDecision.selected && record.kind === "memory") {
+      if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = record.id;
       }
     }
@@ -1626,14 +1631,18 @@ export async function loadOpenClawPluginCliRegistry(
     record.name = definition?.name ?? record.name;
     record.description = definition?.description ?? record.description;
     record.version = definition?.version ?? record.version;
-    const manifestKind = record.kind as string | undefined;
-    const exportKind = definition?.kind as string | undefined;
-    if (manifestKind && exportKind && exportKind !== manifestKind) {
+    const manifestKind = record.kind;
+    const exportKind = definition?.kind;
+    if (
+      manifestKind &&
+      exportKind &&
+      JSON.stringify(manifestKind) !== JSON.stringify(exportKind)
+    ) {
       registry.diagnostics.push({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `plugin kind mismatch (manifest uses "${manifestKind}", export uses "${exportKind}")`,
+        message: `plugin kind mismatch (manifest uses "${String(manifestKind)}", export uses "${String(exportKind)}")`,
       });
     }
     record.kind = definition?.kind ?? record.kind;
@@ -1652,7 +1661,7 @@ export async function loadOpenClawPluginCliRegistry(
       seenIds.set(pluginId, candidate.origin);
       continue;
     }
-    if (memoryDecision.selected && record.kind === "memory") {
+    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
     }
 

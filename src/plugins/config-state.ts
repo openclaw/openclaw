@@ -312,11 +312,13 @@ export function resolveEffectiveEnableState(params: {
 
 export function resolveMemorySlotDecision(params: {
   id: string;
-  kind?: string;
+  kind?: string | string[];
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (params.kind !== "memory") {
+  const kindIncludesMemory =
+    params.kind === "memory" || (Array.isArray(params.kind) && params.kind.includes("memory"));
+  if (!kindIncludesMemory) {
     return { enabled: true };
   }
   if (params.slot === null) {

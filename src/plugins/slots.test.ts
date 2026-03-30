@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { applyExclusiveSlotSelection } from "./slots.js";
+import {
+  applyExclusiveSlotSelection,
+  hasKind,
+  normalizeKinds,
+  slotKeysForPluginKind,
+} from "./slots.js";
 import type { PluginKind } from "./types.js";
 
 describe("applyExclusiveSlotSelection", () => {
@@ -69,7 +74,9 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.warnings).toHaveLength(0);
   }
 
-  function buildSelectionRegistry(plugins: ReadonlyArray<{ id: string; kind?: PluginKind }>) {
+  function buildSelectionRegistry(
+    plugins: ReadonlyArray<{ id: string; kind?: PluginKind | PluginKind[] }>,
+  ) {
     return {
       plugins: [...plugins],
     };
@@ -78,8 +85,8 @@ describe("applyExclusiveSlotSelection", () => {
   function expectUnchangedSelectionCase(params: {
     config: OpenClawConfig;
     selectedId: string;
-    selectedKind?: PluginKind;
-    registry?: { plugins: ReadonlyArray<{ id: string; kind?: PluginKind }> };
+    selectedKind?: PluginKind | PluginKind[];
+    registry?: { plugins: ReadonlyArray<{ id: string; kind?: PluginKind | PluginKind[] }> };
   }) {
     const result = applyExclusiveSlotSelection({
       config: params.config,
@@ -182,5 +189,79 @@ describe("applyExclusiveSlotSelection", () => {
       ...(selectedKind ? { selectedKind } : {}),
       ...(registry ? { registry: buildSelectionRegistry(registry.plugins) } : {}),
     });
+  });
+
+  it("applies slot selection for each kind in a multi-kind array", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        slots: { memory: "memory-core", contextEngine: "legacy" },
+        entries: {
+          "memory-core": { enabled: true },
+          legacy: { enabled: true },
+        },
+      },
+    };
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "dual-plugin",
+      selectedKind: ["memory", "context-engine"],
+      registry: buildSelectionRegistry([
+        { id: "memory-core", kind: "memory" },
+        { id: "legacy", kind: "context-engine" },
+        { id: "dual-plugin", kind: ["memory", "context-engine"] },
+      ]),
+    });
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.slots?.memory).toBe("dual-plugin");
+    expect(result.config.plugins?.slots?.contextEngine).toBe("dual-plugin");
+    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.legacy?.enabled).toBe(false);
+  });
+});
+
+describe("normalizeKinds", () => {
+  it("returns empty array for undefined", () => {
+    expect(normalizeKinds(undefined)).toEqual([]);
+  });
+
+  it("wraps a single kind in an array", () => {
+    expect(normalizeKinds("memory")).toEqual(["memory"]);
+  });
+
+  it("returns an array kind as-is", () => {
+    expect(normalizeKinds(["memory", "context-engine"])).toEqual(["memory", "context-engine"]);
+  });
+});
+
+describe("hasKind", () => {
+  it("returns false for undefined kind", () => {
+    expect(hasKind(undefined, "memory")).toBe(false);
+  });
+
+  it("matches a single kind string", () => {
+    expect(hasKind("memory", "memory")).toBe(true);
+    expect(hasKind("memory", "context-engine")).toBe(false);
+  });
+
+  it("matches within a kind array", () => {
+    expect(hasKind(["memory", "context-engine"], "memory")).toBe(true);
+    expect(hasKind(["memory", "context-engine"], "context-engine")).toBe(true);
+  });
+});
+
+describe("slotKeysForPluginKind", () => {
+  it("returns empty for undefined", () => {
+    expect(slotKeysForPluginKind(undefined)).toEqual([]);
+  });
+
+  it("returns single slot key for single kind", () => {
+    expect(slotKeysForPluginKind("memory")).toEqual(["memory"]);
+  });
+
+  it("returns multiple slot keys for multi-kind", () => {
+    expect(slotKeysForPluginKind(["memory", "context-engine"])).toEqual([
+      "memory",
+      "contextEngine",
+    ]);
   });
 });
