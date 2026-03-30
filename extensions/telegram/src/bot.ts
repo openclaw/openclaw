@@ -30,6 +30,8 @@ import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   buildTelegramUpdateKey,
   createTelegramUpdateDedupe,
+  noteTelegramReplayUpdateCompleted,
+  observeTelegramReplayCandidate,
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
@@ -278,6 +280,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   const recentUpdates = createTelegramUpdateDedupe();
+  const replayGuardKey = account.accountId;
   const initialUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
 
@@ -331,15 +334,38 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.use(async (ctx, next) => {
     const updateId = resolveTelegramUpdateId(ctx);
     if (typeof updateId === "number") {
+      const replayDecision = observeTelegramReplayCandidate({
+        accountKey: replayGuardKey,
+        updateId,
+      });
+      if (replayDecision.skip) {
+        // This intentionally sacrifices one repeatedly failing update so polling can recover.
+        runtime.error?.(
+          `[telegram][diag] skipping repeatedly replayed update_id=${updateId} after ${replayDecision.count} consecutive deliveries; advancing offset to break loop`,
+        );
+        if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
+          highestCompletedUpdateId = updateId;
+        }
+        maybePersistSafeWatermark();
+        return;
+      }
       pendingUpdateIds.add(updateId);
     }
+    let completedSuccessfully = false;
     try {
       await next();
+      completedSuccessfully = true;
     } finally {
       if (typeof updateId === "number") {
         pendingUpdateIds.delete(updateId);
         if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
           highestCompletedUpdateId = updateId;
+        }
+        if (completedSuccessfully) {
+          noteTelegramReplayUpdateCompleted({
+            accountKey: replayGuardKey,
+            updateId,
+          });
         }
         maybePersistSafeWatermark();
       }

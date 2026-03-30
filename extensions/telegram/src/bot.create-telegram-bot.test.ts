@@ -39,6 +39,7 @@ const {
   getTelegramSequentialKey,
   setTelegramBotRuntimeForTest,
 } = await import("./bot.js");
+const { resetTelegramReplayGuardStateForTests } = await import("./bot-updates.js");
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -63,6 +64,7 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
   beforeEach(() => {
+    resetTelegramReplayGuardStateForTests();
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
@@ -977,6 +979,92 @@ describe("createTelegramBot", () => {
       persistedAfterDrain.length > 0 ? Math.max(...persistedAfterDrain) : -Infinity;
     expect(maxPersistedAfterDrain).toBe(102);
   });
+
+  it("skips a repeatedly failing replayed update_id after consecutive deliveries", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+    const errorSpy = vi.fn();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      accountId: "cybera",
+      runtime: {
+        log: vi.fn(),
+        error: errorSpy,
+        exit: ((code: number) => {
+          throw new Error(`exit ${code}`);
+        }) as (code: number) => never,
+      },
+      updateOffset: {
+        lastUpdateId: 100,
+        onUpdateId,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const poisonHandler = vi.fn(async () => {
+      throw new Error("poison update");
+    });
+
+    await expect(runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler)).rejects.toThrow(
+      "poison update",
+    );
+    await expect(runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler)).rejects.toThrow(
+      "poison update",
+    );
+    await expect(runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler)).rejects.toThrow(
+      "poison update",
+    );
+
+    await expect(
+      runMiddlewareChain({ update: { update_id: 101 } }, poisonHandler),
+    ).resolves.toBeUndefined();
+
+    expect(poisonHandler).toHaveBeenCalledTimes(3);
+    expect(onUpdateId).toHaveBeenCalledWith(101);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "skipping repeatedly replayed update_id=101 after 4 consecutive deliveries",
+      ),
+    );
+  });
+
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
       channels: {
