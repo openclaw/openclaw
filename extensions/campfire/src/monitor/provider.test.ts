@@ -380,6 +380,83 @@ describe("campfire gateway", () => {
     await startPromise;
   });
 
+  it("reloads account-scoped settings before inbound authorization and reply delivery", async () => {
+    const registerRoute = vi.fn().mockReturnValue(() => {});
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    const loadConfig = vi.fn(() => ({
+      channels: {
+        campfire: {
+          baseUrl: "https://3.basecamp.com/1234567",
+          botKey: "200-NewBotKey",
+          allowFrom: ["42"],
+          textChunkLimit: 1234,
+        },
+      },
+    }));
+
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockImplementation(
+      async ({
+        dispatcherOptions,
+      }: {
+        dispatcherOptions: {
+          deliver: (payload: { text?: string; body?: string }) => Promise<void>;
+        };
+      }) => {
+        await dispatcherOptions.deliver({ text: "Hello back" });
+      },
+    );
+
+    const gateway = createCampfireGateway({ registerRoute, sendText, loadConfig });
+    const abort = new AbortController();
+    const startPromise = gateway.startAccount({
+      cfg: {
+        channels: {
+          campfire: {
+            baseUrl: "https://3.basecamp.com/9999999",
+            botKey: "100-OldBotKey",
+            allowFrom: ["77"],
+            textChunkLimit: 4000,
+          },
+        },
+      },
+      accountId: "default",
+      account: createAccount({
+        baseUrl: "https://3.basecamp.com/9999999",
+        botKey: "100-OldBotKey",
+        allowFrom: ["77"],
+        textChunkLimit: 4000,
+      }),
+      abortSignal: abort.signal,
+      channelRuntime: {
+        reply: {
+          finalizeInboundContext: vi.fn((ctx: Record<string, unknown>) => ctx),
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+      },
+    });
+
+    const registered = registerRoute.mock.calls[0]?.[0];
+    await registered.onInbound({
+      ...validPayload,
+      room: {
+        ...validPayload.room,
+        path: "https://3.basecamp.com/1234567/buckets/7/chats/88/messages/99",
+      },
+    });
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      "https://3.basecamp.com/1234567/buckets/7/chats/88/messages/99",
+      "Hello back",
+      "200-NewBotKey",
+      1234,
+    );
+
+    abort.abort();
+    await startPromise;
+  });
+
   it("skips webhook registration for disabled accounts", async () => {
     const registerRoute = vi.fn().mockReturnValue(() => {});
     const gateway = createCampfireGateway({ registerRoute });

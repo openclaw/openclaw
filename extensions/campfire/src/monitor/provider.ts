@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveCampfireAccount } from "../config.js";
 import { registerCampfireWebhookRoute, type CampfireInboundHandler } from "../http/index.js";
 import { getCampfireRuntime } from "../runtime.js";
 import { sendCampfireText } from "../send.js";
@@ -116,6 +117,11 @@ async function resolveCampfireInboundConfig(params: {
   }
 }
 
+function hasCampfireChannelSection(cfg: OpenClawConfig): boolean {
+  const section = cfg.channels?.campfire;
+  return Boolean(section && typeof section === "object" && !Array.isArray(section));
+}
+
 export function createCampfireGateway(params?: {
   registerRoute?: typeof registerCampfireWebhookRoute;
   sendText?: typeof sendCampfireText;
@@ -145,13 +151,32 @@ export function createCampfireGateway(params?: {
           return;
         }
 
+        const currentCfg = await resolveCampfireInboundConfig({
+          fallback: ctx.cfg,
+          loadConfigOverride: loadConfig,
+          log: ctx.log,
+        });
+        const resolvedCurrentAccount = resolveCampfireAccount(currentCfg, ctx.account.accountId);
+        const currentAccount =
+          !resolvedCurrentAccount.configured &&
+          ctx.account.configured &&
+          !hasCampfireChannelSection(currentCfg)
+            ? ctx.account
+            : resolvedCurrentAccount;
+        if (!currentAccount.enabled || !currentAccount.configured) {
+          return;
+        }
+
         const inbound = buildCampfireInboundContext({
           payload,
-          allowFrom: ctx.account.allowFrom,
-          baseUrl: ctx.account.baseUrl,
+          allowFrom: currentAccount.allowFrom,
+          baseUrl: currentAccount.baseUrl,
         });
         if (
-          isCampfireSelfAuthoredInbound({ senderId: inbound.sender.id, botKey: ctx.account.botKey })
+          isCampfireSelfAuthoredInbound({
+            senderId: inbound.sender.id,
+            botKey: currentAccount.botKey,
+          })
         ) {
           return;
         }
@@ -159,16 +184,10 @@ export function createCampfireGateway(params?: {
           return;
         }
 
-        const currentCfg = await resolveCampfireInboundConfig({
-          fallback: ctx.cfg,
-          loadConfigOverride: loadConfig,
-          log: ctx.log,
-        });
-
         const route = resolveAgentRoute({
           cfg: currentCfg,
           channel: "campfire",
-          accountId: ctx.account.accountId,
+          accountId: currentAccount.accountId,
           peer: {
             kind: "group",
             id: inbound.roomId,
@@ -178,7 +197,7 @@ export function createCampfireGateway(params?: {
         const commandAuthorized = resolveCampfireCommandAuthorized({
           cfg: currentCfg,
           rawBody: inbound.text,
-          allowFrom: ctx.account.allowFrom,
+          allowFrom: currentAccount.allowFrom,
           senderId: inbound.sender.id,
         });
 
@@ -223,13 +242,13 @@ export function createCampfireGateway(params?: {
               await sendText(
                 inbound.replyUrl,
                 text,
-                ctx.account.botKey,
-                ctx.account.textChunkLimit,
+                currentAccount.botKey,
+                currentAccount.textChunkLimit,
               );
             },
             onError: (err: unknown, info: { kind: string }) => {
               ctx.log?.error?.(
-                `[${ctx.account.accountId}] campfire ${info.kind} reply failed: ${String(err)}`,
+                `[${currentAccount.accountId}] campfire ${info.kind} reply failed: ${String(err)}`,
               );
             },
           },
