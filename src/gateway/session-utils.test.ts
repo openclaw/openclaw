@@ -677,6 +677,23 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("listAgentsForGateway falls back to identity.name when name is unset", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true, identity: { name: "开发助手" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      name: "开发助手",
+      identity: { name: "开发助手" },
+    });
+  });
+
   test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {
     await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
       fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
