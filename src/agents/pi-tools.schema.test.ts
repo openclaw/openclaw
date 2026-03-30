@@ -4,6 +4,47 @@ import { normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 describe("normalizeToolParameters", () => {
+  it("strips patternProperties for non-Anthropic providers by default (#57443)", () => {
+    const tool: AnyAgentTool = {
+      name: "exec",
+      label: "exec",
+      description: "run a command",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          env: {
+            type: "object",
+            patternProperties: {
+              "^(.*)$": { type: "string" },
+            },
+          },
+        },
+        required: ["command"],
+      },
+      execute: vi.fn(),
+    };
+
+    // Non-Anthropic provider (e.g. BytePlus Ark) should strip patternProperties
+    const normalized = normalizeToolParameters(tool, {
+      modelProvider: "bytedance",
+    });
+    const env = (normalized.parameters as Record<string, unknown>).properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(env.env.patternProperties).toBeUndefined();
+    expect(env.env.type).toBe("object");
+
+    // Anthropic native API supports full JSON Schema — keep patternProperties
+    const anthropicNormalized = normalizeToolParameters(tool, {
+      modelProvider: "anthropic",
+    });
+    const anthropicEnv = (anthropicNormalized.parameters as Record<string, unknown>)
+      .properties as Record<string, Record<string, unknown>>;
+    expect(anthropicEnv.env.patternProperties).toBeDefined();
+  });
+
   it("strips compat-declared unsupported schema keywords without provider-specific branching", () => {
     const tool: AnyAgentTool = {
       name: "demo",

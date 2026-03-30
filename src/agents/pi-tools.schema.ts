@@ -99,12 +99,20 @@ export function normalizeToolParameters(
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
+  // Keywords that are not part of the OpenAI tool-schema subset and are
+  // rejected by many OpenAI-compatible providers (BytePlus Ark, etc.).
+  // Anthropic's native API supports full JSON Schema, so it is excluded.
+  // (#57443)
+  const baseUnsupported = isAnthropicProvider
+    ? unsupportedToolSchemaKeywords
+    : new Set([...unsupportedToolSchemaKeywords, "patternProperties"]);
+
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
-    if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords);
+    if (baseUnsupported.size > 0) {
+      return stripUnsupportedSchemaKeywords(s, baseUnsupported);
     }
     return s;
   }
