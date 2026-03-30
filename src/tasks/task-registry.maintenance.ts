@@ -10,7 +10,8 @@ import {
   resolveTaskForLookupToken,
   updateTaskRecordById,
 } from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { summarizeTaskRecords } from "./task-registry.summary.js";
+import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -122,6 +123,10 @@ export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): Task
 export function reconcileInspectableTasks(): TaskRecord[] {
   ensureTaskRegistryReady();
   return listTaskRecords().map((task) => reconcileTaskRecordForOperatorInspection(task));
+}
+
+export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
+  return summarizeTaskRecords(reconcileInspectableTasks());
 }
 
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {

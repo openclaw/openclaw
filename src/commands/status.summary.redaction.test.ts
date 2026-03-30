@@ -29,6 +29,27 @@ describe("redactSensitiveStatusSummary", () => {
       },
       channelSummary: ["ok"],
       queuedSystemEvents: ["none"],
+      tasks: {
+        total: 2,
+        active: 1,
+        terminal: 1,
+        failures: 1,
+        byStatus: {
+          queued: 1,
+          running: 0,
+          succeeded: 0,
+          failed: 1,
+          timed_out: 0,
+          cancelled: 0,
+          lost: 0,
+        },
+        byRuntime: {
+          subagent: 0,
+          acp: 1,
+          cli: 0,
+          cron: 1,
+        },
+      },
       sessions: {
         paths: ["/tmp/openclaw/sessions.json"],
         count: 1,
@@ -54,5 +75,6 @@ describe("redactSensitiveStatusSummary", () => {
     expect(redacted.runtimeVersion).toBe("2026.3.8");
     expect(redacted.heartbeat).toEqual(input.heartbeat);
     expect(redacted.channelSummary).toEqual(input.channelSummary);
+    expect(redacted.tasks).toEqual(input.tasks);
   });
 });
