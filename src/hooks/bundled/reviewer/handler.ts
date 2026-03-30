@@ -73,7 +73,8 @@ CONTINUE (only for genuine gaps):
 - If the user seems satisfied, approve
 - Tool errors that the agent already handled → approve
 - Claims without evidence → flag
-- Incomplete task execution → flag`;
+- Incomplete task execution → flag
+- The TOOL ACTIVITY section only contains calls from the CURRENT agent turn. Previous turns' tool calls are not included.`;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -496,20 +497,36 @@ async function fetchSlackThread(
   threadTs: string,
   botUserId?: string,
 ): Promise<Array<{ role: string; text: string; ts?: string }>> {
-  const params = new URLSearchParams({ channel: channelId, ts: threadTs, limit: "300" });
-  const res = await fetch(`https://slack.com/api/conversations.replies?${params.toString()}`, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = (await res.json()) as {
-    ok?: boolean;
-    messages?: Array<{ user?: string; text?: string; ts?: string }>;
-    error?: string;
-  };
-  if (!data.ok) {
-    log.warn(`conversations.replies failed: ${data.error ?? "unknown"}`);
-  }
-  return (data.messages ?? []).map((m) => ({
+  const allMessages: Array<{ user?: string; text?: string; ts?: string }> = [];
+  let cursor: string | undefined;
+
+  // Paginate to get ALL messages (Slack returns oldest-first, max 200 per page)
+  do {
+    const params = new URLSearchParams({ channel: channelId, ts: threadTs, limit: "200" });
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+    const res = await fetch(`https://slack.com/api/conversations.replies?${params.toString()}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json()) as {
+      ok?: boolean;
+      messages?: Array<{ user?: string; text?: string; ts?: string }>;
+      error?: string;
+      has_more?: boolean;
+      response_metadata?: { next_cursor?: string };
+    };
+    if (!data.ok) {
+      log.warn(`conversations.replies failed: ${data.error ?? "unknown"}`);
+      break;
+    }
+    allMessages.push(...(data.messages ?? []));
+    cursor = data.has_more ? data.response_metadata?.next_cursor : undefined;
+  } while (cursor);
+
+  log.info(`fetchSlackThread: ${allMessages.length} messages fetched (paginated)`);
+  return allMessages.map((m) => ({
     role: m.user === botUserId ? "Assistant" : `User (${m.user ?? "unknown"})`,
     text: m.text ?? "(no text)",
     ts: m.ts,
