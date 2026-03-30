@@ -1,0 +1,40 @@
+import JSZip from "jszip";
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function normalizeDocxWhitespace(value: string): string {
+  return value.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function extractDocxTextFromXml(xml: string): string {
+  const withStructuralBreaks = xml
+    .replace(/<w:tab\b[^>]*\/>/g, "\t")
+    .replace(/<w:br\b[^>]*\/>/g, "\n")
+    .replace(/<\/w:p>/g, "\n\n")
+    .replace(/<\/w:tr>/g, "\n")
+    .replace(/<\/w:tc>/g, "\t");
+
+  const text = withStructuralBreaks
+    .replace(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g, (_match, textContent: string) =>
+      decodeXmlEntities(textContent),
+    )
+    .replace(/<[^>]+>/g, "");
+
+  return normalizeDocxWhitespace(text);
+}
+
+export async function extractDocxText(params: { buffer: Buffer }): Promise<string> {
+  const zip = await JSZip.loadAsync(params.buffer);
+  const documentXml = await zip.file("word/document.xml")?.async("string");
+  if (!documentXml) {
+    return "";
+  }
+  return extractDocxTextFromXml(documentXml);
+}

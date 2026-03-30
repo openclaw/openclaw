@@ -2,6 +2,7 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
+import { extractDocxText } from "./docx-extract.js";
 import { convertHeicToJpeg } from "./image-ops.js";
 import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
@@ -388,6 +389,11 @@ export async function extractFileContentFromSource(params: {
       text,
       images: extracted.images.length > 0 ? extracted.images : undefined,
     };
+  }
+
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    const text = clampText(await extractDocxText({ buffer }), limits.maxChars);
+    return { filename, text };
   }
 
   const text = clampText(decodeTextContent(buffer, charset), limits.maxChars);

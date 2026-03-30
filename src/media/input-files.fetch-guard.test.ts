@@ -356,3 +356,44 @@ describe("input image base64 validation", () => {
     });
   });
 });
+
+describe("input file docx extraction", () => {
+  it("extracts text from docx base64 input_file sources", async () => {
+    const { default: JSZip } = await import("jszip");
+    const zip = new JSZip();
+    zip.file(
+      "[Content_Types].xml",
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+    );
+    zip.file(
+      "word/document.xml",
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello DOCX</w:t></w:r></w:p></w:body></w:document>',
+    );
+    const docxBuffer = await zip.generateAsync({ type: "nodebuffer" });
+
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: docxBuffer.toString("base64"),
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename: "demo.docx",
+      },
+      limits: {
+        allowUrl: false,
+        allowedMimes: new Set([
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ]),
+        maxBytes: 1024 * 1024,
+        maxChars: 1000,
+        maxRedirects: 0,
+        timeoutMs: 1,
+        pdf: { maxPages: 1, maxPixels: 1, minTextChars: 1 },
+      },
+    });
+
+    expect(result).toEqual({
+      filename: "demo.docx",
+      text: "Hello DOCX",
+    });
+  });
+});
