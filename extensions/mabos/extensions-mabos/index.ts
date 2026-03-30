@@ -17,6 +17,7 @@ import { authorizeGatewayBearerRequestOrReply } from "../../../src/gateway/http-
 import { onAgentEvent, type AgentEventPayload } from "../../../src/infra/agent-events.js";
 import { readJsonBodyWithLimit } from "../../../src/infra/http-body.js";
 import { createCronBridgeService } from "./src/cron-bridge.js";
+import { createSecurityModule } from "./src/security/index.js";
 import { createBdiTools } from "./src/tools/bdi-tools.js";
 import { createBpmnMigrateTools } from "./src/tools/bpmn-migrate.js";
 import { createBusinessTools } from "./src/tools/business-tools.js";
@@ -69,6 +70,10 @@ const BDI_RUNTIME_PATH = "../../../mabos/bdi-runtime/index.js";
 
 export default function register(api: OpenClawPluginApi) {
   const log = api.logger;
+
+  // ── 0. Security Module (runs before all tools) ───────────────
+  const pluginConfig = getPluginConfig(api);
+  createSecurityModule(api, pluginConfig);
 
   // ── 1. Register all tools ─────────────────────────────────────
   const factories = [

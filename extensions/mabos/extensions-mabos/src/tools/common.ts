@@ -27,6 +27,8 @@ export interface MabosPluginConfig {
   inboxContextEnabled?: boolean;
   inboxWakeUpEnabled?: boolean;
   inboxWakeUpCooldownMinutes?: number;
+  securityEnabled?: boolean;
+  security?: import("../security/types.js").SecurityConfig;
 }
 
 /**
