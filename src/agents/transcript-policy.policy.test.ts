@@ -21,4 +21,14 @@ describe("resolveTranscriptPolicy e2e smoke", () => {
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict9");
   });
+
+  it("uses strict9 tool-call sanitization for Mistral models accessed via OpenRouter", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "mistral/mistral-small-2603",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict9");
+  });
 });

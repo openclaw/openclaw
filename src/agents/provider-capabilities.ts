@@ -22,6 +22,31 @@ export type ProviderCapabilityLookupOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+/**
+ * Mistral models enforce a strict 9-character alphanumeric tool call ID format.
+ * This constant is shared between the Mistral provider fallback and the
+ * cross-provider model-hint check so that the restriction is detected even
+ * when a Mistral model is accessed through a proxy/aggregator provider like
+ * OpenRouter that has no provider-specific capability overrides.
+ */
+const MISTRAL_MODEL_HINTS = [
+  "mistral",
+  "mixtral",
+  "codestral",
+  "pixtral",
+  "devstral",
+  "ministral",
+  "mistralai",
+];
+
+/**
+ * Model hints that require strict9 tool call IDs regardless of provider.
+ * When a model is accessed through a proxy (e.g. OpenRouter), the provider's
+ * own capabilities won't include these hints — this cross-provider list
+ * ensures the restriction is still applied based on the model ID alone.
+ */
+const CROSS_PROVIDER_STRICT9_MODEL_HINTS: string[] = [...MISTRAL_MODEL_HINTS];
+
 const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   anthropicToolSchemaMode: "native",
   anthropicToolChoiceMode: "native",
@@ -43,15 +68,7 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   },
   mistral: {
     transcriptToolCallIdMode: "strict9",
-    transcriptToolCallIdModelHints: [
-      "mistral",
-      "mixtral",
-      "codestral",
-      "pixtral",
-      "devstral",
-      "ministral",
-      "mistralai",
-    ],
+    transcriptToolCallIdModelHints: MISTRAL_MODEL_HINTS,
   },
   moonshot: {
     openAiPayloadNormalizationMode: "moonshot-thinking",
@@ -229,6 +246,12 @@ export function resolveTranscriptToolCallIdMode(
     return mode;
   }
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
+    return "strict9";
+  }
+  // Cross-provider fallback: detect models that require strict9 IDs even when
+  // accessed through a proxy/aggregator provider (e.g. Mistral via OpenRouter)
+  // whose own capabilities don't include the model hints.
+  if (modelIncludesAnyHint(modelId, CROSS_PROVIDER_STRICT9_MODEL_HINTS)) {
     return "strict9";
   }
   return undefined;

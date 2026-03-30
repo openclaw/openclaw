@@ -205,6 +205,27 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
+  it("detects strict9 tool call ID mode for Mistral models accessed via proxy providers", () => {
+    // When Mistral models are accessed through OpenRouter or other proxy
+    // providers, the provider capabilities won't include Mistral-specific
+    // hints. The cross-provider fallback should still detect the model.
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistral/mistral-small-2603")).toBe(
+      "strict9",
+    );
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistral-large-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "codestral-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/pixtral-large-latest")).toBe(
+      "strict9",
+    );
+    // Non-Mistral models via proxy should not trigger strict9
+    expect(resolveTranscriptToolCallIdMode("openrouter", "anthropic/claude-sonnet-4-5")).toBe(
+      undefined,
+    );
+    expect(resolveTranscriptToolCallIdMode("openrouter", "google/gemini-2.5-pro")).toBe(undefined);
+    // Direct Mistral provider should still work
+    expect(resolveTranscriptToolCallIdMode("mistral", "mistral-small-2603")).toBe("strict9");
+  });
+
   it("treats kimi aliases as native anthropic tool payload providers", () => {
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
