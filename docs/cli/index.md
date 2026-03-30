@@ -801,12 +801,13 @@ Notes:
 
 ### `tasks`
 
-List and manage task runs across agents.
+List and manage [background task](/automation/tasks) runs across agents.
 
 - `tasks list` — show active and recent task runs
 - `tasks show <id>` — show details for a specific task run
-- `tasks notify <id>` — send a notification for a task run
+- `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
+- `tasks audit` — surface operational issues (stale, lost, delivery failures)
 
 ## Gateway
 

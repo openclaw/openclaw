@@ -952,7 +952,7 @@ for usage/billing and raise limits as needed.
     Token tip: long tasks and sub-agents both consume tokens. If cost is a concern, set a
     cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
-    Docs: [Sub-agents](/tools/subagents).
+    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks).
 
   </Accordion>
 

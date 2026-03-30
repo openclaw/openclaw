@@ -3316,7 +3316,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 
-See [Cron Jobs](/automation/cron-jobs).
+See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
 
 ---
 
