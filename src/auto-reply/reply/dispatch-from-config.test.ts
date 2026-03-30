@@ -2398,6 +2398,37 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("consumes pre_route agentId override for session store lookup", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "session:override:without-embedded-agent",
+        agentId: "codex",
+      },
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-pre-route-agent-id-1",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }) satisfies ReplyPayload,
+    });
+
+    expect(sessionStoreMocks.resolveStorePath).toHaveBeenCalledWith(undefined, {
+      agentId: "codex",
+    });
+  });
+
   it("continues dispatch when pre_route blocks past timeout", async () => {
     setNoAbort();
     vi.useFakeTimers();

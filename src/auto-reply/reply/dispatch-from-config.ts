@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -143,6 +143,9 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
+  opts?: {
+    agentId?: string;
+  },
 ): {
   sessionKey?: string;
   entry?: SessionEntry;
@@ -153,7 +156,11 @@ const resolveSessionStoreLookup = (
   if (!sessionKey) {
     return {};
   }
-  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const agentId = resolveSessionAgentIds({
+    sessionKey,
+    config: cfg,
+    agentId: opts?.agentId,
+  }).sessionAgentId;
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
     const store = loadSessionStore(storePath);
@@ -185,6 +192,7 @@ export async function dispatchReplyFromConfig(params: {
   const { ctx, cfg, dispatcher } = params;
   let resolvedSessionKey = ctx.SessionKey;
   let resolvedAccountId = ctx.AccountId;
+  let resolvedRouteAgentId: string | undefined;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
@@ -266,6 +274,7 @@ export async function dispatchReplyFromConfig(params: {
 
     if (preRouteResult?.handled && preRouteResult.routeOverride?.sessionKey) {
       resolvedSessionKey = preRouteResult.routeOverride.sessionKey;
+      resolvedRouteAgentId = preRouteResult.routeOverride.agentId?.trim() || undefined;
       if (preRouteResult.routeOverride.accountId) {
         resolvedAccountId = preRouteResult.routeOverride.accountId;
       } else {
@@ -280,7 +289,9 @@ export async function dispatchReplyFromConfig(params: {
                 ...ctx,
                 SessionKey: resolvedSessionKey,
               };
-        const overrideEntry = resolveSessionStoreLookup(overrideLookupCtx, cfg).entry;
+        const overrideEntry = resolveSessionStoreLookup(overrideLookupCtx, cfg, {
+          agentId: resolvedRouteAgentId,
+        }).entry;
         const storedAccountId =
           typeof overrideEntry?.lastAccountId === "string"
             ? overrideEntry.lastAccountId
@@ -359,7 +370,9 @@ export async function dispatchReplyFromConfig(params: {
     });
   };
 
-  const sessionStoreEntry = resolveSessionStoreLookup(effectiveCtx, cfg);
+  const sessionStoreEntry = resolveSessionStoreLookup(effectiveCtx, cfg, {
+    agentId: resolvedRouteAgentId,
+  });
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
