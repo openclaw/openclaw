@@ -114,6 +114,13 @@ function expectFirstTextContains(result: NodesToolResult, expectedText: string) 
   });
 }
 
+function parseFirstTextJson(result: NodesToolResult): unknown {
+  const first = result.content?.[0];
+  expect(first).toMatchObject({ type: "text" });
+  const text = first?.type === "text" ? first.text : "";
+  return JSON.parse(text);
+}
+
 function setupNodeInvokeMock(params: {
   commands?: string[];
   remoteIp?: string;
@@ -525,6 +532,14 @@ describe("nodes device_status and device_info", () => {
           payload: {
             permissions: {
               camera: { status: "granted", promptable: false },
+              sms: {
+                status: "denied",
+                promptable: true,
+                capabilities: {
+                  send: { status: "denied", promptable: true },
+                  read: { status: "granted", promptable: false },
+                },
+              },
             },
           },
         };
@@ -537,6 +552,18 @@ describe("nodes device_status and device_info", () => {
     });
 
     expectFirstTextContains(result, '"permissions"');
+    expect(parseFirstTextJson(result)).toMatchObject({
+      permissions: {
+        sms: {
+          status: "denied",
+          promptable: true,
+          capabilities: {
+            send: { status: "denied", promptable: true },
+            read: { status: "granted", promptable: false },
+          },
+        },
+      },
+    });
   });
 
   it("invokes device.health and returns payload", async () => {
