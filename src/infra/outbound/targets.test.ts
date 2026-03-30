@@ -836,6 +836,25 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.threadId).toBe(9999);
   });
 
+  it("drops session threadId when turnSourceTo differs from session to (shared-session race)", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-shared-race",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-1009999999999",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1009999999999");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
   it("uses explicitTo even when turnSourceTo is omitted", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {
