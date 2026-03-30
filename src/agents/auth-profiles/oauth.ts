@@ -138,8 +138,12 @@ function isRefreshTokenReusedError(error: unknown): boolean {
   );
 }
 
-function buildOAuthRefreshMutexKey(params: { profileId: string; provider: string }): string {
-  return `${params.provider}:${params.profileId}`;
+function buildOAuthRefreshMutexKey(params: {
+  profileId: string;
+  provider: string;
+  agentDir?: string;
+}): string {
+  return `${params.provider}:${params.profileId}:${resolveAuthStorePath(params.agentDir)}`;
 }
 
 function hasOAuthCredentialChanged(
@@ -164,6 +168,9 @@ async function syncOAuthCredentialToStore(params: {
     agentDir: params.agentDir,
     updater: (store) => {
       const current = store.profiles[params.profileId];
+      if (current && current.type !== "oauth") {
+        return false;
+      }
       if (current?.type === "oauth" && current.provider !== params.provider) {
         return false;
       }
@@ -375,6 +382,7 @@ async function refreshOAuthTokenWithLock(params: {
   const mutexKey = buildOAuthRefreshMutexKey({
     profileId: params.profileId,
     provider: params.provider,
+    agentDir: params.agentDir,
   });
   const inFlight = oauthRefreshInFlight.get(mutexKey);
   if (inFlight) {

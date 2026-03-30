@@ -66,6 +66,7 @@ function createExpiredOauthStore(params: {
   profileId: string;
   provider: string;
   access?: string;
+  refresh?: string;
 }): AuthProfileStore {
   return {
     version: 1,
@@ -74,7 +75,7 @@ function createExpiredOauthStore(params: {
         type: "oauth",
         provider: params.provider,
         access: params.access ?? "cached-access-token",
-        refresh: "refresh-token",
+        refresh: params.refresh ?? "refresh-token",
         expires: Date.now() - 60_000,
       },
     },
@@ -194,7 +195,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
   });
 
-  it("serializes concurrent refreshes for the same shared oauth profile across agent dirs", async () => {
+  it("refreshes the same profile id independently across different agent auth stores", async () => {
     const profileId = "openai-codex:default";
     const workerAgentDir = path.join(tempRoot, "agents", "worker", "agent");
     await fs.mkdir(workerAgentDir, { recursive: true });
@@ -202,6 +203,8 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       createExpiredOauthStore({
         profileId,
         provider: "openai-codex",
+        access: "main-stale-access-token",
+        refresh: "main-refresh-token",
       }),
       agentDir,
     );
@@ -209,6 +212,8 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       createExpiredOauthStore({
         profileId,
         provider: "openai-codex",
+        access: "worker-stale-access-token",
+        refresh: "worker-refresh-token",
       }),
       workerAgentDir,
     );
@@ -217,16 +222,30 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     const refreshStarted = new Promise<void>((resolve) => {
       releaseRefresh = resolve;
     });
-    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+    getOAuthApiKeyMock.mockImplementation(async (_provider, creds) => {
       await refreshStarted;
-      return {
-        apiKey: "fresh-access-token",
-        newCredentials: {
-          access: "fresh-access-token",
-          refresh: "fresh-refresh-token",
-          expires: Date.now() + 60_000,
-        },
-      };
+      const refreshToken = creds["openai-codex"]?.refresh;
+      if (refreshToken === "main-refresh-token") {
+        return {
+          apiKey: "main-fresh-access-token",
+          newCredentials: {
+            access: "main-fresh-access-token",
+            refresh: "main-fresh-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        };
+      }
+      if (refreshToken === "worker-refresh-token") {
+        return {
+          apiKey: "worker-fresh-access-token",
+          newCredentials: {
+            access: "worker-fresh-access-token",
+            refresh: "worker-fresh-refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        };
+      }
+      throw new Error(`Unexpected refresh token: ${refreshToken ?? "missing"}`);
     });
 
     const mainResultPromise = resolveApiKeyForProfile({
@@ -243,24 +262,85 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
     const [mainResult, workerResult] = await Promise.all([mainResultPromise, workerResultPromise]);
 
-    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(2);
     expect(mainResult).toEqual({
-      apiKey: "fresh-access-token",
+      apiKey: "main-fresh-access-token",
       provider: "openai-codex",
       email: undefined,
     });
     expect(workerResult).toEqual({
+      apiKey: "worker-fresh-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+    await expect(readStoredProfile(agentDir, profileId)).resolves.toMatchObject({
+      access: "main-fresh-access-token",
+      refresh: "main-fresh-refresh-token",
+    });
+    await expect(readStoredProfile(workerAgentDir, profileId)).resolves.toMatchObject({
+      access: "worker-fresh-access-token", // pragma: allowlist secret
+      refresh: "worker-fresh-refresh-token",
+    });
+  });
+
+  it("does not overwrite a profile switched to api_key while oauth refresh sync is in flight", async () => {
+    const profileId = "openai-codex:default";
+    let releaseRefresh: (() => void) | undefined;
+    let markRefreshEntered: (() => void) | undefined;
+    const refreshStarted = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const refreshEntered = new Promise<void>((resolve) => {
+      markRefreshEntered = resolve;
+    });
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+      }),
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      markRefreshEntered?.();
+      await refreshStarted;
+      return {
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: Date.now() + 60_000,
+      } as never;
+    });
+
+    const resultPromise = resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+    });
+
+    await refreshEntered;
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "operator-key",
+          },
+        },
+      },
+      agentDir,
+    );
+    releaseRefresh?.();
+
+    await expect(resultPromise).resolves.toEqual({
       apiKey: "fresh-access-token",
       provider: "openai-codex",
       email: undefined,
     });
     await expect(readStoredProfile(agentDir, profileId)).resolves.toMatchObject({
-      access: "fresh-access-token",
-      refresh: "fresh-refresh-token",
-    });
-    await expect(readStoredProfile(workerAgentDir, profileId)).resolves.toMatchObject({
-      access: "fresh-access-token", // pragma: allowlist secret
-      refresh: "fresh-refresh-token",
+      type: "api_key",
+      provider: "openai-codex",
+      key: "operator-key",
     });
   });
 
