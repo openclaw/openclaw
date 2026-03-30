@@ -369,8 +369,12 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("device.permissions")).toBe(true);
     expect(allow.has("device.health")).toBe(true);
     expect(allow.has("callLog.search")).toBe(true);
-    expect(allow.has("sms.search")).toBe(true);
     expect(allow.has("system.notify")).toBe(true);
+    expect(allow.has("sms.search")).toBe(false);
+  });
+
+  it("treats sms.search as dangerous by default", () => {
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {
