@@ -837,6 +837,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["feishu"],
+      skills: ["./skills"],
     },
   },
   {
