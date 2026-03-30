@@ -14,7 +14,7 @@ export type TelegramSequentialKeyContext = {
     edited_message?: Message;
     channel_post?: Message;
     edited_channel_post?: Message;
-    callback_query?: { message?: Message };
+    callback_query?: { message?: Message; data?: string };
     message_reaction?: { chat?: { id?: number } };
   };
 };
@@ -34,6 +34,17 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     ctx.update?.edited_channel_post ??
     ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  // Approval callback_queries must bypass the per-chat sequential queue.
+  // The agent turn waiting for approval holds the chat lock; queuing the
+  // callback behind it causes a deadlock. Use a separate `:approval` key
+  // so the callback handler runs in parallel (same pattern as `:control`).
+  const callbackData = ctx.update?.callback_query?.data;
+  if (callbackData && /^\/approve(?:@[^\s]+)?\s+/i.test(callbackData)) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:approval`;
+    }
+    return "telegram:approval";
+  }
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
   if (isAbortRequestText(rawText, botUsername ? { botUsername } : undefined)) {
