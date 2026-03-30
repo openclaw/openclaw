@@ -44,14 +44,32 @@ vi.mock("../send.js", () => ({
 }));
 
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => {}));
+const runMatrixSemanticLoopJudgeMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    decision: "continue",
+    confidence: 0.9,
+    reasonCode: "progress_detected",
+    reasonShort: "Meaningful progress detected.",
+  })),
+);
 
 vi.mock("./replies.js", () => ({
   deliverMatrixReplies: deliverMatrixRepliesMock,
 }));
 
+vi.mock("./semantic-loop-judge.js", () => ({
+  runMatrixSemanticLoopJudge: runMatrixSemanticLoopJudgeMock,
+}));
+
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   installMatrixMonitorTestRuntime();
+  runMatrixSemanticLoopJudgeMock.mockReset().mockResolvedValue({
+    decision: "continue",
+    confidence: 0.9,
+    reasonCode: "progress_detected",
+    reasonShort: "Meaningful progress detected.",
+  });
   prepareMatrixSingleTextMock.mockReset().mockImplementation((text: string) => {
     const trimmedText = text.trim();
     return {
@@ -1123,6 +1141,112 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("matrix monitor handler semantic bot loop termination", () => {
+  it("terminates a configured bot chain when semantic judge returns stop_loop", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      dispatchReplyFromConfig,
+      getMemberDisplayName: async () => "ops-bot",
+    });
+    runMatrixSemanticLoopJudgeMock.mockResolvedValueOnce({
+      decision: "stop_loop",
+      confidence: 0.98,
+      reasonCode: "no_new_information",
+      reasonShort: "No meaningful information gain.",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-stop-1",
+        sender: "@ops:example.org",
+        body: "@bot let's continue with the same summary",
+      }),
+    );
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-stop-2",
+        sender: "@ops:example.org",
+        body: "@bot repeating previous conclusion",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(runMatrixSemanticLoopJudgeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens a terminated chain when a new human message arrives", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      dispatchReplyFromConfig,
+      getMemberDisplayName: async () => "sender",
+    });
+    runMatrixSemanticLoopJudgeMock
+      .mockResolvedValueOnce({
+        decision: "stop_loop",
+        confidence: 0.97,
+        reasonCode: "no_new_information",
+        reasonShort: "No meaningful information gain.",
+      })
+      .mockResolvedValueOnce({
+        decision: "continue",
+        confidence: 0.95,
+        reasonCode: "new_constraints",
+        reasonShort: "New constraints were introduced.",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-chain-stop",
+        sender: "@ops:example.org",
+        body: "@bot restating the same plan",
+      }),
+    );
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$human-context-reset",
+        sender: "@alice:example.org",
+        body: "new requirement: include rollback strategy",
+      }),
+    );
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-chain-reopen",
+        sender: "@ops:example.org",
+        body: "@bot re-evaluating with rollback strategy",
+      }),
+    );
+
+    expect(runMatrixSemanticLoopJudgeMock).toHaveBeenCalledTimes(2);
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(2);
   });
 });
 
