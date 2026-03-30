@@ -243,9 +243,9 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
-  // When true, skip writing to the global plugin command registry during register().
-  // Used by non-activating snapshot loads to avoid leaking commands into the running gateway.
-  suppressGlobalCommands?: boolean;
+  // When false, keep registration local to the returned registry and avoid mutating
+  // process-global command/hook state during non-activating snapshot loads.
+  activateGlobalSideEffects?: boolean;
 };
 
 type PluginTypedHookPolicy = {
@@ -375,8 +375,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
     });
 
-    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
-    if (!hookSystemEnabled || opts?.register === false) {
+    const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
+    if (
+      !registryParams.activateGlobalSideEffects ||
+      !hookSystemEnabled ||
+      opts?.register === false
+    ) {
       return;
     }
 
@@ -812,7 +816,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // NOTE: cross-plugin duplicate command detection is intentionally skipped here because
     // snapshot registries are isolated and never write to the global command table. Conflicts
     // will surface when the plugin is loaded via the normal activation path at gateway startup.
-    if (registryParams.suppressGlobalCommands) {
+    if (!registryParams.activateGlobalSideEffects) {
       const validationError = validatePluginCommandDefinition(command);
       if (validationError) {
         pushDiagnostic({

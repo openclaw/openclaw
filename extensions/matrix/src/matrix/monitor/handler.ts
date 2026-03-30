@@ -66,7 +66,6 @@ export type MatrixMonitorHandlerParams = {
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: ReadonlySet<string>;
-  mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
@@ -159,7 +158,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds = new Set<string>(),
-    mentionRegexes,
     groupPolicy,
     replyToMode,
     threadReplies,
