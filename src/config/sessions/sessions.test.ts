@@ -144,7 +144,10 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      // Group sessions default to idle (not daily), but should NOT inherit the
+      // dm-specific idleMinutes (45) — they get the group/thread default instead.
+      expect(groupPolicy.mode).toBe("idle");
+      expect(groupPolicy.idleMinutes).not.toBe(45);
     });
   });
 
