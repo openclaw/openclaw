@@ -133,6 +133,82 @@ describe("sessions tools", () => {
     expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
   });
 
+  it("registers sessions_await when per-agent awaitEnabled overrides defaults=false", () => {
+    const tools = createOpenClawTools({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              awaitEnabled: false,
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              subagents: {
+                awaitEnabled: true,
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      agentSessionKey: "agent:worker:main",
+    });
+
+    expect(tools.some((tool) => tool.name === "sessions_await")).toBe(true);
+  });
+
+  it("omits sessions_await when per-agent awaitEnabled=false overrides defaults=true", () => {
+    const tools = createOpenClawTools({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              awaitEnabled: true,
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              subagents: {
+                awaitEnabled: false,
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      agentSessionKey: "agent:worker:main",
+    });
+
+    expect(tools.some((tool) => tool.name === "sessions_await")).toBe(false);
+  });
+
+  it("registers sessions_await when requesterAgentIdOverride enables await mode", () => {
+    const tools = createOpenClawTools({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              awaitEnabled: false,
+            },
+          },
+          list: [
+            {
+              id: "cron-helper",
+              subagents: {
+                awaitEnabled: true,
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      agentSessionKey: "main",
+      requesterAgentIdOverride: "cron-helper",
+    });
+
+    expect(tools.some((tool) => tool.name === "sessions_await")).toBe(true);
+  });
+
   it("sessions_list filters kinds and includes messages", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

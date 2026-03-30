@@ -22,7 +22,7 @@ vi.mock("../acp-spawn.js", () => ({
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 
-async function loadFreshSessionsSpawnToolModuleForTest() {
+async function loadFreshSessionsSpawnToolModuleForTest(opts?: { awaitEnabled?: boolean }) {
   vi.resetModules();
   vi.doMock("../subagent-spawn.js", () => ({
     SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -32,6 +32,11 @@ async function loadFreshSessionsSpawnToolModuleForTest() {
     ACP_SPAWN_MODES: ["run", "session"],
     ACP_SPAWN_STREAM_TARGETS: ["parent"],
     spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
+  }));
+  vi.doMock("../../config/config.js", () => ({
+    loadConfig: () => ({
+      agents: { defaults: { subagents: { awaitEnabled: opts?.awaitEnabled ?? false } } },
+    }),
   }));
   ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
 }
@@ -94,6 +99,152 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("does not default to waitForCompletion when omitted", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+    });
+
+    await tool.execute("call-openresponses-wait", {
+      task: "research and report",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForCompletion: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("passes waitForCompletion=true only when explicitly requested", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:openresponses-user:alice",
+    });
+
+    await tool.execute("call-openresponses-canonical-wait", {
+      task: "research and report",
+      waitForCompletion: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "research and report",
+        waitForCompletion: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects waitForCompletion=true when awaitEnabled is false", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+    });
+
+    const result = await tool.execute("call-openresponses-no-wait", {
+      task: "research and report",
+      waitForCompletion: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("awaitEnabled=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("omits await-only schema fields when awaitEnabled is false", () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.properties).not.toHaveProperty("waitForCompletion");
+    expect(schema.properties).not.toHaveProperty("suppressAnnounce");
+  });
+
+  it("includes await-only schema fields when awaitEnabled is true", () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+      awaitEnabled: true,
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.properties).toHaveProperty("waitForCompletion");
+    expect(schema.properties).toHaveProperty("suppressAnnounce");
+  });
+
+  it("passes suppressAnnounce through to spawnSubagentDirect", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-suppress-announce", {
+      task: "parallel analysis",
+      suppressAnnounce: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "parallel analysis",
+        suppressAnnounce: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("honors injected awaitEnabled option when config fallback is false", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      awaitEnabled: true,
+    });
+
+    await tool.execute("call-injected-await-enabled", {
+      task: "parallel analysis",
+      waitForCompletion: true,
+      suppressAnnounce: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "parallel analysis",
+        waitForCompletion: true,
+        suppressAnnounce: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects await-only flags when injected awaitEnabled=false overrides config", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      awaitEnabled: false,
+    });
+
+    const result = await tool.execute("call-injected-await-disabled", {
+      task: "parallel analysis",
+      waitForCompletion: true,
+      suppressAnnounce: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("awaitEnabled=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -111,6 +262,48 @@ describe("sessions_spawn tool", () => {
         workspaceDir: "/parent/workspace",
       }),
     );
+  });
+
+  it("rejects waitForCompletion for ACP runtime", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-wait-invalid", {
+      runtime: "acp",
+      task: "investigate in ACP and wait",
+      waitForCompletion: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("waitForCompletion/suppressAnnounce are only supported");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects suppressAnnounce for ACP runtime", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-suppress-invalid", {
+      runtime: "acp",
+      task: "investigate in ACP with suppress",
+      suppressAnnounce: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("waitForCompletion/suppressAnnounce are only supported");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {

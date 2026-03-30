@@ -71,50 +71,62 @@ async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
   }
 }
 
-const SessionsSpawnToolSchema = Type.Object({
-  task: Type.String(),
-  label: Type.Optional(Type.String()),
-  runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
-  agentId: Type.Optional(Type.String()),
-  resumeSessionId: Type.Optional(
-    Type.String({
+const AWAIT_ONLY_SESSIONS_SPAWN_SCHEMA_PROPERTIES = {
+  waitForCompletion: Type.Optional(Type.Boolean()),
+  suppressAnnounce: Type.Optional(
+    Type.Boolean({
       description:
-        'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
+        "Suppress auto-announce for this run. Set true when you plan to collect results via sessions_await instead of receiving announce messages.",
     }),
   ),
-  model: Type.Optional(Type.String()),
-  thinking: Type.Optional(Type.String()),
-  cwd: Type.Optional(Type.String()),
-  runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  // Back-compat: older callers used timeoutSeconds for this tool.
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  thread: Type.Optional(Type.Boolean()),
-  mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
-  cleanup: optionalStringEnum(["delete", "keep"] as const),
-  sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
+};
 
-  // Inline attachments (snapshot-by-value).
-  // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
-  attachments: Type.Optional(
-    Type.Array(
-      Type.Object({
-        name: Type.String(),
-        content: Type.String(),
-        encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
-        mimeType: Type.Optional(Type.String()),
+const createSessionsSpawnToolSchema = (awaitEnabled: boolean) =>
+  Type.Object({
+    task: Type.String(),
+    label: Type.Optional(Type.String()),
+    runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
+    agentId: Type.Optional(Type.String()),
+    resumeSessionId: Type.Optional(
+      Type.String({
+        description:
+          'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
       }),
-      { maxItems: 50 },
     ),
-  ),
-  attachAs: Type.Optional(
-    Type.Object({
-      // Where the spawned agent should look for attachments.
-      // Kept as a hint; implementation materializes into the child workspace.
-      mountPath: Type.Optional(Type.String()),
-    }),
-  ),
-});
+    model: Type.Optional(Type.String()),
+    thinking: Type.Optional(Type.String()),
+    cwd: Type.Optional(Type.String()),
+    runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    // Back-compat: older callers used timeoutSeconds for this tool.
+    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    thread: Type.Optional(Type.Boolean()),
+    mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
+    cleanup: optionalStringEnum(["delete", "keep"] as const),
+    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
+    streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
+    ...(awaitEnabled ? AWAIT_ONLY_SESSIONS_SPAWN_SCHEMA_PROPERTIES : {}),
+
+    // Inline attachments (snapshot-by-value).
+    // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
+    attachments: Type.Optional(
+      Type.Array(
+        Type.Object({
+          name: Type.String(),
+          content: Type.String(),
+          encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
+          mimeType: Type.Optional(Type.String()),
+        }),
+        { maxItems: 50 },
+      ),
+    ),
+    attachAs: Type.Optional(
+      Type.Object({
+        // Where the spawned agent should look for attachments.
+        // Kept as a hint; implementation materializes into the child workspace.
+        mountPath: Type.Optional(Type.String()),
+      }),
+    ),
+  });
 
 export function createSessionsSpawnTool(
   opts?: {
@@ -124,16 +136,22 @@ export function createSessionsSpawnTool(
     agentTo?: string;
     agentThreadId?: string | number;
     sandboxed?: boolean;
+    /** Optional injected awaitEnabled override from resolved tool config. */
+    awaitEnabled?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
+  const awaitEnabled =
+    typeof opts?.awaitEnabled === "boolean"
+      ? opts.awaitEnabled
+      : loadConfig()?.agents?.defaults?.subagents?.awaitEnabled === true;
   return {
     label: "Sessions",
     name: "sessions_spawn",
     description:
       'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
-    parameters: SessionsSpawnToolSchema,
+    parameters: createSessionsSpawnToolSchema(awaitEnabled),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
@@ -157,6 +175,24 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const requestedWaitForCompletion = params.waitForCompletion === true;
+      const requestedSuppressAnnounce = params.suppressAnnounce === true;
+      if (runtime === "acp" && (requestedWaitForCompletion || requestedSuppressAnnounce)) {
+        return jsonResult({
+          status: "error",
+          error:
+            "waitForCompletion/suppressAnnounce are only supported for runtime=subagent; got runtime=acp",
+        });
+      }
+      if (!awaitEnabled && (requestedWaitForCompletion || requestedSuppressAnnounce)) {
+        return jsonResult({
+          status: "error",
+          error:
+            "waitForCompletion/suppressAnnounce require agents.defaults.subagents.awaitEnabled=true",
+        });
+      }
+      const waitForCompletion = requestedWaitForCompletion;
+      const suppressAnnounce = requestedSuppressAnnounce;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -296,6 +332,8 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           expectsCompletionMessage: true,
+          ...(waitForCompletion ? { waitForCompletion: true } : {}),
+          ...(suppressAnnounce ? { suppressAnnounce: true } : {}),
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
