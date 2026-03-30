@@ -2,6 +2,10 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.protocol.OpenClawCallLogCommand
+import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import android.content.Context
 import android.content.pm.PackageManager
@@ -146,11 +150,76 @@ class InvokeDispatcherTest {
       assertEquals("SMS_UNAVAILABLE: SMS not available on this device", result.error?.message)
     }
 
+  @Test
+  fun handleInvoke_blocksCameraCommandsWhenCameraDisabled() =
+    runTest {
+      val result = newDispatcher(cameraEnabled = false).handleInvoke(OpenClawCameraCommand.List.rawValue, null)
+
+      assertEquals("CAMERA_DISABLED", result.error?.code)
+      assertEquals("CAMERA_DISABLED: enable Camera in Settings", result.error?.message)
+    }
+
+  @Test
+  fun handleInvoke_blocksLocationCommandWhenLocationDisabled() =
+    runTest {
+      val result = newDispatcher(locationEnabled = false).handleInvoke(OpenClawLocationCommand.Get.rawValue, null)
+
+      assertEquals("LOCATION_DISABLED", result.error?.code)
+      assertEquals("LOCATION_DISABLED: enable Location in Settings", result.error?.message)
+    }
+
+  @Test
+  fun handleInvoke_blocksMotionActivityWhenUnavailable() =
+    runTest {
+      val result =
+        newDispatcher(motionActivityAvailable = false)
+          .handleInvoke(OpenClawMotionCommand.Activity.rawValue, null)
+
+      assertEquals("MOTION_UNAVAILABLE", result.error?.code)
+      assertEquals("MOTION_UNAVAILABLE: accelerometer not available", result.error?.message)
+    }
+
+  @Test
+  fun handleInvoke_blocksMotionPedometerWhenUnavailable() =
+    runTest {
+      val result =
+        newDispatcher(motionPedometerAvailable = false)
+          .handleInvoke(OpenClawMotionCommand.Pedometer.rawValue, null)
+
+      assertEquals("PEDOMETER_UNAVAILABLE", result.error?.code)
+      assertEquals("PEDOMETER_UNAVAILABLE: step counter not available", result.error?.message)
+    }
+
+  @Test
+  fun handleInvoke_blocksCallLogWhenUnavailable() =
+    runTest {
+      val result =
+        newDispatcher(callLogAvailable = false).handleInvoke(OpenClawCallLogCommand.Search.rawValue, null)
+
+      assertEquals("CALL_LOG_UNAVAILABLE", result.error?.code)
+      assertEquals("CALL_LOG_UNAVAILABLE: call log not available on this build", result.error?.message)
+    }
+
+  @Test
+  fun handleInvoke_treatsDebugCommandsAsUnknownOutsideDebugBuilds() =
+    runTest {
+      val result = newDispatcher(debugBuild = false).handleInvoke("debug.logs", null)
+
+      assertEquals("INVALID_REQUEST", result.error?.code)
+      assertEquals("INVALID_REQUEST: unknown command", result.error?.message)
+    }
+
   private fun newDispatcher(
+    cameraEnabled: Boolean = false,
+    locationEnabled: Boolean = false,
     sendSmsAvailable: Boolean = false,
     readSmsAvailable: Boolean = false,
     smsFeatureEnabled: Boolean = true,
     smsTelephonyAvailable: Boolean = true,
+    callLogAvailable: Boolean = false,
+    debugBuild: Boolean = false,
+    motionActivityAvailable: Boolean = false,
+    motionPedometerAvailable: Boolean = false,
   ): InvokeDispatcher {
     val appContext = RuntimeEnvironment.getApplication()
     shadowOf(appContext.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, smsTelephonyAvailable)
@@ -185,19 +254,19 @@ class InvokeDispatcherTest {
       debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
       isForeground = { true },
-      cameraEnabled = { false },
-      locationEnabled = { false },
+      cameraEnabled = { cameraEnabled },
+      locationEnabled = { locationEnabled },
       sendSmsAvailable = { sendSmsAvailable },
       readSmsAvailable = { readSmsAvailable },
       smsFeatureEnabled = { smsFeatureEnabled },
       smsTelephonyAvailable = { smsTelephonyAvailable },
-      callLogAvailable = { false },
-      debugBuild = { false },
+      callLogAvailable = { callLogAvailable },
+      debugBuild = { debugBuild },
       refreshNodeCanvasCapability = { false },
       onCanvasA2uiPush = {},
       onCanvasA2uiReset = {},
-      motionActivityAvailable = { false },
-      motionPedometerAvailable = { false },
+      motionActivityAvailable = { motionActivityAvailable },
+      motionPedometerAvailable = { motionPedometerAvailable },
     )
   }
 
