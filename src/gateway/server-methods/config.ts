@@ -570,7 +570,11 @@ export const configHandlers: GatewayRequestHandlers = {
       context?.logGateway?.warn(
         `config.openFile failed path=${configPath}: ${formatConfigOpenError(err)}`,
       );
-      respond(true, { ok: false, path: configPath, error: "failed to open config file" });
+      respond(
+        true,
+        { ok: false, path: configPath, error: "failed to open config file" },
+        undefined,
+      );
     }
   },
 };

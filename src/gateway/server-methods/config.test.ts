@@ -71,7 +71,7 @@ describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config $(touch pwned).json";
     vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
-      expect(args[0]).toBe("xdg-open");
+      expect(["open", "xdg-open"]).toContain(args[0]);
       expect(args[1]).toEqual(["/tmp/config $(touch pwned).json"]);
       invokeExecFileCallback(args, null);
       return {} as never;
@@ -103,11 +103,15 @@ describe("config.openFile", () => {
     const opts = createOptions();
     await configHandlers["config.openFile"](opts);
 
-    expect(opts.respond).toHaveBeenCalledWith(true, {
-      ok: false,
-      path: "/tmp/config.json",
-      error: "failed to open config file",
-    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: false,
+        path: "/tmp/config.json",
+        error: "failed to open config file",
+      },
+      undefined,
+    );
     expect(opts.context.logGateway.warn).toHaveBeenCalledWith(
       expect.stringContaining("spawn xdg-open ENOENT"),
     );
