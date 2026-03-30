@@ -17,14 +17,9 @@ import {
   resolveSlackAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
+import { SlackChannelConfigSchema } from "./config-schema.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -204,7 +199,7 @@ export function createSlackPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.slack"] },
-    configSchema: buildChannelConfigSchema(SlackConfigSchema),
+    configSchema: SlackChannelConfigSchema,
     config: {
       ...slackConfigAdapter,
       isConfigured: (account) => isSlackPluginAccountConfigured(account),

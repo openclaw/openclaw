@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { bluebubblesMessageActions } from "./actions.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
@@ -44,6 +43,9 @@ vi.mock("./probe.js", () => ({
   isMacOS26OrHigher: vi.fn().mockReturnValue(false),
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
+
+const freshActionsModulePath = "./actions.js?actions-test";
+const { bluebubblesMessageActions } = await import(freshActionsModulePath);
 
 describe("bluebubblesMessageActions", () => {
   const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;
@@ -135,7 +137,8 @@ describe("bluebubblesMessageActions", () => {
         },
       };
       const actions = describeMessageTool({ cfg })?.actions ?? [];
-      expect(actions).toContain("sendAttachment");
+      expect(actions).toContain("upload-file");
+      expect(actions).not.toContain("sendAttachment");
       expect(actions).not.toContain("react");
       expect(actions).not.toContain("reply");
       expect(actions).not.toContain("sendWithEffect");
@@ -165,6 +168,7 @@ describe("bluebubblesMessageActions", () => {
       expect(supportsAction({ action: "removeParticipant" })).toBe(true);
       expect(supportsAction({ action: "leaveGroup" })).toBe(true);
       expect(supportsAction({ action: "sendAttachment" })).toBe(true);
+      expect(supportsAction({ action: "upload-file" })).toBe(true);
     });
 
     it("returns false for unsupported actions", () => {
@@ -204,6 +208,36 @@ describe("bluebubblesMessageActions", () => {
   });
 
   describe("handleAction", () => {
+    it("maps upload-file to the attachment runtime using canonical naming", async () => {
+      const result = await callHandleAction({
+        action: "upload-file",
+        params: {
+          to: "+15551234567",
+          filename: "photo.png",
+          buffer: Buffer.from("img").toString("base64"),
+          message: "caption",
+          contentType: "image/png",
+        },
+        cfg: blueBubblesConfig(),
+        accountId: null,
+      });
+
+      expect(sendBlueBubblesAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+15551234567",
+          filename: "photo.png",
+          caption: "caption",
+          contentType: "image/png",
+        }),
+      );
+      expect(result).toMatchObject({
+        details: {
+          ok: true,
+          messageId: "att-msg-123",
+        },
+      });
+    });
+
     it("throws for unsupported actions", async () => {
       const cfg: OpenClawConfig = {
         channels: {

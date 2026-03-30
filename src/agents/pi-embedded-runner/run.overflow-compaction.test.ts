@@ -12,8 +12,10 @@ import {
   mockedCompactDirect,
   mockedContextEngine,
   mockedDescribeFailoverError,
+  mockedEvaluateContextWindowGuard,
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
+  mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
   mockedRunContextEngineMaintenance,
   mockedRunEmbeddedAttempt,
@@ -32,43 +34,6 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
-  });
-
-  beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedRunContextEngineMaintenance.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedCoerceToFailoverError.mockReset();
-    mockedDescribeFailoverError.mockReset();
-    mockedResolveFailoverStatus.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
-    mockedGlobalHookRunner.runBeforeCompaction.mockReset();
-    mockedGlobalHookRunner.runAfterCompaction.mockReset();
-    mockedPickFallbackThinkingLevel.mockReset();
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
-    mockedCoerceToFailoverError.mockReturnValue(null);
-    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
-      message: err instanceof Error ? err.message : String(err),
-      reason: undefined,
-      status: undefined,
-      code: undefined,
-    }));
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
-    });
-    mockedPickFallbackThinkingLevel.mockReturnValue(null);
-    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
   it("passes precomputed legacy before_agent_start result into the attempt", async () => {
@@ -114,6 +79,28 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         authProfileIdSource: "auto",
       }),
     );
+  });
+
+  it("blocks undersized models before dispatching a provider attempt", async () => {
+    mockedResolveContextWindowInfo.mockReturnValue({
+      tokens: 800,
+      source: "model",
+    });
+    mockedEvaluateContextWindowGuard.mockReturnValue({
+      shouldWarn: true,
+      shouldBlock: true,
+      tokens: 800,
+      source: "model",
+    });
+
+    await expect(
+      runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        runId: "run-small-context",
+      }),
+    ).rejects.toThrow("Model context window too small (800 tokens). Minimum is 1000.");
+
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
   });
 
   it("passes trigger=overflow when retrying compaction after context overflow", async () => {

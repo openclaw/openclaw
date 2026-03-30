@@ -1,5 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient, MattermostPost } from "./client.js";
@@ -434,12 +435,35 @@ describe("buildButtonAttachments", () => {
 });
 
 describe("createMattermostInteractionHandler", () => {
+  function setInteractionRuntime(
+    enqueueSystemEvent: (
+      text: string,
+      options: { sessionKey?: string | null; sessionId?: string | null; userId?: string | null },
+    ) => boolean = () => true,
+  ) {
+    setMattermostRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent,
+        },
+      }),
+    );
+  }
+
+  function createMattermostClientMock(
+    requestImpl: (path: string, init?: { method?: string }) => Promise<unknown>,
+  ): MattermostClient {
+    return {
+      baseUrl: "https://chat.example.com",
+      apiBaseUrl: "https://chat.example.com/api/v4",
+      token: "bot-token",
+      request: async <T>(path: string, init?: RequestInit) => (await requestImpl(path, init)) as T,
+      fetchImpl: vi.fn<typeof fetch>(),
+    };
+  }
+
   beforeEach(() => {
-    setMattermostRuntime({
-      system: {
-        enqueueSystemEvent: () => {},
-      },
-    } as unknown as Parameters<typeof setMattermostRuntime>[0]);
+    setInteractionRuntime();
     setInteractionSecret("acct", "bot-token");
   });
 
@@ -484,16 +508,23 @@ describe("createMattermostInteractionHandler", () => {
   function createRes(): ServerResponse & { headers: Record<string, string>; body: string } {
     const res = {
       statusCode: 200,
-      headers: {} as Record<string, string>,
+      headers: {},
       body: "",
-      setHeader(name: string, value: string) {
-        res.headers[name] = value;
+      setHeader(name: string, value: string | number | readonly string[]) {
+        res.headers[name] = Array.isArray(value) ? value.join(",") : String(value);
+        return res;
       },
-      end(chunk?: string) {
-        res.body = chunk ?? "";
+      end(
+        chunk?: string | Buffer | Uint8Array,
+        _encoding?: BufferEncoding | (() => void),
+        cb?: () => void,
+      ) {
+        res.body = chunk ? String(chunk) : "";
+        cb?.();
+        return res;
       },
-    };
-    return res as unknown as ServerResponse & { headers: Record<string, string>; body: string };
+    } as ServerResponse & { headers: Record<string, string>; body: string };
+    return res;
   }
 
   function createActionContext(actionId = "approve", channelId = "chan-1") {
@@ -586,9 +617,7 @@ describe("createMattermostInteractionHandler", () => {
 
   function createUnusedInteractionHandler() {
     return createMattermostInteractionHandler({
-      client: {
-        request: async () => ({ message: "unused" }),
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async () => ({ message: "unused" })),
       botUserId: "bot",
       accountId: "acct",
     });
@@ -604,15 +633,13 @@ describe("createMattermostInteractionHandler", () => {
     const { context, token } = createActionContext();
     const requestLog: Array<{ path: string; method?: string }> = [];
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async (path: string, init?: { method?: string }) => {
-          requestLog.push({ path, method: init?.method });
-          if (init?.method === "PUT") {
-            return { id: "post-1" };
-          }
-          return createActionPost({ actionName: params?.actionName });
-        },
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        if (init?.method === "PUT") {
+          return { id: "post-1" };
+        }
+        return createActionPost({ actionName: params?.actionName });
+      }),
       botUserId: "bot",
       accountId: "acct",
       allowedSourceIps: params?.allowedSourceIps,
@@ -630,9 +657,9 @@ describe("createMattermostInteractionHandler", () => {
   async function runInvalidActionRequest(actionId: string) {
     const { context, token } = createActionContext();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => createActionPost({ actionId, actionName: actionId }),
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async () =>
+        createActionPost({ actionId, actionName: actionId }),
+      ),
       botUserId: "bot",
       accountId: "acct",
     });
@@ -666,11 +693,9 @@ describe("createMattermostInteractionHandler", () => {
   it("rejects callback requests from non-allowlisted source IPs", async () => {
     const { context, token } = createActionContext();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => {
-          throw new Error("should not fetch post for rejected origins");
-        },
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async () => {
+        throw new Error("should not fetch post for rejected origins");
+      }),
       botUserId: "bot",
       accountId: "acct",
       allowedSourceIps: ["127.0.0.1"],
@@ -710,9 +735,7 @@ describe("createMattermostInteractionHandler", () => {
   it("rejects requests when the fetched post does not belong to the callback channel", async () => {
     const { context, token } = createActionContext();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async () => createActionPost({ channelId: "chan-9" }),
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async () => createActionPost({ channelId: "chan-9" })),
       botUserId: "bot",
       accountId: "acct",
     });
@@ -743,10 +766,9 @@ describe("createMattermostInteractionHandler", () => {
     const dispatchButtonClick = vi.fn();
     const handleInteraction = vi.fn();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async (_path: string, init?: { method?: string }) =>
-          init?.method === "PUT" ? { id: "post-1" } : createActionPost(),
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : createActionPost(),
+      ),
       botUserId: "bot",
       accountId: "acct",
       authorizeButtonClick: async () => ({
@@ -771,20 +793,15 @@ describe("createMattermostInteractionHandler", () => {
 
   it("forwards fetched post threading metadata to session and button callbacks", async () => {
     const enqueueSystemEvent = vi.fn();
-    setMattermostRuntime({
-      system: {
-        enqueueSystemEvent,
-      },
-    } as unknown as Parameters<typeof setMattermostRuntime>[0]);
+    setInteractionRuntime(enqueueSystemEvent);
     const { context, token } = createActionContext();
     const resolveSessionKey = vi.fn().mockResolvedValue("session:thread:root-9");
     const dispatchButtonClick = vi.fn();
     const fetchedPost = createActionPost({ rootId: "root-9" });
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async (_path: string, init?: { method?: string }) =>
-          init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
+      ),
       botUserId: "bot",
       accountId: "acct",
       resolveSessionKey,
@@ -822,15 +839,13 @@ describe("createMattermostInteractionHandler", () => {
     });
     const dispatchButtonClick = vi.fn();
     const handler = createMattermostInteractionHandler({
-      client: {
-        request: async (path: string, init?: { method?: string }) => {
-          requestLog.push({ path, method: init?.method });
-          return createActionPost({
-            actionId: "mdlprov",
-            actionName: "Browse providers",
-          });
-        },
-      } as unknown as MattermostClient,
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        return createActionPost({
+          actionId: "mdlprov",
+          actionName: "Browse providers",
+        });
+      }),
       botUserId: "bot",
       accountId: "acct",
       handleInteraction,

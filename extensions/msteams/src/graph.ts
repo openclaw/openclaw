@@ -34,22 +34,52 @@ export function escapeOData(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+async function requestGraph(params: {
+  token: string;
+  path: string;
+  method?: "GET" | "POST" | "DELETE";
+  root?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  errorPrefix?: string;
+}): Promise<Response> {
+  const hasBody = params.body !== undefined;
+  const res = await fetch(`${params.root ?? GRAPH_ROOT}${params.path}`, {
+    method: params.method,
+    headers: {
+      "User-Agent": buildUserAgent(),
+      Authorization: `Bearer ${params.token}`,
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
+      ...params.headers,
+    },
+    body: hasBody ? JSON.stringify(params.body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `${params.errorPrefix ?? "Graph"} ${params.path} failed (${res.status}): ${text || "unknown error"}`,
+    );
+  }
+  return res;
+}
+
+async function readOptionalGraphJson<T>(res: Response): Promise<T> {
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
+  return (await res.json()) as T;
+}
+
 export async function fetchGraphJson<T>(params: {
   token: string;
   path: string;
   headers?: Record<string, string>;
 }): Promise<T> {
-  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
-    headers: {
-      "User-Agent": buildUserAgent(),
-      Authorization: `Bearer ${params.token}`,
-      ...params.headers,
-    },
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
+    headers: params.headers,
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Graph ${params.path} failed (${res.status}): ${text || "unknown error"}`);
-  }
   return (await res.json()) as T;
 }
 
@@ -83,24 +113,14 @@ export async function postGraphJson<T>(params: {
   path: string;
   body?: unknown;
 }): Promise<T> {
-  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
     method: "POST",
-    headers: {
-      "User-Agent": buildUserAgent(),
-      Authorization: `Bearer ${params.token}`,
-      "Content-Type": "application/json",
-    },
-    body: params.body !== undefined ? JSON.stringify(params.body) : undefined,
+    body: params.body,
+    errorPrefix: "Graph POST",
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Graph POST ${params.path} failed (${res.status}): ${text || "unknown error"}`);
-  }
-  // Some Graph mutation endpoints return 204 No Content
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
-    return undefined as T;
-  }
-  return (await res.json()) as T;
+  return readOptionalGraphJson<T>(res);
 }
 
 export async function postGraphBetaJson<T>(params: {
@@ -108,41 +128,24 @@ export async function postGraphBetaJson<T>(params: {
   path: string;
   body?: unknown;
 }): Promise<T> {
-  const res = await fetch(`${GRAPH_BETA}${params.path}`, {
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
     method: "POST",
-    headers: {
-      "User-Agent": buildUserAgent(),
-      Authorization: `Bearer ${params.token}`,
-      "Content-Type": "application/json",
-    },
-    body: params.body !== undefined ? JSON.stringify(params.body) : undefined,
+    root: GRAPH_BETA,
+    body: params.body,
+    errorPrefix: "Graph beta POST",
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `Graph beta POST ${params.path} failed (${res.status}): ${text || "unknown error"}`,
-    );
-  }
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
-    return undefined as T;
-  }
-  return (await res.json()) as T;
+  return readOptionalGraphJson<T>(res);
 }
 
 export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
-  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
+  await requestGraph({
+    token: params.token,
+    path: params.path,
     method: "DELETE",
-    headers: {
-      "User-Agent": buildUserAgent(),
-      Authorization: `Bearer ${params.token}`,
-    },
+    errorPrefix: "Graph DELETE",
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `Graph DELETE ${params.path} failed (${res.status}): ${text || "unknown error"}`,
-    );
-  }
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
