@@ -66,8 +66,8 @@ export default defineSingleProviderPluginEntry({
       isXaiBackedVeniceModel(modelId) ? applyXaiCompat(model) : undefined,
     prepareExtraParams: ({ modelId, extraParams, thinkingLevel }) => {
       // Check if this is a reasoning model via thinkingLevel hint or catalog metadata
-      // Only apply strip_thinking_response when thinking is actually enabled (not 'off')
-      const thinkingEnabled = thinkingLevel != null && thinkingLevel !== 'off';
+      // Only apply strip_thinking_response when thinking is actually enabled
+      const thinkingEnabled = thinkingLevel === 'on' || thinkingLevel === 'auto';
       const isCatalogReasoningModel = isVeniceReasoningModelFromCatalog(modelId);
       const isReasoningModel = thinkingEnabled || isCatalogReasoningModel;
       
@@ -83,7 +83,7 @@ export default defineSingleProviderPluginEntry({
           ...extraParams?.venice_parameters,
           strip_thinking_response: true,
           // Only set disable_thinking as default if user didn't provide a value
-          disable_thinking: extraParams?.venice_parameters?.disable_thinking ?? false,
+          disable_thinking: extraParams?.venice_parameters?.disable_thinking ?? true,
         },
       };
     },
