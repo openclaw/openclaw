@@ -45,6 +45,12 @@ class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
 ) {
+  data class GatewayConnectAuth(
+    val token: String?,
+    val bootstrapToken: String?,
+    val password: String?,
+  )
+
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deviceAuthStore = DeviceAuthStore(prefs)
@@ -775,12 +781,31 @@ class NodeRuntime(
       }
     operatorStatusText = "Connecting…"
     updateStatus()
-    val token = prefs.loadGatewayToken()
-    val bootstrapToken = prefs.loadGatewayBootstrapToken()
-    val password = prefs.loadGatewayPassword()
+    connectWithAuth(
+      endpoint = endpoint,
+      auth =
+        GatewayConnectAuth(
+          token = prefs.loadGatewayToken(),
+          bootstrapToken = prefs.loadGatewayBootstrapToken(),
+          password = prefs.loadGatewayPassword(),
+        ),
+      reconnect = true,
+    )
+  }
+
+  private fun connectWithAuth(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    reconnect: Boolean = false,
+  ) {
     val tls = connectionManager.resolveTlsParams(endpoint)
     val connectOperator =
-      shouldConnectOperatorSession(token, bootstrapToken, password, loadStoredRoleDeviceToken("operator"))
+      shouldConnectOperatorSession(
+        auth.token,
+        auth.bootstrapToken,
+        auth.password,
+        loadStoredRoleDeviceToken("operator"),
+      )
     if (!connectOperator) {
       operatorConnected = false
       operatorStatusText = "Offline"
@@ -789,25 +814,27 @@ class NodeRuntime(
     } else {
       operatorSession.connect(
         endpoint,
-        token,
-        bootstrapToken,
-        password,
+        auth.token,
+        auth.bootstrapToken,
+        auth.password,
         connectionManager.buildOperatorConnectOptions(),
         tls,
       )
     }
     nodeSession.connect(
       endpoint,
-      token,
-      bootstrapToken,
-      password,
+      auth.token,
+      auth.bootstrapToken,
+      auth.password,
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    if (connectOperator) {
+    if (reconnect && connectOperator) {
       operatorSession.reconnect()
     }
-    nodeSession.reconnect()
+    if (reconnect) {
+      nodeSession.reconnect()
+    }
   }
 
   fun connect(endpoint: GatewayEndpoint) {
@@ -829,34 +856,26 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    val token = prefs.loadGatewayToken()
-    val bootstrapToken = prefs.loadGatewayBootstrapToken()
-    val password = prefs.loadGatewayPassword()
-    val connectOperator =
-      shouldConnectOperatorSession(token, bootstrapToken, password, loadStoredRoleDeviceToken("operator"))
-    if (!connectOperator) {
-      operatorConnected = false
-      operatorStatusText = "Offline"
-      operatorSession.disconnect()
-      updateStatus()
-    } else {
-      operatorSession.connect(
-        endpoint,
-        token,
-        bootstrapToken,
-        password,
-        connectionManager.buildOperatorConnectOptions(),
-        tls,
-      )
-    }
-    nodeSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildNodeConnectOptions(),
-      tls,
+    connectWithAuth(
+      endpoint = endpoint,
+      auth =
+        GatewayConnectAuth(
+          token = prefs.loadGatewayToken(),
+          bootstrapToken = prefs.loadGatewayBootstrapToken(),
+          password = prefs.loadGatewayPassword(),
+        ),
     )
+  }
+
+  fun connect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
+    connectedEndpoint = endpoint
+    operatorStatusText = "Connecting…"
+    nodeStatusText = "Connecting…"
+    updateStatus()
+    connectWithAuth(endpoint = endpoint, auth = auth)
   }
 
   fun acceptGatewayTrustPrompt() {
