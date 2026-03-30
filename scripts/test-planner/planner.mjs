@@ -202,10 +202,11 @@ const createPlannerContext = (request, options = {}) => {
   });
   const executionBudget = resolveExecutionBudget(runtime);
   const catalog = options.catalog ?? loadTestCatalog();
-  const unitTimingManifest = loadUnitTimingManifest();
-  const channelTimingManifest = loadChannelTimingManifest();
-  const extensionTimingManifest = loadExtensionTimingManifest();
-  const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
+  const unitTimingManifest = options.unitTimingManifest ?? loadUnitTimingManifest();
+  const channelTimingManifest = options.channelTimingManifest ?? loadChannelTimingManifest();
+  const extensionTimingManifest = options.extensionTimingManifest ?? loadExtensionTimingManifest();
+  const unitMemoryHotspotManifest =
+    options.unitMemoryHotspotManifest ?? loadUnitMemoryHotspotManifest();
   return {
     env,
     runtime,

@@ -14,6 +14,86 @@ import {
 } from "../../scripts/test-planner/planner.mjs";
 import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
+const createSyntheticTimingManifest = (config: string, defaultDurationMs = 1_000) => ({
+  config,
+  defaultDurationMs,
+  files: {},
+});
+
+const createSyntheticHotspotManifest = () => ({
+  config: "vitest.unit.config.ts",
+  defaultMinDeltaKb: 256 * 1024,
+  files: {},
+});
+
+const createSyntheticCatalog = ({
+  unitFiles = [],
+  extensionFiles = [],
+}: {
+  unitFiles?: string[];
+  extensionFiles?: string[];
+} = {}) => {
+  const allKnownUnitFiles = [...unitFiles];
+  const allKnownTestFiles = [...unitFiles, ...extensionFiles];
+  const unitBehaviorOverrideSet = new Set<string>();
+  const channelTestPrefixes: string[] = [];
+  const channelIsolatedFiles: string[] = [];
+  const extensionForkIsolatedFiles: string[] = [];
+  const unitForkIsolatedFiles: string[] = [];
+  const unitThreadPinnedFiles: string[] = [];
+  const baseThreadPinnedFiles: string[] = [];
+
+  return {
+    allKnownTestFiles,
+    allKnownUnitFiles,
+    baseThreadPinnedFiles,
+    baseThreadPinnedFileSet: new Set<string>(),
+    channelIsolatedFiles,
+    channelIsolatedFileSet: new Set<string>(),
+    channelTestPrefixes,
+    extensionForkIsolatedFiles,
+    extensionForkIsolatedFileSet: new Set<string>(),
+    unitBehaviorOverrideSet,
+    unitForkIsolatedFiles,
+    unitThreadPinnedFiles,
+    classifyTestFile(file: string) {
+      const surface = extensionFiles.includes(file) ? "extensions" : "unit";
+      return {
+        file,
+        surface,
+        isolated: false,
+        legacyBasePinned: false,
+        reasons: [surface === "unit" ? "unit-surface" : "extensions-surface"],
+      };
+    },
+    resolveFilterMatches(fileFilter: string) {
+      return allKnownTestFiles.filter((file) => file.includes(fileFilter));
+    },
+  };
+};
+
+const createUnitFileList = (count: number, prefix = "synthetic") =>
+  Array.from({ length: count }, (_, index) => `src/${prefix}/unit-${String(index + 1)}.test.ts`);
+
+const createExtensionFileList = (count: number, pluginId = "discord") =>
+  Array.from({ length: count }, (_, index) =>
+    bundledPluginFile(pluginId, `src/synthetic/extension-${String(index + 1)}.test.ts`),
+  );
+
+const createSyntheticPlannerOptions = ({
+  unitFiles = [],
+  extensionFiles = [],
+}: {
+  unitFiles?: string[];
+  extensionFiles?: string[];
+} = {}) => ({
+  catalog: createSyntheticCatalog({ unitFiles, extensionFiles }),
+  unitTimingManifest: createSyntheticTimingManifest("vitest.unit.config.ts"),
+  channelTimingManifest: createSyntheticTimingManifest("vitest.channels.config.ts", 3_000),
+  extensionTimingManifest: createSyntheticTimingManifest("vitest.extensions.config.ts", 1_000),
+  unitMemoryHotspotManifest: createSyntheticHotspotManifest(),
+});
+
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
     const artifacts = createExecutionArtifacts({
@@ -120,6 +200,8 @@ describe("test planner", () => {
   });
 
   it("scales down mid-tier local concurrency under saturated load", () => {
+    const unitFiles = createUnitFileList(270, "saturated-mid");
+    const extensionFiles = createExtensionFileList(2);
     const artifacts = createExecutionArtifacts({
       RUNNER_OS: "Linux",
       OPENCLAW_TEST_HOST_CPU_COUNT: "10",
@@ -138,6 +220,7 @@ describe("test planner", () => {
           OPENCLAW_TEST_HOST_CPU_COUNT: "10",
           OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
         },
+        ...createSyntheticPlannerOptions({ unitFiles, extensionFiles }),
         platform: "linux",
         loadAverage: [11.5, 11.5, 11.5],
         writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
@@ -156,6 +239,7 @@ describe("test planner", () => {
   });
 
   it("coalesces saturated high-memory local unit bursts into fewer shared batches", () => {
+    const unitFiles = createUnitFileList(270, "saturated-high");
     const env = {
       RUNNER_OS: "macOS",
       OPENCLAW_TEST_HOST_CPU_COUNT: "16",
@@ -171,6 +255,7 @@ describe("test planner", () => {
       },
       {
         env,
+        ...createSyntheticPlannerOptions({ unitFiles }),
         platform: "darwin",
         loadAverage: [18, 18, 18],
         writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
@@ -401,6 +486,7 @@ describe("test planner", () => {
   });
 
   it("assigns single include-file CI batches to one shard instead of over-sharding them", () => {
+    const unitFiles = createUnitFileList(4, "ci-single-file");
     const env = {
       CI: "true",
       GITHUB_ACTIONS: "true",
@@ -416,6 +502,7 @@ describe("test planner", () => {
       },
       {
         env,
+        ...createSyntheticPlannerOptions({ unitFiles }),
         platform: "linux",
         writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
       },
