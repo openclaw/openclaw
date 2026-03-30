@@ -4843,6 +4843,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) - thanks @juanpablodlc.
 - Auto-reply: treat whitespace-only sender ids as missing for command authorization (WhatsApp self-chat). (#766) - thanks @steipete.
 - Heartbeat: refresh prompt text for updated defaults.
+- Memory/QMD: prefer `qmd collection add --glob` for current QMD releases and fall back to legacy `--mask` when older builds reject it. (#55123) Thanks @ForceConstant and @vincentkoc.
 - Agents/Tools: use PowerShell on Windows to capture system utility output. (#748) - thanks @myfunc.
 - Docker: tolerate unset optional env vars in docker-setup.sh under strict mode. (#725) - thanks @petradonka.
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) - thanks @danielz1z.
