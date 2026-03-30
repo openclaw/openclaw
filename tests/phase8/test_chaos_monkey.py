@@ -493,7 +493,6 @@ class TestModuleImportCoverage(unittest.TestCase):
         "src.openrouter_client",
         "src.intent_classifier",
         "src.code_validator",
-        "src.context_bridge",
         "src.memory_enhanced",
         "src.memory_gc",
         "src.supermemory",
@@ -505,8 +504,6 @@ class TestModuleImportCoverage(unittest.TestCase):
         "src.auto_rollback",
         "src.agent_personas",
         "src.archivist_telegram",
-        "src.vllm_inference",
-        "src.vllm_manager",
         "src.gateway_commands",
         "src.tailscale_monitor",
         # AI subsystem

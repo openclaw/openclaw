@@ -164,7 +164,7 @@ async def _classic_execution(executor, executor_model, executor_sys, executor_pr
         executor.last_loaded_model = executor_model
         max_retries = 3
         for attempt in range(max_retries):
-            executor_response = await executor._call_vllm(
+            executor_response = await executor._call_llm(
                 executor_model, executor_sys, executor_prompt, executor_role, executor_config, active_mcp,
             )
 

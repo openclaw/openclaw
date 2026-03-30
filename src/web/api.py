@@ -190,7 +190,7 @@ async def websocket_logs(websocket: WebSocket) -> None:
 @app.get("/memory/stats")
 async def get_memory_stats() -> JSONResponse:
     """Memory system statistics."""
-    stats: Dict[str, Any] = {"supermemory": None, "rag": None, "context_bridge": None}
+    stats: Dict[str, Any] = {"supermemory": None, "rag": None}
 
     if _pipeline_ref:
         # SuperMemory
@@ -208,13 +208,6 @@ async def get_memory_stats() -> JSONResponse:
                 stats["rag"] = rag.stats()
             except Exception:
                 stats["rag"] = {"status": "initialized"}
-
-        # Context Bridge
-        cb = getattr(_pipeline_ref, "context_bridge", None)
-        if cb:
-            stats["context_bridge"] = {
-                "enabled": getattr(cb, "enabled", False),
-            }
 
     return JSONResponse(stats)
 

@@ -6,7 +6,7 @@ Tests verify the full AGI loop:
 3. If code fails, Reflexion produces a corrected version
 4. Corrected code succeeds and is saved as a skill
 
-Since we can't call real LLMs in unit tests, we mock call_vllm to simulate
+Since we can't call real LLMs in unit tests, we mock route_llm to simulate
 the agent's reasoning steps and focus on verifying the *plumbing*:
   - ReAct → sandbox_execute dispatch
   - Sandbox → error capture
@@ -138,7 +138,7 @@ class TestE2EReActSandbox:
         call_sequence = [REACT_STEP1_OUTPUT, REACT_STEP2_OUTPUT, REACT_STEP3_OUTPUT]
         call_idx = 0
 
-        async def mock_call_vllm(*args, **kwargs):
+        async def mock_route_llm(*args, **kwargs):
             nonlocal call_idx
             response = call_sequence[min(call_idx, len(call_sequence) - 1)]
             call_idx += 1
@@ -150,7 +150,7 @@ class TestE2EReActSandbox:
             {"name": "sandbox_list_skills", "description": "List saved skills"},
         ]
 
-        with patch("src.ai.agents.react.call_vllm", new=mock_call_vllm):
+        with patch("src.ai.agents.react.route_llm", new=mock_route_llm):
             react_result = await reasoner.reason(
                 prompt="Calculate the average of [10, 20, 30, 0]",
                 tools=tools,

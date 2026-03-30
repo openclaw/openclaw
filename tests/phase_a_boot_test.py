@@ -81,8 +81,7 @@ async def test_boot():
     print("\n── Step 3: PipelineExecutor Init ──")
     try:
         from src.pipeline_executor import PipelineExecutor
-        vllm_url = config.get("system", {}).get("vllm_base_url", "http://localhost:8000/v1")
-        pipeline = PipelineExecutor(config, vllm_url, vllm_manager=None)
+        pipeline = PipelineExecutor(config)
         record_ok("pipeline_executor", "PipelineExecutor created")
 
         # Check it reuses shared singletons

@@ -50,8 +50,6 @@ class OpenClawGateway:
         _tg = TelegramConfig(**_tg_raw)
         self.bot_token = _tg.bot_token
         self.admin_id = int(_tg.admin_chat_id)
-        self.vllm_manager = None
-
         # Initialize Tailscale monitor
         self.tailscale = TailscaleMonitor(self.config)
 

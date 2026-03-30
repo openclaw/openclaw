@@ -36,14 +36,6 @@
       "ngram_prompt_lookup_min": 1,
       "notes": "DISABLED 2026-03-21: disables async scheduling, net negative perf. Shell escaping also broken for JSON args."
     },
-    "context_bridge": {
-      "enabled": false,
-      "summary_max_tokens": 500,
-      "fact_store_backend": "sqlite",
-      "fact_store_path": "data/context_bridge.db",
-      "embedding_backend": "chromadb",
-      "notes": "DISABLED in Cloud-Only mode. No local model swaps occur, so context bridge is unnecessary. Re-enable with use_local_models=true."
-    },
     "tailscale": {
       "enabled": true,
       "vllm_use_tailscale": false,

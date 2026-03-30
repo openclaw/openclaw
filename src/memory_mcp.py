@@ -401,7 +401,7 @@ _LANG_MAP = {
 _IGNORE_DIRS = {
     ".venv", "__pycache__", ".git", ".pytest_cache", ".obsidian",
     "node_modules", ".mypy_cache", ".ruff_cache", "target",
-    "unsloth_compiled_cache", "dist", ".tox",
+    "dist", ".tox",
 }
 
 _IGNORE_EXTS = {

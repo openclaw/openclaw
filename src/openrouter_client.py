@@ -119,8 +119,6 @@ async def call_openrouter(
     preserve_think: bool = False,
     json_schema: Optional[Dict] = None,
     tools: Optional[List[Dict]] = None,
-    vllm_url: str = "",
-    vllm_manager: Any = None,
 ) -> str:
     """
     Try OpenRouter with per-model circuit breaker + automatic fallback chain.
@@ -128,9 +126,6 @@ async def call_openrouter(
     Fallback order: primary model → fallback_model → LAST_RESORT_MODEL.
     Each model has an independent circuit breaker so one flaky model
     doesn't poison the rest of the pipeline.
-
-    Note: vllm_url and vllm_manager parameters are accepted for backwards
-    compatibility but are unused (cloud-only mode).
     """
     from src.pipeline_schemas import ROLE_TOKEN_BUDGET
 

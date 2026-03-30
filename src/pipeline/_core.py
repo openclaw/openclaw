@@ -206,14 +206,11 @@ async def _async_save_trajectory(supermemory, prompt, chain, complexity, steps_r
 class PipelineExecutor:
     """
     Executes a chain of agent roles sequentially, passing compressed
-    context between each step. Uses vLLM (OpenAI-compatible local server)
-    for all inference calls. Model swapping managed by VLLMModelManager.
+    context between each step. Uses cloud LLM routing for all inference calls.
     """
 
-    def __init__(self, config: Dict[str, Any], vllm_url: str = "", vllm_manager=None):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
-        self.vllm_manager = vllm_manager
 
         # OpenRouter configuration (primary inference)
         self.openrouter_config = config.get("system", {}).get("openrouter", {})
@@ -257,8 +254,6 @@ class PipelineExecutor:
 
         # SmartModelRouter (delegated to _state.py)
         self._smart_router = init_smart_router(config, self.force_cloud)
-
-        self.context_bridge = None  # Unused in cloud-only mode
 
         self._react_reasoner = ReActReasoner(model="")
         self._constitutional = ConstitutionalChecker(model="")
@@ -347,10 +342,7 @@ class PipelineExecutor:
         self._init_supermemory()
 
     async def _validate_vllm(self):
-        """Checks that the vLLM server is reachable (or manager is configured)."""
-        if self.vllm_manager:
-            logger.info("vLLM model manager configured — models will be loaded on demand")
-            return
+        """Checks that the vLLM server is reachable."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -769,24 +761,6 @@ class PipelineExecutor:
 
             prev_model = self.last_loaded_model
 
-            if not self.force_cloud:
-                if (prev_model and prev_model != model
-                        and self.context_bridge.enabled and self.vllm_manager):
-                    import uuid
-                    _pipeline_id = str(uuid.uuid4())
-                    _snapshot = self.context_bridge.build_handoff_summary(
-                        pipeline_id=_pipeline_id, brigade=brigade, chain_position=step_index,
-                        source_model=prev_model, target_model=model,
-                        steps_results=steps_results, accumulated_context=context_briefing,
-                    )
-                    self.context_bridge.save_before_swap(_snapshot)
-                    logger.info("Context Bridge: snapshot saved before model swap",
-                                pipeline_id=_pipeline_id, source=prev_model, target=model)
-                    _restored = self.context_bridge.restore_after_swap(_pipeline_id)
-                    if _restored:
-                        context_briefing = _restored
-                        logger.info("Context Bridge: context restored for new model")
-
             did_handoff = False
             _autoheal_used = False  # v16.4: one self-healing retry per step
 
@@ -821,7 +795,7 @@ class PipelineExecutor:
                         auditor_role_config=_auditor_cfg,
                     )
                 else:
-                    response = await self._call_vllm(
+                    response = await self._call_llm(
                         model, system_prompt, step_prompt, role_name, role_config, active_mcp,
                         preserve_think=preserve_think, json_schema=role_schema
                     )
@@ -898,7 +872,7 @@ class PipelineExecutor:
                                 "Используй результаты инструментов выше для финального ответа. "
                                 "Не выводи XML-теги tool_call."
                             )
-                            response = await self._call_vllm(
+                            response = await self._call_llm(
                                 model, system_prompt, _tc_followup, role_name,
                                 role_config, active_mcp,
                                 preserve_think=preserve_think, json_schema=role_schema,
@@ -929,7 +903,7 @@ class PipelineExecutor:
                         if status_callback:
                             await status_callback(role_name, display_model, f"🔄 Гарантия качества: повтор {retry_i + 1} — {feedback[:60]}")
                         retry_prompt = f"{step_prompt}\n\n[GUARDRAIL FEEDBACK — исправь ответ]:\n{feedback}"
-                        response = await self._call_vllm(
+                        response = await self._call_llm(
                             model, system_prompt, retry_prompt, role_name, role_config, active_mcp,
                             preserve_think=preserve_think, json_schema=role_schema
                         )
@@ -946,7 +920,7 @@ class PipelineExecutor:
                             if status_callback:
                                 await status_callback(role_name, display_model, f"🔍 Статический анализ: {_issues_count} проблем — исправляю...")
                             _cv_retry_prompt = f"{step_prompt}\n\n{_cv_fix_prompt}"
-                            response = await self._call_vllm(
+                            response = await self._call_llm(
                                 model, system_prompt, _cv_retry_prompt, role_name, role_config,
                                 active_mcp, preserve_think=preserve_think, json_schema=role_schema,
                             )
@@ -987,7 +961,7 @@ class PipelineExecutor:
                                     f"[FIX RULE]: {_fix_rule}\n\n"
                                     "Предыдущий ответ содержал ошибку. Используй правило фикса и исправь."
                                 )
-                                response = await self._call_vllm(
+                                response = await self._call_llm(
                                     model, system_prompt, _heal_prompt, role_name, role_config,
                                     active_mcp, preserve_think=preserve_think, json_schema=role_schema,
                                 )
@@ -1287,7 +1261,7 @@ class PipelineExecutor:
         if status_callback:
             await status_callback(role_name, display_model, f"⚡ Параллельно: {role_name} работает...")
         active_mcp = self.openclaw_mcp if brigade == "OpenClaw" else self.dmarket_mcp
-        return await self._call_vllm(model, system_prompt, step_prompt, role_name, role_config, active_mcp)
+        return await self._call_llm(model, system_prompt, step_prompt, role_name, role_config, active_mcp)
 
     def _display_model(self, role_config: Dict[str, Any], fallback_model: str = "") -> str:
         if self.openrouter_enabled:
@@ -1329,7 +1303,7 @@ class PipelineExecutor:
             patched_config = dict(role_config)
             patched_config["temperature"] = temp
             try:
-                return await self._call_vllm(
+                return await self._call_llm(
                     model, system_prompt, step_prompt,
                     role_name, patched_config, active_mcp,
                     preserve_think=False,
@@ -1353,7 +1327,7 @@ class PipelineExecutor:
 
         if not candidates:
             logger.warning("Ensemble: all instances failed, single fallback")
-            return await self._call_vllm(
+            return await self._call_llm(
                 model, system_prompt, step_prompt, role_name, role_config, active_mcp,
             )
 
@@ -1383,7 +1357,7 @@ class PipelineExecutor:
         )
 
         try:
-            verdict = await self._call_vllm(
+            verdict = await self._call_llm(
                 auditor_model,
                 vote_system,
                 vote_prompt,
@@ -1424,7 +1398,7 @@ class PipelineExecutor:
         # Last resort: return longest (most complete) candidate
         return max(candidates, key=len)
 
-    async def _call_vllm(self, model, system_prompt, user_prompt, role_name, role_config, mcp_client, preserve_think=False, json_schema=None) -> str:
+    async def _call_llm(self, model, system_prompt, user_prompt, role_name, role_config, mcp_client, preserve_think=False, json_schema=None) -> str:
         or_model = role_config.get("openrouter_model")
         if not or_model and self._smart_router:
             task_type = "general"
@@ -1459,7 +1433,6 @@ class PipelineExecutor:
         if self.openrouter_enabled and or_model:
             result = await call_openrouter(
                 openrouter_config=self.openrouter_config,
-                vllm_url=self.vllm_url,
                 model=or_model,
                 fallback_model=fallback,
                 system_prompt=system_prompt,
@@ -1468,7 +1441,6 @@ class PipelineExecutor:
                 role_config=role_config,
                 mcp_client=mcp_client,
                 config=self.config,
-                vllm_manager=self.vllm_manager,
                 preserve_think=preserve_think,
                 json_schema=json_schema,
             )
