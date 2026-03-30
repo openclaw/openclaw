@@ -1,6 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
+  getTelegramExecApprovalApprovers,
   isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
@@ -12,11 +13,13 @@ import {
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>["execApprovals"],
+  channelOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
 ): OpenClawConfig {
   return {
     channels: {
       telegram: {
         botToken: "tok",
+        ...channelOverrides,
         execApprovals,
       },
     },
@@ -24,13 +27,18 @@ function buildConfig(
 }
 
 describe("telegram exec approvals", () => {
-  it("requires enablement and at least one approver", () => {
+  it("requires enablement and an explicit or inferred approver", () => {
     expect(isTelegramExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
         cfg: buildConfig({ enabled: true }),
       }),
     ).toBe(false);
+    expect(
+      isTelegramExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
+      }),
+    ).toBe(true);
     expect(
       isTelegramExecApprovalClientEnabled({
         cfg: buildConfig({ enabled: true, approvers: ["123"] }),
@@ -43,6 +51,20 @@ describe("telegram exec approvals", () => {
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "123" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
+  });
+
+  it("infers approvers from allowFrom and direct defaultTo", () => {
+    const cfg = buildConfig(
+      { enabled: true },
+      {
+        allowFrom: ["12345", "-100999", "@ignored"],
+        defaultTo: 67890,
+      },
+    );
+
+    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345", "67890"]);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(true);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
   });
 
   it("defaults target to dm", () => {
@@ -196,6 +218,11 @@ describe("telegram exec approvals", () => {
   describe("isTelegramExecApprovalAuthorizedSender", () => {
     it("accepts explicit approvers", () => {
       const cfg = buildConfig({ enabled: true, approvers: ["123"] });
+      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
+    });
+
+    it("accepts explicit approvers even when the richer client is disabled", () => {
+      const cfg = buildConfig({ enabled: false, approvers: ["123"] });
       expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
     });
 

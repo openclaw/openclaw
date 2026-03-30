@@ -1,6 +1,6 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 import * as discordClientModule from "../client.js";
 import * as discordSendModule from "../send.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";

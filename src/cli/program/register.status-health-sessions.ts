@@ -4,8 +4,10 @@ import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import {
+  tasksAuditCommand,
   tasksCancelCommand,
   tasksListCommand,
+  tasksMaintenanceCommand,
   tasksNotifyCommand,
   tasksShowCommand,
 } from "../../commands/tasks.js";
@@ -224,10 +226,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("tasks")
     .description("Inspect durable background task state")
     .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by runtime (subagent, acp, cli)")
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
     .option(
       "--status <name>",
-      "Filter by status (accepted, running, done, failed, timed_out, cancelled, lost)",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -247,10 +249,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("list")
     .description("List tracked background tasks")
     .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by runtime (subagent, acp, cli)")
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
     .option(
       "--status <name>",
-      "Filter by status (accepted, running, done, failed, timed_out, cancelled, lost)",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as
@@ -266,6 +268,56 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json || parentOpts?.json),
             runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
             status: (opts.status as string | undefined) ?? parentOpts?.status,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("audit")
+    .description("Show stale or broken background task runs")
+    .option("--json", "Output as JSON", false)
+    .option("--severity <level>", "Filter by severity (warn, error)")
+    .option(
+      "--code <name>",
+      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps)",
+    )
+    .option("--limit <n>", "Limit displayed findings")
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksAuditCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            severity: opts.severity as "warn" | "error" | undefined,
+            code: opts.code as
+              | "stale_queued"
+              | "stale_running"
+              | "lost"
+              | "delivery_failed"
+              | "missing_cleanup"
+              | "inconsistent_timestamps"
+              | undefined,
+            limit: parsePositiveIntOrUndefined(opts.limit),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("maintenance")
+    .description("Preview or apply task ledger maintenance")
+    .option("--json", "Output as JSON", false)
+    .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMaintenanceCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            apply: Boolean(opts.apply),
           },
           defaultRuntime,
         );

@@ -4,6 +4,9 @@ import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js"
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 
+const resolveComparablePath = (value: string, workspaceDir = "/workspace/root"): string =>
+  path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value);
+
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
     const cfg = { agents: { defaults: { workspace: "/tmp/memory-test" } } } as OpenClawConfig;
@@ -142,5 +145,199 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.qmd?.searchMode).toBe("vsearch");
+  });
+
+  it("resolves qmd mcporter search tool override", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+          searchTool: " hybrid_search ",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.qmd?.searchMode).toBe("query");
+    expect(resolved.qmd?.searchTool).toBe("hybrid_search");
+  });
+});
+
+describe("memorySearch.extraPaths integration", () => {
+  it("maps agents.defaults.memorySearch.extraPaths to QMD collections", () => {
+    const cfg = {
+      memory: { backend: "qmd" },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            extraPaths: ["/home/user/docs", "/home/user/vault"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "test-agent" });
+    expect(result.backend).toBe("qmd");
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    expect(customCollections.length).toBeGreaterThanOrEqual(2);
+    expect(customCollections.map((collection) => collection.path)).toEqual(
+      expect.arrayContaining([
+        resolveComparablePath("/home/user/docs"),
+        resolveComparablePath("/home/user/vault"),
+      ]),
+    );
+  });
+
+  it("merges default and per-agent memorySearch.extraPaths for QMD collections", () => {
+    const cfg = {
+      memory: { backend: "qmd" },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            extraPaths: ["/default/path"],
+          },
+        },
+        list: [
+          {
+            id: "my-agent",
+            memorySearch: {
+              extraPaths: ["/agent/specific/path"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
+    expect(result.backend).toBe("qmd");
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const paths = customCollections.map((collection) => collection.path);
+    expect(paths).toContain(resolveComparablePath("/agent/specific/path"));
+    expect(paths).toContain(resolveComparablePath("/default/path"));
+  });
+
+  it("falls back to defaults when agent has no overrides", () => {
+    const cfg = {
+      memory: { backend: "qmd" },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            extraPaths: ["/default/path"],
+          },
+        },
+        list: [
+          {
+            id: "other-agent",
+            memorySearch: {
+              extraPaths: ["/other/path"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
+    expect(result.backend).toBe("qmd");
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const paths = customCollections.map((collection) => collection.path);
+    expect(paths).toContain(resolveComparablePath("/default/path"));
+  });
+
+  it("deduplicates merged memorySearch.extraPaths for QMD collections", () => {
+    const cfg = {
+      memory: { backend: "qmd" },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            extraPaths: ["/shared/path", " /shared/path "],
+          },
+        },
+        list: [
+          {
+            id: "my-agent",
+            memorySearch: {
+              extraPaths: ["/shared/path", "/agent-only"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const paths = customCollections.map((collection) => collection.path);
+
+    expect(
+      paths.filter((collectionPath) => collectionPath === resolveComparablePath("/shared/path")),
+    ).toHaveLength(1);
+    expect(paths).toContain(resolveComparablePath("/agent-only"));
+  });
+
+  it("matches per-agent memorySearch.extraPaths using normalized agent ids", () => {
+    const cfg = {
+      memory: { backend: "qmd" },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+        },
+        list: [
+          {
+            id: "My-Agent",
+            memorySearch: {
+              extraPaths: ["/agent/mixed-case"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+
+    expect(customCollections.map((collection) => collection.path)).toContain(
+      resolveComparablePath("/agent/mixed-case"),
+    );
+  });
+
+  it("deduplicates identical roots shared by memory.qmd.paths and memorySearch.extraPaths", () => {
+    const cfg = {
+      memory: {
+        backend: "qmd",
+        qmd: {
+          paths: [{ path: "docs", pattern: "**/*.md", name: "workspace-docs" }],
+        },
+      },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            extraPaths: ["./docs"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const docsCollections = customCollections.filter(
+      (collection) =>
+        collection.path === resolveComparablePath("./docs") && collection.pattern === "**/*.md",
+    );
+
+    expect(docsCollections).toHaveLength(1);
   });
 });

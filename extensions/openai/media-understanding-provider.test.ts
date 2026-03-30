@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.js";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import { transcribeOpenAiAudio } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();

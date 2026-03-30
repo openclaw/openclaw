@@ -69,6 +69,29 @@ describe("probeMatrix", () => {
     });
   });
 
+  it("passes dispatcherPolicy through to client creation", async () => {
+    await probeMatrix({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok",
+      timeoutMs: 500,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://127.0.0.1:7890",
+      },
+    });
+
+    expect(createMatrixClientMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      userId: undefined,
+      accessToken: "tok",
+      localTimeoutMs: 500,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://127.0.0.1:7890",
+      },
+    });
+  });
+
   it("returns client validation errors for insecure public http homeservers", async () => {
     createMatrixClientMock.mockRejectedValue(
       new Error("Matrix homeserver must use https:// unless it targets a private or loopback host"),
