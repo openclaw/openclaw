@@ -43,6 +43,8 @@ const MAX_COUNT = 4;
 const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const DEFAULT_IMAGE_GENERATE_TIMEOUT_MS = 60_000;
+const MAX_IMAGE_GENERATE_TIMEOUT_MS = 2_147_483_647;
+const MAX_IMAGE_GENERATE_TIMEOUT_SECONDS = Math.floor(MAX_IMAGE_GENERATE_TIMEOUT_MS / 1000);
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
   "2:3",
@@ -123,7 +125,7 @@ function resolveImageGenerateTimeoutMs(cfg: OpenClawConfig | undefined): number 
   ) {
     return DEFAULT_IMAGE_GENERATE_TIMEOUT_MS;
   }
-  return Math.floor(timeoutSeconds * 1000);
+  return Math.floor(Math.min(timeoutSeconds, MAX_IMAGE_GENERATE_TIMEOUT_SECONDS) * 1000);
 }
 
 function resolveImageGenerationModelCandidates(

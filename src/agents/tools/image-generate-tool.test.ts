@@ -457,6 +457,62 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("clamps configured image generation timeout to a safe timer maximum", async () => {
+    stubImageGenerationProviders();
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-clamped-timeout"),
+          mimeType: "image/png",
+          fileName: "cat-clamped-timeout.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated-clamped-timeout.png",
+      id: "generated-clamped-timeout.png",
+      size: 19,
+      contentType: "image/png",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "openai/gpt-image-1",
+            },
+          },
+        },
+        tools: {
+          media: {
+            imageGenerate: {
+              timeoutSeconds: Number.MAX_SAFE_INTEGER,
+            },
+          },
+        },
+      },
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    await tool.execute("call-clamped-timeout", {
+      prompt: "A cat wearing sunglasses",
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 2_147_483_000,
+      }),
+    );
+  });
+
   it("rejects counts outside the supported range", async () => {
     stubImageGenerationProviders();
     const tool = createImageGenerateTool({
