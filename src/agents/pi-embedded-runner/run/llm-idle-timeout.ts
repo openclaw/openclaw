@@ -38,13 +38,13 @@ export function resolveLlmIdleTimeoutMs(cfg?: OpenClawConfig): number {
  *
  * @param baseFn - The base stream function to wrap
  * @param timeoutMs - Idle timeout in milliseconds
- * @param controller - Optional abort controller to abort on timeout
+ * @param onIdleTimeout - Optional callback invoked when idle timeout triggers
  * @returns A wrapped stream function with idle timeout detection
  */
 export function streamWithIdleTimeout(
   baseFn: StreamFn,
   timeoutMs: number,
-  controller?: AbortController,
+  onIdleTimeout?: (error: Error) => void,
 ): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
@@ -62,9 +62,7 @@ export function streamWithIdleTimeout(
                 const error = new Error(
                   `LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`,
                 );
-                if (controller && !controller.signal.aborted) {
-                  controller.abort(error);
-                }
+                onIdleTimeout?.(error);
                 reject(error);
               }, timeoutMs);
             });
