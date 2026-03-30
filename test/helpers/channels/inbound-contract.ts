@@ -36,23 +36,21 @@ const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPlugin
     opts: { source: string };
   }) => Promise<SlackPrepareResult>;
 }>("slack");
-const { telegramHarnessModuleId, signalApiModuleId, whatsAppTestApiModuleId } = vi.hoisted(() => ({
-  telegramHarnessModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "telegram",
-    artifactBasename: "src/bot-message-context.test-harness.js",
-  }),
-  signalApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "signal",
-    artifactBasename: "api.js",
-  }),
-  whatsAppTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "whatsapp",
-    artifactBasename: "test-api.js",
-  }),
-}));
+const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "telegram",
+  artifactBasename: "src/bot-message-context.test-harness.js",
+});
+const signalApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "signal",
+  artifactBasename: "api.js",
+});
+const whatsAppTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "whatsapp",
+  artifactBasename: "test-api.js",
+});
 
 async function buildTelegramMessageContextForTest(params: {
   cfg: OpenClawConfig;
@@ -108,7 +106,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock(signalApiModuleId, () => ({
+vi.doMock(signalApiModuleId, () => ({
   sendMessageSignal: vi.fn(),
   sendTypingSignal: vi.fn(async () => true),
   sendReadReceiptSignal: vi.fn(async () => true),
@@ -119,7 +117,7 @@ vi.mock("../../../src/pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-vi.mock(whatsAppTestApiModuleId, async (importOriginal) => {
+vi.doMock(whatsAppTestApiModuleId, async (importOriginal) => {
   const actual = await importOriginal<object>();
   return {
     ...actual,

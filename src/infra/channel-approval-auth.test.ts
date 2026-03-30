@@ -33,6 +33,16 @@ describe("resolveApprovalCommandAuthorization", () => {
               ? { authorized: false, reason: "plugin denied" }
               : { authorized: true },
         },
+      auth: {
+        authorizeActorAction: ({
+          approvalKind,
+        }: {
+          action: "approve";
+          approvalKind: "exec" | "plugin";
+        }) =>
+          approvalKind === "plugin"
+            ? { authorized: false, reason: "plugin denied" }
+            : { authorized: true },
       },
     });
 

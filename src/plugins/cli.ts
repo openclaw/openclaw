@@ -6,7 +6,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import {
+  loadOpenClawPluginCliRegistry,
+  loadOpenClawPlugins,
+  type PluginLoadOptions,
+} from "./loader.js";
+import type { PluginRegistry } from "./registry.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
@@ -30,11 +35,29 @@ function canRegisterPluginCliLazily(entry: {
   return entry.commands.every((command) => descriptorNames.has(command));
 }
 
-function loadPluginCliRegistry(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
-) {
+function hasIgnoredAsyncPluginRegistration(registry: PluginRegistry): boolean {
+  return (registry.diagnostics ?? []).some(
+    (entry) =>
+      entry.message === "plugin register returned a promise; async registration is ignored",
+  );
+}
+
+function mergeCliRegistrars(params: {
+  runtimeRegistry: PluginRegistry;
+  metadataRegistry: PluginRegistry;
+}) {
+  const metadataCommands = new Set(
+    params.metadataRegistry.cliRegistrars.flatMap((entry) => entry.commands),
+  );
+  return [
+    ...params.metadataRegistry.cliRegistrars,
+    ...params.runtimeRegistry.cliRegistrars.filter(
+      (entry) => !entry.commands.some((command) => metadataCommands.has(command)),
+    ),
+  ];
+}
+
+function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const config = cfg ?? loadConfig();
   const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
   const workspaceDir = resolveAgentWorkspaceDir(
@@ -51,22 +74,81 @@ function loadPluginCliRegistry(
     config: resolvedConfig,
     workspaceDir,
     logger,
-    registry: loadOpenClawPlugins({
-      config: resolvedConfig,
-      workspaceDir,
+  };
+}
+
+async function loadPluginCliMetadataRegistry(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
+  const context = resolvePluginCliLoadContext(cfg, env);
+  return {
+    ...context,
+    registry: await loadOpenClawPluginCliRegistry({
+      config: context.config,
+      workspaceDir: context.workspaceDir,
       env,
-      logger,
+      logger: context.logger,
       ...loaderOptions,
     }),
   };
 }
 
-export function getPluginCliCommandDescriptors(
+async function loadPluginCliCommandRegistry(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-): OpenClawPluginCliCommandDescriptor[] {
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
+  const context = resolvePluginCliLoadContext(cfg, env);
+  const runtimeRegistry = loadOpenClawPlugins({
+    config: context.config,
+    workspaceDir: context.workspaceDir,
+    env,
+    logger: context.logger,
+    ...loaderOptions,
+  });
+
+  if (!hasIgnoredAsyncPluginRegistration(runtimeRegistry)) {
+    return {
+      ...context,
+      registry: runtimeRegistry,
+    };
+  }
+
   try {
-    const { registry } = loadPluginCliRegistry(cfg, env);
+    const metadataRegistry = await loadOpenClawPluginCliRegistry({
+      config: context.config,
+      workspaceDir: context.workspaceDir,
+      env,
+      logger: context.logger,
+      ...loaderOptions,
+    });
+    return {
+      ...context,
+      registry: {
+        ...runtimeRegistry,
+        cliRegistrars: mergeCliRegistrars({
+          runtimeRegistry,
+          metadataRegistry,
+        }),
+      },
+    };
+  } catch (error) {
+    log.warn(`plugin CLI metadata fallback failed: ${String(error)}`);
+    return {
+      ...context,
+      registry: runtimeRegistry,
+    };
+  }
+}
+
+export async function getPluginCliCommandDescriptors(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): Promise<OpenClawPluginCliCommandDescriptor[]> {
+  try {
+    const { registry } = await loadPluginCliMetadataRegistry(cfg, env);
     const seen = new Set<string>();
     const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
     for (const entry of registry.cliRegistrars) {
@@ -91,7 +173,11 @@ export async function registerPluginCliCommands(
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
   options?: RegisterPluginCliOptions,
 ) {
-  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env, loaderOptions);
+  const { config, workspaceDir, logger, registry } = await loadPluginCliCommandRegistry(
+    cfg,
+    env,
+    loaderOptions,
+  );
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? null;
 

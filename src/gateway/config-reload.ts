@@ -97,6 +97,7 @@ export function startGatewayConfigReloader(opts: {
   let missingConfigRetries = 0;
   let pendingInProcessConfig: OpenClawConfig | null = null;
   let suppressedWatchEventsRemaining = 0;
+  let lastAppliedWriteHash: string | null = null;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -211,6 +212,12 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       const snapshot = await opts.readSnapshot();
+      if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
+        if (snapshot.hash === lastAppliedWriteHash) {
+          return;
+        }
+        lastAppliedWriteHash = null;
+      }
       if (handleMissingSnapshot(snapshot)) {
         return;
       }
@@ -250,6 +257,7 @@ export function startGatewayConfigReloader(opts: {
       }
       pendingInProcessConfig = event.runtimeConfig;
       suppressedWatchEventsRemaining = 2;
+      lastAppliedWriteHash = event.persistedHash;
       scheduleAfter(0);
     }) ?? (() => {});
 

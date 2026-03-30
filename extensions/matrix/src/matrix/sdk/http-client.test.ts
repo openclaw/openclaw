@@ -27,8 +27,16 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: Buffer.from('{"ok":true}', "utf8"),
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token", {
-      allowPrivateNetwork: true,
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+      },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8080",
+      },
     });
     const result = await client.requestJson({
       method: "GET",
@@ -44,6 +52,10 @@ describe("MatrixAuthedHttpClient", () => {
         endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
         allowAbsoluteEndpoint: true,
         ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://proxy.internal:8080",
+        },
       }),
     );
   });
@@ -58,7 +70,10 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: Buffer.from("pong", "utf8"),
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token");
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
     const result = await client.requestJson({
       method: "GET",
       endpoint: "/_matrix/client/v3/ping",
@@ -76,7 +91,10 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: payload,
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token");
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
     const result = await client.requestRaw({
       method: "GET",
       endpoint: "/_matrix/media/v3/download/example/id",
@@ -96,7 +114,10 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: Buffer.from(JSON.stringify({ error: "forbidden" }), "utf8"),
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token");
+    const client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
     await expect(
       client.requestJson({
         method: "GET",

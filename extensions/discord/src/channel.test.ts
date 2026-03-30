@@ -1,9 +1,5 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  PluginApprovalRequest,
-  PluginApprovalResolved,
-} from "../../../src/infra/plugin-approvals.js";
-import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -47,38 +43,6 @@ function createCfg(): OpenClawConfig {
       },
     },
   } as OpenClawConfig;
-}
-
-function createPluginApprovalRequest(
-  overrides?: Partial<PluginApprovalRequest["request"]>,
-): PluginApprovalRequest {
-  return {
-    id: "plugin:approval-1",
-    request: {
-      title: "Sensitive plugin action",
-      description: "The plugin asked to perform a sensitive action.",
-      severity: "warning",
-      pluginId: "plugin-test",
-      toolName: "plugin.tool",
-      agentId: "agent-1",
-      sessionKey: "agent:agent-1:discord:channel:123456789",
-      ...overrides,
-    },
-    createdAtMs: 1_000,
-    expiresAtMs: 61_000,
-  };
-}
-
-function createPluginApprovalResolved(
-  request?: PluginApprovalRequest["request"],
-): PluginApprovalResolved {
-  return {
-    id: "plugin:approval-1",
-    decision: "allow-once",
-    resolvedBy: "discord:123",
-    ts: 2_000,
-    request,
-  };
 }
 
 function resolveAccount(cfg: OpenClawConfig): ResolvedDiscordAccount {

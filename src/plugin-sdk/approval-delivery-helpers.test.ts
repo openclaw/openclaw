@@ -13,32 +13,41 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       isNativeDeliveryEnabled: () => true,
       resolveNativeDeliveryMode: () => "dm",
     });
-    const authorizeCommand = adapter.auth.authorizeCommand;
+//     const authorizeCommand = adapter.auth.authorizeCommand;
+
+//     expect(
+//       authorizeCommand({
+    const authorizeActorAction = adapter.auth.authorizeActorAction;
 
     expect(
-      authorizeCommand({
+      authorizeActorAction({
         cfg: {} as never,
         accountId: "work",
         senderId: "exec-owner",
-        kind: "exec",
+        action: "approve",
+        approvalKind: "exec",
       }),
     ).toEqual({ authorized: true });
 
     expect(
-      authorizeCommand({
+//       authorizeCommand({
+      authorizeActorAction({
         cfg: {} as never,
         accountId: "work",
         senderId: "plugin-owner",
-        kind: "plugin",
+        action: "approve",
+        approvalKind: "plugin",
       }),
     ).toEqual({ authorized: true });
 
     expect(
-      authorizeCommand({
+//       authorizeCommand({
+      authorizeActorAction({
         cfg: {} as never,
         accountId: "work",
         senderId: "someone-else",
-        kind: "plugin",
+        action: "approve",
+        approvalKind: "plugin",
       }),
     ).toEqual({
       authorized: false,

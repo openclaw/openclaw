@@ -9,7 +9,7 @@ vi.mock("./preflight-audio.runtime.js", () => ({
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
-} from "../../../../src/infra/outbound/session-binding-service.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createDiscordMessage,
   createDiscordPreflightArgs,
@@ -37,9 +37,7 @@ beforeAll(async () => {
 });
 
 function createThreadBinding(
-  overrides?: Partial<
-    import("../../../../src/infra/outbound/session-binding-service.js").SessionBindingRecord
-  >,
+  overrides?: Partial<import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord>,
 ) {
   return {
     bindingId: "default:thread-1",
@@ -60,11 +58,11 @@ function createThreadBinding(
       webhookToken: "tok-1",
     },
     ...overrides,
-  } satisfies import("../../../../src/infra/outbound/session-binding-service.js").SessionBindingRecord;
+  } satisfies import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
 }
 
 function createPreflightArgs(params: {
-  cfg: import("../../../../src/config/config.js").OpenClawConfig;
+  cfg: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
@@ -114,7 +112,7 @@ async function runThreadBoundPreflight(params: {
   threadId: string;
   parentId: string;
   message: import("@buape/carbon").Message;
-  threadBinding: import("../../../../src/infra/outbound/session-binding-service.js").SessionBindingRecord;
+  threadBinding: import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
   discordConfig: DiscordConfig;
   registerBindingAdapter?: boolean;
 }) {
@@ -156,7 +154,7 @@ async function runGuildPreflight(params: {
   guildId: string;
   message: import("@buape/carbon").Message;
   discordConfig: DiscordConfig;
-  cfg?: import("../../../../src/config/config.js").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
 }) {
@@ -473,7 +471,7 @@ describe("preflightDiscordMessage", () => {
       createPreflightArgs({
         cfg: {
           ...DEFAULT_PREFLIGHT_CFG,
-        } as import("../../../../src/config/config.js").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
         discordConfig: {
           allowBots: true,
         } as DiscordConfig,
@@ -732,7 +730,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("../../../../src/config/config.js").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,

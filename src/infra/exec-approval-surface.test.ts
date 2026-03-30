@@ -135,7 +135,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
               auth: {
                 getInitiatingSurfaceState: () => ({ kind: "disabled" }),
               },
-            },
+            }
           }
         : undefined,
     );
@@ -196,21 +196,21 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     {
       plugins: [
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: undefined,
+          approvals: undefined,
         },
       ],
       expected: false,

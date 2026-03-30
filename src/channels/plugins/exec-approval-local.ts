@@ -13,10 +13,12 @@ export function shouldSuppressLocalExecApprovalPrompt(params: {
     return false;
   }
   return (
+//     getChannelPlugin(channel)?.outbound?.shouldSuppressLocalPayloadPrompt?.({
     getChannelPlugin(channel)?.execApprovals?.delivery?.shouldSuppressLocalPrompt?.({
       cfg: params.cfg,
       accountId: params.accountId,
       payload: params.payload,
+      hint: { kind: "approval-pending", approvalKind: "exec" },
     }) ?? false
   );
 }
