@@ -1,15 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type CheckQmdBinaryAvailability = (params: {
-  command: string;
-  env: NodeJS.ProcessEnv;
-  cwd?: string;
-  timeoutMs?: number;
-}) => Promise<{
-  available: boolean;
-  error?: string;
-}>;
+type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 
 function createManagerStatus(params: {
   backend: "qmd" | "builtin";
