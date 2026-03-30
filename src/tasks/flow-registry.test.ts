@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createFlowRecord,
@@ -11,8 +11,26 @@ import {
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
+async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
+  return await withTempDir({ prefix: "openclaw-flow-registry-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetFlowRegistryForTests();
+    try {
+      return await run(root);
+    } finally {
+      // Close the sqlite-backed registry before Windows temp-dir cleanup removes the store root.
+      resetFlowRegistryForTests();
+    }
+  });
+}
+
 describe("flow-registry", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     if (ORIGINAL_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -22,7 +40,7 @@ describe("flow-registry", () => {
   });
 
   it("creates, updates, lists, and deletes flow records", async () => {
-    await withTempDir({ prefix: "openclaw-flow-registry-" }, async (root) => {
+    await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
@@ -64,7 +82,7 @@ describe("flow-registry", () => {
   });
 
   it("applies minimal defaults for new flow records", async () => {
-    await withTempDir({ prefix: "openclaw-flow-registry-" }, async (root) => {
+    await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
@@ -86,7 +104,7 @@ describe("flow-registry", () => {
   });
 
   it("preserves endedAt when later updates change other flow fields", async () => {
-    await withTempDir({ prefix: "openclaw-flow-registry-" }, async (root) => {
+    await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 

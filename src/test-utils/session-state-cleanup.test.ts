@@ -32,11 +32,13 @@ function createDeferred<T>() {
 
 describe("cleanupSessionStateForTest", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     await cleanupSessionStateForTest();
     acquireSessionWriteLockMock.mockClear();
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await cleanupSessionStateForTest();
     vi.restoreAllMocks();
   });
