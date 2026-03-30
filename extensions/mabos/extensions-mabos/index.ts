@@ -17,9 +17,11 @@ import { authorizeGatewayBearerRequestOrReply } from "../../../src/gateway/http-
 import { onAgentEvent, type AgentEventPayload } from "../../../src/infra/agent-events.js";
 import { readJsonBodyWithLimit } from "../../../src/infra/http-body.js";
 import { createCronBridgeService } from "./src/cron-bridge.js";
+import { registerExecutionSandbox } from "./src/execution-sandbox/index.js";
 import { registerGovernance } from "./src/governance/index.js";
 import { registerModelRouter } from "./src/model-router/index.js";
 import { createSecurityModule } from "./src/security/index.js";
+import { registerSessionIntel } from "./src/session-intel/index.js";
 import { createBdiTools } from "./src/tools/bdi-tools.js";
 import { createBpmnMigrateTools } from "./src/tools/bpmn-migrate.js";
 import { createBusinessTools } from "./src/tools/business-tools.js";
@@ -85,6 +87,16 @@ export default function register(api: OpenClawPluginApi) {
   // ── 0c. Model Router ─────────────────────────────────────────
   if (pluginConfig.modelRouterEnabled) {
     registerModelRouter(api, pluginConfig);
+  }
+
+  // ── 0d. Session Intelligence ──────────────────────────────────
+  if (pluginConfig.sessionIntelEnabled) {
+    registerSessionIntel(api, pluginConfig);
+  }
+
+  // ── 0e. Execution Sandbox ─────────────────────────────────────
+  if (pluginConfig.sandboxEnabled) {
+    registerExecutionSandbox(api, pluginConfig);
   }
 
   // ── 1. Register all tools ─────────────────────────────────────

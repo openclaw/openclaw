@@ -33,6 +33,10 @@ export interface MabosPluginConfig {
   governance?: import("../governance/types.js").GovernanceConfig;
   modelRouterEnabled?: boolean;
   modelRouter?: import("../model-router/types.js").ModelRouterConfig;
+  sessionIntelEnabled?: boolean;
+  sessionIntel?: import("../session-intel/types.js").SessionIntelConfig;
+  sandboxEnabled?: boolean;
+  sandbox?: import("../execution-sandbox/types.js").ExecutionSandboxConfig;
 }
 
 /**
