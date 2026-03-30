@@ -1,7 +1,10 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import { updateTaskDeliveryByRunId, updateTaskStateByRunId } from "../tasks/task-registry.js";
+import {
+  markTaskTerminalByRunId,
+  setTaskRunDeliveryStatusByRunId,
+} from "../tasks/task-registry.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   captureSubagentCompletionReply,
@@ -154,7 +157,7 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
-    updateTaskDeliveryByRunId({
+    setTaskRunDeliveryStatusByRunId({
       runId: giveUpParams.runId,
       deliveryStatus: "failed",
     });
@@ -270,7 +273,7 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
     if (didAnnounce) {
-      updateTaskDeliveryByRunId({
+      setTaskRunDeliveryStatusByRunId({
         runId,
         deliveryStatus: "delivered",
       });
@@ -326,7 +329,7 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
-      updateTaskDeliveryByRunId({
+      setTaskRunDeliveryStatusByRunId({
         runId,
         deliveryStatus: "failed",
       });
@@ -377,26 +380,27 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
-    void params.runSubagentAnnounceFlow({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: entry.task,
-      timeoutMs: params.subagentAnnounceTimeoutMs,
-      cleanup: entry.cleanup,
-      roundOneReply: entry.frozenResultText ?? undefined,
-      fallbackReply: entry.fallbackFrozenResultText ?? undefined,
-      waitForCompletion: false,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      label: entry.label,
-      outcome: entry.outcome,
-      spawnMode: entry.spawnMode,
-      expectsCompletionMessage: entry.expectsCompletionMessage,
-      wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
-    })
+    void params
+      .runSubagentAnnounceFlow({
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterOrigin,
+        requesterDisplayKey: entry.requesterDisplayKey,
+        task: entry.task,
+        timeoutMs: params.subagentAnnounceTimeoutMs,
+        cleanup: entry.cleanup,
+        roundOneReply: entry.frozenResultText ?? undefined,
+        fallbackReply: entry.fallbackFrozenResultText ?? undefined,
+        waitForCompletion: false,
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+        label: entry.label,
+        outcome: entry.outcome,
+        spawnMode: entry.spawnMode,
+        expectsCompletionMessage: entry.expectsCompletionMessage,
+        wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+      })
       .then((didAnnounce) => {
         finalizeAnnounceCleanup(didAnnounce);
       })
@@ -458,7 +462,7 @@ export function createSubagentRegistryLifecycleController(params: {
     if (mutated) {
       params.persist();
     }
-    updateTaskStateByRunId({
+    markTaskTerminalByRunId({
       runId: entry.runId,
       status:
         completeParams.outcome.status === "ok"
