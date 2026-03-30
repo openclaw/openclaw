@@ -243,11 +243,21 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      SessionKey?: string;
+      MessageThreadId?: string | number;
+      TrustedSenderPrincipal?: string;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          TrustedSenderPrincipal?: string;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -688,6 +698,23 @@ describe("processDiscordMessage session routing", () => {
       channel: "discord",
       to: "channel:thread-1",
       accountId: "default",
+    });
+  });
+
+  it("carries trusted sender principal into dispatch context", async () => {
+    const ctx = await createBaseContext({
+      sender: {
+        id: "pk-member-1",
+        label: "Display Name",
+        trustedPrincipal: "alice",
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      TrustedSenderPrincipal: "alice",
     });
   });
 });

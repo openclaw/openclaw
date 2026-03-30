@@ -138,6 +138,8 @@ export type MsgContext = {
   SenderId?: string;
   SenderUsername?: string;
   SenderTag?: string;
+  /** Canonical trusted sender principal derived from provider identity, never display metadata. */
+  TrustedSenderPrincipal?: string;
   SenderE164?: string;
   Timestamp?: number;
   /** Provider label (e.g. whatsapp, telegram). */

@@ -129,6 +129,7 @@ export function buildInboundMetaSystemPrompt(
   const payload = {
     schema: "openclaw.inbound_meta.v2",
     account_id: normalizePromptMetadataString(ctx.AccountId),
+    sender_principal: normalizePromptMetadataString(ctx.TrustedSenderPrincipal),
     channel: channelValue,
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),

@@ -479,6 +479,7 @@ export async function processDiscordMessage(
     SenderId: sender.id,
     SenderUsername: senderUsername,
     SenderTag: senderTag,
+    TrustedSenderPrincipal: sender.trustedPrincipal,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
     UntrustedContext: untrustedContext,

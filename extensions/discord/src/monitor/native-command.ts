@@ -1199,6 +1199,7 @@ async function dispatchDiscordCommandInteraction(params: {
       globalName: user.globalName,
     },
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
+    identityLinks: cfg.session?.identityLinks,
   });
 
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({

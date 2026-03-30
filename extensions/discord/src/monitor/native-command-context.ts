@@ -3,6 +3,7 @@ import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runti
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
+import { resolveDiscordTrustedPrincipalFromUserId } from "./sender-identity.js";
 
 export type BuildDiscordNativeCommandContextParams = {
   prompt: string;
@@ -33,10 +34,15 @@ export type BuildDiscordNativeCommandContextParams = {
     name?: string;
     tag?: string;
   };
+  identityLinks?: Record<string, string[]>;
   timestampMs?: number;
 };
 
 export function buildDiscordNativeCommandContext(params: BuildDiscordNativeCommandContextParams) {
+  const trustedSenderPrincipal = resolveDiscordTrustedPrincipalFromUserId({
+    userId: params.user.id,
+    identityLinks: params.identityLinks,
+  });
   const conversationLabel = params.isDirectMessage
     ? (params.user.globalName ?? params.user.username)
     : params.channelId;
@@ -74,6 +80,7 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     SenderId: params.user.id,
     SenderUsername: params.user.username,
     SenderTag: params.sender.tag,
+    TrustedSenderPrincipal: trustedSenderPrincipal,
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: true,

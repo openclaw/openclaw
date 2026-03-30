@@ -10,6 +10,7 @@ import {
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
+  resolveCanonicalIdentityFromLinks,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -162,5 +163,31 @@ describe("isValidAgentId", () => {
     { input: "a".repeat(65), expected: false },
   ] as const)("validates agent id %j => $expected", ({ input, expected }) => {
     expect(isValidAgentId(input)).toBe(expected);
+  });
+});
+
+describe("resolveCanonicalIdentityFromLinks", () => {
+  it("matches canonical identities using channel-scoped ids", () => {
+    expect(
+      resolveCanonicalIdentityFromLinks({
+        identityLinks: {
+          alice: ["discord:123"],
+        },
+        channel: "discord",
+        peerId: "123",
+      }),
+    ).toBe("alice");
+  });
+
+  it("returns null when no canonical match exists", () => {
+    expect(
+      resolveCanonicalIdentityFromLinks({
+        identityLinks: {
+          alice: ["discord:123"],
+        },
+        channel: "discord",
+        peerId: "999",
+      }),
+    ).toBeNull();
   });
 });

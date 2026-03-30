@@ -279,6 +279,43 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
 
+  it("resolves trusted sender principal from configured identity links for guild messages", async () => {
+    const message = createDiscordMessage({
+      id: "m-identity-link",
+      channelId: "channel-1",
+      content: "hello",
+      author: {
+        id: "123",
+        bot: false,
+        username: "alias-attempt",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId: "channel-1",
+      guildId: "guild-1",
+      message,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        session: {
+          ...DEFAULT_PREFLIGHT_CFG.session,
+          identityLinks: {
+            alice: ["discord:123"],
+          },
+        },
+      },
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        "guild-1": {
+          requireMention: false,
+        },
+      },
+    });
+
+    expect(result?.sender.id).toBe("123");
+    expect(result?.sender.trustedPrincipal).toBe("alice");
+  });
+
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",

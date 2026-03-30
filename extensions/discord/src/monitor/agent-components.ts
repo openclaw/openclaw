@@ -85,7 +85,6 @@ import {
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
 let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
@@ -117,6 +116,7 @@ async function loadTypingRuntime() {
   typingRuntimePromise ??= import("./typing.js");
   return await typingRuntimePromise;
 }
+import { resolveDiscordTrustedPrincipalFromUserId } from "./sender-identity.js";
 
 function resolveComponentGroupPolicy(
   ctx: AgentComponentContext,
@@ -369,6 +369,10 @@ async function dispatchDiscordComponentEvent(params: {
   const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
+  const trustedSenderPrincipal = resolveDiscordTrustedPrincipalFromUserId({
+    userId: interactionCtx.userId,
+    identityLinks: ctx.cfg.session?.identityLinks,
+  });
   const groupChannel =
     !interactionCtx.isDirectMessage && channelCtx.channelSlug
       ? `#${channelCtx.channelSlug}`
@@ -462,6 +466,7 @@ async function dispatchDiscordComponentEvent(params: {
     SenderId: interactionCtx.userId,
     SenderUsername: senderUsername,
     SenderTag: senderTag,
+    TrustedSenderPrincipal: trustedSenderPrincipal,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
     GroupSystemPrompt: interactionCtx.isDirectMessage ? undefined : groupSystemPrompt,
