@@ -169,7 +169,7 @@ export async function handleSessionHistoryHttpRequest(
 
   // HTTP callers must declare the same least-privilege operator scopes they
   // intend to use over WS so both transport surfaces enforce the same gate.
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req);
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, opts.auth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

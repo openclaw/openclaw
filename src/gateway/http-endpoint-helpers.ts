@@ -42,7 +42,7 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   if (opts.requiredOperatorMethod) {
-    const requestedScopes = resolveTrustedHttpOperatorScopes(req);
+    const requestedScopes = resolveTrustedHttpOperatorScopes(req, opts.auth);
     const scopeAuth = authorizeOperatorScopesForMethod(
       opts.requiredOperatorMethod,
       requestedScopes,

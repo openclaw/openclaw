@@ -87,7 +87,7 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req);
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, opts.auth);
   const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

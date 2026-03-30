@@ -10,6 +10,7 @@ import {
 import { loadConfig } from "../config/config.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
@@ -36,12 +37,24 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   return token || undefined;
 }
 
-export function isGatewayBearerHttpRequest(req: IncomingMessage): boolean {
-  return Boolean(getBearerToken(req));
+type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
+
+function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
+  return auth?.mode === "token" || auth?.mode === "password";
 }
 
-export function resolveTrustedHttpOperatorScopes(req: IncomingMessage): string[] {
-  if (isGatewayBearerHttpRequest(req)) {
+export function isGatewayBearerHttpRequest(
+  req: IncomingMessage,
+  auth?: SharedSecretGatewayAuth,
+): boolean {
+  return usesSharedSecretHttpAuth(auth) && Boolean(getBearerToken(req));
+}
+
+export function resolveTrustedHttpOperatorScopes(
+  req: IncomingMessage,
+  auth?: SharedSecretGatewayAuth,
+): string[] {
+  if (isGatewayBearerHttpRequest(req, auth)) {
     // Gateway bearer auth only proves possession of the shared secret. Do not
     // let HTTP clients self-assert operator scopes through request headers.
     return [];
@@ -57,8 +70,11 @@ export function resolveTrustedHttpOperatorScopes(req: IncomingMessage): string[]
     .filter((scope) => scope.length > 0);
 }
 
-export function resolveHttpSenderIsOwner(req: IncomingMessage): boolean {
-  return resolveTrustedHttpOperatorScopes(req).includes(ADMIN_SCOPE);
+export function resolveHttpSenderIsOwner(
+  req: IncomingMessage,
+  auth?: SharedSecretGatewayAuth,
+): boolean {
+  return resolveTrustedHttpOperatorScopes(req, auth).includes(ADMIN_SCOPE);
 }
 
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
