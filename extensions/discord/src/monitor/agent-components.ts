@@ -114,6 +114,34 @@ function resolveComponentGroupPolicy(
   }).groupPolicy;
 }
 
+function buildDiscordComponentConversationLabel(params: {
+  interactionCtx: ComponentInteractionContext;
+  interaction: AgentComponentInteraction;
+  channelCtx: DiscordChannelContext;
+}) {
+  if (params.interactionCtx.isDirectMessage) {
+    return buildDirectLabel(params.interactionCtx.user);
+  }
+  if (params.interactionCtx.isGroupDm) {
+    return `Group DM #${params.channelCtx.channelName ?? params.interactionCtx.channelId} channel id:${params.interactionCtx.channelId}`;
+  }
+  return buildGuildLabel({
+    guild: params.interaction.guild ?? undefined,
+    channelName: params.channelCtx.channelName ?? params.interactionCtx.channelId,
+    channelId: params.interactionCtx.channelId,
+  });
+}
+
+function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionContext) {
+  if (interactionCtx.isDirectMessage) {
+    return "direct";
+  }
+  if (interactionCtx.isGroupDm) {
+    return "group";
+  }
+  return "channel";
+}
+
 async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -301,14 +329,12 @@ async function dispatchDiscordComponentEvent(params: {
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
-
-  const fromLabel = interactionCtx.isDirectMessage
-    ? buildDirectLabel(interactionCtx.user)
-    : buildGuildLabel({
-        guild: interaction.guild ?? undefined,
-        channelName: channelCtx.channelName ?? interactionCtx.channelId,
-        channelId: interactionCtx.channelId,
-      });
+  const fromLabel = buildDiscordComponentConversationLabel({
+    interactionCtx,
+    interaction,
+    channelCtx,
+  });
+  const chatType = resolveDiscordComponentChatType(interactionCtx);
   const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
@@ -366,7 +392,7 @@ async function dispatchDiscordComponentEvent(params: {
     from: fromLabel,
     timestamp,
     body: eventText,
-    chatType: interactionCtx.isDirectMessage ? "direct" : "channel",
+    chatType,
     senderLabel: senderName,
     previousTimestamp,
     envelope: envelopeOptions,
@@ -379,11 +405,13 @@ async function dispatchDiscordComponentEvent(params: {
     CommandBody: eventText,
     From: interactionCtx.isDirectMessage
       ? `discord:${interactionCtx.userId}`
-      : `discord:channel:${interactionCtx.channelId}`,
+      : interactionCtx.isGroupDm
+        ? `discord:group:${interactionCtx.channelId}`
+        : `discord:channel:${interactionCtx.channelId}`,
     To: `channel:${interactionCtx.channelId}`,
     SessionKey: sessionKey,
     AccountId: accountId,
-    ChatType: interactionCtx.isDirectMessage ? "direct" : "channel",
+    ChatType: chatType,
     ConversationLabel: fromLabel,
     SenderName: senderName,
     SenderId: interactionCtx.userId,
@@ -691,6 +719,7 @@ async function handleDiscordModalTrigger(params: {
   interaction: ButtonInteraction;
   data: ComponentData;
   label: string;
+  interactionCtx?: ComponentInteractionContext;
 }): Promise<void> {
   const parsed = parseDiscordComponentData(
     params.data,
@@ -734,13 +763,15 @@ async function handleDiscordModalTrigger(params: {
     return;
   }
 
-  const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
-    interaction: params.interaction,
-    label: params.label,
-    componentLabel: "form",
-    defer: false,
-  });
+  const interactionCtx =
+    params.interactionCtx ??
+    (await resolveInteractionContextWithDmAuth({
+      ctx: params.ctx,
+      interaction: params.interaction,
+      label: params.label,
+      componentLabel: "form",
+      defer: false,
+    }));
   if (!interactionCtx) {
     return;
   }
@@ -1023,11 +1054,22 @@ class DiscordComponentButton extends Button {
   async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
     if (parsed?.modalId) {
+      const interactionCtx = await resolveInteractionContextWithDmAuth({
+        ctx: this.ctx,
+        interaction,
+        label: "discord component button",
+        componentLabel: "form",
+        defer: false,
+      });
+      if (!interactionCtx) {
+        return;
+      }
       await handleDiscordModalTrigger({
         ctx: this.ctx,
         interaction,
         data,
         label: "discord component modal",
+        interactionCtx,
       });
       return;
     }
