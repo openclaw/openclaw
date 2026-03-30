@@ -300,7 +300,10 @@ function loadSkillEntries(
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
 
-  const loadSkills = (params: { dir: string; source: string }): Skill[] => {
+  const loadSkills = (params: {
+    dir: string;
+    source: string;
+  }): { skills: Skill[]; parseFailures: number } => {
     const rootDir = path.resolve(params.dir);
     const rootRealPath = tryRealpath(rootDir) ?? rootDir;
     const resolved = resolveNestedSkillsRoot(params.dir, {
@@ -314,7 +317,12 @@ function loadSkillEntries(
       candidatePath: baseDir,
     });
     if (!baseDirRealPath) {
-      return [];
+      skillsLogger.debug("Skills directory not accessible or does not exist", {
+        dir: params.dir,
+        source: params.source,
+        reason: "path resolution failed",
+      });
+      return { skills: [], parseFailures: 0 };
     }
 
     // If the root itself is a skill directory, just load it directly (but enforce size cap).
@@ -327,7 +335,7 @@ function loadSkillEntries(
         candidatePath: rootSkillMd,
       });
       if (!rootSkillRealPath) {
-        return [];
+        return { skills: [], parseFailures: 0 };
       }
       try {
         const size = fs.statSync(rootSkillRealPath).size;
@@ -338,19 +346,20 @@ function loadSkillEntries(
             size,
             maxSkillFileBytes: limits.maxSkillFileBytes,
           });
-          return [];
+          return { skills: [], parseFailures: 0 };
         }
       } catch {
-        return [];
+        return { skills: [], parseFailures: 0 };
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return filterLoadedSkillsInsideRoot({
+      const skills = filterLoadedSkillsInsideRoot({
         skills: unwrapLoadedSkills(loaded),
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
       });
+      return { skills, parseFailures: skills.length === 0 ? 1 : 0 };
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -377,6 +386,7 @@ function loadSkillEntries(
     }
 
     const loadedSkills: Skill[] = [];
+    let parseFailures = 0;
 
     // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
     for (const name of limitedChildren) {
@@ -419,14 +429,26 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(
-        ...filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+      const unwrapped = unwrapLoadedSkills(loaded);
+      const filtered = filterLoadedSkillsInsideRoot({
+        skills: unwrapped,
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+      });
+
+      // Log parsing failures
+      if (unwrapped.length === 0) {
+        skillsLogger.warn("Failed to parse SKILL.md - file exists but no skills loaded", {
+          skill: name,
+          filePath: skillMd,
           source: params.source,
-          rootDir,
-          rootRealPath: baseDirRealPath,
-        }),
-      );
+          hint: "Check SKILL.md format - must use markdown with ## Description, ## Usage sections",
+        });
+        parseFailures += 1;
+      }
+
+      loadedSkills.push(...filtered);
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
@@ -434,13 +456,29 @@ function loadSkillEntries(
     }
 
     if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
-      return loadedSkills
+      const truncated = loadedSkills
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name))
         .slice(0, limits.maxSkillsLoadedPerSource);
+      skillsLogger.debug("Skills discovery completed (truncated to limit)", {
+        dir: params.dir,
+        source: params.source,
+        totalCandidates: childDirs.length,
+        loaded: truncated.length,
+        skipped: childDirs.length - truncated.length,
+      });
+      return { skills: truncated, parseFailures };
     }
 
-    return loadedSkills;
+    skillsLogger.debug("Skills discovery completed", {
+      dir: params.dir,
+      source: params.source,
+      totalCandidates: childDirs.length,
+      loaded: loadedSkills.length,
+      skipped: childDirs.length - loadedSkills.length,
+    });
+
+    return { skills: loadedSkills, parseFailures };
   };
 
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
@@ -456,37 +494,42 @@ function loadSkillEntries(
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
-  const bundledSkills = bundledSkillsDir
+  const bundledSkillsResult = bundledSkillsDir
     ? loadSkills({
         dir: bundledSkillsDir,
         source: "openclaw-bundled",
       })
-    : [];
-  const extraSkills = mergedExtraDirs.flatMap((dir) => {
+    : { skills: [], parseFailures: 0 };
+  const extraSkillsResult = mergedExtraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
     return loadSkills({
       dir: resolved,
       source: "openclaw-extra",
     });
   });
-  const managedSkills = loadSkills({
+  const managedSkillsResult = loadSkills({
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
-  const personalAgentsSkills = loadSkills({
-    dir: personalAgentsSkillsDir,
+  const personalAgentsSkillsResult = loadSkills({
+    dir: path.resolve(os.homedir(), ".agents", "skills"),
     source: "agents-skills-personal",
   });
-  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
-  const projectAgentsSkills = loadSkills({
-    dir: projectAgentsSkillsDir,
+  const projectAgentsSkillsResult = loadSkills({
+    dir: path.resolve(workspaceDir, ".agents", "skills"),
     source: "agents-skills-project",
   });
-  const workspaceSkills = loadSkills({
+  const workspaceSkillsResult = loadSkills({
     dir: workspaceSkillsDir,
     source: "openclaw-workspace",
   });
+
+  const bundledSkills = bundledSkillsResult.skills;
+  const extraSkills = extraSkillsResult.flatMap((r) => r.skills);
+  const managedSkills = managedSkillsResult.skills;
+  const personalAgentsSkills = personalAgentsSkillsResult.skills;
+  const projectAgentsSkills = projectAgentsSkillsResult.skills;
+  const workspaceSkills = workspaceSkillsResult.skills;
 
   const merged = new Map<string, Skill>();
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
@@ -514,8 +557,12 @@ function loadSkillEntries(
     try {
       const raw = fs.readFileSync(skill.filePath, "utf-8");
       frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed skills
+    } catch (error) {
+      skillsLogger.warn("Failed to load skill frontmatter", {
+        skill: skill.name,
+        filePath: skill.filePath,
+        error: String(error),
+      });
     }
     return {
       skill,
@@ -524,6 +571,37 @@ function loadSkillEntries(
       invocation: resolveSkillInvocationPolicy(frontmatter),
     };
   });
+
+  // Log overall skills loading summary
+  const sources = {
+    bundled: bundledSkills.length,
+    extra: extraSkills.length,
+    managed: managedSkills.length,
+    personalAgents: personalAgentsSkills.length,
+    projectAgents: projectAgentsSkills.length,
+    workspace: workspaceSkills.length,
+  };
+  const sourceValues = Object.values(sources);
+  const totalSkillsLoaded = sourceValues.reduce((sum, count) => sum + count, 0);
+  const duplicatesRemoved = totalSkillsLoaded - merged.size;
+
+  const parseFailures =
+    bundledSkillsResult.parseFailures +
+    extraSkillsResult.reduce((sum, r) => sum + r.parseFailures, 0) +
+    managedSkillsResult.parseFailures +
+    personalAgentsSkillsResult.parseFailures +
+    projectAgentsSkillsResult.parseFailures +
+    workspaceSkillsResult.parseFailures;
+
+  skillsLogger.info("Skills loading completed", {
+    workspaceDir,
+    totalSkills: skillEntries.length,
+    sources,
+    uniqueSkills: merged.size,
+    duplicatesRemoved,
+    parseFailures,
+  });
+
   return skillEntries;
 }
 
