@@ -410,9 +410,12 @@ describe("test planner", () => {
 
     expect(targetedUnit).toBeTruthy();
     expect(defaultUnitWithSameId).toBeTruthy();
-    expect(defaultUnitWithSameId).not.toBe(targetedUnit);
-    expect(plan.topLevelSingleShardAssignments.get(targetedUnit)).toBeUndefined();
-    expect(plan.topLevelSingleShardAssignments.get(defaultUnitWithSameId)).toBeDefined();
+    const targetedUnitRecord = targetedUnit!;
+    const defaultUnitRecord = defaultUnitWithSameId!;
+
+    expect(defaultUnitRecord).not.toBe(targetedUnitRecord);
+    expect(plan.topLevelSingleShardAssignments.get(targetedUnitRecord)).toBeUndefined();
+    expect(plan.topLevelSingleShardAssignments.get(defaultUnitRecord)).toBeDefined();
 
     artifacts.cleanupTempArtifacts();
   });
@@ -490,11 +493,11 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
 
     await expect(
-      new Promise((resolve, reject) => {
+      new Promise<void>((resolve, reject) => {
         stream.on("error", reject);
-        stream.end("after cleanup\n", resolve);
+        stream.end("after cleanup\n", () => resolve());
       }),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
