@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -99,7 +98,7 @@ export async function runSessionsSendA2AFlow(params: {
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText) || isSilentReplyText(replyText)) {
+        if (!replyText || isReplySkip(replyText)) {
           break;
         }
         latestReply = replyText;

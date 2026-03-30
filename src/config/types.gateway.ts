@@ -438,7 +438,8 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
-  /** Stale event threshold in minutes for the channel health monitor.
+  /**
+   * Stale event threshold in minutes for the channel health monitor.
    * A connected channel that receives no events for this duration is treated
    * as a stale socket and restarted. Default: 30.
    */

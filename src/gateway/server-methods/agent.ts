@@ -624,10 +624,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, {
-        sessionKey: canonicalSessionKey,
-        suppressNodeChat: inputProvenance?.kind === "inter_session",
-      });
+      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
 
     const runId = idem;
