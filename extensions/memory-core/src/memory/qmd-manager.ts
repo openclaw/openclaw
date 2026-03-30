@@ -1580,7 +1580,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         : params.tool;
 
     const selector = `${params.mcporter.serverName}.${effectiveTool}`;
-    const useUnifiedQueryTool = !params.explicitToolOverride && effectiveTool === "query";
+    const useUnifiedQueryTool = effectiveTool === "query";
     const callArgs: Record<string, unknown> = useUnifiedQueryTool
       ? {
           // QMD 1.1+ "query" tool accepts typed sub-queries via `searches` array.

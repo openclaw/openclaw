@@ -1982,6 +1982,44 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it('uses unified v2 args when the explicit mcporter search tool override is "query"', async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          searchTool: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.query");
+        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        expect(callArgs).toHaveProperty("searches", [{ type: "lex", query: "hello" }]);
+        expect(callArgs).toHaveProperty("collections", ["workspace-main"]);
+        expect(callArgs).not.toHaveProperty("query");
+        expect(callArgs).not.toHaveProperty("minScore");
+        expect(callArgs).not.toHaveProperty("collection");
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.close();
+  });
+
   it("uses an explicit mcporter search tool override across multiple collections", async () => {
     cfg = {
       ...cfg,
