@@ -3,6 +3,7 @@ import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   adaptScopedAccountAccessor,
+  authorizeConfigWrite,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
@@ -12,33 +13,168 @@ import {
   createTopLevelChannelConfigBase,
   createHybridChannelConfigBase,
   mapAllowFromEntries,
+  resolveChannelConfigWrites,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
   resolveOptionalConfigString,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
-describe("mapAllowFromEntries", () => {
-  it("coerces allowFrom entries to strings", () => {
-    expect(mapAllowFromEntries(["user", 42])).toEqual(["user", "42"]);
-  });
+function createMergedReaderCfg(
+  channelId: "whatsapp" | "imessage",
+  accountConfig: { allowFrom: string[]; defaultTo: string },
+) {
+  return {
+    channels: {
+      [channelId]: {
+        allowFrom: ["root"],
+        defaultTo: " root:chat ",
+        accounts: {
+          alt: accountConfig,
+        },
+      },
+    },
+  };
+}
 
-  it("returns empty list for missing input", () => {
-    expect(mapAllowFromEntries(undefined)).toEqual([]);
+function createConfigWritesCfg() {
+  return {
+    channels: {
+      telegram: {
+        configWrites: true,
+        accounts: {
+          Work: { configWrites: false },
+        },
+      },
+    },
+  };
+}
+
+function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
+  const channelAdapter = adapter as {
+    resolveAllowFrom?: (params: { cfg: object; accountId: string }) => unknown;
+    resolveDefaultTo?: (params: { cfg: object; accountId: string }) => unknown;
+    setAccountEnabled?: (params: { cfg: object; accountId: string; enabled: boolean }) => {
+      channels?: {
+        demo?: unknown;
+      };
+    };
+  };
+
+  expect(channelAdapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
+  expect(channelAdapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
+  expect(
+    channelAdapter.setAccountEnabled?.({
+      cfg: {},
+      accountId: "default",
+      enabled: true,
+    })?.channels?.demo,
+  ).toEqual({ enabled: true });
+}
+
+describe("mapAllowFromEntries", () => {
+  it.each([
+    {
+      name: "coerces allowFrom entries to strings",
+      input: ["user", 42],
+      expected: ["user", "42"],
+    },
+    {
+      name: "returns empty list for missing input",
+      input: undefined,
+      expected: [],
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(mapAllowFromEntries(input)).toEqual(expected);
   });
 });
 
 describe("resolveOptionalConfigString", () => {
-  it("trims and returns string values", () => {
-    expect(resolveOptionalConfigString("  room:123  ")).toBe("room:123");
+  it.each([
+    {
+      name: "trims and returns string values",
+      input: "  room:123  ",
+      expected: "room:123",
+    },
+    {
+      name: "coerces numeric values",
+      input: 123,
+      expected: "123",
+    },
+    {
+      name: "returns undefined for empty string values",
+      input: "   ",
+      expected: undefined,
+    },
+    {
+      name: "returns undefined for missing values",
+      input: undefined,
+      expected: undefined,
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(resolveOptionalConfigString(input)).toBe(expected);
+  });
+});
+
+describe("provider config readers", () => {
+  it.each([
+    {
+      name: "reads merged WhatsApp allowFrom/defaultTo without the channel registry",
+      cfg: createMergedReaderCfg("whatsapp", {
+        allowFrom: ["49123", "42"],
+        defaultTo: " alt:chat ",
+      }),
+      resolveAllowFrom: resolveWhatsAppConfigAllowFrom,
+      resolveDefaultTo: resolveWhatsAppConfigDefaultTo,
+      expectedAllowFrom: ["49123", "42"],
+    },
+    {
+      name: "reads merged iMessage allowFrom/defaultTo without the channel registry",
+      cfg: createMergedReaderCfg("imessage", {
+        allowFrom: ["chat_id:9", "user@example.com"],
+        defaultTo: " alt:chat ",
+      }),
+      resolveAllowFrom: resolveIMessageConfigAllowFrom,
+      resolveDefaultTo: resolveIMessageConfigDefaultTo,
+      expectedAllowFrom: ["chat_id:9", "user@example.com"],
+    },
+  ])("$name", ({ cfg, resolveAllowFrom, resolveDefaultTo, expectedAllowFrom }) => {
+    expect(resolveAllowFrom({ cfg, accountId: "alt" })).toEqual(expectedAllowFrom);
+    expect(resolveDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
+  });
+});
+
+describe("config write helpers", () => {
+  it("matches account ids case-insensitively", () => {
+    expect(
+      resolveChannelConfigWrites({
+        cfg: createConfigWritesCfg(),
+        channelId: "telegram",
+        accountId: "work",
+      }),
+    ).toBe(false);
   });
 
-  it("coerces numeric values", () => {
-    expect(resolveOptionalConfigString(123)).toBe("123");
-  });
-
-  it("returns undefined for empty values", () => {
-    expect(resolveOptionalConfigString("   ")).toBeUndefined();
-    expect(resolveOptionalConfigString(undefined)).toBeUndefined();
+  it("blocks account-scoped writes when the configured account key differs only by case", () => {
+    expect(
+      authorizeConfigWrite({
+        cfg: createConfigWritesCfg(),
+        target: {
+          kind: "account",
+          scope: { channelId: "telegram", accountId: "work" },
+        },
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "target-disabled",
+      blockedScope: {
+        kind: "target",
+        scope: { channelId: "telegram", accountId: "work" },
+      },
+    });
   });
 });
 
@@ -218,15 +354,7 @@ describe("createScopedChannelConfigAdapter", () => {
       allowFrom: ["alt"],
       defaultTo: " room:123 ",
     });
-    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
-    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
-    expect(
-      adapter.setAccountEnabled!({
-        cfg: {},
-        accountId: "default",
-        enabled: true,
-      }).channels?.demo,
-    ).toEqual({ enabled: true });
+    expectAdapterAllowFromAndDefaultTo(adapter);
   });
 });
 
@@ -467,15 +595,7 @@ describe("createHybridChannelConfigAdapter", () => {
       resolveDefaultTo: (account) => account.defaultTo,
     });
 
-    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
-    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
-    expect(
-      adapter.setAccountEnabled!({
-        cfg: {},
-        accountId: "default",
-        enabled: true,
-      }).channels?.demo,
-    ).toEqual({ enabled: true });
+    expectAdapterAllowFromAndDefaultTo(adapter);
     expect(
       adapter.deleteAccount!({
         cfg: {

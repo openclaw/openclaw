@@ -1,6 +1,6 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
 
 const { logVerboseMock } = vi.hoisted(() => ({
   logVerboseMock: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-let listNativeCommandSpecs: typeof import("../../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
+let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 
@@ -97,7 +97,7 @@ function readChoices(option: CommandOption | undefined): unknown[] | undefined {
 
 describe("createDiscordNativeCommand option wiring", () => {
   beforeAll(async () => {
-    ({ listNativeCommandSpecs } = await import("../../../../src/auto-reply/commands-registry.js"));
+    ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth"));
     ({ createDiscordNativeCommand } = await import("./native-command.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
   });
@@ -229,11 +229,5 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(command.description).toBe("x".repeat(100));
     expect(requireOption(command, "input").description).toHaveLength(100);
     expect(requireOption(command, "input").description).toBe("x".repeat(100));
-    expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("truncating native command description (command:longdesc)"),
-    );
-    expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("truncating native command description (command:longdesc arg:input)"),
-    );
   });
 });

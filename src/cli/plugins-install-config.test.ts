@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledPluginRootAt, repoInstallSpec } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 
@@ -16,6 +17,7 @@ vi.mock("../commands/doctor/providers/matrix.js", () => ({
 }));
 
 const { loadConfigForInstall } = await import("./plugins-install-command.js");
+const MATRIX_REPO_INSTALL_SPEC = repoInstallSpec("matrix");
 
 function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
   return {
@@ -23,8 +25,10 @@ function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSn
     exists: true,
     raw: '{ "plugins": {} }',
     parsed: { plugins: {} },
+    sourceConfig: { plugins: {} } as ConfigFileSnapshot["sourceConfig"],
     resolved: { plugins: {} } as OpenClawConfig,
     valid: false,
+    runtimeConfig: { plugins: {} } as ConfigFileSnapshot["runtimeConfig"],
     config: { plugins: {} } as OpenClawConfig,
     hash: "abc",
     issues: [{ path: "plugins.installs.matrix", message: "stale path" }],
@@ -112,9 +116,9 @@ describe("loadConfigForInstall", () => {
     );
 
     const result = await loadConfigForInstall({
-      rawSpec: "./extensions/matrix",
-      normalizedSpec: "./extensions/matrix",
-      resolvedPath: "/tmp/repo/extensions/matrix",
+      rawSpec: MATRIX_REPO_INSTALL_SPEC,
+      normalizedSpec: MATRIX_REPO_INSTALL_SPEC,
+      resolvedPath: bundledPluginRootAt("/tmp/repo", "matrix"),
     });
     expect(result).toBe(snapshotCfg);
   });
