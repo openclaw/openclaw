@@ -52,17 +52,25 @@ export const updateHandlers: GatewayRequestHandlers = {
         force,
         progress: {
           onStepStart: (step) => {
-            context?.broadcast?.(GATEWAY_EVENT_UPDATE_PROGRESS, {
-              kind: "step.start",
-              step: { name: step.name, index: step.index, total: step.total },
-            } satisfies GatewayUpdateProgressEventPayload);
+            context?.broadcast?.(
+              GATEWAY_EVENT_UPDATE_PROGRESS,
+              {
+                kind: "step.start",
+                step: { name: step.name, index: step.index, total: step.total },
+              } satisfies GatewayUpdateProgressEventPayload,
+              { dropIfSlow: true },
+            );
           },
           onStepComplete: (step) => {
-            context?.broadcast?.(GATEWAY_EVENT_UPDATE_PROGRESS, {
-              kind: "step.complete",
-              step: { name: step.name, index: step.index, total: step.total },
-              completion: { durationMs: step.durationMs, exitCode: step.exitCode },
-            } satisfies GatewayUpdateProgressEventPayload);
+            context?.broadcast?.(
+              GATEWAY_EVENT_UPDATE_PROGRESS,
+              {
+                kind: "step.complete",
+                step: { name: step.name, index: step.index, total: step.total },
+                completion: { durationMs: step.durationMs, exitCode: step.exitCode },
+              } satisfies GatewayUpdateProgressEventPayload,
+              { dropIfSlow: true },
+            );
           },
         },
       });
@@ -138,10 +146,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       );
     }
 
-    context?.broadcast?.(GATEWAY_EVENT_UPDATE_PROGRESS, {
-      kind: "finished",
-      result: { status: result.status, reason: result.reason },
-    } satisfies GatewayUpdateProgressEventPayload);
+    context?.broadcast?.(
+      GATEWAY_EVENT_UPDATE_PROGRESS,
+      {
+        kind: "finished",
+        result: { status: result.status, reason: result.reason },
+      } satisfies GatewayUpdateProgressEventPayload,
+      { dropIfSlow: true },
+    );
 
     respond(
       true,
