@@ -11,6 +11,7 @@ import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
+import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
@@ -152,7 +153,7 @@ class SshSandboxBackendImpl {
             remoteCommand,
             tty: usePty,
           }),
-          env: process.env,
+          env: sanitizeEnvVars(process.env).allowed,
           stdinMode: "pipe-open",
           finalizeToken: { sshSession } satisfies PendingExec,
         };

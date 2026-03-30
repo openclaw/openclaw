@@ -6,6 +6,7 @@ import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend.js";
+import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 export type SshSandboxSettings = {
   command: string;
@@ -212,10 +213,11 @@ export async function runSshSandboxCommand(
     remoteCommand: params.remoteCommand,
     tty: params.tty,
   });
+  const sshEnv = sanitizeEnvVars(process.env).allowed;
   return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env: sshEnv,
       signal: params.signal,
     });
     const stdoutChunks: Buffer[] = [];
@@ -266,6 +268,7 @@ export async function uploadDirectoryToSshTarget(params: {
     session: params.session,
     remoteCommand,
   });
+  const sshEnv = sanitizeEnvVars(process.env).allowed;
   await new Promise<void>((resolve, reject) => {
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -273,7 +276,7 @@ export async function uploadDirectoryToSshTarget(params: {
     });
     const ssh = spawn(sshArgv[0], sshArgv.slice(1), {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env: sshEnv,
       signal: params.signal,
     });
     const tarStderr: Buffer[] = [];
