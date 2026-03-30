@@ -1,6 +1,6 @@
 {
   "id": "qnaigc-api",
-  "enabledByDefault": true,
+  "enabledByDefault": false,
   "providers": ["qnaigc-api"],
   "providerAuthEnvVars": {
     "qnaigc-api": ["QNAIGC_API_KEY"]

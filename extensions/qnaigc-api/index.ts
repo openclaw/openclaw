@@ -69,7 +69,7 @@ const QNAIGC_MODELS = [
     reasoning: true,
     input: ["text"] as const,
     contextWindow: 256000,
-    maxTokens: 256000,
+    maxTokens: 32000,
   },
   {
     id: "xiaomi/mimo-v2-flash",
@@ -77,7 +77,7 @@ const QNAIGC_MODELS = [
     reasoning: true,
     input: ["text"] as const,
     contextWindow: 256000,
-    maxTokens: 256000,
+    maxTokens: 32000,
   },
   {
     id: "doubao-seed-1.6",
@@ -133,7 +133,7 @@ const QNAIGC_MODELS = [
     reasoning: false,
     input: ["text"] as const,
     contextWindow: 256000,
-    maxTokens: 320000,
+    maxTokens: 32000,
   },
 ] as const satisfies readonly QnaigcCatalogEntry[];
 
