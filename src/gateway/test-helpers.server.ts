@@ -65,11 +65,11 @@ const GATEWAY_TEST_ENV_KEYS = [
   "NEXUS_SKIP_BROWSER_CONTROL_SERVER",
   "NEXUS_SKIP_GMAIL_WATCHER",
   "NEXUS_SKIP_CANVAS_HOST",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
+  "NEXUS_BUNDLED_PLUGINS_DIR",
+  "NEXUS_SKIP_CHANNELS",
+  "NEXUS_SKIP_PROVIDERS",
+  "NEXUS_SKIP_CRON",
+  "NEXUS_TEST_MINIMAL_GATEWAY",
 ] as const;
 
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -118,7 +118,7 @@ async function persistTestSessionConfig(): Promise<void> {
     configPaths.add(process.env.NEXUS_CONFIG_PATH);
   }
   if (process.env.NEXUS_STATE_DIR) {
-    configPaths.add(path.join(process.env.NEXUS_STATE_DIR, "openclaw.json"));
+    configPaths.add(path.join(process.env.NEXUS_STATE_DIR, "nexus-agent.json"));
   }
   const parsedConfigs = new Map<string, Record<string, unknown>>();
   let preservedTemplateStore: string | undefined;
@@ -219,11 +219,11 @@ function applyGatewaySkipEnv() {
   process.env.NEXUS_SKIP_BROWSER_CONTROL_SERVER = "1";
   process.env.NEXUS_SKIP_GMAIL_WATCHER = "1";
   process.env.NEXUS_SKIP_CANVAS_HOST = "1";
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
+  process.env.NEXUS_SKIP_CHANNELS = "1";
+  process.env.NEXUS_SKIP_PROVIDERS = "1";
+  process.env.NEXUS_SKIP_CRON = "1";
+  process.env.NEXUS_TEST_MINIMAL_GATEWAY = "1";
+  process.env.NEXUS_BUNDLED_PLUGINS_DIR = tempHome
     ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
     : "openclaw-test-no-bundled-extensions";
 }
@@ -479,7 +479,7 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
     opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
   if (
     resolvedOpts?.controlUiEnabled === true &&
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
+    process.env.NEXUS_TEST_MINIMAL_GATEWAY === "1" &&
     tempControlUiRoot &&
     typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"
   ) {
@@ -602,8 +602,8 @@ export async function startServerWithClient(
 ) {
   const { wsHeaders, ...gatewayOpts } = opts ?? {};
   let port = await getFreePort();
-  const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
-  const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const envSnapshot = captureEnv(["NEXUS_GATEWAY_TOKEN"]);
+  const prev = process.env.NEXUS_GATEWAY_TOKEN;
   if (typeof token === "string") {
     testState.gatewayAuth = { mode: "token", token };
   }
@@ -613,9 +613,9 @@ export async function startServerWithClient(
       ? (testState.gatewayAuth as { token?: string }).token
       : undefined);
   if (fallbackToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.NEXUS_GATEWAY_TOKEN;
   } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = fallbackToken;
+    process.env.NEXUS_GATEWAY_TOKEN = fallbackToken;
   }
 
   const started = await startGatewayServerWithRetries({ port, opts: gatewayOpts });
@@ -734,13 +734,13 @@ export async function connectReq(
       ? undefined
       : typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
         ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_TOKEN;
+        : process.env.NEXUS_GATEWAY_TOKEN;
   const defaultPassword =
     opts?.skipDefaultAuth === true
       ? undefined
       : typeof (testState.gatewayAuth as { password?: unknown } | undefined)?.password === "string"
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_PASSWORD;
+        : process.env.NEXUS_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
   const deviceToken = opts?.deviceToken?.trim() || undefined;
   const password = opts?.password ?? defaultPassword;
