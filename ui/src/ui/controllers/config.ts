@@ -15,7 +15,7 @@ const SKIPPED_REASON_MESSAGES: Record<string, { message: string; warning: string
   dirty: {
     message: "Repository has uncommitted changes.",
     warning:
-      "Force update will discard all uncommitted changes (git checkout -- .). Make sure you have backed up any work in progress.",
+      "Force update will discard all uncommitted changes and remove untracked files. Make sure you have backed up any work in progress.",
   },
   "no-upstream": {
     message: "No upstream branch configured.",

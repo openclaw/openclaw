@@ -552,6 +552,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       if (discardStep.exitCode !== 0) {
         return buildGitErrorResult("force-discard-failed");
       }
+      const cleanStep = await runStep(
+        step("git clean (force remove untracked)", ["git", "-C", gitRoot, "clean", "-fd"], gitRoot),
+      );
+      steps.push(cleanStep);
+      if (cleanStep.exitCode !== 0) {
+        return buildGitErrorResult("force-clean-failed");
+      }
     }
 
     if (channel === "dev") {
