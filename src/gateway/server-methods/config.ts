@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -502,13 +502,18 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const configPath = createConfigIO().configPath;
     const platform = process.platform;
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-    exec(`${cmd} ${JSON.stringify(configPath)}`, (err) => {
+    const cb = (err: Error | null) => {
       if (err) {
         respond(true, { ok: false, path: configPath, error: err.message }, undefined);
         return;
       }
       respond(true, { ok: true, path: configPath }, undefined);
-    });
+    };
+    if (platform === "win32") {
+      // "start" is a cmd.exe built-in; use cmd /c start "" <path> to avoid shell injection.
+      execFile("cmd", ["/c", "start", "", configPath], cb);
+    } else {
+      execFile(platform === "darwin" ? "open" : "xdg-open", [configPath], cb);
+    }
   },
 };
