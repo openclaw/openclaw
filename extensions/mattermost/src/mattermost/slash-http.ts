@@ -78,17 +78,29 @@ function sendJsonResponse(
   res.end(JSON.stringify(body));
 }
 
-type SlashInvocationAuth = {
-  ok: boolean;
-  denyResponse?: MattermostSlashCommandResponse;
-  commandAuthorized: boolean;
-  channelInfo: MattermostChannel | null;
-  kind: "direct" | "group" | "channel";
-  chatType: "direct" | "group" | "channel";
-  channelName: string;
-  channelDisplay: string;
-  roomLabel: string;
-};
+type SlashInvocationAuth =
+  | {
+      ok: true;
+      denyResponse: undefined;
+      commandAuthorized: boolean;
+      channelInfo: MattermostChannel;
+      kind: "direct" | "group" | "channel";
+      chatType: "direct" | "group" | "channel";
+      channelName: string;
+      channelDisplay: string;
+      roomLabel: string;
+    }
+  | {
+      ok: false;
+      denyResponse?: MattermostSlashCommandResponse;
+      commandAuthorized: false;
+      channelInfo: MattermostChannel | null;
+      kind: "direct" | "group" | "channel" | "unknown";
+      chatType: "direct" | "group" | "channel" | "unknown";
+      channelName: string;
+      channelDisplay: string;
+      roomLabel: string;
+    };
 
 async function authorizeSlashInvocation(params: {
   account: ResolvedMattermostAccount;
