@@ -1,17 +1,26 @@
 import {
   closeTaskRegistrySqliteStore,
+  deleteTaskDeliveryStateFromSqlite,
   deleteTaskRegistryRecordFromSqlite,
-  loadTaskRegistrySnapshotFromSqlite,
-  saveTaskRegistrySnapshotToSqlite,
+  loadTaskRegistryStateFromSqlite,
+  saveTaskRegistryStateToSqlite,
+  upsertTaskDeliveryStateToSqlite,
   upsertTaskRegistryRecordToSqlite,
 } from "./task-registry.store.sqlite.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+
+export type TaskRegistryStoreSnapshot = {
+  tasks: Map<string, TaskRecord>;
+  deliveryStates: Map<string, TaskDeliveryState>;
+};
 
 export type TaskRegistryStore = {
-  loadSnapshot: () => Map<string, TaskRecord>;
-  saveSnapshot: (tasks: ReadonlyMap<string, TaskRecord>) => void;
+  loadSnapshot: () => TaskRegistryStoreSnapshot;
+  saveSnapshot: (snapshot: TaskRegistryStoreSnapshot) => void;
   upsertTask?: (task: TaskRecord) => void;
   deleteTask?: (taskId: string) => void;
+  upsertDeliveryState?: (state: TaskDeliveryState) => void;
+  deleteDeliveryState?: (taskId: string) => void;
   close?: () => void;
 };
 
@@ -37,10 +46,12 @@ export type TaskRegistryHooks = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
-  loadSnapshot: loadTaskRegistrySnapshotFromSqlite,
-  saveSnapshot: saveTaskRegistrySnapshotToSqlite,
+  loadSnapshot: loadTaskRegistryStateFromSqlite,
+  saveSnapshot: saveTaskRegistryStateToSqlite,
   upsertTask: upsertTaskRegistryRecordToSqlite,
   deleteTask: deleteTaskRegistryRecordFromSqlite,
+  upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
+  deleteDeliveryState: deleteTaskDeliveryStateFromSqlite,
   close: closeTaskRegistrySqliteStore,
 };
 

@@ -15,12 +15,13 @@ import {
   listTaskRecords,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
+  markTaskRunningByRunId,
+  recordTaskProgressByRunId,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
   setTaskProgressById,
   setTaskTimingById,
   updateTaskNotifyPolicyById,
-  updateTaskStateByRunId,
 } from "./task-registry.js";
 import {
   getInspectableTaskAuditSummary,
@@ -890,8 +891,8 @@ describe("task-registry", () => {
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
-          loadSnapshot: () =>
-            new Map([
+          loadSnapshot: () => ({
+            tasks: new Map([
               [
                 "task-missing-cleanup",
                 {
@@ -909,6 +910,8 @@ describe("task-registry", () => {
                 },
               ],
             ]),
+            deliveryStates: new Map(),
+          }),
           saveSnapshot: () => {},
         },
       });
@@ -935,8 +938,8 @@ describe("task-registry", () => {
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
-          loadSnapshot: () =>
-            new Map([
+          loadSnapshot: () => ({
+            tasks: new Map([
               [
                 "task-audit-summary",
                 {
@@ -954,6 +957,8 @@ describe("task-registry", () => {
                 },
               ],
             ]),
+            deliveryStates: new Map(),
+          }),
           saveSnapshot: () => {},
         },
       });
@@ -998,9 +1003,8 @@ describe("task-registry", () => {
         notifyPolicy: "done_only",
       });
 
-      updateTaskStateByRunId({
+      markTaskRunningByRunId({
         runId: "run-state-change",
-        status: "running",
         eventSummary: "Started.",
       });
       await waitForAssertion(() => expect(hoisted.sendMessageMock).not.toHaveBeenCalled());
@@ -1009,7 +1013,7 @@ describe("task-registry", () => {
         taskId: task.taskId,
         notifyPolicy: "state_changes",
       });
-      updateTaskStateByRunId({
+      recordTaskProgressByRunId({
         runId: "run-state-change",
         eventSummary: "No output for 60s. It may be waiting for input.",
       });
@@ -1024,13 +1028,6 @@ describe("task-registry", () => {
       );
       expect(findTaskByRunId("run-state-change")).toMatchObject({
         notifyPolicy: "state_changes",
-        lastNotifiedEventAt: expect.any(Number),
-        recentEvents: expect.arrayContaining([
-          expect.objectContaining({
-            kind: "progress",
-            summary: "No output for 60s. It may be waiting for input.",
-          }),
-        ]),
       });
       await maybeDeliverTaskStateChangeUpdate(task.taskId);
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
