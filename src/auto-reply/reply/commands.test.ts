@@ -813,6 +813,42 @@ describe("/approve command", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("does not treat implicit same-chat approval auth as a bypass for unauthorized senders", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+            auth: {
+              authorizeActorAction: () => ({ authorized: true }),
+              getActionAvailabilityState: () => ({ kind: "disabled" }),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const params = buildParams(
+      "/approve abc12345 allow-once",
+      {
+        commands: { text: true },
+        channels: { slack: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "slack",
+        Surface: "slack",
+        SenderId: "U123",
+      },
+    );
+    params.command.isAuthorizedSender = false;
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("accepts Telegram /approve from exec target recipients even when native approvals are disabled", async () => {
     const cfg = {
       commands: { text: true },

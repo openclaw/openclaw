@@ -59,4 +59,23 @@ describe("resolveApprovalCommandAuthorization", () => {
       }),
     ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
   });
+
+  it("keeps disabled approval availability implicit even when same-chat auth returns allow", () => {
+    getChannelPluginMock.mockReturnValue({
+      auth: {
+        authorizeActorAction: () => ({ authorized: true }),
+        getActionAvailabilityState: () => ({ kind: "disabled" }),
+      },
+    });
+
+    expect(
+      resolveApprovalCommandAuthorization({
+        cfg: {} as never,
+        channel: "slack",
+        accountId: "work",
+        senderId: "U123",
+        kind: "exec",
+      }),
+    ).toEqual({ authorized: true, explicit: false });
+  });
 });

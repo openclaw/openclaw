@@ -19,7 +19,8 @@ export function resolveApprovalCommandAuthorization(params: {
   if (!channel) {
     return { authorized: true, explicit: false };
   }
-  const resolved = getChannelPlugin(channel)?.auth?.authorizeActorAction?.({
+  const channelPlugin = getChannelPlugin(channel);
+  const resolved = channelPlugin?.auth?.authorizeActorAction?.({
     cfg: params.cfg,
     accountId: params.accountId,
     senderId: params.senderId,
@@ -29,9 +30,14 @@ export function resolveApprovalCommandAuthorization(params: {
   if (!resolved) {
     return { authorized: true, explicit: false };
   }
+  const availability = channelPlugin?.auth?.getActionAvailabilityState?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    action: "approve",
+  });
   return {
     authorized: resolved.authorized,
     reason: resolved.reason,
-    explicit: true,
+    explicit: resolved.authorized ? availability?.kind !== "disabled" : true,
   };
 }
