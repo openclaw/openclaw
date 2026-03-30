@@ -215,17 +215,16 @@ describe("QmdMemoryManager", () => {
     const baselineCalls = spawnMock.mock.calls.length;
 
     await manager.sync({ reason: "manual" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 1);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
 
     await manager.sync({ reason: "manual-again" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 1);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
 
     (manager as unknown as { lastUpdateAt: number | null }).lastUpdateAt =
       Date.now() - (resolved.qmd?.update.debounceMs ?? 0) - 10;
 
     await manager.sync({ reason: "after-wait" });
-    // `search` mode does not require qmd embed side effects.
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 3);
 
     await manager.close();
   });
@@ -1836,7 +1835,7 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager();
     const managerWithPrivate = manager as object as {
-      runMcporter: typeof manager["runMcporter"];
+      runMcporter: (typeof manager)["runMcporter"];
     };
     const originalRunMcporter = managerWithPrivate.runMcporter.bind(managerWithPrivate);
     let injectTimeoutOnce = true;
@@ -1854,7 +1853,7 @@ describe("QmdMemoryManager", () => {
       });
 
     await expect(
-      manager.search('abc: Tool query not found', {
+      manager.search("abc: Tool query not found", {
         sessionKey: "agent:main:slack:dm:u123",
       }),
     ).rejects.toThrow("timed out after 5000ms");
@@ -2028,6 +2027,9 @@ describe("QmdMemoryManager", () => {
     const spawnOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
     expect(normalizePath(spawnOpts?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
+    expect(normalizePath(spawnOpts?.env?.QMD_CONFIG_DIR)).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
     expect(normalizePath(spawnOpts?.env?.XDG_CACHE_HOME)).toContain("/agents/main/qmd/xdg-cache");
 
     await manager.close();
@@ -2363,7 +2365,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("does not arm periodic embed maintenance in search mode", async () => {
+  it("arms periodic embed maintenance in search mode", async () => {
     vi.useFakeTimers();
     cfg = {
       ...cfg,
@@ -2390,12 +2392,12 @@ describe("QmdMemoryManager", () => {
     const commandCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
-    expect(commandCalls).toEqual([]);
+    expect(commandCalls).toEqual([["update"], ["embed"]]);
 
     await manager.close();
   });
 
-  it("skips qmd embed in search mode even for forced sync", async () => {
+  it("runs qmd embed in search mode for forced sync", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -2415,7 +2417,7 @@ describe("QmdMemoryManager", () => {
     const commandCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
-    expect(commandCalls).toEqual([["update"]]);
+    expect(commandCalls).toEqual([["update"], ["embed"]]);
     await manager.close();
   });
 

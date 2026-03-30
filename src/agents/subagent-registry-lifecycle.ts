@@ -54,6 +54,8 @@ export function createSubagentRegistryLifecycleController(params: {
     workspaceDir?: string;
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
+  captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
+  runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const freezeRunResultAtCompletion = async (entry: SubagentRunRecord): Promise<boolean> => {
@@ -61,7 +63,7 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     try {
-      const captured = await captureSubagentCompletionReply(entry.childSessionKey);
+      const captured = await params.captureSubagentCompletionReply(entry.childSessionKey);
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
       entry.frozenResultText = null;
@@ -375,7 +377,7 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
-    void runSubagentAnnounceFlow({
+    void params.runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
@@ -460,7 +462,7 @@ export function createSubagentRegistryLifecycleController(params: {
       runId: entry.runId,
       status:
         completeParams.outcome.status === "ok"
-          ? "done"
+          ? "succeeded"
           : completeParams.outcome.status === "timeout"
             ? "timed_out"
             : "failed",

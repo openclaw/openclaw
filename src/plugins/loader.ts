@@ -1563,26 +1563,6 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
-    if (manifestRecord.kind === "memory") {
-      const memoryDecision = resolveMemorySlotDecision({
-        id: record.id,
-        kind: "memory",
-        slot: memorySlot,
-        selectedId: selectedMemoryPluginId,
-      });
-      if (!memoryDecision.enabled) {
-        record.enabled = false;
-        record.status = "disabled";
-        record.error = memoryDecision.reason;
-        registry.plugins.push(record);
-        seenIds.set(pluginId, candidate.origin);
-        continue;
-      }
-      if (memoryDecision.selected) {
-        selectedMemoryPluginId = record.id;
-      }
-    }
-
     if (!manifestRecord.configSchema) {
       pushPluginLoadError("missing config schema");
       continue;
@@ -1657,6 +1637,24 @@ export async function loadOpenClawPluginCliRegistry(
       });
     }
     record.kind = definition?.kind ?? record.kind;
+
+    const memoryDecision = resolveMemorySlotDecision({
+      id: record.id,
+      kind: record.kind,
+      slot: memorySlot,
+      selectedId: selectedMemoryPluginId,
+    });
+    if (!memoryDecision.enabled) {
+      record.enabled = false;
+      record.status = "disabled";
+      record.error = memoryDecision.reason;
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      continue;
+    }
+    if (memoryDecision.selected && record.kind === "memory") {
+      selectedMemoryPluginId = record.id;
+    }
 
     if (typeof register !== "function") {
       logger.error(`[plugins] ${record.id} missing register/activate export`);
