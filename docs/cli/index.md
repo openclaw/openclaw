@@ -160,6 +160,11 @@ openclaw [--dev] [--profile <name>] <command>
   status
   health
   sessions
+  tasks
+    list
+    show
+    notify
+    cancel
   gateway
     call
     health
@@ -349,7 +354,18 @@ Options:
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
-- `--auth-choice <setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ollama|ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|mistral-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|opencode-go|custom-api-key|skip>`
+- `--auth-choice <choice>` where `<choice>` is one of:
+  `setup-token`, `token`, `chutes`, `deepseek-api-key`, `openai-codex`, `openai-api-key`,
+  `openrouter-api-key`, `kilocode-api-key`, `litellm-api-key`, `ai-gateway-api-key`,
+  `cloudflare-ai-gateway-api-key`, `moonshot-api-key`, `moonshot-api-key-cn`,
+  `kimi-code-api-key`, `synthetic-api-key`, `venice-api-key`, `together-api-key`,
+  `huggingface-api-key`, `apiKey`, `gemini-api-key`, `google-gemini-cli`, `zai-api-key`,
+  `zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`, `xiaomi-api-key`,
+  `minimax-global-oauth`, `minimax-global-api`, `minimax-cn-oauth`, `minimax-cn-api`,
+  `opencode-zen`, `opencode-go`, `github-copilot`, `copilot-proxy`, `xai-api-key`,
+  `mistral-api-key`, `volcengine-api-key`, `byteplus-api-key`, `qianfan-api-key`,
+  `modelstudio-standard-api-key-cn`, `modelstudio-standard-api-key`,
+  `modelstudio-api-key-cn`, `modelstudio-api-key`, `custom-api-key`, `skip`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
@@ -367,8 +383,8 @@ Options:
 - `--minimax-api-key <key>`
 - `--opencode-zen-api-key <key>`
 - `--opencode-go-api-key <key>`
-- `--custom-base-url <url>` (non-interactive; used with `--auth-choice custom-api-key` or `--auth-choice ollama`)
-- `--custom-model-id <id>` (non-interactive; used with `--auth-choice custom-api-key` or `--auth-choice ollama`)
+- `--custom-base-url <url>` (non-interactive; used with `--auth-choice custom-api-key`)
+- `--custom-model-id <id>` (non-interactive; used with `--auth-choice custom-api-key`)
 - `--custom-api-key <key>` (non-interactive; optional; used with `--auth-choice custom-api-key`; falls back to `CUSTOM_API_KEY` when omitted)
 - `--custom-provider-id <id>` (non-interactive; optional custom provider id)
 - `--custom-compatibility <openai|anthropic>` (non-interactive; optional; default `openai`)
@@ -582,15 +598,19 @@ Run one agent turn via the Gateway (or `--local` embedded).
 
 Required:
 
-- `--message <text>`
+- `-m, --message <text>`
 
 Options:
 
-- `--to <dest>` (for session key and optional delivery)
+- `-t, --to <dest>` (for session key and optional delivery)
 - `--session-id <id>`
-- `--thinking <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
-- `--verbose <on|full|off>`
-- `--channel <whatsapp|telegram|discord|slack|mattermost|signal|imessage|msteams>`
+- `--agent <id>` (agent id; overrides routing bindings)
+- `--thinking <off|minimal|low|medium|high|xhigh>` (provider support varies; not model-gated at CLI level)
+- `--verbose <on|off>`
+- `--channel <channel>` (delivery channel; omit to use the main session channel)
+- `--reply-to <target>` (delivery target override, separate from session routing)
+- `--reply-channel <channel>` (delivery channel override)
+- `--reply-account <id>` (delivery account id override)
 - `--local`
 - `--deliver`
 - `--json`
@@ -761,6 +781,15 @@ Notes:
 
 - `--non-interactive` requires `--yes` and explicit scopes (or `--all`).
 
+### `tasks`
+
+List and manage task runs across agents.
+
+- `tasks list` — show active and recent task runs
+- `tasks show <id>` — show details for a specific task run
+- `tasks notify <id>` — send a notification for a task run
+- `tasks cancel <id>` — cancel a running task
+
 ## Gateway
 
 ### `gateway`
@@ -878,8 +907,9 @@ Anthropic Claude CLI migration:
 
 ```bash
 openclaw models auth login --provider anthropic --method cli --set-default
-openclaw onboard --auth-choice anthropic-cli
 ```
+
+Note: `--auth-choice anthropic-cli` is a deprecated legacy alias. Use `models auth login` instead.
 
 ### `models` (root)
 
