@@ -127,7 +127,15 @@ export function createExecApprovalChannelRuntime<
       pendingResolution: null,
     };
     pending.set(request.id, entry);
-    const entries = await adapter.deliverRequested(request);
+    let entries: TPending[];
+    try {
+      entries = await adapter.deliverRequested(request);
+    } catch (err) {
+      if (pending.get(request.id) === entry) {
+        clearPendingEntry(request.id);
+      }
+      throw err;
+    }
     const current = pending.get(request.id);
     if (current !== entry) {
       return;

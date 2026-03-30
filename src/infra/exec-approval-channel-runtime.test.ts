@@ -1,3 +1,5 @@
+import type { GatewayClient } from "../gateway/client.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGatewayClientStarts = vi.hoisted(() => vi.fn());
@@ -18,6 +20,16 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 let createExecApprovalChannelRuntime: typeof import("./exec-approval-channel-runtime.js").createExecApprovalChannelRuntime;
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
 
 beforeEach(() => {
   mockGatewayClientStarts.mockReset();
@@ -117,9 +129,13 @@ describe("createExecApprovalChannelRuntime", () => {
   });
 
   it("finalizes approvals that resolve while delivery is still in flight", async () => {
-    const pendingDelivery = Promise.withResolvers<Array<{ id: string }>>();
+    const pendingDelivery = createDeferred<Array<{ id: string }>>();
     const finalizeResolved = vi.fn(async () => undefined);
-    const runtime = createExecApprovalChannelRuntime({
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
       label: "test/plugin-approvals",
       clientDisplayName: "Test Plugin Approvals",
       cfg: {} as never,
@@ -203,11 +219,7 @@ describe("createExecApprovalChannelRuntime", () => {
   });
 
   it("does not leave a gateway client running when stop wins the startup race", async () => {
-    const pendingClient = Promise.withResolvers<{
-      start: () => void;
-      stop: () => void;
-      request: typeof mockGatewayClientRequests;
-    }>();
+    const pendingClient = createDeferred<GatewayClient>();
     mockCreateOperatorApprovalsGatewayClient.mockReturnValueOnce(pendingClient.promise);
     const runtime = createExecApprovalChannelRuntime({
       label: "test/exec-approvals",
@@ -237,7 +249,11 @@ describe("createExecApprovalChannelRuntime", () => {
   });
 
   it("logs async request handling failures from gateway events", async () => {
-    const runtime = createExecApprovalChannelRuntime({
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
       label: "test/plugin-approvals",
       clientDisplayName: "Test Plugin Approvals",
       cfg: {} as never,
@@ -277,7 +293,11 @@ describe("createExecApprovalChannelRuntime", () => {
 
   it("logs async expiration handling failures", async () => {
     vi.useFakeTimers();
-    const runtime = createExecApprovalChannelRuntime({
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
       label: "test/plugin-approvals",
       clientDisplayName: "Test Plugin Approvals",
       cfg: {} as never,
@@ -311,7 +331,11 @@ describe("createExecApprovalChannelRuntime", () => {
   it("subscribes to plugin approval events when requested", async () => {
     const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
     const finalizeResolved = vi.fn(async () => undefined);
-    const runtime = createExecApprovalChannelRuntime({
+    const runtime = createExecApprovalChannelRuntime<
+      { id: string },
+      PluginApprovalRequest,
+      PluginApprovalResolved
+    >({
       label: "test/plugin-approvals",
       clientDisplayName: "Test Plugin Approvals",
       cfg: {} as never,
@@ -362,6 +386,54 @@ describe("createExecApprovalChannelRuntime", () => {
         resolved: expect.objectContaining({ id: "plugin:abc", decision: "allow-once" }),
         entries: [{ id: "plugin:abc" }],
       });
+    });
+  });
+
+  it("clears pending state when delivery throws", async () => {
+    const deliverRequested = vi
+      .fn<() => Promise<Array<{ id: string }>>>()
+      .mockRejectedValueOnce(new Error("deliver failed"))
+      .mockResolvedValueOnce([{ id: "abc" }]);
+    const finalizeResolved = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/delivery-failure",
+      clientDisplayName: "Test Delivery Failure",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested,
+      finalizeResolved,
+    });
+
+    await expect(
+      runtime.handleRequested({
+        id: "abc",
+        request: {
+          command: "echo abc",
+        },
+        createdAtMs: 1000,
+        expiresAtMs: 2000,
+      }),
+    ).rejects.toThrow("deliver failed");
+
+    await runtime.handleRequested({
+      id: "abc",
+      request: {
+        command: "echo abc",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+    await runtime.handleResolved({
+      id: "abc",
+      decision: "allow-once",
+      ts: 1500,
+    });
+
+    expect(finalizeResolved).toHaveBeenCalledWith({
+      request: expect.objectContaining({ id: "abc" }),
+      resolved: expect.objectContaining({ id: "abc", decision: "allow-once" }),
+      entries: [{ id: "abc" }],
     });
   });
 });
