@@ -69,9 +69,9 @@ make <target>
 
 另见：模型仓库中的 `docs/gateway-exposure-matrix.md`。
 
-### Nodes.run 管道（最高风险能力）
+### 节点 exec 管道（最高风险能力）
 
-**声明：** `nodes.run` 需要（a）节点命令允许列表加上声明的命令以及（b）配置时的实时批准；批准被令牌化以防止重放（在模型中）。
+**声明：** `exec host=node` 需要（a）节点命令允许列表加上声明的命令以及（b）配置时的实时批准；批准被令牌化以防止重放（在模型中）。
 
 - 绿色运行：
   - `make nodes-pipeline`

@@ -4,6 +4,7 @@ import path from "node:path";
 
 const BROWSER_FIXTURE_MANIFEST = {
   id: "browser",
+  enabledByDefault: true,
   configSchema: {
     type: "object",
     additionalProperties: false,

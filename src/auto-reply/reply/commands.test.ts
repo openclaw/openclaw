@@ -130,6 +130,8 @@ const { parseConfigCommand } = await import("./config-commands.js");
 const { parseDebugCommand } = await import("./debug-commands.js");
 const { parseInlineDirectives } = await import("./directive-handling.js");
 const { buildCommandContext, handleCommands } = await import("./commands.js");
+const { createTaskRecord, resetTaskRegistryForTests } =
+  await import("../../tasks/task-registry.js");
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -150,6 +152,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.useRealTimers();
   vi.clearAllTimers();
+  resetTaskRegistryForTests();
   setDefaultChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -457,26 +460,29 @@ describe("/approve command", () => {
   it("requires configured Discord approvers for exec approvals", async () => {
     for (const testCase of [
       {
-        name: "discord approvals disabled",
+        name: "discord no approver policy",
         cfg: createDiscordApproveCfg(null),
         senderId: "123",
-        expectedText: "Discord exec approvals are not enabled",
-        setup: () =>
-          callGatewayMock.mockRejectedValue(
-            gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
-          ),
-        expectedGatewayCalls: 1,
+        expectedText: "not authorized to approve",
+        setup: undefined,
+        expectedGatewayCalls: 0,
       },
       {
         name: "discord non approver",
         cfg: createDiscordApproveCfg({ enabled: true, approvers: ["999"], target: "channel" }),
         senderId: "123",
         expectedText: "not authorized to approve",
-        setup: () =>
-          callGatewayMock.mockRejectedValue(
-            gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
-          ),
+        setup: undefined,
+        expectedGatewayCalls: 0,
+      },
+      {
+        name: "discord approver with rich client disabled",
+        cfg: createDiscordApproveCfg({ enabled: false, approvers: ["123"], target: "channel" }),
+        senderId: "123",
+        expectedText: "Approval allow-once submitted",
+        setup: () => callGatewayMock.mockResolvedValue({ ok: true }),
         expectedGatewayCalls: 1,
+        expectedMethod: "exec.approval.resolve",
       },
       {
         name: "discord approver",
@@ -485,10 +491,11 @@ describe("/approve command", () => {
         expectedText: "Approval allow-once submitted",
         setup: () => callGatewayMock.mockResolvedValue({ ok: true }),
         expectedGatewayCalls: 1,
+        expectedMethod: "exec.approval.resolve",
       },
     ] as const) {
       callGatewayMock.mockReset();
-      testCase.setup();
+      testCase.setup?.();
       const params = buildParams("/approve abc12345 allow-once", testCase.cfg, {
         Provider: "discord",
         Surface: "discord",
@@ -499,13 +506,10 @@ describe("/approve command", () => {
       expect(result.shouldContinue, testCase.name).toBe(false);
       expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
       expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
-      if (testCase.expectedGatewayCalls > 0) {
+      if ("expectedMethod" in testCase) {
         expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
           expect.objectContaining({
-            method:
-              testCase.name === "discord approver"
-                ? "exec.approval.resolve"
-                : "plugin.approval.resolve",
+            method: testCase.expectedMethod,
             params: { id: "abc12345", decision: "allow-once" },
           }),
         );
@@ -633,6 +637,19 @@ describe("/approve command", () => {
         expectGatewayCalls: 0,
       },
       {
+        name: "telegram approver with rich client disabled",
+        cfg: createTelegramApproveCfg({ enabled: false, approvers: ["123"], target: "dm" }),
+        commandBody: "/approve abc12345 allow-once",
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
+        },
+        setup: () => callGatewayMock.mockResolvedValue({ ok: true }),
+        expectedText: "Approval allow-once submitted",
+        expectGatewayCalls: 1,
+      },
+      {
         name: "non approver",
         cfg: createTelegramApproveCfg({ enabled: true, approvers: ["999"], target: "dm" }),
         commandBody: "/approve abc12345 allow-once",
@@ -654,6 +671,14 @@ describe("/approve command", () => {
       expect(result.shouldContinue, testCase.name).toBe(false);
       expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
       expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectGatewayCalls);
+      if (testCase.expectGatewayCalls > 0) {
+        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "exec.approval.resolve",
+            params: { id: "abc12345", decision: "allow-once" },
+          }),
+        );
+      }
     }
   });
 
@@ -2721,6 +2746,16 @@ describe("handleCommands subagents", () => {
       endedAt: now - 1_000,
       outcome: { status: "ok" },
     });
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:abc",
+      runId: "run-1",
+      task: "do thing",
+      status: "succeeded",
+      terminalSummary: "Completed the requested task",
+      deliveryStatus: "delivered",
+    });
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -2732,6 +2767,8 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagent info");
     expect(result.reply?.text).toContain("Run: run-1");
     expect(result.reply?.text).toContain("Status: done");
+    expect(result.reply?.text).toContain("TaskStatus: succeeded");
+    expect(result.reply?.text).toContain("Task summary: Completed the requested task");
   });
 
   it("does not resolve moved child rows from a stale older parent", async () => {

@@ -147,10 +147,77 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
     expect(plan.executionBudget.unitSharedWorkers).toBe(2);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitIsolated).toBe(1);
     expect(plan.topLevelParallelLimit).toBe(4);
     expect(plan.deferredRunConcurrency).toBe(1);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("coalesces saturated high-memory local unit bursts into fewer shared batches", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        loadAverage: [18, 18, 18],
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(plan.runtimeCapabilities.memoryBand).toBe("high");
+    expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
+    expect(sharedUnitBatches).toHaveLength(3);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
+    expect(plan.executionBudget.unitFastBatchTargetMs).toBe(90_000);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("keeps full local unit runs phased when isolated and heavy lanes are present", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(sharedUnitBatches.length).toBeGreaterThanOrEqual(4);
+    expect(plan.serialPrefixUnits.some((unit) => unit.serialPhase === "unit-fast")).toBe(true);
+    expect(plan.topLevelParallelLimit).toBe(3);
     artifacts.cleanupTempArtifacts();
   });
 

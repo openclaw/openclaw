@@ -1032,7 +1032,16 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
+                  {
+                    "group": "Memory",
+                    "pages": [
+                      "concepts/memory",
+                      "concepts/memory-builtin",
+                      "concepts/memory-qmd",
+                      "concepts/memory-honcho",
+                      "concepts/memory-search"
+                    ]
+                  },
                   "concepts/compaction"
                 ]
               },
@@ -1109,6 +1118,7 @@
                   "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
+                  "automation/tasks",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
