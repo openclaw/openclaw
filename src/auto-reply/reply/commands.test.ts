@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { loadBundledPluginPublicSurfaceSync } from "../../test-utils/bundled-plugin-public-surface.js";
+import { telegramCommandTestPlugin } from "../../../extensions/telegram/test-support.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -22,12 +23,6 @@ const { slackPlugin } = loadBundledPluginPublicSurfaceSync<{
   slackPlugin: ChannelPlugin;
 }>({
   pluginId: "slack",
-  artifactBasename: "index.ts",
-});
-const { telegramPlugin } = loadBundledPluginPublicSurfaceSync<{
-  telegramPlugin: ChannelPlugin;
-}>({
-  pluginId: "telegram",
   artifactBasename: "index.ts",
 });
 const { whatsappPlugin } = loadBundledPluginPublicSurfaceSync<{
@@ -177,7 +172,7 @@ function setMinimalChannelPluginRegistryForTests(): void {
       },
       {
         pluginId: "telegram",
-        plugin: telegramPlugin,
+        plugin: telegramCommandTestPlugin,
         source: "test",
       },
       {
