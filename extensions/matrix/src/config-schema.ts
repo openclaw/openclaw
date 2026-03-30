@@ -84,7 +84,14 @@ export const MatrixConfigSchema = z.object({
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
-  dm: buildNestedDmConfigSchema(),
+  dm: z
+    .object({
+      enabled: z.boolean().optional(),
+      policy: DmPolicySchema.optional(),
+      allowFrom: AllowFromListSchema,
+      threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+    })
+    .optional(),
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,

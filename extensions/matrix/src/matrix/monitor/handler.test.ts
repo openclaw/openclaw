@@ -628,7 +628,7 @@ describe("matrix monitor handler pairing account scope", () => {
     );
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:ops:main",
+        sessionKey: "agent:ops:main:thread:$root",
       }),
     );
   });

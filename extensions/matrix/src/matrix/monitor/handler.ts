@@ -80,6 +80,8 @@ export type MatrixMonitorHandlerParams = {
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
+  /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
+  dmThreadReplies?: "off" | "inbound" | "always";
   streaming: "partial" | "off";
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
@@ -196,6 +198,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     groupPolicy,
     replyToMode,
     threadReplies,
+    dmThreadReplies,
     streaming,
     dmEnabled,
     dmPolicy,
@@ -903,9 +906,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
+      const effectiveThreadReplies =
+        isDirectMessage && dmThreadReplies !== undefined ? dmThreadReplies : threadReplies;
       const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
       const threadTarget = resolveMatrixThreadTarget({
-        threadReplies,
+        threadReplies: effectiveThreadReplies,
         messageId: _messageId,
         threadRootId: _threadRootId,
         isThreadRoot: false,

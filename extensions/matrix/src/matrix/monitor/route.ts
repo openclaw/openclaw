@@ -1,3 +1,4 @@
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   getSessionBindingService,
   resolveAgentIdFromSessionKey,
@@ -80,19 +81,41 @@ export function resolveMatrixInboundRoute(params: {
       : null;
   const configuredSessionKey = configuredBinding?.record.targetSessionKey?.trim();
 
+  const effectiveRoute =
+    configuredBinding && configuredSessionKey
+      ? {
+          ...baseRoute,
+          sessionKey: configuredSessionKey,
+          agentId:
+            resolveAgentIdFromSessionKey(configuredSessionKey) ||
+            configuredBinding.spec.agentId ||
+            baseRoute.agentId,
+          matchedBy: "binding.channel" as const,
+        }
+      : baseRoute;
+
+  // When no binding overrides the session key, isolate threads into their own sessions.
+  const threadId =
+    params.threadRootId && params.threadRootId !== params.messageId ? params.threadRootId : null;
+  if (!configuredBinding && !configuredSessionKey && threadId) {
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: effectiveRoute.sessionKey,
+      threadId,
+      parentSessionKey: effectiveRoute.sessionKey,
+    });
+    return {
+      route: {
+        ...effectiveRoute,
+        sessionKey: threadKeys.sessionKey,
+        mainSessionKey: threadKeys.parentSessionKey ?? effectiveRoute.sessionKey,
+      },
+      configuredBinding,
+      runtimeBindingId: null,
+    };
+  }
+
   return {
-    route:
-      configuredBinding && configuredSessionKey
-        ? {
-            ...baseRoute,
-            sessionKey: configuredSessionKey,
-            agentId:
-              resolveAgentIdFromSessionKey(configuredSessionKey) ||
-              configuredBinding.spec.agentId ||
-              baseRoute.agentId,
-            matchedBy: "binding.channel",
-          }
-        : baseRoute,
+    route: effectiveRoute,
     configuredBinding,
     runtimeBindingId: null,
   };
