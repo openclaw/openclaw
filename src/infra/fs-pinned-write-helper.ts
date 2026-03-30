@@ -253,6 +253,8 @@ async function runPinnedWriteFallback(params: {
     const handle = await fs.open(tempPath, "w", params.mode);
     try {
       await pipeline(params.input.stream, handle.createWriteStream());
+      // Sync to disk before stat to ensure metadata is flushed
+      await handle.sync();
     } finally {
       await handle.close().catch(() => {});
     }
