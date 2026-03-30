@@ -341,7 +341,7 @@ function resolveRenderTarget(mode: DiffMode): DiffRenderTarget {
 }
 
 function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget): string {
-  if (html) {
+  if (html !== undefined) {
     return html;
   }
   throw new Error(`Missing ${target} render output.`);
