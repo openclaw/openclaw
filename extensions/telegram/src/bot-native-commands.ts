@@ -86,6 +86,7 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -128,6 +129,22 @@ export type RegisterTelegramHandlerParams = {
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
 };
+
+export function buildTelegramNativeCommandCallbackData(commandText: string): string {
+  return `${TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX}${commandText}`;
+}
+
+export function parseTelegramNativeCommandCallbackData(data?: string | null): string | null {
+  if (!data) {
+    return null;
+  }
+  const trimmed = data.trim();
+  if (!trimmed.startsWith(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX)) {
+    return null;
+  }
+  const commandText = trimmed.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();
+  return commandText.startsWith("/") ? commandText : null;
+}
 
 export type RegisterTelegramNativeCommandsParams = {
   bot: Bot;
@@ -679,7 +696,9 @@ export const registerTelegramNativeCommands = ({
                 };
                 return {
                   text: choice.label,
-                  callback_data: buildCommandTextFromArgs(commandDefinition, args),
+                  callback_data: buildTelegramNativeCommandCallbackData(
+                    buildCommandTextFromArgs(commandDefinition, args),
+                  ),
                 };
               }),
             );

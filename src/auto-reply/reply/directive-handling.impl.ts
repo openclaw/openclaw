@@ -200,7 +200,7 @@ export async function handleDirectiveOnly(
     };
   }
   if (directives.hasFastDirective && directives.fastMode === undefined) {
-    if (!directives.rawFastMode) {
+    if (!directives.rawFastMode || directives.rawFastMode.toLowerCase() === "status") {
       const sourceSuffix =
         effectiveFastModeSource === "config"
           ? " (config)"
@@ -210,12 +210,12 @@ export async function handleDirectiveOnly(
       return {
         text: withOptions(
           `Current fast mode: ${effectiveFastMode ? "on" : "off"}${sourceSuffix}.`,
-          "on, off",
+          "status, on, off",
         ),
       };
     }
     return {
-      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off.`,
+      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: status, on, off.`,
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {

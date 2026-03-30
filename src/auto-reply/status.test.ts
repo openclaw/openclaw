@@ -1309,7 +1309,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast on|off");
+    expect(buildHelpMessage()).toContain("/fast status|on|off");
   });
 });
 
