@@ -223,6 +223,7 @@ describe("resolveMattermostThreadSessionContext", () => {
       }),
     ).toEqual({
       effectiveReplyToId: "post-123",
+      messageThreadId: "post-123",
       sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
       parentSessionKey: "agent:main:mattermost:default:chan-1",
     });
@@ -239,6 +240,7 @@ describe("resolveMattermostThreadSessionContext", () => {
       }),
     ).toEqual({
       effectiveReplyToId: "root-456",
+      messageThreadId: "root-456",
       sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
       parentSessionKey: "agent:main:mattermost:default:chan-1",
     });
@@ -255,9 +257,23 @@ describe("resolveMattermostThreadSessionContext", () => {
       }),
     ).toEqual({
       effectiveReplyToId: undefined,
+      messageThreadId: "root-456",
       sessionKey: "agent:main:mattermost:default:chan-1",
       parentSessionKey: undefined,
     });
+  });
+
+  it("still reports messageThreadId when replyToMode is off (fixes /bootstrap in threads)", () => {
+    const result = resolveMattermostThreadSessionContext({
+      baseSessionKey: "agent:main:mattermost:default:chan-1",
+      kind: "channel",
+      postId: "post-123",
+      replyToMode: "off",
+      threadRootId: "root-456",
+    });
+    expect(result.effectiveReplyToId).toBeUndefined();
+    expect(result.messageThreadId).toBe("root-456");
+    expect(result.sessionKey).toBe("agent:main:mattermost:default:chan-1");
   });
 
   it("keeps direct-message sessions linear", () => {
@@ -270,6 +286,7 @@ describe("resolveMattermostThreadSessionContext", () => {
       }),
     ).toEqual({
       effectiveReplyToId: undefined,
+      messageThreadId: undefined,
       sessionKey: "agent:main:mattermost:default:user-1",
       parentSessionKey: undefined,
     });

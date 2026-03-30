@@ -435,6 +435,15 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             : "channel",
         ),
     },
+    buildToolContext: ({ context, hasRepliedRef }) => ({
+      currentChannelId: context.To?.trim() || undefined,
+      // Use MessageThreadId (always the actual thread root) rather than ReplyToId
+      // (undefined when replyToMode is "off"), so currentThreadTs is populated for
+      // thread messages regardless of replyToMode.
+      currentThreadTs:
+        context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+      hasRepliedRef,
+    }),
   },
   security: mattermostSecurityAdapter,
   outbound: {
