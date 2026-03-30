@@ -49,7 +49,10 @@ describe("getOrLoadBootstrapFiles", () => {
   });
 
   it("returns cached result on second call", async () => {
-    const firstResult = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    const firstResult = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-1",
+    });
     const result = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
 
     expect(result).toBe(firstResult);
@@ -84,6 +87,58 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(result).toHaveLength(2);
     expect(result[0].content).toBe("# Agent v1"); // first occurrence kept
     expect(result[1].content).toBe("# Soul");
+  });
+
+  it("deduplicates case-insensitively (Windows paths)", async () => {
+    const filesWithCaseDup: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md" as WorkspaceBootstrapFile["name"],
+        path: "C:\\Users\\ws\\AGENTS.md",
+        content: "first",
+        missing: false,
+      },
+      {
+        name: "AGENTS.md" as WorkspaceBootstrapFile["name"],
+        path: "c:\\users\\ws\\agents.md",
+        content: "second",
+        missing: false,
+      },
+    ];
+    mockLoad().mockResolvedValueOnce(filesWithCaseDup);
+
+    const result = await getOrLoadBootstrapFiles({
+      workspaceDir: "C:\\Users\\ws",
+      sessionKey: "session-case",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe("first");
+  });
+
+  it("deduplicates paths with mixed separators", async () => {
+    const filesWithMixedSep: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md" as WorkspaceBootstrapFile["name"],
+        path: "/ws/sub/../AGENTS.md",
+        content: "first",
+        missing: false,
+      },
+      {
+        name: "AGENTS.md" as WorkspaceBootstrapFile["name"],
+        path: "/ws/AGENTS.md",
+        content: "second",
+        missing: false,
+      },
+    ];
+    mockLoad().mockResolvedValueOnce(filesWithMixedSep);
+
+    const result = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-sep",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe("first");
   });
 
   it("handles empty files array", async () => {
