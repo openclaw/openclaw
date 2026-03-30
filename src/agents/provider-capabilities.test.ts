@@ -31,6 +31,14 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
       return {
         providerFamily: "openai",
       };
+    case "minimax":
+      return {
+        dropThinkingBlockModelHints: ["minimax"],
+      };
+    case "minimax-portal":
+      return {
+        dropThinkingBlockModelHints: ["minimax"],
+      };
     case "github-copilot":
       return {
         dropThinkingBlockModelHints: ["claude"],
@@ -239,6 +247,27 @@ describe("resolveProviderCapabilities", () => {
         modelId: "claude-3.7-sonnet",
       }),
     ).toBe(true);
+  });
+
+  it("strips thinking blocks for minimax and minimax-portal providers", () => {
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "minimax",
+        modelId: "MiniMax-M2.7",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "minimax-portal",
+        modelId: "MiniMax-M2.7",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "minimax",
+        modelId: "some-other-model",
+      }),
+    ).toBe(false);
   });
 
   it("forwards config and workspace context to plugin capability lookup", () => {
