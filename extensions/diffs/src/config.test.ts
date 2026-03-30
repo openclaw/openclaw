@@ -179,6 +179,42 @@ describe("resolveDiffsPluginSecurity", () => {
 });
 
 describe("diffs plugin schema surfaces", () => {
+  it("preserves defaults and security for direct safeParse callers", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        defaults: {
+          theme: "light",
+        },
+        security: {
+          allowRemoteViewer: true,
+        },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        defaults: {
+          fontFamily: "Fira Code",
+          fontSize: 15,
+          lineSpacing: 1.6,
+          layout: "unified",
+          showLineNumbers: true,
+          diffIndicators: "bars",
+          wordWrap: true,
+          background: true,
+          theme: "light",
+          fileFormat: "png",
+          fileQuality: "standard",
+          fileScale: 2,
+          fileMaxWidth: 960,
+          mode: "both",
+        },
+        security: {
+          allowRemoteViewer: true,
+        },
+      },
+    });
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),

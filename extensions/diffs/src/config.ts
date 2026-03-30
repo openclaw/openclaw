@@ -153,16 +153,22 @@ export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = buildPluginCo
       if (value === undefined) {
         return { success: true, data: undefined };
       }
-      try {
-        return { success: true, data: resolveDiffsPluginDefaults(value) };
-      } catch (error) {
-        return {
-          success: false,
-          error: {
-            issues: [{ path: [], message: error instanceof Error ? error.message : String(error) }],
-          },
-        };
+      const result = DiffsPluginJsonSchemaSource.safeParse(value);
+      if (result.success) {
+        return result;
       }
+      return {
+        success: false,
+        error: {
+          issues: result.error.issues.map((issue) => ({
+            path: issue.path.filter((segment): segment is string | number => {
+              const kind = typeof segment;
+              return kind === "string" || kind === "number";
+            }),
+            message: issue.message,
+          })),
+        },
+      };
     },
   },
 );
