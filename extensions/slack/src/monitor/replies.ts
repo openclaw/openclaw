@@ -15,11 +15,7 @@ import { resolveSlackReplyBlocks } from "../reply-blocks.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
-  try {
-    return resolveSlackReplyBlocks(payload);
-  } catch {
-    return undefined;
-  }
+  return resolveSlackReplyBlocks(payload);
 }
 
 export async function deliverReplies(params: {

@@ -140,6 +140,30 @@ describe("deliverReplies identity passthrough", () => {
       ],
     });
   });
+
+  it("rejects replies when merged Slack blocks exceed the platform limit", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    await expect(
+      deliverReplies(
+        baseParams({
+          replies: [
+            {
+              text: "Choose",
+              channelData: {
+                slack: {
+                  blocks: Array.from({ length: 50 }, () => ({ type: "divider" })),
+                },
+              },
+              interactive: {
+                blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+              },
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+  });
 });
 
 describe("deliverSlackSlashReplies chunking", () => {

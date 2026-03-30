@@ -748,6 +748,29 @@ describe("parseSlackDirectives", () => {
     ]);
   });
 
+  it("preserves slack_select values that end in style-like suffixes", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Choose one | Queue:queue:danger, Archive:archive:primary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Choose one",
+        options: [
+          {
+            label: "Queue",
+            value: "queue:danger",
+          },
+          {
+            label: "Archive",
+            value: "archive:primary",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps existing interactive blocks when compiling additional Slack directives", () => {
     const result = parseSlackDirectives({
       text: "Choose [[slack_buttons: Retry:retry]]",
