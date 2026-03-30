@@ -143,6 +143,7 @@ export function handleMessageStart(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
+
   if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
@@ -154,12 +155,13 @@ export function handleMessageStart(
   // re-trigger block replies.
   // FIX: tolerate providers emitting message_start without message_stop
   if (ctx.state.deltaBuffer || ctx.state.lastStreamedAssistant !== undefined) {
-    const lastMsg = ctx.state.lastAssistantMessage ?? msg;
-
-    handleMessageEnd(ctx, {
-      ...evt,
-      message: lastMsg,
-    });
+    const lastMsg = ctx.state.lastAssistantMessage;
+    if (lastMsg) {
+      handleMessageEnd(ctx, {
+        ...evt,
+        message: lastMsg,
+      });
+    }
   }
 
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length); // Use assistant message_start as the earliest "writing" signal for typing.
@@ -353,9 +355,6 @@ export function handleMessageEnd(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
 ) {
-  if (!ctx.state.deltaBuffer && ctx.state.lastStreamedAssistant === undefined) {
-    return;
-  }
   const msg = evt.message;
   if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
@@ -364,6 +363,10 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+
+  if (!ctx.state.deltaBuffer && ctx.state.lastStreamedAssistant === undefined) {
+    return;
+  }
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
