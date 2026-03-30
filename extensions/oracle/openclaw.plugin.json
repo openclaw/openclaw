@@ -1,0 +1,56 @@
+{
+  "id": "oracle",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "providers": ["oracle"],
+  "providerAuthEnvVars": {
+    "oracle": ["OCI_CONFIG_FILE", "OCI_PROFILE", "OCI_CLI_PROFILE", "OCI_COMPARTMENT_ID"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "oracle",
+      "method": "oci-config",
+      "choiceId": "oracle-oci-config",
+      "choiceLabel": "OCI config file",
+      "choiceHint": "API key auth via OCI config + private key",
+      "groupId": "oracle",
+      "groupLabel": "Oracle OCI",
+      "groupHint": "OCI config file + private key",
+      "optionKey": "oracleConfigFile",
+      "cliFlag": "--oracle-config-file",
+      "cliOption": "--oracle-config-file \u003cpath\u003e",
+      "cliDescription": "Path to OCI config file"
+    },
+    {
+      "provider": "oracle",
+      "method": "oci-config",
+      "choiceId": "oracle-oci-config",
+      "choiceLabel": "OCI config file",
+      "choiceHint": "API key auth via OCI config + private key",
+      "groupId": "oracle",
+      "groupLabel": "Oracle OCI",
+      "groupHint": "OCI config file + private key",
+      "optionKey": "oracleProfile",
+      "cliFlag": "--oracle-profile",
+      "cliOption": "--oracle-profile \u003cname\u003e",
+      "cliDescription": "OCI profile name"
+    },
+    {
+      "provider": "oracle",
+      "method": "oci-config",
+      "choiceId": "oracle-oci-config",
+      "choiceLabel": "OCI config file",
+      "choiceHint": "API key auth via OCI config + private key",
+      "groupId": "oracle",
+      "groupLabel": "Oracle OCI",
+      "groupHint": "OCI config file + private key",
+      "optionKey": "oracleCompartmentId",
+      "cliFlag": "--oracle-compartment-id",
+      "cliOption": "--oracle-compartment-id \u003cocid\u003e",
+      "cliDescription": "OCI compartment OCID"
+    }
+  ]
+}

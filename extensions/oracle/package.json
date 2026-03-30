@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/oracle-provider",
+  "version": "2026.3.23",
+  "private": true,
+  "description": "Oracle OCI Generative AI provider plugin",
+  "type": "module",
+  "dependencies": {
+    "oci-common": "2.126.2",
+    "oci-generativeai": "2.126.2",
+    "oci-generativeaiinference": "2.126.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
