@@ -552,6 +552,107 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
   });
 
+  it("re-resolves inherited main-store updates when refresh returns null", async () => {
+    const profileId = "openai-codex:default";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+    let releaseRefresh:
+      | ((value: {
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+          accountId?: string;
+        }) => void)
+      | undefined;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-null-reresolve", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-subagent-only",
+          },
+        },
+      },
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        accountId: "acct-shared",
+      }),
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        await new Promise<{
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+          accountId?: string;
+        }>((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const resolving = resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    await vi.waitFor(() =>
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1),
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "token",
+            provider: "openai-codex",
+            token: "replacement-token",
+            expires: freshExpiry,
+          },
+        },
+      },
+      agentDir,
+    );
+    releaseRefresh?.({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "stale-refreshed-access",
+      refresh: "stale-refreshed-refresh",
+      expires: freshExpiry,
+      accountId: "acct-shared",
+    });
+
+    await expect(resolving).resolves.toEqual({
+      apiKey: "replacement-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const subStoreRaw = JSON.parse(
+      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(subStoreRaw.profiles[profileId]).toBeUndefined();
+    expect(subStoreRaw.profiles["anthropic:default"]).toMatchObject({
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-subagent-only",
+    });
+  });
+
   it("does not recreate a profile that was deleted while refresh was in flight", async () => {
     const profileId = "openai-codex:default";
     const freshExpiry = Date.now() + 60 * 60 * 1000;

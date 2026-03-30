@@ -584,7 +584,10 @@ async function tryResolveOAuthProfile(
     agentDir: params.agentDir,
   });
   if (!refreshed) {
-    const refreshedStore = loadAuthProfileStoreForAgent(params.agentDir);
+    const refreshedStore = loadAuthProfileStoreForRuntime(
+      params.agentDir,
+      READ_ONLY_AUTH_STORE_OPTIONS,
+    );
     const current = refreshedStore.profiles[profileId];
     if (current && (current.type !== "oauth" || !areOAuthCredentialsEquivalent(current, cred))) {
       return await resolveApiKeyForProfile({
@@ -740,7 +743,10 @@ export async function resolveApiKeyForProfile(
       agentDir: params.agentDir,
     });
     if (!result) {
-      const refreshedStore = loadAuthProfileStoreForAgent(params.agentDir);
+      const refreshedStore = loadAuthProfileStoreForRuntime(
+        params.agentDir,
+        READ_ONLY_AUTH_STORE_OPTIONS,
+      );
       const current = refreshedStore.profiles[profileId];
       if (
         current &&
