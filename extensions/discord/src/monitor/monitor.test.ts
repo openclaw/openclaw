@@ -676,7 +676,16 @@ describe("discord component interactions", () => {
       duplicate: false,
     });
 
-    const button = createDiscordComponentButton(createComponentContext());
+    const button = createDiscordComponentButton(
+      createComponentContext({
+        discordConfig: createDiscordConfig({
+          dm: {
+            groupEnabled: true,
+            groupChannels: ["group-dm-1"],
+          },
+        }),
+      }),
+    );
     const { interaction } = createComponentButtonInteraction({
       rawData: {
         channel_id: "group-dm-1",

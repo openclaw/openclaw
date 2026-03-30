@@ -80,6 +80,7 @@ export const MatrixConfigSchema = z.object({
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
