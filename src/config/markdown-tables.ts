@@ -15,13 +15,14 @@ type MarkdownConfigSection = MarkdownConfigEntry & {
 };
 
 export const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
+  ["slack", "block"],
   ["signal", "bullets"],
   ["whatsapp", "bullets"],
   ["mattermost", "off"],
 ]);
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
-  value === "off" || value === "bullets" || value === "code";
+  value === "off" || value === "bullets" || value === "code" || value === "block";
 
 function resolveMarkdownModeFromSection(
   section: MarkdownConfigSection | undefined,
@@ -58,5 +59,9 @@ export function resolveMarkdownTableMode(params: {
     (params.cfg as Record<string, unknown> | undefined)?.[channel]) as
     | MarkdownConfigSection
     | undefined;
-  return resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+  const resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+  if (resolved === "block" && channel !== "slack") {
+    return "code";
+  }
+  return resolved;
 }

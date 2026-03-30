@@ -51,6 +51,15 @@ export type MarkdownIR = {
   links: MarkdownLinkSpan[];
 };
 
+export type MarkdownTableData = {
+  headers: string[];
+  rows: string[][];
+};
+
+export type MarkdownTableMeta = MarkdownTableData & {
+  placeholderOffset: number;
+};
+
 type OpenStyle = {
   style: MarkdownStyle;
   start: number;
@@ -86,6 +95,7 @@ type RenderState = RenderTarget & {
   tableMode: MarkdownTableMode;
   table: TableState | null;
   hasTables: boolean;
+  collectedTables: MarkdownTableMeta[];
 };
 
 export type MarkdownParseOptions = {
@@ -94,7 +104,7 @@ export type MarkdownParseOptions = {
   headingStyle?: "none" | "bold";
   blockquotePrefix?: string;
   autolink?: boolean;
-  /** How to render tables (off|bullets|code). Default: off. */
+  /** How to render tables (off|bullets|code|block). Default: off. */
   tableMode?: MarkdownTableMode;
 };
 
@@ -400,6 +410,17 @@ function appendCellTextOnly(state: RenderState, cell: TableCell) {
   // Do not append styles - this is used for code blocks where inner styles would overlap
 }
 
+function collectTableBlock(state: RenderState) {
+  if (!state.table) {
+    return;
+  }
+  state.collectedTables.push({
+    headers: state.table.headers.map((cell) => trimCell(cell).text),
+    rows: state.table.rows.map((row) => row.map((cell) => trimCell(cell).text)),
+    placeholderOffset: state.text.length,
+  });
+}
+
 function appendTableBulletValue(
   state: RenderState,
   params: {
@@ -696,6 +717,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
             renderTableAsBullets(state);
           } else if (state.tableMode === "code") {
             renderTableAsCode(state);
+          } else if (state.tableMode === "block") {
+            collectTableBlock(state);
           }
         }
         state.table = null;
@@ -893,7 +916,7 @@ export function markdownToIR(markdown: string, options: MarkdownParseOptions = {
 export function markdownToIRWithMeta(
   markdown: string,
   options: MarkdownParseOptions = {},
-): { ir: MarkdownIR; hasTables: boolean } {
+): { ir: MarkdownIR; hasTables: boolean; tables: MarkdownTableMeta[] } {
   const env: RenderEnv = { listStack: [] };
   const md = createMarkdownIt(options);
   const tokens = md.parse(markdown ?? "", env as unknown as object);
@@ -916,6 +939,7 @@ export function markdownToIRWithMeta(
     tableMode,
     table: null,
     hasTables: false,
+    collectedTables: [],
   };
 
   renderTokens(tokens as MarkdownToken[], state);
@@ -943,6 +967,7 @@ export function markdownToIRWithMeta(
       links: clampLinkSpans(state.links, finalLength),
     },
     hasTables: state.hasTables,
+    tables: state.collectedTables,
   };
 }
 
