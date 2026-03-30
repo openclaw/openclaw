@@ -705,7 +705,6 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         senderIsOwner: false,
-        senderIsOwner: false,
         deps,
       });
 
@@ -958,7 +957,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner: false,
         senderIsOwner: false,
         deps,
       });
