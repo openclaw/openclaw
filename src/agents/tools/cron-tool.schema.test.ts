@@ -82,6 +82,25 @@ describe("CronToolSchema", () => {
     );
   });
 
+  it("job.payload includes fallbacks", () => {
+    expect(keysAt(CronToolSchema as Record<string, unknown>, "job.payload")).toContain("fallbacks");
+  });
+
+  it("patch.payload omits fallbacks (not consumed by mergeCronPayload)", () => {
+    expect(keysAt(CronToolSchema as Record<string, unknown>, "patch.payload")).toEqual(
+      [
+        "allowUnsafeExternalContent",
+        "kind",
+        "lightContext",
+        "message",
+        "model",
+        "text",
+        "thinking",
+        "timeoutSeconds",
+      ].toSorted(),
+    );
+  });
+
   it("job.failureAlert exposes after, channel, to, cooldownMs, mode, accountId", () => {
     expect(keysAt(CronToolSchema as Record<string, unknown>, "job.failureAlert")).toEqual(
       ["accountId", "after", "channel", "cooldownMs", "mode", "to"].toSorted(),

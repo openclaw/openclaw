@@ -161,9 +161,6 @@ const CronPatchObjectSchema = Type.Optional(
             timeoutSeconds: Type.Optional(Type.Number()),
             lightContext: Type.Optional(Type.Boolean()),
             allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-            fallbacks: Type.Optional(
-              Type.Array(Type.String(), { description: "Fallback model ids" }),
-            ),
           },
           { additionalProperties: true },
         ),
