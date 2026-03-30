@@ -358,7 +358,10 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+          if (
+            (ctx.channel === "webchat" || Array.isArray(ctx.gatewayClientScopes)) &&
+            !ctx.gatewayClientScopes?.includes("operator.admin")
+          ) {
             return {
               text: "⚠️ /phone disarm requires operator.admin.",
             };
@@ -380,7 +383,10 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+          if (
+            (ctx.channel === "webchat" || Array.isArray(ctx.gatewayClientScopes)) &&
+            !ctx.gatewayClientScopes?.includes("operator.admin")
+          ) {
             return {
               text: "⚠️ /phone arm requires operator.admin.",
             };
