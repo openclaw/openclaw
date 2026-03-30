@@ -249,6 +249,46 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     }
   });
 
+  it("history-enabled rooms do not serialize DM ingress heavy work", async () => {
+    let resolveFirstName: (() => void) | undefined;
+    let nameLookupCalls = 0;
+    const getMemberDisplayName = vi.fn(async () => {
+      nameLookupCalls += 1;
+      if (nameLookupCalls === 1) {
+        await new Promise<void>((resolve) => {
+          resolveFirstName = resolve;
+        });
+      }
+      return "sender";
+    });
+
+    const { handler } = createMatrixHandlerTestHarness({
+      historyLimit: 20,
+      isDirectMessage: true,
+      getMemberDisplayName,
+      dispatchReplyFromConfig: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
+    });
+
+    const first = handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$dm-a", body: "first dm" }));
+    await vi.waitFor(() => {
+      expect(resolveFirstName).toBeTypeOf("function");
+    });
+
+    const second = handler(
+      DEFAULT_ROOM,
+      makeRoomPlainEvent({ eventId: "$dm-b", body: "second dm" }),
+    );
+    await vi.waitFor(() => {
+      expect(nameLookupCalls).toBe(2);
+    });
+
+    resolveFirstName?.();
+    await Promise.all([first, second]);
+  });
+
   it("includes skipped media-only room messages in next trigger history", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
     const { handler } = createMatrixHandlerTestHarness({

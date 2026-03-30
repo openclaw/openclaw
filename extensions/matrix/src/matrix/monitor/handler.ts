@@ -287,11 +287,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     }
   };
 
-  const runHistoryAwareRoomIngress = async <T>(
-    roomId: string,
-    task: () => Promise<T>,
-  ): Promise<T> => (historyLimit > 0 ? runRoomIngress(roomId, task) : task());
-
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let claimedInboundEvent = false;
@@ -336,7 +331,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         await inboundDeduper.commitEvent({ roomId, eventId });
         claimedInboundEvent = false;
       };
-      const ingressResult = await runHistoryAwareRoomIngress(roomId, async () => {
+      const readIngressPrefix = async () => {
         const selfUserId = await client.getUserId();
         if (senderId === selfUserId) {
           return;
@@ -389,8 +384,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderId,
           selfUserId,
         });
+        return { content, isDirectMessage, locationPayload, selfUserId };
+      };
+      const continueIngress = async (params: {
+        content: RoomMessageEventContent;
+        isDirectMessage: boolean;
+        locationPayload: MatrixLocationPayload | null;
+        selfUserId: string;
+      }) => {
+        let content = params.content;
+        const isDirectMessage = params.isDirectMessage;
         const isRoom = !isDirectMessage;
-
+        const { locationPayload, selfUserId } = params;
         if (isRoom && groupPolicy === "disabled") {
           await commitInboundEventIfClaimed();
           return;
@@ -846,8 +851,33 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId: _threadRootId,
         };
-      });
-      if (!ingressResult) {
+      };
+      const ingressResult =
+        historyLimit > 0
+          ? await runRoomIngress(roomId, async () => {
+              const prefix = await readIngressPrefix();
+              if (!prefix) {
+                return;
+              }
+              if (prefix.isDirectMessage) {
+                return { deferredPrefix: prefix } as const;
+              }
+              return { ingressResult: await continueIngress(prefix) } as const;
+            })
+          : undefined;
+      const resolvedIngressResult =
+        historyLimit > 0
+          ? ingressResult?.deferredPrefix
+            ? await continueIngress(ingressResult.deferredPrefix)
+            : ingressResult?.ingressResult
+          : await (async () => {
+              const prefix = await readIngressPrefix();
+              if (!prefix) {
+                return;
+              }
+              return await continueIngress(prefix);
+            })();
+      if (!resolvedIngressResult) {
         return;
       }
 
@@ -869,7 +899,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         messageId: _messageId,
         triggerSnapshot,
         threadRootId: _threadRootId,
-      } = ingressResult;
+      } = resolvedIngressResult;
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
