@@ -480,18 +480,21 @@ async function resolveHeartbeatPreflight(params: {
         sessionKey: originatingSessionKey,
         contextKey: event.contextKey,
         deliveryContext: event.deliveryContext,
+        skipDedup: true,
       });
     }
 
-    // Drain destination events first so `lastText` is reset — prevents
-    // the consecutive-duplicate guard in enqueueSystemEvent from silently
-    // dropping migrated events whose text matches the destination's tail.
+    // Drain destination events first so we can rebuild the queue with
+    // pre-existing events followed by migrated events.  skipDedup prevents
+    // the consecutive-duplicate guard from dropping a migrated event whose
+    // text happens to match the destination queue's tail.
     preExistingHeartbeatEvents = drainSystemEventEntries(session.sessionKey);
     for (const event of [...preExistingHeartbeatEvents, ...migratedEvents]) {
       enqueueSystemEvent(event.text, {
         sessionKey: session.sessionKey,
         contextKey: event.contextKey,
         deliveryContext: event.deliveryContext,
+        skipDedup: true,
       });
     }
   }
@@ -556,6 +559,7 @@ async function resolveHeartbeatPreflight(params: {
               sessionKey: session.sessionKey,
               contextKey: event.contextKey,
               deliveryContext: event.deliveryContext,
+              skipDedup: true,
             });
           }
         }
@@ -566,6 +570,7 @@ async function resolveHeartbeatPreflight(params: {
             sessionKey: originatingSessionKey,
             contextKey: event.contextKey,
             deliveryContext: event.deliveryContext,
+            skipDedup: true,
           });
         }
       }

@@ -882,4 +882,110 @@ describe("system-event-triggered heartbeat session routing", () => {
 
     readFileSpy.mockRestore();
   });
+
+  it("preserves migrated events when destination tail has matching text", async () => {
+    const tmpDir = await createCaseDir("hb-dedup-bypass");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+
+    const agentId = "main";
+    const heartbeatSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "group",
+      peerId: "-100heartbeat",
+    });
+    const dmSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "direct",
+      peerId: "555444333",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "telegram",
+            to: "-100heartbeat",
+            session: heartbeatSessionKey,
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveAgentMainSessionKey({ cfg, agentId })]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [dmSessionKey]: {
+          sessionId: "sid-dm",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "555444333",
+        },
+      }),
+    );
+
+    // Pre-populate the heartbeat session with an event whose text will
+    // match the first migrated event — this is the scenario where the
+    // consecutive-duplicate guard would silently drop the migrated event.
+    const sharedText = "exec finished (dup-test, code 0) :: build done";
+    enqueueSystemEvent(sharedText, {
+      sessionKey: heartbeatSessionKey,
+      contextKey: "exec:earlier-run",
+    });
+
+    // Now enqueue the same text into the DM session so it becomes a
+    // migrated event during session routing.
+    enqueueSystemEvent(sharedText, {
+      sessionKey: dmSessionKey,
+      contextKey: "exec:dup-test",
+    });
+
+    expect(peekSystemEventEntries(heartbeatSessionKey)).toHaveLength(1);
+    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(1);
+
+    replySpy.mockResolvedValue([{ text: "Build completed" }]);
+    const sendTelegram = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; chatId: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", chatId: "-100heartbeat" });
+
+    await runHeartbeatOnce({
+      cfg,
+      reason: "exec-event",
+      sessionKey: dmSessionKey,
+      deps: createHeartbeatDeps(sendTelegram),
+    });
+
+    // Both events must be present — the migrated event must NOT be
+    // dropped even though its text matches the destination tail.
+    const entries = peekSystemEventEntries(heartbeatSessionKey);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].text).toBe(sharedText);
+    expect(entries[0].contextKey).toBe("exec:earlier-run");
+    expect(entries[1].text).toBe(sharedText);
+    expect(entries[1].contextKey).toBe("exec:dup-test");
+
+    // DM session should be drained
+    expect(hasSystemEvents(dmSessionKey)).toBe(false);
+
+    replySpy.mockRestore();
+  });
 });

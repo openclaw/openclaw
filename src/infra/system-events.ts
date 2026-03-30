@@ -34,6 +34,8 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  /** Bypass consecutive-duplicate suppression (used for cross-session migration). */
+  skipDedup?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -100,7 +102,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
   entry.lastContextKey = normalizedContextKey;
-  if (entry.lastText === cleaned) {
+  if (!options?.skipDedup && entry.lastText === cleaned) {
     return false;
   } // skip consecutive duplicates
   entry.lastText = cleaned;
