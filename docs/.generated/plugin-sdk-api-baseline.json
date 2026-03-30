@@ -109,7 +109,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 569,
+            "line": 607,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -118,7 +118,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 574,
+            "line": 612,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 590,
+            "line": 628,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -136,7 +136,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 243,
+            "line": 268,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -154,7 +154,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 517,
+            "line": 525,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -163,7 +163,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 483,
+            "line": 491,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -190,7 +190,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 60,
+            "line": 62,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -253,7 +253,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1628,
+            "line": 1636,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1672,
+            "line": 1680,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1170,7 +1170,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 560,
+            "line": 568,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1179,7 +1179,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 566,
+            "line": 574,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1206,7 +1206,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 578,
+            "line": 616,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1224,7 +1224,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 517,
+            "line": 525,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1233,7 +1233,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 483,
+            "line": 491,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1752,7 +1752,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 560,
+            "line": 568,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1761,7 +1761,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 566,
+            "line": 574,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1781,6 +1781,15 @@
           "source": {
             "line": 108,
             "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelActionAvailabilityState = ChannelActionAvailabilityState;",
+          "exportName": "ChannelActionAvailabilityState",
+          "kind": "type",
+          "source": {
+            "line": 31,
+            "path": "src/channels/plugins/types.adapters.ts"
           }
         },
         {
@@ -1815,7 +1824,34 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 513,
+            "line": 551,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelApprovalAdapter = ChannelApprovalAdapter;",
+          "exportName": "ChannelApprovalAdapter",
+          "kind": "type",
+          "source": {
+            "line": 546,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelApprovalForwardTarget = ChannelApprovalForwardTarget;",
+          "exportName": "ChannelApprovalForwardTarget",
+          "kind": "type",
+          "source": {
+            "line": 38,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelApprovalInitiatingSurfaceState = ChannelActionAvailabilityState;",
+          "exportName": "ChannelApprovalInitiatingSurfaceState",
+          "kind": "type",
+          "source": {
+            "line": 36,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1824,7 +1860,7 @@
           "exportName": "ChannelAuthAdapter",
           "kind": "type",
           "source": {
-            "line": 367,
+            "line": 392,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1842,7 +1878,7 @@
           "exportName": "ChannelCapabilitiesDiagnostics",
           "kind": "type",
           "source": {
-            "line": 51,
+            "line": 53,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1851,7 +1887,7 @@
           "exportName": "ChannelCapabilitiesDisplayLine",
           "kind": "type",
           "source": {
-            "line": 46,
+            "line": 48,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1860,7 +1896,7 @@
           "exportName": "ChannelCapabilitiesDisplayTone",
           "kind": "type",
           "source": {
-            "line": 44,
+            "line": 46,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1869,7 +1905,7 @@
           "exportName": "ChannelCommandAdapter",
           "kind": "type",
           "source": {
-            "line": 449,
+            "line": 489,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1878,7 +1914,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 578,
+            "line": 616,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1887,7 +1923,7 @@
           "exportName": "ChannelConfigAdapter",
           "kind": "type",
           "source": {
-            "line": 95,
+            "line": 97,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1896,7 +1932,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 569,
+            "line": 607,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1905,7 +1941,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 574,
+            "line": 612,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1914,7 +1950,16 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 590,
+            "line": 628,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelConversationBindingSupport = ChannelConversationBindingSupport;",
+          "exportName": "ChannelConversationBindingSupport",
+          "kind": "type",
+          "source": {
+            "line": 644,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1923,7 +1968,7 @@
           "exportName": "ChannelDirectoryAdapter",
           "kind": "type",
           "source": {
-            "line": 411,
+            "line": 451,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1932,7 +1977,7 @@
           "exportName": "ChannelDirectoryEntry",
           "kind": "type",
           "source": {
-            "line": 470,
+            "line": 478,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1941,7 +1986,7 @@
           "exportName": "ChannelDirectoryEntryKind",
           "kind": "type",
           "source": {
-            "line": 468,
+            "line": 476,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1950,34 +1995,7 @@
           "exportName": "ChannelElevatedAdapter",
           "kind": "type",
           "source": {
-            "line": 442,
-            "path": "src/channels/plugins/types.adapters.ts"
-          }
-        },
-        {
-          "declaration": "export type ChannelExecApprovalAdapter = ChannelExecApprovalAdapter;",
-          "exportName": "ChannelExecApprovalAdapter",
-          "kind": "type",
-          "source": {
-            "line": 468,
-            "path": "src/channels/plugins/types.adapters.ts"
-          }
-        },
-        {
-          "declaration": "export type ChannelExecApprovalForwardTarget = ChannelExecApprovalForwardTarget;",
-          "exportName": "ChannelExecApprovalForwardTarget",
-          "kind": "type",
-          "source": {
-            "line": 36,
-            "path": "src/channels/plugins/types.adapters.ts"
-          }
-        },
-        {
-          "declaration": "export type ChannelExecApprovalInitiatingSurfaceState = ChannelExecApprovalInitiatingSurfaceState;",
-          "exportName": "ChannelExecApprovalInitiatingSurfaceState",
-          "kind": "type",
-          "source": {
-            "line": 31,
+            "line": 482,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1986,7 +2004,7 @@
           "exportName": "ChannelGatewayAdapter",
           "kind": "type",
           "source": {
-            "line": 351,
+            "line": 376,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1995,7 +2013,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 243,
+            "line": 268,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2004,7 +2022,7 @@
           "exportName": "ChannelGroupAdapter",
           "kind": "type",
           "source": {
-            "line": 126,
+            "line": 128,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2022,7 +2040,7 @@
           "exportName": "ChannelHeartbeatAdapter",
           "kind": "type",
           "source": {
-            "line": 377,
+            "line": 417,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2049,7 +2067,7 @@
           "exportName": "ChannelLifecycleAdapter",
           "kind": "type",
           "source": {
-            "line": 454,
+            "line": 494,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2058,7 +2076,7 @@
           "exportName": "ChannelLoginWithQrStartResult",
           "kind": "type",
           "source": {
-            "line": 322,
+            "line": 347,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2067,7 +2085,7 @@
           "exportName": "ChannelLoginWithQrWaitResult",
           "kind": "type",
           "source": {
-            "line": 327,
+            "line": 352,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2076,7 +2094,7 @@
           "exportName": "ChannelLogoutContext",
           "kind": "type",
           "source": {
-            "line": 332,
+            "line": 357,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2085,7 +2103,7 @@
           "exportName": "ChannelLogoutResult",
           "kind": "type",
           "source": {
-            "line": 316,
+            "line": 341,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2112,7 +2130,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 517,
+            "line": 525,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2121,7 +2139,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 483,
+            "line": 491,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2193,7 +2211,7 @@
           "exportName": "ChannelOutboundAdapter",
           "kind": "type",
           "source": {
-            "line": 159,
+            "line": 172,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2202,7 +2220,16 @@
           "exportName": "ChannelOutboundContext",
           "kind": "type",
           "source": {
-            "line": 132,
+            "line": 134,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelOutboundPayloadHint = ChannelOutboundPayloadHint;",
+          "exportName": "ChannelOutboundPayloadHint",
+          "kind": "type",
+          "source": {
+            "line": 157,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2216,11 +2243,20 @@
           }
         },
         {
+          "declaration": "export type ChannelOutboundTargetRef = ChannelOutboundTargetRef;",
+          "exportName": "ChannelOutboundTargetRef",
+          "kind": "type",
+          "source": {
+            "line": 161,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelPairingAdapter = ChannelPairingAdapter;",
           "exportName": "ChannelPairingAdapter",
           "kind": "type",
           "source": {
-            "line": 340,
+            "line": 365,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2238,7 +2274,7 @@
           "exportName": "ChannelPollContext",
           "kind": "type",
           "source": {
-            "line": 548,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2247,7 +2283,7 @@
           "exportName": "ChannelPollResult",
           "kind": "type",
           "source": {
-            "line": 539,
+            "line": 547,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2256,7 +2292,7 @@
           "exportName": "ChannelResolveKind",
           "kind": "type",
           "source": {
-            "line": 422,
+            "line": 462,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2265,7 +2301,7 @@
           "exportName": "ChannelResolverAdapter",
           "kind": "type",
           "source": {
-            "line": 432,
+            "line": 472,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2274,7 +2310,7 @@
           "exportName": "ChannelResolveResult",
           "kind": "type",
           "source": {
-            "line": 424,
+            "line": 464,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2283,7 +2319,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 610,
+            "line": 675,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2310,7 +2346,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 60,
+            "line": 62,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2328,7 +2364,7 @@
           "exportName": "ChannelStatusAdapter",
           "kind": "type",
           "source": {
-            "line": 189,
+            "line": 214,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2391,7 +2427,7 @@
           "exportName": "ChannelToolSend",
           "kind": "type",
           "source": {
-            "line": 510,
+            "line": 518,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2591,7 +2627,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 60,
+            "line": 62,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2935,7 +2971,7 @@
           "exportName": "resolveDirectDmAuthorizationOutcome",
           "kind": "function",
           "source": {
-            "line": 120,
+            "line": 122,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2980,7 +3016,7 @@
           "exportName": "resolveSenderCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 149,
+            "line": 151,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -2989,7 +3025,7 @@
           "exportName": "resolveSenderCommandAuthorizationWithRuntime",
           "kind": "function",
           "source": {
-            "line": 138,
+            "line": 140,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3093,6 +3129,15 @@
           }
         },
         {
+          "declaration": "export type CommandArgsParsing = CommandArgsParsing;",
+          "exportName": "CommandArgsParsing",
+          "kind": "type",
+          "source": {
+            "line": 51,
+            "path": "src/auto-reply/commands-registry.types.ts"
+          }
+        },
+        {
           "declaration": "export type CommandArgValues = CommandArgValues;",
           "exportName": "CommandArgValues",
           "kind": "type",
@@ -3115,7 +3160,7 @@
           "exportName": "CommandAuthorizationRuntime",
           "kind": "type",
           "source": {
-            "line": 104,
+            "line": 106,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3223,7 +3268,7 @@
           "exportName": "ResolveSenderCommandAuthorizationParams",
           "kind": "type",
           "source": {
-            "line": 87,
+            "line": 89,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3232,7 +3277,7 @@
           "exportName": "ResolveSenderCommandAuthorizationWithRuntimeParams",
           "kind": "type",
           "source": {
-            "line": 112,
+            "line": 114,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3243,6 +3288,15 @@
           "source": {
             "line": 83,
             "path": "src/auto-reply/commands-registry.types.ts"
+          }
+        },
+        {
+          "declaration": "export type SkillCommandSpec = SkillCommandSpec;",
+          "exportName": "SkillCommandSpec",
+          "kind": "type",
+          "source": {
+            "line": 51,
+            "path": "src/agents/skills/types.ts"
           }
         },
         {
@@ -3342,7 +3396,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 534,
+            "line": 541,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3351,7 +3405,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 507,
+            "line": 514,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3374,11 +3428,11 @@
           }
         },
         {
-          "declaration": "export function defineChannelPluginEntry<TPlugin>({ id, name, description, plugin, configSchema, setRuntime, registerFull, }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin>;",
+          "declaration": "export function defineChannelPluginEntry<TPlugin>({ id, name, description, plugin, configSchema, setRuntime, registerCliMetadata, registerFull, }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin>;",
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 277,
+            "line": 278,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3396,7 +3450,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 314,
+            "line": 321,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3468,7 +3522,7 @@
           "exportName": "getChatChannelMeta",
           "kind": "function",
           "source": {
-            "line": 123,
+            "line": 126,
             "path": "src/channels/chat-meta.ts"
           }
         },
@@ -3684,7 +3738,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 483,
+            "line": 491,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3765,7 +3819,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1672,
+            "line": 1680,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3792,7 +3846,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1654,
+            "line": 1662,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3801,7 +3855,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1621,
+            "line": 1629,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3810,7 +3864,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1613,
+            "line": 1621,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4280,7 +4334,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1672,
+            "line": 1680,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4307,7 +4361,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1654,
+            "line": 1662,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4316,7 +4370,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1621,
+            "line": 1629,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4325,7 +4379,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1613,
+            "line": 1621,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4687,7 +4741,7 @@
           "exportName": "applyAgentDefaultModelPrimary",
           "kind": "function",
           "source": {
-            "line": 267,
+            "line": 271,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4696,7 +4750,7 @@
           "exportName": "applyOnboardAuthAgentModelsAndProviders",
           "kind": "function",
           "source": {
-            "line": 244,
+            "line": 248,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4705,7 +4759,7 @@
           "exportName": "applyProviderConfigWithDefaultModel",
           "kind": "function",
           "source": {
-            "line": 321,
+            "line": 325,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4714,7 +4768,7 @@
           "exportName": "applyProviderConfigWithDefaultModelPreset",
           "kind": "function",
           "source": {
-            "line": 342,
+            "line": 346,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4723,7 +4777,7 @@
           "exportName": "applyProviderConfigWithDefaultModels",
           "kind": "function",
           "source": {
-            "line": 287,
+            "line": 291,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4732,7 +4786,7 @@
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
-            "line": 384,
+            "line": 388,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4741,7 +4795,7 @@
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
-            "line": 426,
+            "line": 430,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4750,7 +4804,7 @@
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
-            "line": 458,
+            "line": 462,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4759,7 +4813,7 @@
           "exportName": "createDefaultModelPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 367,
+            "line": 371,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4768,7 +4822,7 @@
           "exportName": "createDefaultModelsPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 409,
+            "line": 413,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4777,7 +4831,7 @@
           "exportName": "createModelCatalogPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 481,
+            "line": 485,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4786,8 +4840,26 @@
           "exportName": "ensureModelAllowlistEntry",
           "kind": "function",
           "source": {
-            "line": 498,
+            "line": 502,
             "path": "src/plugin-sdk/provider-onboard.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveAgentModelFallbackValues(model?: AgentModelConfig | undefined): string[];",
+          "exportName": "resolveAgentModelFallbackValues",
+          "kind": "function",
+          "source": {
+            "line": 20,
+            "path": "src/config/model-input.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveAgentModelPrimaryValue(model?: AgentModelConfig | undefined): string | undefined;",
+          "exportName": "resolveAgentModelPrimaryValue",
+          "kind": "function",
+          "source": {
+            "line": 8,
+            "path": "src/config/model-input.ts"
           }
         },
         {
@@ -4795,7 +4867,7 @@
           "exportName": "withAgentModelAliases",
           "kind": "function",
           "source": {
-            "line": 229,
+            "line": 233,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4804,7 +4876,7 @@
           "exportName": "AgentModelAliasEntry",
           "kind": "type",
           "source": {
-            "line": 21,
+            "line": 25,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
@@ -4822,7 +4894,7 @@
           "exportName": "ModelDefinitionConfig",
           "kind": "type",
           "source": {
-            "line": 48,
+            "line": 49,
             "path": "src/config/types.models.ts"
           }
         },
@@ -4831,7 +4903,7 @@
           "exportName": "ModelProviderConfig",
           "kind": "type",
           "source": {
-            "line": 66,
+            "line": 67,
             "path": "src/config/types.models.ts"
           }
         },
@@ -4849,7 +4921,7 @@
           "exportName": "ProviderOnboardPresetAppliers",
           "kind": "type",
           "source": {
-            "line": 28,
+            "line": 32,
             "path": "src/plugin-sdk/provider-onboard.ts"
           }
         }
@@ -5213,12 +5285,147 @@
       "entrypoint": "testing",
       "exports": [
         {
+          "declaration": "export function buildCommandTestParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext> | undefined): HandleCommandsParams;",
+          "exportName": "buildCommandTestParams",
+          "kind": "function",
+          "source": {
+            "line": 5,
+            "path": "src/auto-reply/reply/commands-spawn.test-harness.ts"
+          }
+        },
+        {
+          "declaration": "export function buildDispatchInboundCaptureMock<T extends Record<string, unknown>>(actual: T, setCtx: (ctx: unknown) => void): T & { dispatchInboundMessage: Mock<(params: { ctx: unknown; }) => Promise<{ queuedFinal: boolean; counts: { tool: number; block: number; final: number; }; }>>; dispatchInboundMessageWithDispatcher: Mock<...>; dispatchInboundMessageWithBufferedDispatcher: Mock<...>; };",
+          "exportName": "buildDispatchInboundCaptureMock",
+          "kind": "function",
+          "source": {
+            "line": 12,
+            "path": "src/channels/plugins/contracts/inbound-testkit.ts"
+          }
+        },
+        {
+          "declaration": "export function callGateway<T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T>;",
+          "exportName": "callGateway",
+          "kind": "function",
+          "source": {
+            "line": 933,
+            "path": "src/gateway/call.ts"
+          }
+        },
+        {
+          "declaration": "export function capturePluginRegistration(params: { register(api: OpenClawPluginApi): void; }): CapturedPluginRegistration;",
+          "exportName": "capturePluginRegistration",
+          "kind": "function",
+          "source": {
+            "line": 124,
+            "path": "src/plugins/captured-registration.ts"
+          }
+        },
+        {
+          "declaration": "export function createAuthCaptureJsonFetch(responseBody: unknown): { fetchFn: ((_input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getAuthHeader: () => string | null; };",
+          "exportName": "createAuthCaptureJsonFetch",
+          "kind": "function",
+          "source": {
+            "line": 45,
+            "path": "src/media-understanding/audio.test-helpers.ts"
+          }
+        },
+        {
+          "declaration": "export function createCliRuntimeCapture(): CliRuntimeCapture;",
+          "exportName": "createCliRuntimeCapture",
+          "kind": "function",
+          "source": {
+            "line": 34,
+            "path": "src/cli/test-runtime-capture.ts"
+          }
+        },
+        {
+          "declaration": "export function createEmptyPluginRegistry(): PluginRegistry;",
+          "exportName": "createEmptyPluginRegistry",
+          "kind": "function",
+          "source": {
+            "line": 3,
+            "path": "src/plugins/registry-empty.ts"
+          }
+        },
+        {
+          "declaration": "export function createRequestCaptureJsonFetch(responseBody: unknown): { fetchFn: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getRequest: () => { ...; }; };",
+          "exportName": "createRequestCaptureJsonFetch",
+          "kind": "function",
+          "source": {
+            "line": 61,
+            "path": "src/media-understanding/audio.test-helpers.ts"
+          }
+        },
+        {
+          "declaration": "export function createSandboxTestContext(params?: { overrides?: Partial<SandboxContext> | undefined; dockerOverrides?: Partial<SandboxDockerConfig> | undefined; } | undefined): SandboxContext;",
+          "exportName": "createSandboxTestContext",
+          "kind": "function",
+          "source": {
+            "line": 3,
+            "path": "src/agents/sandbox/test-fixtures.ts"
+          }
+        },
+        {
+          "declaration": "export function createSlackOutboundPayloadHarness(params: { payload: ReplyPayload; sendResults?: { messageId: string; }[] | undefined; }): { run: () => Promise<OutboundDeliveryResult>; sendMock: Mock<...>; to: string; };",
+          "exportName": "createSlackOutboundPayloadHarness",
+          "kind": "function",
+          "source": {
+            "line": 118,
+            "path": "src/channels/plugins/contracts/suites.ts"
+          }
+        },
+        {
+          "declaration": "export function createWhatsAppPollFixture(): { cfg: OpenClawConfig; poll: { question: string; options: string[]; maxSelections: number; }; to: string; accountId: string; };",
+          "exportName": "createWhatsAppPollFixture",
+          "kind": "function",
+          "source": {
+            "line": 4,
+            "path": "src/test-helpers/whatsapp-outbound.ts"
+          }
+        },
+        {
           "declaration": "export function createWindowsCmdShimFixture(params: { shimPath: string; scriptPath: string; shimLine: string; }): Promise<void>;",
           "exportName": "createWindowsCmdShimFixture",
           "kind": "function",
           "source": {
-            "line": 16,
+            "line": 62,
             "path": "src/plugin-sdk/testing.ts"
+          }
+        },
+        {
+          "declaration": "export function expectChannelInboundContextContract(ctx: MsgContext): void;",
+          "exportName": "expectChannelInboundContextContract",
+          "kind": "function",
+          "source": {
+            "line": 848,
+            "path": "src/channels/plugins/contracts/suites.ts"
+          }
+        },
+        {
+          "declaration": "export function expectWhatsAppPollSent(sendPollWhatsApp: MockInstance<Procedure>, params: { cfg: OpenClawConfig; poll: { question: string; options: string[]; maxSelections: number; }; to?: string | undefined; accountId?: string | undefined; }): void;",
+          "exportName": "expectWhatsAppPollSent",
+          "kind": "function",
+          "source": {
+            "line": 19,
+            "path": "src/test-helpers/whatsapp-outbound.ts"
+          }
+        },
+        {
+          "declaration": "export function firstWrittenJsonArg<T>(writeJson: MockCallsWithFirstArg): T | null;",
+          "exportName": "firstWrittenJsonArg",
+          "kind": "function",
+          "source": {
+            "line": 92,
+            "path": "src/cli/test-runtime-capture.ts"
+          }
+        },
+        {
+          "declaration": "export function getActivePluginRegistry(): PluginRegistry | null;",
+          "exportName": "getActivePluginRegistry",
+          "kind": "function",
+          "source": {
+            "line": 89,
+            "path": "src/plugins/runtime.ts"
           }
         },
         {
@@ -5226,8 +5433,62 @@
           "exportName": "installCommonResolveTargetErrorCases",
           "kind": "function",
           "source": {
-            "line": 42,
+            "line": 88,
             "path": "src/plugin-sdk/testing.ts"
+          }
+        },
+        {
+          "declaration": "export function installPinnedHostnameTestHooks(): void;",
+          "exportName": "installPinnedHostnameTestHooks",
+          "kind": "function",
+          "source": {
+            "line": 16,
+            "path": "src/media-understanding/audio.test-helpers.ts"
+          }
+        },
+        {
+          "declaration": "export function isLiveTestEnabled(extraEnvVars?: readonly string[], env?: ProcessEnv): boolean;",
+          "exportName": "isLiveTestEnabled",
+          "kind": "function",
+          "source": {
+            "line": 5,
+            "path": "src/agents/live-test-helpers.ts"
+          }
+        },
+        {
+          "declaration": "export function jsonResponse(body: unknown, status?: number): Response;",
+          "exportName": "jsonResponse",
+          "kind": "function",
+          "source": {
+            "line": 1,
+            "path": "src/test-helpers/http.ts"
+          }
+        },
+        {
+          "declaration": "export function mockPinnedHostnameResolution(addresses?: string[]): Mock<(hostname: string, lookupFn?: { (hostname: string, family: number): Promise<LookupAddress>; (hostname: string, options: LookupOneOptions): Promise<...>; (hostname: string, options: LookupAllOptions): Promise<...>; (hostname: string, options: LookupOptions): Promise<...>; (hostname: string): Promise<...>; }) => Promise<...>>;",
+          "exportName": "mockPinnedHostnameResolution",
+          "kind": "function",
+          "source": {
+            "line": 4,
+            "path": "src/test-helpers/ssrf.ts"
+          }
+        },
+        {
+          "declaration": "export function peekSystemEvents(sessionKey: string): string[];",
+          "exportName": "peekSystemEvents",
+          "kind": "function",
+          "source": {
+            "line": 139,
+            "path": "src/infra/system-events.ts"
+          }
+        },
+        {
+          "declaration": "export function primeChannelOutboundSendMock(sendMock: Mock, fallbackResult: Record<string, unknown>, sendResults?: SendResultLike[]): void;",
+          "exportName": "primeChannelOutboundSendMock",
+          "kind": "function",
+          "source": {
+            "line": 796,
+            "path": "src/channels/plugins/contracts/suites.ts"
           }
         },
         {
@@ -5240,12 +5501,165 @@
           }
         },
         {
+          "declaration": "export function requestBodyText(body: BodyInit | null | undefined): string;",
+          "exportName": "requestBodyText",
+          "kind": "function",
+          "source": {
+            "line": 18,
+            "path": "src/test-helpers/http.ts"
+          }
+        },
+        {
+          "declaration": "export function requestUrl(input: string | Request | URL): string;",
+          "exportName": "requestUrl",
+          "kind": "function",
+          "source": {
+            "line": 8,
+            "path": "src/test-helpers/http.ts"
+          }
+        },
+        {
+          "declaration": "export function resetPluginRuntimeStateForTest(): void;",
+          "exportName": "resetPluginRuntimeStateForTest",
+          "kind": "function",
+          "source": {
+            "line": 193,
+            "path": "src/plugins/runtime.ts"
+          }
+        },
+        {
+          "declaration": "export function resetSystemEventsForTest(): void;",
+          "exportName": "resetSystemEventsForTest",
+          "kind": "function",
+          "source": {
+            "line": 157,
+            "path": "src/infra/system-events.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveProviderPluginChoice(params: { providers: ProviderPlugin[]; choice: string; }): { provider: ProviderPlugin; method: ProviderAuthMethod; wizard?: ProviderPluginWizardSetup | undefined; } | null;",
+          "exportName": "resolveProviderPluginChoice",
+          "kind": "function",
+          "source": {
+            "line": 13,
+            "path": "src/plugins/provider-auth-choice.runtime.ts"
+          }
+        },
+        {
+          "declaration": "export function runAcpRuntimeAdapterContract(params: AcpRuntimeAdapterContractParams): Promise<void>;",
+          "exportName": "runAcpRuntimeAdapterContract",
+          "kind": "function",
+          "source": {
+            "line": 19,
+            "path": "src/acp/runtime/adapter-contract.testkit.ts"
+          }
+        },
+        {
+          "declaration": "export function sanitizeTerminalText(input: string): string;",
+          "exportName": "sanitizeTerminalText",
+          "kind": "function",
+          "source": {
+            "line": 6,
+            "path": "src/terminal/safe-text.ts"
+          }
+        },
+        {
+          "declaration": "export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string | undefined, runtimeSubagentMode?: \"default\" | \"explicit\" | \"gateway-bindable\"): void;",
+          "exportName": "setActivePluginRegistry",
+          "kind": "function",
+          "source": {
+            "line": 76,
+            "path": "src/plugins/runtime.ts"
+          }
+        },
+        {
+          "declaration": "export function setDefaultChannelPluginRegistryForTests(): void;",
+          "exportName": "setDefaultChannelPluginRegistryForTests",
+          "kind": "function",
+          "source": {
+            "line": 50,
+            "path": "src/commands/channel-test-helpers.ts"
+          }
+        },
+        {
           "declaration": "export function shouldAckReaction(params: AckReactionGateParams): boolean;",
           "exportName": "shouldAckReaction",
           "kind": "function",
           "source": {
             "line": 16,
             "path": "src/channels/ack-reactions.ts"
+          }
+        },
+        {
+          "declaration": "export function spyRuntimeErrors(runtime: Pick<OutputRuntimeEnv, \"error\">): Mock<(...args: unknown[]) => void>;",
+          "exportName": "spyRuntimeErrors",
+          "kind": "function",
+          "source": {
+            "line": 84,
+            "path": "src/cli/test-runtime-capture.ts"
+          }
+        },
+        {
+          "declaration": "export function spyRuntimeJson(runtime: Pick<OutputRuntimeEnv, \"writeJson\">): Mock<(value: unknown, space?: number | undefined) => void>;",
+          "exportName": "spyRuntimeJson",
+          "kind": "function",
+          "source": {
+            "line": 88,
+            "path": "src/cli/test-runtime-capture.ts"
+          }
+        },
+        {
+          "declaration": "export function spyRuntimeLogs(runtime: Pick<OutputRuntimeEnv, \"log\">): Mock<(...args: unknown[]) => void>;",
+          "exportName": "spyRuntimeLogs",
+          "kind": "function",
+          "source": {
+            "line": 80,
+            "path": "src/cli/test-runtime-capture.ts"
+          }
+        },
+        {
+          "declaration": "export function withStateDirEnv<T>(prefix: string, fn: (ctx: { tempRoot: string; stateDir: string; }) => Promise<T>): Promise<T>;",
+          "exportName": "withStateDirEnv",
+          "kind": "function",
+          "source": {
+            "line": 19,
+            "path": "src/test-helpers/state-dir-env.ts"
+          }
+        },
+        {
+          "declaration": "export function writeSkill(params: { dir: string; name: string; description: string; metadata?: string | undefined; body?: string | undefined; frontmatterExtra?: string | undefined; }): Promise<void>;",
+          "exportName": "writeSkill",
+          "kind": "function",
+          "source": {
+            "line": 4,
+            "path": "src/agents/skills.e2e-test-helpers.ts"
+          }
+        },
+        {
+          "declaration": "export const __testing: { resetAcpSessionManagerForTests(): void; setAcpSessionManagerForTests(manager: unknown): void; };",
+          "exportName": "__testing",
+          "kind": "const",
+          "source": {
+            "line": 25,
+            "path": "src/acp/control-plane/manager.ts"
+          }
+        },
+        {
+          "declaration": "export const __testing: { resetAcpSessionManagerForTests(): void; setAcpSessionManagerForTests(manager: unknown): void; };",
+          "exportName": "acpManagerTesting",
+          "kind": "const",
+          "source": {
+            "line": 25,
+            "path": "src/acp/control-plane/manager.ts"
+          }
+        },
+        {
+          "declaration": "export const handleAcpCommand: CommandHandler;",
+          "exportName": "handleAcpCommand",
+          "kind": "const",
+          "source": {
+            "line": 75,
+            "path": "src/auto-reply/reply/commands-acp.ts"
           }
         },
         {
@@ -5262,8 +5676,26 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 243,
+            "line": 268,
             "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type CliMockOutputRuntime = CliMockOutputRuntime;",
+          "exportName": "CliMockOutputRuntime",
+          "kind": "type",
+          "source": {
+            "line": 5,
+            "path": "src/cli/test-runtime-capture.ts"
+          }
+        },
+        {
+          "declaration": "export type CliRuntimeCapture = CliRuntimeCapture;",
+          "exportName": "CliRuntimeCapture",
+          "kind": "type",
+          "source": {
+            "line": 13,
+            "path": "src/cli/test-runtime-capture.ts"
           }
         },
         {
