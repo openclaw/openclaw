@@ -53,12 +53,14 @@ function applyFeishuSDKReconnectPatch(): void {
     (proto as unknown as Record<string, unknown>).handleControlData = async function (
       data: { headers: Array<{ key: string; value: string }>; payload?: Uint8Array },
     ) {
+      const self = this as unknown as Record<string, unknown>;
       try {
         return await origHandleControlData.call(this, data);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("PingInterval")) {
-          this.logger?.warn?.(
+          (self.logger as Record<string, Function> | undefined)?.warn?.call(
+            self.logger,
             "[feishu-ws-patch]",
             "swallowed PingInterval error in pong handler (Feishu system_busy?)",
           );
@@ -73,19 +75,22 @@ function applyFeishuSDKReconnectPatch(): void {
   const origReConnect = proto.reConnect as ((isStart?: boolean) => Promise<void>) | undefined;
   if (origReConnect) {
     (proto as unknown as Record<string, unknown>).reConnect = async function (isStart = false) {
+      const self = this as unknown as Record<string, unknown>;
       if (isStart) {
         // Reset backoff counter on a fresh start
-        (this as unknown as Record<string, unknown>)._feishuReconnectCount = 0;
+        self._feishuReconnectCount = 0;
       }
       if (!isStart) {
         // Exponential backoff: doubles each retry, capped at MAX_RECONNECT_BACKOFF_MS
         // Add ±20% jitter to avoid synchronized retries across multiple clients
-        (this as unknown as Record<string, unknown>)._feishuReconnectCount = ((this as unknown as Record<string, unknown>)._feishuReconnectCount as number) + 1 || 1;
-        const count = (this as unknown as Record<string, unknown>)._feishuReconnectCount as number;
-        const { reconnectInterval = DEFAULT_RECONNECT_INTERVAL_MS } = this.wsConfig?.getWS?.() ?? {};
+        self._feishuReconnectCount = ((self._feishuReconnectCount as number) || 0) + 1;
+        const count = self._feishuReconnectCount as number;
+        const wsConfig = self.wsConfig as { getWS?: () => { reconnectInterval?: number } } | undefined;
+        const { reconnectInterval = DEFAULT_RECONNECT_INTERVAL_MS } = wsConfig?.getWS?.() ?? {};
         const jitter = 1 + (Math.random() - 0.5) * 0.4; // ±20%
         const backoff = Math.min(reconnectInterval * Math.pow(2, count - 1) * jitter, MAX_RECONNECT_BACKOFF_MS);
-        this.logger?.info?.(
+        (self.logger as Record<string, Function> | undefined)?.info?.call(
+          self.logger,
           "[feishu-ws-patch]",
           `reconnect backoff: ${Math.round(backoff / 1000)}s (attempt ${count}, jitter ${Math.round((jitter - 1) * 100)}%)`,
         );
