@@ -13,6 +13,9 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
+
+/** Pre-normalized billing error text for deduplication comparisons. */
+const NORMALIZED_BILLING_ERROR_TEXT = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
@@ -156,7 +159,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeTextForComparison(rawErrorMessage)
     : null;
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
-  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
+  const normalizedGenericBillingErrorText = NORMALIZED_BILLING_ERROR_TEXT;
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
