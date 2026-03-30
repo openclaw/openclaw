@@ -134,17 +134,31 @@ describe("hybrid query expansion improves FTS recall", () => {
     expect(expandedResults.length).toBeGreaterThanOrEqual(rawResults.length);
   });
 
-  it("falls back to original query when no keywords are extracted", async () => {
+  it("AND-joins multiple extracted keywords in hybrid mode", async () => {
     const keywords = extractKeywords("API PostgreSQL");
-    // Pure keywords without stop words — extractKeywords returns them as-is
     expect(keywords.length).toBeGreaterThan(0);
 
     const results = await runSearch({
       rows: indexedRows,
       query: keywords.join(" "),
     });
-    // "API" AND "PostgreSQL" — only row 1 has "API" but not "PostgreSQL",
-    // so this may return 0. The point is the code doesn't break.
+    // "API" AND "PostgreSQL" — row 1 has "API" but not "PostgreSQL",
+    // row 2 has "PostgreSQL" but not "API". AND semantics → 0 results.
+    // This is intentional: vector search provides broad recall in hybrid mode.
+    expect(results).toHaveLength(0);
+  });
+
+  it("falls back to original query when all tokens are stop words", async () => {
+    const keywords = extractKeywords("what is the");
+    expect(keywords).toHaveLength(0);
+
+    // When extractKeywords returns empty, the code falls back to the raw query.
+    // Verify the search doesn't throw and returns a defined result.
+    const fallbackQuery = keywords.length > 0 ? keywords.join(" ") : "what is the";
+    const results = await runSearch({
+      rows: indexedRows,
+      query: fallbackQuery,
+    });
     expect(results).toBeDefined();
   });
 });
