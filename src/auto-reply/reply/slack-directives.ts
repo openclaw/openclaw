@@ -31,6 +31,8 @@ function parseChoice(raw: string): SlackChoice | null {
     return null;
   }
   let style: SlackChoice["style"];
+  // Trailing style keywords are reserved for Slack button styling, so values
+  // that need to end with one of these tokens must use a different suffix.
   const styleDelimiter = value.lastIndexOf(":");
   if (styleDelimiter !== -1) {
     const maybeStyle = value.slice(styleDelimiter + 1).trim().toLowerCase();
@@ -80,7 +82,7 @@ function buildButtonsBlock(
     buttons: choices.map((choice) => ({
       label: choice.label,
       value: choice.value,
-      style: choice.style,
+      ...(choice.style ? { style: choice.style } : {}),
     })),
   };
 }
