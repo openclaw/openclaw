@@ -103,6 +103,13 @@ export function applyExclusiveSlotSelection(params: {
         if (!kindForSlot || !hasKind(plugin.kind, kindForSlot)) {
           continue;
         }
+        // Don't disable a plugin that still owns another slot.
+        const stillOwnsOtherSlot = Object.entries(slots).some(
+          ([sk, sv]) => sk !== slotKey && sv === plugin.id,
+        );
+        if (stillOwnsOtherSlot) {
+          continue;
+        }
         const entry = entries[plugin.id];
         if (!entry || entry.enabled !== false) {
           entries = {
