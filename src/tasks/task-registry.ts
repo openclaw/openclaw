@@ -10,6 +10,15 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
+  formatTaskBlockedFollowupMessage,
+  formatTaskStateChangeMessage,
+  formatTaskTerminalMessage,
+  isTerminalTaskStatus,
+  shouldAutoDeliverTaskStateChange,
+  shouldAutoDeliverTaskTerminalUpdate,
+  shouldSuppressDuplicateTerminalDelivery,
+} from "./task-executor-policy.js";
+import {
   getTaskRegistryHooks,
   getTaskRegistryStore,
   resetTaskRegistryRuntimeForTests,
@@ -384,16 +393,6 @@ export function ensureTaskRegistryReady() {
   ensureListener();
 }
 
-function isTerminalTaskStatus(status: TaskStatus): boolean {
-  return (
-    status === "succeeded" ||
-    status === "failed" ||
-    status === "timed_out" ||
-    status === "cancelled" ||
-    status === "lost"
-  );
-}
-
 function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | null {
   const current = tasks.get(taskId);
   if (!current) {
@@ -441,43 +440,6 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
   return state ? cloneTaskDeliveryState(state) : undefined;
 }
 
-function formatTaskTerminalEvent(task: TaskRecord): string {
-  // User-facing task notifications stay intentionally terse. Detailed runtime chatter lives
-  // in task metadata for inspection, not in the default channel ping.
-  const title =
-    task.label?.trim() ||
-    (task.runtime === "acp"
-      ? "ACP background task"
-      : task.runtime === "subagent"
-        ? "Subagent task"
-        : task.task.trim() || "Background task");
-  const runLabel = task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
-  const summary = task.terminalSummary?.trim();
-  if (task.status === "succeeded") {
-    if (task.terminalOutcome === "blocked") {
-      return summary
-        ? `Background task blocked: ${title}${runLabel}. ${summary}`
-        : `Background task blocked: ${title}${runLabel}.`;
-    }
-    return summary
-      ? `Background task done: ${title}${runLabel}. ${summary}`
-      : `Background task done: ${title}${runLabel}.`;
-  }
-  if (task.status === "timed_out") {
-    return `Background task timed out: ${title}${runLabel}.`;
-  }
-  if (task.status === "lost") {
-    return `Background task lost: ${title}${runLabel}. ${task.error ?? "Backing session disappeared."}`;
-  }
-  if (task.status === "cancelled") {
-    return `Background task cancelled: ${title}${runLabel}.`;
-  }
-  const error = task.error?.trim();
-  return error
-    ? `Background task failed: ${title}${runLabel}. ${error}`
-    : `Background task failed: ${title}${runLabel}.`;
-}
-
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   const origin = normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin);
   const channel = origin?.channel?.trim();
@@ -503,23 +465,15 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
 }
 
 function queueBlockedTaskFollowup(task: TaskRecord) {
-  if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
+  const followupText = formatTaskBlockedFollowupMessage(task);
+  if (!followupText) {
     return false;
   }
   const requesterSessionKey = task.requesterSessionKey.trim();
   if (!requesterSessionKey) {
     return false;
   }
-  const title =
-    task.label?.trim() ||
-    (task.runtime === "acp"
-      ? "ACP background task"
-      : task.runtime === "subagent"
-        ? "Subagent task"
-        : task.task.trim() || "Background task");
-  const runLabel = task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
-  const summary = task.terminalSummary?.trim() || "Task is blocked and needs follow-up.";
-  enqueueSystemEvent(`Task needs follow-up: ${title}${runLabel}. ${summary}`, {
+  enqueueSystemEvent(followupText, {
     sessionKey: requesterSessionKey,
     contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: taskDeliveryStates.get(task.taskId)?.requesterOrigin,
@@ -531,66 +485,10 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
   return true;
 }
 
-function formatTaskStateChangeEvent(task: TaskRecord, event: TaskEventRecord): string | null {
-  const title =
-    task.label?.trim() ||
-    (task.runtime === "acp"
-      ? "ACP background task"
-      : task.runtime === "subagent"
-        ? "Subagent task"
-        : task.task.trim() || "Background task");
-  if (event.kind === "running") {
-    return `Background task started: ${title}.`;
-  }
-  if (event.kind === "progress") {
-    return event.summary ? `Background task update: ${title}. ${event.summary}` : null;
-  }
-  return null;
-}
-
-function shouldAutoDeliverTaskUpdate(task: TaskRecord): boolean {
-  if (task.notifyPolicy === "silent") {
-    return false;
-  }
-  if (task.runtime === "subagent" && task.status !== "cancelled") {
-    return false;
-  }
-  if (
-    task.status !== "succeeded" &&
-    task.status !== "failed" &&
-    task.status !== "timed_out" &&
-    task.status !== "lost" &&
-    task.status !== "cancelled"
-  ) {
-    return false;
-  }
-  return task.deliveryStatus === "pending";
-}
-
-function shouldAutoDeliverTaskStateChange(task: TaskRecord): boolean {
-  return (
-    task.notifyPolicy === "state_changes" &&
-    task.deliveryStatus === "pending" &&
-    task.status !== "succeeded" &&
-    task.status !== "failed" &&
-    task.status !== "timed_out" &&
-    task.status !== "lost" &&
-    task.status !== "cancelled"
-  );
-}
-
-function shouldSuppressDuplicateTerminalDelivery(task: TaskRecord): boolean {
-  if (task.runtime !== "acp" || !task.runId?.trim()) {
-    return false;
-  }
-  const preferred = pickPreferredRunIdTask(getTasksByRunId(task.runId));
-  return Boolean(preferred && preferred.taskId !== task.taskId);
-}
-
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
-  if (!current || !shouldAutoDeliverTaskUpdate(current)) {
+  if (!current || !shouldAutoDeliverTaskTerminalUpdate(current)) {
     return current ? cloneTaskRecord(current) : null;
   }
   if (tasksWithPendingDelivery.has(taskId)) {
@@ -599,10 +497,15 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
   tasksWithPendingDelivery.add(taskId);
   try {
     const latest = tasks.get(taskId);
-    if (!latest || !shouldAutoDeliverTaskUpdate(latest)) {
+    if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
       return latest ? cloneTaskRecord(latest) : null;
     }
-    if (shouldSuppressDuplicateTerminalDelivery(latest)) {
+    const preferred = latest.runId
+      ? pickPreferredRunIdTask(getTasksByRunId(latest.runId))
+      : undefined;
+    if (
+      shouldSuppressDuplicateTerminalDelivery({ task: latest, preferredTaskId: preferred?.taskId })
+    ) {
       return updateTask(taskId, {
         deliveryStatus: "not_applicable",
         lastEventAt: Date.now(),
@@ -614,7 +517,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         lastEventAt: Date.now(),
       });
     }
-    const eventText = formatTaskTerminalEvent(latest);
+    const eventText = formatTaskTerminalMessage(latest);
     if (!canDeliverTaskToRequesterOrigin(latest)) {
       try {
         queueTaskSystemEvent(latest, eventText);
@@ -704,7 +607,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
   if (!latestEvent || (deliveryState?.lastNotifiedEventAt ?? 0) >= latestEvent.at) {
     return cloneTaskRecord(current);
   }
-  const eventText = formatTaskStateChangeEvent(current, latestEvent);
+  const eventText = formatTaskStateChangeMessage(current, latestEvent);
   if (!eventText) {
     return cloneTaskRecord(current);
   }
