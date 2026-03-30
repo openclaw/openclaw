@@ -157,6 +157,7 @@ type ManagedCollection = {
 };
 
 type QmdManagerMode = "full" | "status";
+type QmdCollectionPatternFlag = "--glob" | "--mask";
 
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
@@ -220,6 +221,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private readonly sessionWarm = new Set<string>();
+  private collectionPatternFlag: QmdCollectionPatternFlag | null = null;
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -575,9 +577,25 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async addCollection(pathArg: string, name: string, pattern: string): Promise<void> {
-    await this.runQmd(["collection", "add", pathArg, "--name", name, "--mask", pattern], {
-      timeoutMs: this.qmd.update.commandTimeoutMs,
-    });
+    const candidateFlags: QmdCollectionPatternFlag[] =
+      this.collectionPatternFlag === "--mask" ? ["--mask", "--glob"] : ["--glob", "--mask"];
+    let lastError: unknown;
+    for (const flag of candidateFlags) {
+      try {
+        await this.runQmd(["collection", "add", pathArg, "--name", name, flag, pattern], {
+          timeoutMs: this.qmd.update.commandTimeoutMs,
+        });
+        this.collectionPatternFlag = flag;
+        return;
+      } catch (err) {
+        lastError = err;
+        if (!this.isUnsupportedQmdOptionError(err) || candidateFlags.at(-1) === flag) {
+          throw err;
+        }
+        log.warn(`qmd collection add rejected ${flag}; retrying with legacy compatibility flag`);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   private async removeCollection(name: string): Promise<void> {
