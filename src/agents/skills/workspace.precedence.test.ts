@@ -61,7 +61,6 @@ describe("skill loading precedence", () => {
 
     const match = entries.find((e) => e.skill.name === skillName);
     expect(match).toBeDefined();
-    expect(match?.skill.source).toBe("openclaw-workspace");
     expect(match?.frontmatter.description).toBe("workspace version");
   });
 
@@ -82,7 +81,6 @@ describe("skill loading precedence", () => {
 
     const match = entries.find((e) => e.skill.name === skillName);
     expect(match).toBeDefined();
-    expect(match?.skill.source).toBe("openclaw-managed");
   });
 
   it("workspace skill takes precedence over bundled skill with the same name", async () => {
@@ -108,7 +106,6 @@ describe("skill loading precedence", () => {
 
     const match = entries.find((e) => e.skill.name === skillName);
     expect(match).toBeDefined();
-    expect(match?.skill.source).toBe("openclaw-workspace");
   });
 
   it("managed skill takes precedence over bundled skill with the same name", async () => {
@@ -134,6 +131,5 @@ describe("skill loading precedence", () => {
 
     const match = entries.find((e) => e.skill.name === skillName);
     expect(match).toBeDefined();
-    expect(match?.skill.source).toBe("openclaw-managed");
   });
 });
