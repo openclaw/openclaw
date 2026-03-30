@@ -183,6 +183,15 @@ export async function bindGenericCurrentConversation(
       ...existing?.metadata,
       ...input.metadata,
       lastActivityAt: now,
+      ...(existing && existing.targetSessionKey !== targetSessionKey
+        ? {
+            previousBinding: {
+              targetSessionKey: existing.targetSessionKey,
+              targetKind: existing.targetKind,
+              metadata: existing.metadata,
+            },
+          }
+        : {}),
     },
   };
   bindingsByConversationKey.set(key, record);
@@ -230,6 +239,29 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
   });
 }
 
+function maybeRestorePreviousBinding(key: string, removed: SessionBindingRecord): void {
+  const prev = removed.metadata?.previousBinding as
+    | { targetSessionKey: string; targetKind: string; metadata?: Record<string, unknown> }
+    | undefined;
+  if (!prev?.targetSessionKey) {
+    return;
+  }
+  const now = Date.now();
+  bindingsByConversationKey.set(key, {
+    bindingId: removed.bindingId,
+    targetSessionKey: prev.targetSessionKey,
+    targetKind: (prev.targetKind as SessionBindingRecord["targetKind"]) ?? "session",
+    conversation: removed.conversation,
+    status: "active",
+    boundAt: now,
+    metadata: {
+      ...prev.metadata,
+      lastActivityAt: now,
+      restoredFrom: removed.targetSessionKey,
+    },
+  });
+}
+
 export async function unbindGenericCurrentConversationBindings(
   input: SessionBindingUnbindInput,
 ): Promise<SessionBindingRecord[]> {
@@ -242,6 +274,7 @@ export async function unbindGenericCurrentConversationBindings(
     const record = pruneExpiredBinding(key);
     if (record) {
       bindingsByConversationKey.delete(key);
+      maybeRestorePreviousBinding(key, record);
       removed.push(record);
       await enqueuePersist();
     }
@@ -256,6 +289,7 @@ export async function unbindGenericCurrentConversationBindings(
       continue;
     }
     bindingsByConversationKey.delete(key);
+    maybeRestorePreviousBinding(key, record);
     removed.push(record);
   }
   if (removed.length > 0) {

@@ -149,4 +149,134 @@ describe("generic current-conversation bindings", () => {
       }),
     ).toBeNull();
   });
+
+  it("saves previousBinding in metadata when rebinding to a different session", async () => {
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "dm:U999",
+    };
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation,
+    });
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:coder:acp:2",
+      targetKind: "session",
+      conversation,
+    });
+
+    const binding = resolveGenericCurrentConversationBinding(conversation);
+    expect(binding).toMatchObject({
+      targetSessionKey: "agent:coder:acp:2",
+    });
+    expect(binding?.metadata?.previousBinding).toMatchObject({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+    });
+  });
+
+  it("does not save previousBinding when rebinding to the same session", async () => {
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "dm:U888",
+    };
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation,
+    });
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation,
+      metadata: { label: "refreshed" },
+    });
+
+    const binding = resolveGenericCurrentConversationBinding(conversation);
+    expect(binding?.targetSessionKey).toBe("agent:main:session:1");
+    expect(binding?.metadata?.previousBinding).toBeUndefined();
+  });
+
+  it("restores previous binding on unbind", async () => {
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "dm:U777",
+    };
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation,
+    });
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:coder:acp:2",
+      targetKind: "session",
+      conversation,
+    });
+
+    await unbindGenericCurrentConversationBindings({
+      targetSessionKey: "agent:coder:acp:2",
+      reason: "session-end",
+    });
+
+    const restored = resolveGenericCurrentConversationBinding(conversation);
+    expect(restored).toMatchObject({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+    });
+    expect(restored?.metadata?.restoredFrom).toBe("agent:coder:acp:2");
+  });
+
+  it("restores stacked bindings in correct order", async () => {
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "dm:U666",
+    };
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation,
+    });
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:coder:acp:2",
+      targetKind: "session",
+      conversation,
+    });
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:analyst:acp:3",
+      targetKind: "session",
+      conversation,
+    });
+
+    // Unbind analyst → should revert to coder
+    await unbindGenericCurrentConversationBindings({
+      targetSessionKey: "agent:analyst:acp:3",
+      reason: "session-end",
+    });
+    expect(resolveGenericCurrentConversationBinding(conversation)).toMatchObject({
+      targetSessionKey: "agent:coder:acp:2",
+    });
+
+    // Unbind coder → should revert to main
+    await unbindGenericCurrentConversationBindings({
+      targetSessionKey: "agent:coder:acp:2",
+      reason: "session-end",
+    });
+    expect(resolveGenericCurrentConversationBinding(conversation)).toMatchObject({
+      targetSessionKey: "agent:main:session:1",
+    });
+  });
 });

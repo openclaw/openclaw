@@ -204,6 +204,15 @@ function fromSessionBindingInput(params: {
     metadata: {
       ...existing?.metadata,
       ...metadata,
+      ...(existing && existing.targetSessionKey !== params.input.targetSessionKey
+        ? {
+            previousBinding: {
+              targetSessionKey: existing.targetSessionKey,
+              targetKind: existing.targetKind,
+              metadata: existing.metadata,
+            },
+          }
+        : {}),
     },
   };
 
@@ -220,6 +229,34 @@ function fromSessionBindingInput(params: {
   }
 
   return record;
+}
+
+function maybeRestorePreviousThreadBinding(params: {
+  accountId: string;
+  key: string;
+  removed: TelegramThreadBindingRecord;
+}): void {
+  const prev = params.removed.metadata?.previousBinding as
+    | { targetSessionKey: string; targetKind: string; metadata?: Record<string, unknown> }
+    | undefined;
+  if (!prev?.targetSessionKey) {
+    return;
+  }
+  const now = Date.now();
+  const restored: TelegramThreadBindingRecord = {
+    accountId: params.accountId,
+    conversationId: params.removed.conversationId,
+    targetKind: prev.targetKind === "subagent" ? "subagent" : "acp",
+    targetSessionKey: prev.targetSessionKey,
+    boundAt: now,
+    lastActivityAt: now,
+    metadata: {
+      ...prev.metadata,
+      lastActivityAt: now,
+      restoredFrom: params.removed.targetSessionKey,
+    },
+  };
+  getThreadBindingsState().bindingsByAccountConversation.set(params.key, restored);
 }
 
 function resolveBindingsPath(accountId: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -503,6 +540,7 @@ export function createTelegramThreadBindingManager(
         return null;
       }
       getThreadBindingsState().bindingsByAccountConversation.delete(key);
+      maybeRestorePreviousThreadBinding({ accountId, key, removed });
       persistBindingsSafely({
         accountId,
         persist: manager.shouldPersistMutations(),
@@ -526,6 +564,7 @@ export function createTelegramThreadBindingManager(
           conversationId: entry.conversationId,
         });
         getThreadBindingsState().bindingsByAccountConversation.delete(key);
+        maybeRestorePreviousThreadBinding({ accountId, key, removed: entry });
         removed.push(entry);
       }
       if (removed.length > 0) {
