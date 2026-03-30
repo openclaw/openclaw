@@ -28,6 +28,18 @@ describe("sanitizeUserFacingText", () => {
     ).toBe("Here is my response ");
   });
 
+  it("preserves leading indentation when no scaffolding is present", () => {
+    expect(sanitizeUserFacingText("    key: value")).toBe("    key: value");
+  });
+
+  it("preserves indentation after stripping leading tool_call scaffolding", () => {
+    expect(
+      sanitizeUserFacingText(
+        '<tool_call>{"name":"exec","arguments":{"command":"echo test"}}</tool_call>\n    key: value',
+      ),
+    ).toBe("    key: value");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {

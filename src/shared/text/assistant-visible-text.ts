@@ -80,8 +80,12 @@ function stripToolCallTags(text: string): string {
   return result;
 }
 
-export function stripAssistantInternalScaffolding(text: string): string {
+export function stripAssistantInternalScaffolding(
+  text: string,
+  options?: { trimStart?: boolean },
+): string {
   const withoutReasoning = stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
   const withoutToolCalls = stripToolCallTags(withoutReasoning);
-  return stripRelevantMemoriesTags(withoutToolCalls).trimStart();
+  const cleaned = stripRelevantMemoriesTags(withoutToolCalls);
+  return options?.trimStart === false ? cleaned : cleaned.trimStart();
 }

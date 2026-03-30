@@ -91,6 +91,11 @@ describe("stripAssistantInternalScaffolding", () => {
       expected: "Here is my response ",
     },
     {
+      name: "hides unfinished tool_call blocks",
+      input: ["Before", "<tool_call>", "incomplete..."].join(" "),
+      expected: "Before ",
+    },
+    {
       name: "keeps relevant-memories tags inside fenced code",
       input: createLiteralRelevantMemoriesCodeBlock(),
       expected: undefined,
