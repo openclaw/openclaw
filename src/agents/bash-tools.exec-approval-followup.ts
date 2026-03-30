@@ -1,4 +1,5 @@
 import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
+import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -60,6 +61,11 @@ export async function sendExecApprovalFollowup(
     accountId: params.turnSourceAccountId,
     threadId: params.turnSourceThreadId,
   });
+  const normalizedTurnSourceChannel = normalizeMessageChannel(params.turnSourceChannel);
+  const sessionOnlyOriginChannel =
+    normalizedTurnSourceChannel && isGatewayMessageChannel(normalizedTurnSourceChannel)
+      ? normalizedTurnSourceChannel
+      : undefined;
 
   await callGatewayTool(
     "agent",
@@ -69,10 +75,22 @@ export async function sendExecApprovalFollowup(
       message: buildExecApprovalFollowupPrompt(resultText),
       deliver: deliveryTarget.deliver,
       ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
-      channel: deliveryTarget.channel,
-      to: deliveryTarget.to,
-      accountId: deliveryTarget.accountId,
-      threadId: deliveryTarget.threadId,
+      channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+      to: deliveryTarget.deliver
+        ? deliveryTarget.to
+        : sessionOnlyOriginChannel
+          ? params.turnSourceTo
+          : undefined,
+      accountId: deliveryTarget.deliver
+        ? deliveryTarget.accountId
+        : sessionOnlyOriginChannel
+          ? params.turnSourceAccountId
+          : undefined,
+      threadId: deliveryTarget.deliver
+        ? deliveryTarget.threadId
+        : sessionOnlyOriginChannel
+          ? params.turnSourceThreadId
+          : undefined,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     },
     { expectFinal: true },

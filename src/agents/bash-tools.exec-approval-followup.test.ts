@@ -44,8 +44,8 @@ describe("sendExecApprovalFollowup", () => {
     const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as Record<string, unknown>;
     expect(payload.deliver).toBe(false);
     expect(payload).not.toHaveProperty("bestEffortDeliver");
-    expect(payload.channel).toBeUndefined();
-    expect(payload.to).toBeUndefined();
+    expect(payload.channel).toBe("webchat");
+    expect(payload.to).toBe("chat:123");
   });
 
   it("enables delivery for valid external turn source targets", async () => {

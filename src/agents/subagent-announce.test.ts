@@ -260,7 +260,6 @@ describe("subagent announce seam flow", () => {
   });
 
   it("keeps completion direct announce session-only when requester origin is webchat", async () => {
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:webchat",
       childRunId: "run-webchat-direct-announce",
@@ -292,9 +291,9 @@ describe("subagent announce seam flow", () => {
           sessionKey: "agent:main:main",
           deliver: false,
           bestEffortDeliver: true,
-          channel: undefined,
-          to: undefined,
-          accountId: undefined,
+          channel: "webchat",
+          to: "chat:123",
+          accountId: "default",
         }),
       }),
     );
