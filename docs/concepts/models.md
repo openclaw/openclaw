@@ -52,13 +52,20 @@ subscription** (OAuth) and **Anthropic** (API key or `claude setup-token`).
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
-- `models.providers` (custom providers written into `models.json`)
+- `models.providers` (source-controlled provider + model metadata written into `models.json`)
 
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
 to `zai/*`.
 
 Provider configuration examples (including OpenCode) live in
 [/providers/opencode](/providers/opencode).
+
+## Model metadata flow
+
+- `models.providers.*.models[]` is the canonical config-backed metadata layer for durable model traits like `name`, `contextWindow`, `maxTokens`, `reasoning`, `input`, `cost`, and `compat`.
+- OpenClaw projects that metadata into the agent-local `models.json`, then merges it with legitimate runtime/provider discovery.
+- For matching `provider/model` rows, explicit config keeps its durable metadata while runtime discovery can still add missing rows or provider-owned dynamic catalogs.
+- `/model`, `openclaw models ...`, session/status context reporting, and context-window safeguards all read through that same merged metadata path.
 
 ## "Model is not allowed" (and why replies stop)
 
@@ -208,9 +215,12 @@ mode, pass `--yes` to accept defaults.
 
 ## Models registry (`models.json`)
 
-Custom providers in `models.providers` are written into `models.json` under the
-agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). This file
-is merged by default unless `models.mode` is set to `replace`.
+Custom providers and explicit model metadata in `models.providers` are written
+into `models.json` under the agent directory (default
+`~/.openclaw/agents/<agentId>/agent/models.json`). That file is the generated
+agent-local projection of the source-controlled metadata layer plus runtime
+provider discovery, and it is merged by default unless `models.mode` is set to
+`replace`.
 
 Merge mode precedence for matching provider IDs:
 

@@ -2116,6 +2116,9 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 
 - Use `authHeader: true` + `headers` for custom auth needs.
 - Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`).
+- `models.providers.*.models[]` is the source-controlled metadata layer for explicit provider/model traits such as `name`, `contextWindow`, `maxTokens`, `reasoning`, `input`, `cost`, and `compat`.
+- OpenClaw projects that metadata into agent-local `models.json` and also uses it directly for model selection, session/status context reporting, and context-window safeguards.
+- Discovery stays additive: runtime/provider discovery can still add legitimate rows, but matching explicit config keeps its durable metadata.
 - Merge precedence for matching provider IDs:
   - Non-empty agent `models.json` `baseUrl` values win.
   - Non-empty agent `apiKey` values win only when that provider is not SecretRef-managed in current config/auth-profile context.
@@ -2137,7 +2140,7 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
-- `models.providers.*.models`: explicit provider model catalog entries.
+- `models.providers.*.models`: explicit provider model metadata entries. These become the canonical config-backed source for durable model traits before runtime discovery is merged in.
 - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
 - `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
 - `models.bedrockDiscovery.enabled`: turn discovery polling on/off.

@@ -8,6 +8,7 @@ import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
+import { findConfiguredModelMetadata, listConfiguredModelMetadata } from "./model-metadata.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 type ModelEntry = { id: string; provider?: string; contextWindow?: number };
@@ -15,9 +16,6 @@ type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
 };
-type ConfigModelEntry = { id?: string; contextWindow?: number };
-type ProviderConfigEntry = { models?: ConfigModelEntry[] };
-type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
 type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
@@ -115,36 +113,24 @@ export function applyDiscoveredContextWindows(params: {
 
 export function applyConfiguredContextWindows(params: {
   cache: Map<string, number>;
-  modelsConfig: ModelsConfig | undefined;
+  cfg: OpenClawConfig | undefined;
 }) {
-  const providers = params.modelsConfig?.providers;
-  if (!providers || typeof providers !== "object") {
-    return;
-  }
-  for (const [providerId, provider] of Object.entries(providers)) {
-    if (!Array.isArray(provider?.models)) {
+  for (const model of listConfiguredModelMetadata(params.cfg)) {
+    if (!model.contextWindow) {
       continue;
     }
-    for (const model of provider.models) {
-      const modelId = typeof model?.id === "string" ? model.id : undefined;
-      const contextWindow =
-        typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-      if (!modelId || !contextWindow || contextWindow <= 0) {
-        continue;
-      }
-      const { scopedKey, legacyKey } = resolveModelCacheKeys({
-        provider: providerId,
-        modelId,
-      });
+    const { scopedKey, legacyKey } = resolveModelCacheKeys({
+      provider: model.provider,
+      modelId: model.id,
+    });
 
-      if (scopedKey) {
-        // Explicit config wins for provider-scoped lookups.
-        params.cache.set(scopedKey, contextWindow);
-      }
-
-      // Keep legacy fallback fail-safe.
-      setMinContextWindow(params.cache, legacyKey, contextWindow);
+    if (scopedKey) {
+      // Explicit config wins for provider-scoped lookups.
+      params.cache.set(scopedKey, model.contextWindow);
     }
+
+    // Keep legacy fallback fail-safe.
+    setMinContextWindow(params.cache, legacyKey, model.contextWindow);
   }
 }
 
@@ -239,7 +225,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
     const cfg = loadConfig();
     applyConfiguredContextWindows({
       cache: MODEL_CONTEXT_TOKEN_CACHE,
-      modelsConfig: cfg.models as ModelsConfig | undefined,
+      cfg,
     });
     configuredConfig = cfg;
     configLoadFailures = 0;
@@ -291,7 +277,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
     applyConfiguredContextWindows({
       cache: MODEL_CONTEXT_TOKEN_CACHE,
-      modelsConfig: cfg.models as ModelsConfig | undefined,
+      cfg,
     });
   })().catch(() => {
     // Keep lookup best-effort.
@@ -390,45 +376,7 @@ function resolveConfiguredProviderContextWindow(
   provider: string,
   model: string,
 ): number | undefined {
-  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
-  if (!providers) {
-    return undefined;
-  }
-
-  // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
-  // then normalized fallback. This prevents alias collisions from picking the
-  // wrong contextWindow based on Object.entries iteration order.
-  function findContextWindow(matchProviderId: (id: string) => boolean): number | undefined {
-    for (const [providerId, providerConfig] of Object.entries(providers!)) {
-      if (!matchProviderId(providerId)) {
-        continue;
-      }
-      if (!Array.isArray(providerConfig?.models)) {
-        continue;
-      }
-      for (const m of providerConfig.models) {
-        if (
-          typeof m?.id === "string" &&
-          m.id === model &&
-          typeof m?.contextWindow === "number" &&
-          m.contextWindow > 0
-        ) {
-          return m.contextWindow;
-        }
-      }
-    }
-    return undefined;
-  }
-
-  // 1. Exact match (case-insensitive, no alias expansion).
-  const exactResult = findContextWindow((id) => id.trim().toLowerCase() === provider.toLowerCase());
-  if (exactResult !== undefined) {
-    return exactResult;
-  }
-
-  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
-  const normalizedProvider = normalizeProviderId(provider);
-  return findContextWindow((id) => normalizeProviderId(id) === normalizedProvider);
+  return findConfiguredModelMetadata({ cfg, provider, model })?.contextWindow;
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
@@ -473,7 +421,7 @@ export function resolveContextTokensForModel(params: {
     if (params.provider) {
       const configuredWindow = resolveConfiguredProviderContextWindow(
         params.cfg,
-        ref.provider,
+        params.provider,
         ref.model,
       );
       if (configuredWindow !== undefined) {

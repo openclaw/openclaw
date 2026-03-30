@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
@@ -6,6 +7,12 @@ import {
   resolveContextTokensForModel,
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
+
+function buildModelsConfig(providers: unknown): OpenClawConfig {
+  return {
+    models: { providers },
+  } as unknown as OpenClawConfig;
+}
 
 describe("applyDiscoveredContextWindows", () => {
   it("keeps the smallest context window when the same bare model id appears under multiple providers", () => {
@@ -45,13 +52,11 @@ describe("applyConfiguredContextWindows", () => {
     const cache = new Map<string, number>([["openrouter/anthropic/claude-opus-4-6", 1_000_000]]);
     applyConfiguredContextWindows({
       cache,
-      modelsConfig: {
-        providers: {
-          openrouter: {
-            models: [{ id: "anthropic/claude-opus-4-6", contextWindow: 200_000 }],
-          },
+      cfg: buildModelsConfig({
+        openrouter: {
+          models: [{ id: "anthropic/claude-opus-4-6", contextWindow: 200_000 }],
         },
-      },
+      }),
     });
 
     expect(cache.get("anthropic/claude-opus-4-6")).toBe(200_000);
@@ -63,13 +68,11 @@ describe("applyConfiguredContextWindows", () => {
     cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576); // discovery entry
     applyConfiguredContextWindows({
       cache,
-      modelsConfig: {
-        providers: {
-          "google-gemini-cli": {
-            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 200_000 }],
-          },
+      cfg: buildModelsConfig({
+        "google-gemini-cli": {
+          models: [{ id: "gemini-3.1-pro-preview", contextWindow: 200_000 }],
         },
-      },
+      }),
     });
 
     expect(cache.get("gemini-3.1-pro-preview")).toBe(200_000);
@@ -80,21 +83,34 @@ describe("applyConfiguredContextWindows", () => {
     const cache = new Map<string, number>();
     applyConfiguredContextWindows({
       cache,
-      modelsConfig: {
-        providers: {
-          openrouter: {
-            models: [
-              { id: "custom/model", contextWindow: 150_000 },
-              { id: "bad/model", contextWindow: 0 },
-              { id: "", contextWindow: 300_000 },
-            ],
-          },
+      cfg: buildModelsConfig({
+        openrouter: {
+          models: [
+            { id: "custom/model", contextWindow: 150_000 },
+            { id: "bad/model", contextWindow: 0 },
+            { id: "", contextWindow: 300_000 },
+          ],
         },
-      },
+      }),
     });
 
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
+  });
+
+  it("normalizes provider aliases when populating configured cache keys", () => {
+    const cache = new Map<string, number>();
+    applyConfiguredContextWindows({
+      cache,
+      cfg: buildModelsConfig({
+        "z.ai": {
+          models: [{ id: "glm-5", contextWindow: 256_000 }],
+        },
+      }),
+    });
+
+    expect(cache.get("zai/glm-5")).toBe(256_000);
+    expect(cache.get("glm-5")).toBe(256_000);
   });
 });
 

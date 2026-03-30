@@ -2,27 +2,28 @@ import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import {
+  buildModelMetadataLookupKey,
+  findModelMetadataInCatalog,
+  mergeModelMetadata,
+  modelMetadataSupportsInput,
+  normalizeModelMetadataInput,
+  toConfiguredModelMetadata,
+  type ModelInputType,
+  type ModelMetadata,
+} from "./model-metadata.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type ModelInputType = "text" | "image" | "document";
-
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  input?: ModelInputType[];
-};
+export type ModelCatalogEntry = ModelMetadata;
 
 type DiscoveredModel = {
   id: string;
   name?: string;
   provider: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
 };
@@ -44,16 +45,6 @@ function shouldLogModelCatalogTiming(): boolean {
 function loadModelSuppression() {
   modelSuppressionPromise ??= import("./model-suppression.runtime.js");
   return modelSuppressionPromise;
-}
-
-function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
-  if (!Array.isArray(input)) {
-    return undefined;
-  }
-  const normalized = input.filter(
-    (item): item is ModelInputType => item === "text" || item === "image" || item === "document",
-  );
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalogEntry[] {
@@ -81,23 +72,13 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
       if (!configuredModel || typeof configuredModel !== "object") {
         continue;
       }
-      const idRaw = (configuredModel as { id?: unknown }).id;
-      if (typeof idRaw !== "string") {
-        continue;
+      const metadata = toConfiguredModelMetadata({
+        provider,
+        model: configuredModel as Record<string, unknown>,
+      });
+      if (metadata) {
+        out.push(metadata);
       }
-      const id = idRaw.trim();
-      if (!id) {
-        continue;
-      }
-      const rawName = (configuredModel as { name?: unknown }).name;
-      const name = (typeof rawName === "string" ? rawName : id).trim() || id;
-      const contextWindowRaw = (configuredModel as { contextWindow?: unknown }).contextWindow;
-      const contextWindow =
-        typeof contextWindowRaw === "number" && contextWindowRaw > 0 ? contextWindowRaw : undefined;
-      const reasoningRaw = (configuredModel as { reasoning?: unknown }).reasoning;
-      const reasoning = typeof reasoningRaw === "boolean" ? reasoningRaw : undefined;
-      const input = normalizeConfiguredModelInput((configuredModel as { input?: unknown }).input);
-      out.push({ id, name, provider, contextWindow, reasoning, input });
     }
   }
 
@@ -114,18 +95,52 @@ function mergeConfiguredOptInProviderModels(params: {
   }
 
   const seen = new Set(
-    params.models.map(
-      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
-    ),
+    params.models.map((entry) => buildModelMetadataLookupKey(entry.provider, entry.id)),
   );
 
   for (const entry of configured) {
-    const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+    const key = buildModelMetadataLookupKey(entry.provider, entry.id);
     if (seen.has(key)) {
       continue;
     }
     params.models.push(entry);
     seen.add(key);
+  }
+}
+
+function applyConfiguredCatalogMetadata(params: {
+  config: OpenClawConfig;
+  models: ModelCatalogEntry[];
+}): void {
+  const providers = params.config.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return;
+  }
+
+  const configuredByKey = new Map<string, ModelCatalogEntry>();
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (!Array.isArray(providerConfig?.models)) {
+      continue;
+    }
+    for (const model of providerConfig.models) {
+      const metadata = toConfiguredModelMetadata({
+        provider: providerId,
+        model: model as Record<string, unknown>,
+      });
+      if (!metadata) {
+        continue;
+      }
+      configuredByKey.set(buildModelMetadataLookupKey(metadata.provider, metadata.id), metadata);
+    }
+  }
+
+  for (let index = 0; index < params.models.length; index += 1) {
+    const entry = params.models[index];
+    const overlay = configuredByKey.get(buildModelMetadataLookupKey(entry.provider, entry.id));
+    if (!overlay) {
+      continue;
+    }
+    params.models[index] = mergeModelMetadata(entry, overlay);
   }
 }
 
@@ -216,9 +231,11 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
+        const maxTokens =
+          typeof entry?.maxTokens === "number" && entry.maxTokens > 0 ? entry.maxTokens : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
-        const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        const input = normalizeModelMetadataInput(entry?.input);
+        models.push({ id, name, provider, contextWindow, maxTokens, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       logStage("configured-models-merged", `entries=${models.length}`);
@@ -234,12 +251,10 @@ export async function loadModelCatalog(params?: {
       });
       if (supplemental.length > 0) {
         const seen = new Set(
-          models.map(
-            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
-          ),
+          models.map((entry) => buildModelMetadataLookupKey(entry.provider, entry.id)),
         );
         for (const entry of supplemental) {
-          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+          const key = buildModelMetadataLookupKey(entry.provider, entry.id);
           if (seen.has(key)) {
             continue;
           }
@@ -248,6 +263,8 @@ export async function loadModelCatalog(params?: {
         }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
+      applyConfiguredCatalogMetadata({ config: cfg, models });
+      logStage("configured-metadata-applied", `entries=${models.length}`);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
@@ -278,14 +295,14 @@ export async function loadModelCatalog(params?: {
  * Check if a model supports image input based on its catalog entry.
  */
 export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
-  return entry?.input?.includes("image") ?? false;
+  return modelMetadataSupportsInput(entry, "image");
 }
 
 /**
  * Check if a model supports native document/PDF input based on its catalog entry.
  */
 export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
-  return entry?.input?.includes("document") ?? false;
+  return modelMetadataSupportsInput(entry, "document");
 }
 
 /**
@@ -296,11 +313,5 @@ export function findModelInCatalog(
   provider: string,
   modelId: string,
 ): ModelCatalogEntry | undefined {
-  const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModelId = modelId.toLowerCase().trim();
-  return catalog.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
-      entry.id.toLowerCase() === normalizedModelId,
-  );
+  return findModelMetadataInCatalog(catalog, provider, modelId);
 }

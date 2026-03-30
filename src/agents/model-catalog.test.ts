@@ -355,6 +355,16 @@ describe("loadModelCatalog", () => {
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Kilo Auto");
+    expect(matches[0]).toEqual(
+      expect.objectContaining({
+        provider: "kilocode",
+        id: "kilo/auto",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        input: ["text", "image"],
+      }),
+    );
   });
 
   it("matches models across canonical provider aliases", () => {

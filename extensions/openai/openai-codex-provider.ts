@@ -292,6 +292,11 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
               ...sparkTemplate,
               id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
               name: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+              reasoning: sparkTemplate.reasoning ?? true,
+              input: sparkTemplate.input ?? ["text"],
+              contextWindow:
+                sparkTemplate.contextWindow ?? OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+              maxTokens: sparkTemplate.maxTokens ?? OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS,
             }
           : undefined,
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);

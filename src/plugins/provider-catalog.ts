@@ -2,11 +2,11 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
-export function findCatalogTemplate(params: {
-  entries: ReadonlyArray<{ provider: string; id: string }>;
+export function findCatalogTemplate<T extends { provider: string; id: string }>(params: {
+  entries: ReadonlyArray<T>;
   providerId: string;
   templateIds: readonly string[];
-}) {
+}): T | undefined {
   return params.templateIds
     .map((templateId) =>
       params.entries.find(
