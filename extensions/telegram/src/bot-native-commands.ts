@@ -992,11 +992,13 @@ export const registerTelegramNativeCommands = ({
           OriginatingChannel: "telegram" as const,
           OriginatingTo: originatingTo,
         });
+        const sessionMetaKey =
+          ctxPayload.CommandTargetSessionKey?.trim() || ctxPayload.SessionKey || route.sessionKey;
 
         await nativeCommandRuntime.recordInboundSessionMetaSafe({
           cfg: executionCfg,
           agentId: route.agentId,
-          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+          sessionKey: sessionMetaKey,
           ctx: ctxPayload,
           onError: (err) =>
             runtime.error?.(danger(`telegram slash: failed updating session meta: ${String(err)}`)),
