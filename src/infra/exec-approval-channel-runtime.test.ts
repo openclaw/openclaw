@@ -116,6 +116,45 @@ describe("createExecApprovalChannelRuntime", () => {
     });
   });
 
+  it("finalizes approvals that resolve while delivery is still in flight", async () => {
+    const pendingDelivery = Promise.withResolvers<Array<{ id: string }>>();
+    const finalizeResolved = vi.fn(async () => undefined);
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/plugin-approvals",
+      clientDisplayName: "Test Plugin Approvals",
+      cfg: {} as never,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => pendingDelivery.promise,
+      finalizeResolved,
+    });
+
+    const requestPromise = runtime.handleRequested({
+      id: "plugin:abc",
+      request: {
+        title: "Plugin approval",
+        description: "Let plugin proceed",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+    await runtime.handleResolved({
+      id: "plugin:abc",
+      decision: "allow-once",
+      ts: 1500,
+    });
+
+    pendingDelivery.resolve([{ id: "plugin:abc" }]);
+    await requestPromise;
+
+    expect(finalizeResolved).toHaveBeenCalledWith({
+      request: expect.objectContaining({ id: "plugin:abc" }),
+      resolved: expect.objectContaining({ id: "plugin:abc", decision: "allow-once" }),
+      entries: [{ id: "plugin:abc" }],
+    });
+  });
+
   it("routes gateway requests through the shared client", async () => {
     const runtime = createExecApprovalChannelRuntime({
       label: "test/exec-approvals",
@@ -161,6 +200,40 @@ describe("createExecApprovalChannelRuntime", () => {
 
     expect(mockCreateOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(2);
     expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not leave a gateway client running when stop wins the startup race", async () => {
+    const pendingClient = Promise.withResolvers<{
+      start: () => void;
+      stop: () => void;
+      request: typeof mockGatewayClientRequests;
+    }>();
+    mockCreateOperatorApprovalsGatewayClient.mockReturnValueOnce(pendingClient.promise);
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    const startPromise = runtime.start();
+    const stopPromise = runtime.stop();
+    pendingClient.resolve({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    await startPromise;
+    await stopPromise;
+
+    expect(mockGatewayClientStarts).not.toHaveBeenCalled();
+    expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
+    await expect(runtime.request("exec.approval.resolve", { id: "abc" })).rejects.toThrow(
+      "gateway client not connected",
+    );
   });
 
   it("logs async request handling failures from gateway events", async () => {
