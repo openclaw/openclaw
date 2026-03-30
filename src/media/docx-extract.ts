@@ -10,7 +10,16 @@ function decodeXmlEntities(value: string): string {
 }
 
 function normalizeDocxWhitespace(value: string): string {
-  return value.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return value
+    .replace(/\r/g, "")
+    .replace(/[ ]+\t/g, "\t")
+    .replace(/\t[ ]+/g, "\t")
+    .replace(/[ ]+\n/g, "\n")
+    .replace(/\n[ ]+/g, "\n")
+    .replace(/ {2,}/g, " ")
+    .replace(/\n\n(?=\t|\n)/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function extractDocxTextFromXml(xml: string): string {
