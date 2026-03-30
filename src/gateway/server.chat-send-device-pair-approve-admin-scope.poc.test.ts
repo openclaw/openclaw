@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import registerDevicePair from "../../extensions/device-pair/index.js";
 import { getReplyFromConfig as getActualReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, writeConfigFile } from "../config/config.js";
 import {
@@ -13,8 +10,7 @@ import {
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
-import { buildPluginApi } from "../plugins/api-builder.js";
-import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
+import { clearPluginCommands } from "../plugins/commands.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -27,6 +23,8 @@ import {
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
   startServerWithClient,
   testState,
   trackConnectChallengeNonce,
@@ -48,27 +46,6 @@ function loadDeviceIdentity(name: string) {
     identity,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
   };
-}
-
-function createDevicePairApi(params: {
-  registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-}): OpenClawPluginApi {
-  return buildPluginApi({
-    id: "device-pair",
-    name: "device-pair",
-    source: "test",
-    registrationMode: "full",
-    config: {},
-    pluginConfig: {},
-    runtime: {} as OpenClawPluginApi["runtime"],
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    resolvePath(input: string) {
-      return input;
-    },
-    handlers: {
-      registerCommand: params.registerCommand,
-    },
-  });
 }
 
 async function openWs(port: number): Promise<WebSocket> {
@@ -107,22 +84,48 @@ async function withMainSessionStore<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+async function loadRealDevicePairRegistry() {
+  const actualLoader = await vi.importActual<typeof import("../plugins/loader.js")>(
+    "../plugins/loader.js",
+  );
+  const env = {
+    ...process.env,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+  };
+  actualLoader.clearPluginLoaderCache();
+  const registry = actualLoader.loadOpenClawPlugins({
+    cache: false,
+    env,
+    workspaceDir: process.cwd(),
+    onlyPluginIds: ["device-pair"],
+    config: {
+      plugins: {
+        enabled: true,
+        entries: {
+          "device-pair": {
+            enabled: true,
+          },
+        },
+        slots: {
+          memory: "none",
+        },
+      },
+    },
+  });
+  setTestPluginRegistry(registry);
+  return {
+    registry,
+    clearLoaderCache: actualLoader.clearPluginLoaderCache,
+    bundledPluginsDir: env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+  };
+}
+
 describe("gateway chat.send /pair approve admin scope", () => {
   it("does not let operator.write plus operator.pairing approve an operator.admin device via /pair approve", async () => {
-    getReplyFromConfig.mockImplementation(async (ctx, opts, configOverride) => {
-      const commandBody =
-        (typeof ctx.CommandBody === "string" && ctx.CommandBody) ||
-        (typeof ctx.BodyForCommands === "string" && ctx.BodyForCommands) ||
-        (typeof ctx.Body === "string" && ctx.Body) ||
-        "";
-      if (commandBody.trim() !== "/pair approve latest") {
-        return await getActualReplyFromConfig(ctx, opts, configOverride);
-      }
-      return { text: "⚠️ Cannot approve a request requiring operator.admin." };
-    });
+    getReplyFromConfig.mockImplementation(getActualReplyFromConfig);
     clearPluginCommands();
     clearConfigCache();
-    await writeConfigFile({
+    const testConfig = {
       agents: {
         defaults: {
           model: "openai/gpt-5.4",
@@ -132,22 +135,23 @@ describe("gateway chat.send /pair approve admin scope", () => {
       commands: {
         text: true,
       },
-    });
-    clearConfigCache();
-    let pairCommandRegistered = false;
-    await registerDevicePair.register(
-      createDevicePairApi({
-        registerCommand: (command) => {
-          pairCommandRegistered = true;
-          const registered = registerPluginCommand("device-pair", command, {
-            pluginName: "Device Pair",
-          });
-          if (!registered.ok) {
-            throw new Error(registered.error ?? "failed to register device-pair command");
-          }
+      plugins: {
+        enabled: true,
+        entries: {
+          "device-pair": {
+            enabled: true,
+          },
         },
-      }),
-    );
+        slots: {
+          memory: "none",
+        },
+      },
+    };
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(process.cwd(), "extensions");
+    await writeConfigFile(testConfig);
+    clearConfigCache();
+    const { registry, clearLoaderCache } = await loadRealDevicePairRegistry();
 
     try {
       await withMainSessionStore(async () => {
@@ -175,7 +179,10 @@ describe("gateway chat.send /pair approve admin scope", () => {
           });
           expect(directApprove.ok).toBe(false);
           expect(directApprove.error?.message).toBe("missing scope: operator.admin");
-          expect(pairCommandRegistered).toBe(true);
+          expect(registry.plugins.find((entry) => entry.id === "device-pair")?.status).toBe(
+            "loaded",
+          );
+          expect(registry.commands.map((entry) => entry.command.name)).toContain("pair");
 
           const runId = "idem-chat-send-device-pair-approve-admin-scope-poc";
           const finalEventPromise = onceMessage(
@@ -221,6 +228,13 @@ describe("gateway chat.send /pair approve admin scope", () => {
         }
       });
     } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      clearLoaderCache();
+      resetTestPluginRegistry();
       getReplyFromConfig.mockReset().mockResolvedValue(undefined);
       clearPluginCommands();
       clearConfigCache();

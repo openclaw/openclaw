@@ -51,6 +51,18 @@ import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 
+export function resolveConfigOpenCommand(configPath: string): string {
+  if (process.platform === "darwin") {
+    return `open ${JSON.stringify(configPath)}`;
+  }
+  if (process.platform === "win32") {
+    const escapedPath = configPath.replaceAll("'", "''");
+    const script = `Start-Process -FilePath '${escapedPath}'`;
+    return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${JSON.stringify(script)}`;
+  }
+  return `xdg-open ${JSON.stringify(configPath)}`;
+}
+
 function requireConfigBaseHash(
   params: unknown,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
@@ -501,9 +513,7 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const configPath = createConfigIO().configPath;
-    const platform = process.platform;
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-    exec(`${cmd} ${JSON.stringify(configPath)}`, (err) => {
+    exec(resolveConfigOpenCommand(configPath), (err) => {
       if (err) {
         respond(true, { ok: false, path: configPath, error: err.message }, undefined);
         return;
