@@ -12,6 +12,9 @@ import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -201,6 +204,31 @@ class InvokeCommandRegistryTest {
     val capabilities = InvokeCommandRegistry.advertisedCapabilities(defaultFlags(callLogAvailable = false))
 
     assertFalse(capabilities.contains(OpenClawCapability.CallLog.rawValue))
+  }
+
+  @Test
+  fun advertisedCapabilities_includesVoiceWakeWithoutAdvertisingCommands() {
+    val capabilities = InvokeCommandRegistry.advertisedCapabilities(defaultFlags(voiceWakeEnabled = true))
+    val commands = InvokeCommandRegistry.advertisedCommands(defaultFlags(voiceWakeEnabled = true))
+
+    assertTrue(capabilities.contains(OpenClawCapability.VoiceWake.rawValue))
+    assertFalse(commands.any { it.contains("voice", ignoreCase = true) })
+  }
+
+  @Test
+  fun find_returnsForegroundMetadataForCameraCommands() {
+    val list = InvokeCommandRegistry.find(OpenClawCameraCommand.List.rawValue)
+    val location = InvokeCommandRegistry.find(OpenClawLocationCommand.Get.rawValue)
+
+    assertNotNull(list)
+    assertEquals(true, list?.requiresForeground)
+    assertNotNull(location)
+    assertEquals(false, location?.requiresForeground)
+  }
+
+  @Test
+  fun find_returnsNullForUnknownCommand() {
+    assertNull(InvokeCommandRegistry.find("not.real"))
   }
 
   private fun defaultFlags(
