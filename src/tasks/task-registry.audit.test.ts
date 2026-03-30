@@ -44,8 +44,8 @@ describe("task-registry audit", () => {
     });
 
     expect(findings.map((finding) => [finding.code, finding.task.taskId])).toEqual([
-      ["stale_running", "stale-running"],
       ["lost", "lost-task"],
+      ["stale_running", "stale-running"],
       ["missing_cleanup", "missing-cleanup"],
     ]);
   });
@@ -79,5 +79,22 @@ describe("task-registry audit", () => {
         inconsistent_timestamps: 0,
       },
     });
+  });
+
+  it("does not double-report lost tasks as missing cleanup", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "lost-projected",
+          status: "lost",
+          endedAt: now - 60_000,
+          cleanupAfter: undefined,
+        }),
+      ],
+    });
+
+    expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
   });
 });

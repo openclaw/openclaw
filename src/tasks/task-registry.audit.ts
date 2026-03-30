@@ -173,6 +173,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
     }
 
     if (
+      task.status !== "lost" &&
       task.status !== "queued" &&
       task.status !== "running" &&
       typeof task.cleanupAfter !== "number"
