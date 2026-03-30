@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { buildPlatformRuntimeLogHints, buildPlatformServiceStartHints } from "./runtime-hints.js";
 
+function normalizeWindowsHintLines(lines: string[]): string[] {
+  return lines.map((line) => {
+    if (!line.startsWith("Gateway ")) {
+      return line;
+    }
+    return line.replaceAll("/", "\\");
+  });
+}
+
 describe("buildPlatformRuntimeLogHints", () => {
   it("renders launchd log hints on darwin", () => {
     expect(
@@ -28,14 +37,16 @@ describe("buildPlatformRuntimeLogHints", () => {
       }),
     ).toEqual(["Logs: journalctl --user -u openclaw-gateway.service -n 200 --no-pager"]);
     expect(
-      buildPlatformRuntimeLogHints({
-        platform: "win32",
-        env: {
-          USERPROFILE: "C:\\Users\\test",
-        },
-        systemdServiceName: "openclaw-gateway",
-        windowsTaskName: "OpenClaw Gateway",
-      }),
+      normalizeWindowsHintLines(
+        buildPlatformRuntimeLogHints({
+          platform: "win32",
+          env: {
+            USERPROFILE: "C:\\Users\\test",
+          },
+          systemdServiceName: "openclaw-gateway",
+          windowsTaskName: "OpenClaw Gateway",
+        }),
+      ),
     ).toEqual([
       "Gateway stdout: C:\\Users\\test\\.openclaw\\logs\\gateway.log",
       "Gateway stderr: C:\\Users\\test\\.openclaw\\logs\\gateway.err.log",

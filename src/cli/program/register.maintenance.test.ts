@@ -112,7 +112,7 @@ describe("registerMaintenanceCommands doctor action", () => {
   });
 
   it("fails fast when non-interactive doctor exceeds the timeout budget", async () => {
-    vi.useFakeTimers();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_DOCTOR_TIMEOUT_MS", "10");
     const child = new EventEmitter() as EventEmitter & {
@@ -127,7 +127,7 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     const run = runMaintenanceCli(["doctor", "--non-interactive"]);
     child.stderr.emit("data", Buffer.from("[doctor-debug] providers.runtime:loadOpenClawPlugins:start\n"));
-    await vi.advanceTimersByTimeAsync(25);
+    await new Promise((resolve) => setTimeout(resolve, 25));
     await run;
 
     expect(spawnMock).toHaveBeenCalledTimes(1);

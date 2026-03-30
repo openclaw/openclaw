@@ -88,6 +88,26 @@ let cliLoadedConfig: Record<string, unknown> = {
   },
 };
 
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(value: NodeJS.Platform) {
+  if (!originalPlatformDescriptor) {
+    throw new Error("missing process.platform descriptor");
+  }
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: originalPlatformDescriptor.enumerable ?? false,
+    value,
+  });
+}
+
+function restorePlatform() {
+  if (!originalPlatformDescriptor) {
+    return;
+  }
+  Object.defineProperty(process, "platform", originalPlatformDescriptor);
+}
+
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({ configPath }: { configPath: string }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
@@ -199,6 +219,7 @@ describe("gatherDaemonStatus", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    restorePlatform();
   });
 
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {
@@ -549,6 +570,8 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("includes Windows logs and status details in JSON output", async () => {
+    setPlatform("win32");
+
     const status = await gatherDaemonStatus({
       rpc: {},
       probe: false,
