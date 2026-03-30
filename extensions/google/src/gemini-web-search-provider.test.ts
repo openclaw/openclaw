@@ -87,6 +87,53 @@ describe("gemini web search provider", () => {
     expect(__testing.resolveGeminiModel({ model: "gemini-2.5-pro" })).toBe("gemini-2.5-pro");
   });
 
+  it("exposes models.providers.google.apiKey to configured credential lookup for auto-detect", () => {
+    const provider = createGeminiWebSearchProvider();
+
+    expect(
+      provider.getConfiguredCredentialValue?.({
+        models: {
+          providers: {
+            google: {
+              apiKey: "provider-secret",
+              baseUrl: "https://example.com",
+              models: [],
+            },
+          },
+        },
+      } as never),
+    ).toBe("provider-secret");
+  });
+
+  it("prefers dedicated Gemini web search config over models.providers.google.apiKey for auto-detect", () => {
+    const provider = createGeminiWebSearchProvider();
+
+    expect(
+      provider.getConfiguredCredentialValue?.({
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "scoped-secret",
+                },
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              apiKey: "provider-secret",
+              baseUrl: "https://example.com",
+              models: [],
+            },
+          },
+        },
+      } as never),
+    ).toBe("scoped-secret");
+  });
+
   it("returns a missing-key error when no dedicated, env, or provider fallback exists", async () => {
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({

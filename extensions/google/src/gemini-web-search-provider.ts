@@ -284,7 +284,8 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     setCredentialValue: (searchConfigTarget, value) =>
       setScopedCredentialValue(searchConfigTarget, "gemini", value),
     getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
+      resolveProviderWebSearchPluginConfig(config, "google")?.apiKey ??
+      config?.models?.providers?.google?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
     },
