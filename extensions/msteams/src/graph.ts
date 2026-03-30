@@ -270,6 +270,32 @@ export async function deleteGraphRequest(params: { token: string; path: string }
   });
 }
 
+export async function patchGraphJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
+    method: "PATCH",
+    headers: {
+      "User-Agent": buildUserAgent(),
+      Authorization: `Bearer ${params.token}`,
+      "Content-Type": "application/json",
+    },
+    body: params.body !== undefined ? JSON.stringify(params.body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Graph PATCH ${params.path} failed (${res.status}): ${text || "unknown error"}`,
+    );
+  }
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
+  return (await res.json()) as T;
+}
+
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
   const { items } = await fetchAllGraphPages<GraphChannel>({ token, path, maxPages: 10 });
