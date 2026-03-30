@@ -173,6 +173,9 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
 };
 
+const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+
 export function resolveCommandEnv(params: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
@@ -224,6 +227,8 @@ export async function runCommandWithTimeout(
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  const usesWindowsExitCodeShim =
+    process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
@@ -330,7 +335,7 @@ export async function runCommandWithTimeout(
         child.stderr?.destroy();
       }, 250);
     });
-    child.on("close", (code, signal) => {
+    const resolveFromClose = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) {
         return;
       }
@@ -338,8 +343,18 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
-      const resolvedCode = childExitState?.code ?? code;
-      const resolvedSignal = childExitState?.signal ?? signal;
+      const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
+      const resolvedCode =
+        childExitState?.code ??
+        code ??
+        child.exitCode ??
+        (usesWindowsExitCodeShim &&
+        resolvedSignal == null &&
+        !timedOut &&
+        !noOutputTimedOut &&
+        !child.killed
+          ? 0
+          : null);
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut
@@ -363,6 +378,36 @@ export async function runCommandWithTimeout(
         termination,
         noOutputTimedOut,
       });
+    };
+    child.on("close", (code, signal) => {
+      if (
+        process.platform !== "win32" ||
+        childExitState != null ||
+        code != null ||
+        signal != null ||
+        child.exitCode != null ||
+        child.signalCode != null
+      ) {
+        resolveFromClose(code, signal);
+        return;
+      }
+
+      const startedAt = Date.now();
+      const waitForExitState = () => {
+        if (settled) {
+          return;
+        }
+        if (childExitState != null || child.exitCode != null || child.signalCode != null) {
+          resolveFromClose(code, signal);
+          return;
+        }
+        if (Date.now() - startedAt >= WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS) {
+          resolveFromClose(code, signal);
+          return;
+        }
+        setTimeout(waitForExitState, WINDOWS_CLOSE_STATE_POLL_MS);
+      };
+      waitForExitState();
     });
   });
 }

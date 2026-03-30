@@ -1,26 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
-const mocks = vi.hoisted(() => ({
-  clackIntro: vi.fn(),
-  clackOutro: vi.fn(),
-  clackSelect: vi.fn(),
-  clackText: vi.fn(),
-  clackConfirm: vi.fn(),
-  resolveSearchProviderOptions: vi.fn(),
-  setupSearch: vi.fn(),
-  readConfigFileSnapshot: vi.fn(),
-  writeConfigFile: vi.fn(),
-  resolveGatewayPort: vi.fn(),
-  ensureControlUiAssetsBuilt: vi.fn(),
-  createClackPrompter: vi.fn(),
-  note: vi.fn(),
-  printWizardHeader: vi.fn(),
-  probeGatewayReachable: vi.fn(),
-  waitForGatewayReachable: vi.fn(),
-  resolveControlUiLinks: vi.fn(),
-  summarizeExistingConfig: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const writeConfigFile = vi.fn();
+  return {
+    clackIntro: vi.fn(),
+    clackOutro: vi.fn(),
+    clackSelect: vi.fn(),
+    clackText: vi.fn(),
+    clackConfirm: vi.fn(),
+    resolveSearchProviderOptions: vi.fn(),
+    setupSearch: vi.fn(),
+    readConfigFileSnapshot: vi.fn(),
+    writeConfigFile,
+    replaceConfigFile: vi.fn(async (params: { nextConfig: unknown }) => {
+      await writeConfigFile(params.nextConfig);
+    }),
+    resolveGatewayPort: vi.fn(),
+    ensureControlUiAssetsBuilt: vi.fn(),
+    createClackPrompter: vi.fn(),
+    note: vi.fn(),
+    printWizardHeader: vi.fn(),
+    probeGatewayReachable: vi.fn(),
+    waitForGatewayReachable: vi.fn(),
+    resolveControlUiLinks: vi.fn(),
+    summarizeExistingConfig: vi.fn(),
+  };
+});
 
 vi.mock("@clack/prompts", () => ({
   intro: mocks.clackIntro,
@@ -34,6 +40,7 @@ vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "~/.openclaw/openclaw.json",
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   writeConfigFile: mocks.writeConfigFile,
+  replaceConfigFile: mocks.replaceConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 

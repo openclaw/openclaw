@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeWebFetchFirecrawlMetadata } from "../secrets/runtime-web-tools.types.js";
+import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
-vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
-}));
+vi.mock("../plugins/tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/tools.js")>("../plugins/tools.js");
+  return {
+    ...actual,
+    copyPluginToolMeta: () => undefined,
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
@@ -80,14 +86,34 @@ function asConfig(value: unknown): OpenClawConfig {
 }
 
 let secretsRuntime: typeof import("../secrets/runtime.js");
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
+let createWebSearchTool: typeof import("./tools/web-tools.js").createWebSearchTool;
+let createWebFetchTool: typeof import("./tools/web-tools.js").createWebFetchTool;
 
-function findTool(name: string, config: OpenClawConfig) {
-  const allTools = createOpenClawTools({ config, sandboxed: true });
-  const tool = allTools.find((candidate) => candidate.name === name);
+function requireWebSearchTool(config: OpenClawConfig, runtimeWebSearch?: RuntimeWebSearchMetadata) {
+  const tool = createWebSearchTool({
+    config,
+    sandboxed: true,
+    runtimeWebSearch,
+  });
   expect(tool).toBeDefined();
   if (!tool) {
-    throw new Error(`missing ${name} tool`);
+    throw new Error("missing web_search tool");
+  }
+  return tool;
+}
+
+function requireWebFetchTool(
+  config: OpenClawConfig,
+  runtimeFirecrawl?: RuntimeWebFetchFirecrawlMetadata,
+) {
+  const tool = createWebFetchTool({
+    config,
+    sandboxed: true,
+    runtimeFirecrawl,
+  });
+  expect(tool).toBeDefined();
+  if (!tool) {
+    throw new Error("missing web_fetch tool");
   }
   return tool;
 }
@@ -115,7 +141,7 @@ describe("openclaw tools runtime web metadata wiring", () => {
   beforeEach(async () => {
     vi.resetModules();
     secretsRuntime = await import("../secrets/runtime.js");
-    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+    ({ createWebFetchTool, createWebSearchTool } = await import("./tools/web-tools.js"));
   });
 
   afterEach(() => {
@@ -160,7 +186,7 @@ describe("openclaw tools runtime web metadata wiring", () => {
     );
     global.fetch = withFetchPreconnect(mockFetch);
 
-    const webSearch = findTool("web_search", snapshot.config);
+    const webSearch = requireWebSearchTool(snapshot.config, snapshot.webTools.search);
     const result = await webSearch.execute("call-runtime-search", { query: "runtime search" });
 
     expect(mockFetch).toHaveBeenCalled();
@@ -197,7 +223,7 @@ describe("openclaw tools runtime web metadata wiring", () => {
     );
     global.fetch = withFetchPreconnect(mockFetch);
 
-    const webFetch = findTool("web_fetch", snapshot.config);
+    const webFetch = requireWebFetchTool(snapshot.config, snapshot.webTools.fetch.firecrawl);
     await webFetch.execute("call-runtime-fetch", { url: "https://example.com/runtime-off" });
 
     expect(mockFetch).toHaveBeenCalled();

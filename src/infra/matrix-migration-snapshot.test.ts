@@ -1,61 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix.js";
+import { resolveMatrixAccountStorageRoot } from "./matrix-config-helpers.js";
 import { detectLegacyMatrixCrypto } from "./matrix-legacy-crypto.js";
-
-const createBackupArchiveMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./backup-create.js", () => ({
-  createBackupArchive: (...args: unknown[]) => createBackupArchiveMock(...args),
-}));
-
-let hasActionableMatrixMigration: typeof import("./matrix-migration-snapshot.js").hasActionableMatrixMigration;
-let maybeCreateMatrixMigrationSnapshot: typeof import("./matrix-migration-snapshot.js").maybeCreateMatrixMigrationSnapshot;
-let resolveMatrixMigrationSnapshotMarkerPath: typeof import("./matrix-migration-snapshot.js").resolveMatrixMigrationSnapshotMarkerPath;
-let resolveMatrixMigrationSnapshotOutputDir: typeof import("./matrix-migration-snapshot.js").resolveMatrixMigrationSnapshotOutputDir;
+import {
+  hasActionableMatrixMigration,
+  maybeCreateMatrixMigrationSnapshot,
+  resolveMatrixMigrationSnapshotMarkerPath,
+  resolveMatrixMigrationSnapshotOutputDir,
+} from "./matrix-migration-snapshot.js";
 
 describe("matrix migration snapshots", () => {
-  afterEach(() => {
-    createBackupArchiveMock.mockReset();
-  });
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({
-      hasActionableMatrixMigration,
-      maybeCreateMatrixMigrationSnapshot,
-      resolveMatrixMigrationSnapshotMarkerPath,
-      resolveMatrixMigrationSnapshotOutputDir,
-    } = await import("./matrix-migration-snapshot.js"));
-  });
-
   it("creates a backup marker after writing a pre-migration snapshot", async () => {
     await withTempHome(async (home) => {
-      const archivePath = path.join(home, "Backups", "openclaw-migrations", "snapshot.tar.gz");
-      fs.mkdirSync(path.dirname(archivePath), { recursive: true });
       fs.writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{}\n", "utf8");
       fs.writeFileSync(path.join(home, ".openclaw", "state.txt"), "state\n", "utf8");
-      createBackupArchiveMock.mockResolvedValueOnce({
-        createdAt: "2026-03-10T18:00:00.000Z",
-        archivePath,
-        includeWorkspace: false,
-      });
 
       const result = await maybeCreateMatrixMigrationSnapshot({ trigger: "unit-test" });
 
-      expect(result).toEqual({
-        created: true,
-        archivePath,
-        markerPath: resolveMatrixMigrationSnapshotMarkerPath(process.env),
-      });
-      expect(createBackupArchiveMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          output: resolveMatrixMigrationSnapshotOutputDir(process.env),
-          includeWorkspace: false,
-        }),
-      );
+      expect(result.created).toBe(true);
+      expect(result.markerPath).toBe(resolveMatrixMigrationSnapshotMarkerPath(process.env));
+      expect(
+        result.archivePath.startsWith(resolveMatrixMigrationSnapshotOutputDir(process.env)),
+      ).toBe(true);
+      expect(fs.existsSync(result.archivePath)).toBe(true);
 
       const marker = JSON.parse(
         fs.readFileSync(resolveMatrixMigrationSnapshotMarkerPath(process.env), "utf8"),
@@ -63,7 +32,7 @@ describe("matrix migration snapshots", () => {
         archivePath: string;
         trigger: string;
       };
-      expect(marker.archivePath).toBe(archivePath);
+      expect(marker.archivePath).toBe(result.archivePath);
       expect(marker.trigger).toBe("unit-test");
     });
   });
@@ -91,21 +60,14 @@ describe("matrix migration snapshots", () => {
 
       expect(result.created).toBe(false);
       expect(result.archivePath).toBe(archivePath);
-      expect(createBackupArchiveMock).not.toHaveBeenCalled();
     });
   });
 
   it("recreates the snapshot when the marker exists but the archive is missing", async () => {
     await withTempHome(async (home) => {
       const markerPath = resolveMatrixMigrationSnapshotMarkerPath(process.env);
-      const replacementArchivePath = path.join(
-        home,
-        "Backups",
-        "openclaw-migrations",
-        "replacement.tar.gz",
-      );
       fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-      fs.mkdirSync(path.dirname(replacementArchivePath), { recursive: true });
+      fs.mkdirSync(path.join(home, "Backups", "openclaw-migrations"), { recursive: true });
       fs.writeFileSync(
         markerPath,
         JSON.stringify({
@@ -117,28 +79,33 @@ describe("matrix migration snapshots", () => {
         }),
         "utf8",
       );
-      createBackupArchiveMock.mockResolvedValueOnce({
-        createdAt: "2026-03-10T19:00:00.000Z",
-        archivePath: replacementArchivePath,
-        includeWorkspace: false,
-      });
 
       const result = await maybeCreateMatrixMigrationSnapshot({ trigger: "unit-test" });
 
       expect(result.created).toBe(true);
-      expect(result.archivePath).toBe(replacementArchivePath);
+      expect(result.archivePath).not.toBe(
+        path.join(home, "Backups", "openclaw-migrations", "missing.tar.gz"),
+      );
+      expect(
+        result.archivePath.startsWith(resolveMatrixMigrationSnapshotOutputDir(process.env)),
+      ).toBe(true);
+      expect(fs.existsSync(result.archivePath)).toBe(true);
       const marker = JSON.parse(fs.readFileSync(markerPath, "utf8")) as { archivePath: string };
-      expect(marker.archivePath).toBe(replacementArchivePath);
+      expect(marker.archivePath).toBe(result.archivePath);
     });
   });
 
   it("surfaces backup creation failures without writing a marker", async () => {
-    await withTempHome(async () => {
-      createBackupArchiveMock.mockRejectedValueOnce(new Error("backup failed"));
+    await withTempHome(async (home) => {
+      const invalidOutputPath = path.join(home, "invalid-output");
+      fs.writeFileSync(invalidOutputPath, "occupied\n", "utf8");
 
-      await expect(maybeCreateMatrixMigrationSnapshot({ trigger: "unit-test" })).rejects.toThrow(
-        "backup failed",
-      );
+      await expect(
+        maybeCreateMatrixMigrationSnapshot({
+          trigger: "unit-test",
+          outputDir: invalidOutputPath,
+        }),
+      ).rejects.toThrow();
       expect(fs.existsSync(resolveMatrixMigrationSnapshotMarkerPath(process.env))).toBe(false);
     });
   });

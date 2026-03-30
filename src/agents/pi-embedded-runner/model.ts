@@ -2,8 +2,9 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
-import { normalizeModelCompat } from "../../plugins/provider-model-compat.js";
 import {
+  applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
   normalizeProviderTransportWithPlugin,
@@ -23,7 +24,8 @@ import {
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
-type InlineModelEntry = ModelDefinitionConfig & {
+type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+  api?: Api;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -36,6 +38,12 @@ type InlineProviderConfig = {
 };
 
 type ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins?: (
+    params: Parameters<typeof applyProviderResolvedModelCompatWithPlugins>[0],
+  ) => unknown;
+  applyProviderResolvedTransportWithPlugin?: (
+    params: Parameters<typeof applyProviderResolvedTransportWithPlugin>[0],
+  ) => unknown;
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
@@ -52,12 +60,34 @@ type ProviderRuntimeHooks = {
 };
 
 const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin,
 };
+
+const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  runProviderDynamicModel: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+};
+
+function resolveRuntimeHooks(params?: {
+  runtimeHooks?: ProviderRuntimeHooks;
+  skipProviderRuntimeHooks?: boolean;
+}): ProviderRuntimeHooks {
+  if (params?.skipProviderRuntimeHooks) {
+    return STATIC_PROVIDER_RUNTIME_HOOKS;
+  }
+  return params?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+}
 
 function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api"] | undefined {
   switch (api) {
@@ -95,6 +125,36 @@ function sanitizeModelHeaders(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function applyResolvedTransportFallback(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  runtimeHooks: ProviderRuntimeHooks;
+  model: Model<Api>;
+}): Model<Api> | undefined {
+  const normalized = params.runtimeHooks.normalizeProviderTransportWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      provider: params.provider,
+      api: params.model.api,
+      baseUrl: params.model.baseUrl,
+    },
+  }) as { api?: Api | null; baseUrl?: string } | undefined;
+  if (!normalized) {
+    return undefined;
+  }
+  const nextApi = normalizeResolvedTransportApi(normalized.api) ?? params.model.api;
+  const nextBaseUrl = normalized.baseUrl ?? params.model.baseUrl;
+  if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    api: nextApi,
+    baseUrl: nextBaseUrl,
+  };
+}
+
 function normalizeResolvedModel(params: {
   provider: string;
   model: Model<Api>;
@@ -121,23 +181,51 @@ function normalizeResolvedModel(params: {
       model: normalizedInputModel,
     },
   }) as Model<Api> | undefined;
-  if (pluginNormalized) {
-    return normalizeModelCompat(pluginNormalized);
-  }
+  const compatNormalized = runtimeHooks.applyProviderResolvedModelCompatWithPlugins?.({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: normalizedInputModel.id,
+      model: (pluginNormalized ?? normalizedInputModel) as never,
+    },
+  }) as Model<Api> | undefined;
+  const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: normalizedInputModel.id,
+      model: (compatNormalized ?? pluginNormalized ?? normalizedInputModel) as never,
+    },
+  }) as Model<Api> | undefined;
+  const fallbackTransportNormalized =
+    transportNormalized ??
+    applyResolvedTransportFallback({
+      provider: params.provider,
+      cfg: params.cfg,
+      runtimeHooks,
+      model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    });
   return normalizeResolvedProviderModel({
     provider: params.provider,
-    model: normalizedInputModel,
+    model:
+      fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
   });
 }
 
 function resolveProviderTransport(params: {
   provider: string;
-  api?: ModelDefinitionConfig["api"] | Api | null;
+  api?: Api | null;
   baseUrl?: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
 }): {
-  api?: ModelDefinitionConfig["api"];
+  api?: Api;
   baseUrl?: string;
 } {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
@@ -149,7 +237,7 @@ function resolveProviderTransport(params: {
       api: params.api,
       baseUrl: params.baseUrl,
     },
-  }) as { api?: ModelDefinitionConfig["api"] | null; baseUrl?: string } | undefined;
+  }) as { api?: Api | null; baseUrl?: string } | undefined;
 
   return {
     api: normalizeResolvedTransportApi(normalized?.api ?? params.api),
@@ -283,7 +371,7 @@ export function buildInlineProviderModels(
         ...model,
         provider: trimmed,
         baseUrl: transport.baseUrl,
-        api: transport.api,
+        api: transport.api ?? model.api,
         headers: (() => {
           const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
             stripSecretRefMarkers: true,
@@ -505,6 +593,7 @@ export function resolveModel(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     runtimeHooks?: ProviderRuntimeHooks;
+    skipProviderRuntimeHooks?: boolean;
   },
 ): {
   model?: Model<Api>;
@@ -515,13 +604,14 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
     provider,
     modelId,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
-    runtimeHooks: options?.runtimeHooks,
+    runtimeHooks,
   });
   if (model) {
     return { model, authStorage, modelRegistry };
@@ -533,7 +623,7 @@ export function resolveModel(
       modelId,
       cfg,
       agentDir: resolvedAgentDir,
-      runtimeHooks: options?.runtimeHooks,
+      runtimeHooks,
     }),
     authStorage,
     modelRegistry,
@@ -550,6 +640,7 @@ export async function resolveModelAsync(
     modelRegistry?: ModelRegistry;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
+    skipProviderRuntimeHooks?: boolean;
   },
 ): Promise<{
   model?: Model<Api>;
@@ -560,13 +651,14 @@ export async function resolveModelAsync(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider,
     modelId,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
-    runtimeHooks: options?.runtimeHooks,
+    runtimeHooks,
   });
   if (explicitModel?.kind === "suppressed") {
     return {
@@ -575,14 +667,13 @@ export async function resolveModelAsync(
         modelId,
         cfg,
         agentDir: resolvedAgentDir,
-        runtimeHooks: options?.runtimeHooks,
+        runtimeHooks,
       }),
       authStorage,
       modelRegistry,
     };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const runtimeHooks = options?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
       clearProviderRuntimeHookCache();
@@ -605,7 +696,7 @@ export async function resolveModelAsync(
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
-      runtimeHooks: options?.runtimeHooks,
+      runtimeHooks,
     });
   };
   let model =
@@ -626,7 +717,7 @@ export async function resolveModelAsync(
       modelId,
       cfg,
       agentDir: resolvedAgentDir,
-      runtimeHooks: options?.runtimeHooks,
+      runtimeHooks,
     }),
     authStorage,
     modelRegistry,

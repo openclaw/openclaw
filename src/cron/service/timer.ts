@@ -2,6 +2,7 @@ import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { createTaskRecord, markTaskTerminalById } from "../../tasks/task-registry.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -46,6 +47,7 @@ const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
+    taskId?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     startedAt: number;
@@ -106,6 +108,75 @@ function isAbortError(err: unknown): boolean {
     return false;
   }
   return err.name === "AbortError" || err.message === timeoutErrorMessage();
+}
+
+export function normalizeCronRunErrorText(err: unknown): string {
+  if (isAbortError(err)) {
+    return timeoutErrorMessage();
+  }
+  if (typeof err === "string") {
+    return err === `Error: ${timeoutErrorMessage()}` ? timeoutErrorMessage() : err;
+  }
+  return String(err);
+}
+
+function tryCreateCronTaskRecord(params: {
+  state: CronServiceState;
+  job: CronJob;
+  startedAt: number;
+}): string | undefined {
+  try {
+    return createTaskRecord({
+      runtime: "cron",
+      sourceId: params.job.id,
+      requesterSessionKey: "",
+      childSessionKey: params.job.sessionKey,
+      agentId: params.job.agentId,
+      runId: `cron:${params.job.id}:${params.startedAt}`,
+      label: params.job.name,
+      task: params.job.name || params.job.id,
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: params.startedAt,
+      lastEventAt: params.startedAt,
+    }).taskId;
+  } catch (error) {
+    params.state.deps.log.warn(
+      { jobId: params.job.id, error },
+      "cron: failed to create task ledger record",
+    );
+    return undefined;
+  }
+}
+
+function tryUpdateCronTaskRecord(
+  state: CronServiceState,
+  result: Pick<TimedCronRunOutcome, "taskId" | "status" | "error" | "endedAt" | "summary">,
+): void {
+  if (!result.taskId) {
+    return;
+  }
+  try {
+    markTaskTerminalById({
+      taskId: result.taskId,
+      status:
+        result.status === "ok" || result.status === "skipped"
+          ? "succeeded"
+          : normalizeCronRunErrorText(result.error) === timeoutErrorMessage()
+            ? "timed_out"
+            : "failed",
+      endedAt: result.endedAt,
+      lastEventAt: result.endedAt,
+      error: result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined,
+      terminalSummary: result.summary ?? undefined,
+    });
+  } catch (error) {
+    state.deps.log.warn(
+      { taskId: result.taskId, jobStatus: result.status, error },
+      "cron: failed to update task ledger record",
+    );
+  }
 }
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
@@ -474,6 +545,7 @@ export function applyJobResult(
 }
 
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+  tryUpdateCronTaskRecord(state, result);
   const store = state.store;
   if (!store) {
     return;
@@ -630,18 +702,26 @@ export async function onTimer(state: CronServiceState) {
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+      const taskId = tryCreateCronTaskRecord({ state, job, startedAt });
 
       try {
         const result = await executeJobCoreWithTimeout(state, job);
-        return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
+        return {
+          jobId: id,
+          taskId,
+          ...result,
+          startedAt,
+          endedAt: state.deps.nowMs(),
+        };
       } catch (err) {
-        const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
+        const errorText = normalizeCronRunErrorText(err);
         state.deps.log.warn(
           { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
           `cron: job failed: ${errorText}`,
         );
         return {
           jobId: id,
+          taskId,
           status: "error",
           error: errorText,
           startedAt,
@@ -926,11 +1006,17 @@ async function runStartupCatchupCandidate(
   candidate: StartupCatchupCandidate,
 ): Promise<TimedCronRunOutcome> {
   const startedAt = state.deps.nowMs();
+  const taskId = tryCreateCronTaskRecord({
+    state,
+    job: candidate.job,
+    startedAt,
+  });
   emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
   try {
     const result = await executeJobCoreWithTimeout(state, candidate.job);
     return {
       jobId: candidate.jobId,
+      taskId,
       status: result.status,
       error: result.error,
       summary: result.summary,
@@ -946,8 +1032,9 @@ async function runStartupCatchupCandidate(
   } catch (err) {
     return {
       jobId: candidate.jobId,
+      taskId,
       status: "error",
-      error: String(err),
+      error: normalizeCronRunErrorText(err),
       startedAt,
       endedAt: state.deps.nowMs(),
     };

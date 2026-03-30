@@ -28,7 +28,7 @@ describe("image-generation provider registry", () => {
 
   it("does not load plugins when listing without config", () => {
     expect(listImageGenerationProviders()).toEqual([]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(undefined);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
   });
 
   it("uses active plugin providers without loading from disk", () => {
@@ -54,7 +54,7 @@ describe("image-generation provider registry", () => {
     const provider = getImageGenerationProvider("custom-image");
 
     expect(provider?.id).toBe("custom-image");
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(undefined);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
   });
 
   it("ignores prototype-like provider ids and aliases", () => {

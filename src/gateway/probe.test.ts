@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
+  startMode: "hello" as "hello" | "close",
+  close: { code: 1008, reason: "pairing required" },
 }));
 
 const deviceIdentityState = vi.hoisted(() => ({
@@ -22,6 +24,13 @@ class MockGatewayClient {
   start(): void {
     void Promise.resolve()
       .then(async () => {
+        if (gatewayClientState.startMode === "close") {
+          const onClose = this.opts.onClose;
+          if (typeof onClose === "function") {
+            onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
+          }
+          return;
+        }
         const onHelloOk = this.opts.onHelloOk;
         if (typeof onHelloOk === "function") {
           await onHelloOk();
@@ -59,6 +68,8 @@ const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 describe("probeGateway", () => {
   beforeEach(() => {
     deviceIdentityState.throwOnLoad = false;
+    gatewayClientState.startMode = "hello";
+    gatewayClientState.close = { code: 1008, reason: "pairing required" };
   });
 
   it("clamps probe timeout to timer-safe bounds", () => {
@@ -171,5 +182,23 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.tlsFingerprint).toBe("sha256:abc");
+  });
+
+  it("surfaces immediate close failures before the probe timeout", async () => {
+    gatewayClientState.startMode = "close";
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 5_000,
+      includeDetails: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "gateway closed (1008): pairing required",
+      close: { code: 1008, reason: "pairing required" },
+    });
+    expect(gatewayClientState.requests).toEqual([]);
   });
 });

@@ -1,4 +1,3 @@
-import { resolveAnthropicVertexConfigApiKey } from "../plugin-sdk/anthropic-vertex.js";
 import {
   applyProviderNativeStreamingUsageCompatWithPlugin,
   normalizeProviderConfigWithPlugin,
@@ -6,12 +5,6 @@ import {
   resolveProviderRuntimePlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
-
-const PROVIDER_CONFIG_API_KEY_RESOLVERS: Partial<
-  Record<string, (env: NodeJS.ProcessEnv) => string | undefined>
-> = {
-  "anthropic-vertex": resolveAnthropicVertexConfigApiKey,
-};
 
 export function applyNativeStreamingUsageCompat(
   providers: Record<string, ProviderConfig>,
@@ -53,18 +46,18 @@ export function normalizeProviderSpecificConfig(
 export function resolveProviderConfigApiKeyResolver(
   providerKey: string,
 ): ((env: NodeJS.ProcessEnv) => string | undefined) | undefined {
-  const fallback = PROVIDER_CONFIG_API_KEY_RESOLVERS[providerKey];
-  const plugin = resolveProviderRuntimePlugin({ provider: providerKey });
-  if (!plugin?.resolveConfigApiKey && !fallback) {
+  if (!resolveProviderRuntimePlugin({ provider: providerKey })?.resolveConfigApiKey) {
     return undefined;
   }
-  return (env: NodeJS.ProcessEnv) =>
-    resolveProviderConfigApiKeyWithPlugin({
+  return (env) => {
+    const resolved = resolveProviderConfigApiKeyWithPlugin({
       provider: providerKey,
       env,
       context: {
         provider: providerKey,
         env,
       },
-    }) ?? fallback?.(env);
+    });
+    return resolved?.trim() || undefined;
+  };
 }

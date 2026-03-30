@@ -1,10 +1,10 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
+import * as dispatcherModule from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { DiscordAccountConfig } from "../../../../src/config/types.discord.js";
-import * as pluginCommandsModule from "../../../../src/plugins/commands.js";
 import { __testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,

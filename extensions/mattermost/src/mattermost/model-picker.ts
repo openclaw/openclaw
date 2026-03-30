@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { MattermostInteractiveButtonInput } from "./interactions.js";
 import {
   loadSessionStore,
   normalizeProviderId,
@@ -6,8 +7,7 @@ import {
   resolveStoredModelOverride,
   type ModelsProviderData,
   type OpenClawConfig,
-} from "../runtime-api.js";
-import type { MattermostInteractiveButtonInput } from "./interactions.js";
+} from "./runtime-api.js";
 
 const MATTERMOST_MODEL_PICKER_CONTEXT_KEY = "oc_model_picker";
 const MODELS_PAGE_SIZE = 8;

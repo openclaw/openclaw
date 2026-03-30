@@ -1,6 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../test/helpers/extensions/typed-cases.js";
+import { typedCases } from "../../../test/helpers/plugins/typed-cases.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,
@@ -168,7 +168,7 @@ describe("DiscordMessageListener", () => {
       warn: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >;
     const handler = vi.fn(async () => {
       throw new Error("boom");
@@ -191,7 +191,7 @@ describe("DiscordMessageListener", () => {
       warn: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >;
     const listener = new DiscordMessageListener(handler, logger);
 
@@ -990,9 +990,9 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as ReturnType<typeof import("../../../src/config/config.js").loadConfig>,
+    cfg: {} as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
     accountId: "acc-1",
-    runtime: {} as import("../../../src/runtime.js").RuntimeEnv,
+    runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
     dmEnabled: overrides?.dmEnabled ?? true,
     groupDmEnabled: overrides?.groupDmEnabled ?? true,
@@ -1008,7 +1008,7 @@ function makeReactionListenerParams(overrides?: {
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >,
   };
 }
