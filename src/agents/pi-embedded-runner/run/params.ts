@@ -25,6 +25,8 @@ export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "o
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Optional command-lane key override (separate from session identity). */
+  sessionLaneKey?: string;
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;

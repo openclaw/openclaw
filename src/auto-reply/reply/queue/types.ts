@@ -47,6 +47,8 @@ export type FollowupRun = {
     agentDir: string;
     sessionId: string;
     sessionKey?: string;
+    /** Optional command-lane override used for fast-lane isolation. */
+    sessionLaneKey?: string;
     messageProvider?: string;
     agentAccountId?: string;
     groupId?: string;

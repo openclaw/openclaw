@@ -150,6 +150,7 @@ export function buildEmbeddedContextFromTemplate(params: {
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
+    sessionLaneKey: params.run.sessionLaneKey,
     agentId: params.run.agentId,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: params.sessionCtx.OriginatingChannel,

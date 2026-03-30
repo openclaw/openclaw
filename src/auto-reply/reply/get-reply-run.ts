@@ -37,6 +37,7 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { getFollowupQueueDepth } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings.js";
 import type { RouteReplyParams } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
@@ -522,6 +523,7 @@ export async function runPreparedReply(
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   const queueKey = sessionKey ?? sessionIdFinal;
+  const queuedFollowupDepth = getFollowupQueueDepth(queueKey);
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
@@ -610,6 +612,8 @@ export async function runPreparedReply(
   const shouldUseFastLane =
     isActive &&
     shouldFollowup &&
+    // Preserve turn order: do not fast-lane when older followups are already queued.
+    queuedFollowupDepth === 0 &&
     opts?.isHeartbeat !== true &&
     !isStreaming &&
     isFastLaneCandidateMessage(baseBodyTrimmedRaw, cfg);
@@ -636,6 +640,8 @@ export async function runPreparedReply(
         sessionId: transientSessionId,
         // Keep parent session key so system-event routing stays on the real lane.
         sessionKey,
+        // Isolate command-lane serialization from the parent run.
+        sessionLaneKey: transientQueueKey,
         sessionFile: transientSessionFile,
         extraSystemPrompt: [followupRun.run.extraSystemPrompt, FAST_LANE_SYSTEM_PROMPT]
           .filter(Boolean)

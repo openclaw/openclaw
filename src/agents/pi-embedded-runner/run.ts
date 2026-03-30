@@ -95,7 +95,9 @@ type ApiKeyInfo = ResolvedProviderAuth;
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
-  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
+  const sessionLane = resolveSessionLane(
+    params.sessionLaneKey?.trim() || params.sessionKey?.trim() || params.sessionId,
+  );
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
