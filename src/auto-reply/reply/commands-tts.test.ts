@@ -90,4 +90,31 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(result?.reply?.text).toContain("Error: TTS conversion failed");
     expect(result?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
   });
+
+  it("persists fallback metadata from /tts audio and renders it in /tts status", async () => {
+    let lastAttempt: Record<string, unknown> | undefined;
+    ttsMocks.getLastTtsAttempt.mockImplementation(() => lastAttempt);
+    ttsMocks.setLastTtsAttempt.mockImplementation((next: Record<string, unknown>) => {
+      lastAttempt = next;
+    });
+    ttsMocks.textToSpeech.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/fallback.ogg",
+      provider: "microsoft",
+      fallbackFrom: "elevenlabs",
+      attemptedProviders: ["elevenlabs", "microsoft"],
+      latencyMs: 175,
+      voiceCompatible: true,
+    });
+
+    const audioResult = await handleTtsCommands(buildTtsParams("/tts audio hello world"), true);
+    expect(audioResult?.shouldContinue).toBe(false);
+    expect(audioResult?.reply?.mediaUrl).toBe("/tmp/fallback.ogg");
+
+    const statusResult = await handleTtsCommands(buildTtsParams("/tts status"), true);
+    expect(statusResult?.shouldContinue).toBe(false);
+    expect(statusResult?.reply?.text).toContain("Provider: microsoft");
+    expect(statusResult?.reply?.text).toContain("Fallback: elevenlabs → microsoft");
+    expect(statusResult?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
+  });
 });
