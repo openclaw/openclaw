@@ -512,4 +512,147 @@ describe("cron run log", () => {
     });
   });
 
+  it("concurrent append and read-side prune do not lose append data", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-race-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-race.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write enough lines to exceed a small maxBytes so prune triggers on read
+      const lines: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-race",
+            action: "finished",
+            status: "ok",
+            summary: "seed-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      // Fire append and prune-triggering read concurrently
+      const appendEntry = {
+        ts: 9999,
+        jobId: "job-race",
+        action: "finished" as const,
+        status: "ok" as const,
+        summary: "concurrent-append",
+      };
+
+      const [, page] = await Promise.all([
+        appendCronRunLog(logPath, appendEntry),
+        readCronRunLogEntriesPage(logPath, {
+          limit: 200,
+          offset: 0,
+          sortDir: "desc",
+          pruneOptions: { maxBytes: 500, keepLines: 20 },
+        }),
+      ]);
+
+      // After both complete, re-read to verify the appended entry survived
+      const finalPage = await readCronRunLogEntriesPage(logPath, {
+        limit: 200,
+        offset: 0,
+        sortDir: "desc",
+      });
+      const hasConcurrentAppend = finalPage.entries.some(
+        (e) => e.summary === "concurrent-append",
+      );
+      expect(hasConcurrentAppend).toBe(true);
+    });
+  });
+
+  it("serialized prune failure does not poison the write queue", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-poison-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-poison.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write enough to trigger prune
+      const lines: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-poison",
+            action: "finished",
+            status: "ok",
+            summary: "seed-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      // Make directory read-only so prune fails
+      const runsDir = path.dirname(logPath);
+      await fs.chmod(runsDir, 0o555);
+
+      try {
+        // Read with small pruneOptions — prune will fail but read succeeds
+        await readCronRunLogEntriesPage(logPath, {
+          limit: 10,
+          offset: 0,
+          sortDir: "desc",
+          pruneOptions: { maxBytes: 500, keepLines: 10 },
+        });
+      } finally {
+        await fs.chmod(runsDir, 0o755);
+      }
+
+      // Subsequent append should still work — write queue not poisoned
+      await appendCronRunLog(logPath, {
+        ts: 9999,
+        jobId: "job-poison",
+        action: "finished",
+        status: "ok",
+        summary: "post-failure-append",
+      });
+
+      const page = await readCronRunLogEntriesPage(logPath, {
+        limit: 200,
+        offset: 0,
+        sortDir: "desc",
+      });
+      const hasPostFailure = page.entries.some(
+        (e) => e.summary === "post-failure-append",
+      );
+      expect(hasPostFailure).toBe(true);
+    });
+  });
+
+  it("write queue is cleaned up after serialized prune completes", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-cleanup-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-cleanup.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      const lines: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-cleanup",
+            action: "finished",
+            status: "ok",
+            summary: "entry-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      const pendingBefore = getPendingCronRunLogWriteCountForTests();
+
+      // Trigger read (which does serialized prune internally)
+      await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        offset: 0,
+        sortDir: "desc",
+      });
+
+      // Write queue should not be leaking entries
+      const pendingAfter = getPendingCronRunLogWriteCountForTests();
+      expect(pendingAfter).toBeLessThanOrEqual(pendingBefore);
+    });
+  });
+
 });
