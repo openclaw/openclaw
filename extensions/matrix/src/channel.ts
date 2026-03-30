@@ -35,6 +35,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { matrixMessageActions } from "./actions.js";
+import { matrixApprovalAuth } from "./approval-auth.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
   resolveMatrixGroupRequireMention,
@@ -308,6 +309,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             },
           }),
       },
+      auth: matrixApprovalAuth,
       groups: {
         resolveRequireMention: resolveMatrixGroupRequireMention,
         resolveToolPolicy: resolveMatrixGroupToolPolicy,
