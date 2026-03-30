@@ -419,6 +419,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
         });
         if (kind === "unknown") {
+          // Channel type unresolvable — return the base session key without
+          // thread session forking. handlePost will drop the post via its own
+          // early-exit guard before this session key is used for routing.
           return route.sessionKey;
         }
         const replyToMode = resolveMattermostReplyToMode(account, kind);
