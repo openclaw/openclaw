@@ -77,7 +77,9 @@ describe("gateway startup log", () => {
     });
 
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('security warning: CRITICAL: Gateway bound to "lan" (0.0.0.0)'),
+      expect.stringContaining(
+        'security warning: Gateway bound to "0.0.0.0" without authentication',
+      ),
     );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("without authentication"));
   });
@@ -105,8 +107,6 @@ describe("gateway startup log", () => {
     }
 
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("without authentication"));
-    expect(info).toHaveBeenCalledWith(
-      expect.stringContaining("gateway auth exposure warning suppressed"),
-    );
+    expect(info).not.toHaveBeenCalledWith(expect.stringContaining("gateway auth exposure warning"));
   });
 });

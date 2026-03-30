@@ -19,11 +19,13 @@ function resolveBindHostFromConfig(cfg: OpenClawConfig): string {
     return "0.0.0.0";
   }
   if (bindMode === "custom") {
-    return cfg.gateway?.customBindHost?.trim() ?? "";
+    return cfg.gateway?.customBindHost?.trim() || "0.0.0.0";
   }
   if (bindMode === "loopback") {
     return "127.0.0.1";
   }
+  // "auto" and "tailnet" intentionally return ""
+  // because runtime resolution is not available here.
   return "";
 }
 

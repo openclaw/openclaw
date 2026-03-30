@@ -3,7 +3,10 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
-import { assessGatewayExposureWarning } from "../gateway/gateway-exposure-warning.js";
+import {
+  OPENCLAW_SKIP_AUTH_WARNING_ENV,
+  assessGatewayExposureWarning,
+} from "../gateway/gateway-exposure-warning.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
@@ -74,7 +77,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig): Promise<{
       `- CRITICAL: Gateway bound to "${gatewayExposure.bindHost}" without authentication. Anyone on your network can control your agent.`,
       `- Fix: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
       `- Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
-      "- Override (only if intentional): set OPENCLAW_SKIP_AUTH_WARNING=true",
+      `- Override (only if intentional): set ${OPENCLAW_SKIP_AUTH_WARNING_ENV}=true`,
     );
   }
 
