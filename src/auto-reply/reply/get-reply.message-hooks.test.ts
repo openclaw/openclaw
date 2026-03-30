@@ -23,7 +23,13 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 vi.mock("../../link-understanding/apply.js", () => ({
   applyLinkUnderstanding: mocks.applyLinkUnderstanding,
 }));
+vi.mock("../../link-understanding/apply.runtime.js", () => ({
+  applyLinkUnderstanding: mocks.applyLinkUnderstanding,
+}));
 vi.mock("../../media-understanding/apply.js", () => ({
+  applyMediaUnderstanding: mocks.applyMediaUnderstanding,
+}));
+vi.mock("../../media-understanding/apply.runtime.js", () => ({
   applyMediaUnderstanding: mocks.applyMediaUnderstanding,
 }));
 vi.mock("./commands-core.js", () => ({
@@ -39,7 +45,12 @@ vi.mock("./session.js", () => ({
   initSessionState: mocks.initSessionState,
 }));
 
-const { getReplyFromConfig } = await import("./get-reply.js");
+let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+
+async function loadFreshGetReplyModuleForTest() {
+  vi.resetModules();
+  ({ getReplyFromConfig } = await import("./get-reply.js"));
+}
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   return {
@@ -57,12 +68,16 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
     To: "telegram:-100123",
     GroupChannel: "ops",
     Timestamp: 1710000000000,
+    MediaPath: "/tmp/voice.ogg",
+    MediaUrl: "https://example.test/voice.ogg",
+    MediaType: "audio/ogg",
     ...overrides,
   };
 }
 
 describe("getReplyFromConfig message hooks", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshGetReplyModuleForTest();
     delete process.env.OPENCLAW_TEST_FAST;
     mocks.applyMediaUnderstanding.mockReset();
     mocks.applyLinkUnderstanding.mockReset();
@@ -176,5 +191,29 @@ describe("getReplyFromConfig message hooks", () => {
 
     expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it("skips media and link understanding on plain text without attachments or urls", async () => {
+    await getReplyFromConfig(
+      buildCtx({
+        Body: "hello there",
+        BodyForAgent: "hello there",
+        RawBody: "hello there",
+        CommandBody: "hello there",
+        BodyForCommands: "hello there",
+        MediaPath: undefined,
+        MediaUrl: undefined,
+        MediaPaths: undefined,
+        MediaUrls: undefined,
+        MediaTypes: undefined,
+        Sticker: undefined,
+        StickerMediaIncluded: undefined,
+      }),
+      undefined,
+      {},
+    );
+
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
   });
 });

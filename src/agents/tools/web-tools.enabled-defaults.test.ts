@@ -1,5 +1,7 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { __testing as webSearchTesting } from "./web-search.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
@@ -150,6 +152,10 @@ function createProviderSuccessPayload(
   };
 }
 
+afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
+
 describe("web tools defaults", () => {
   it("enables web_fetch by default (non-sandbox)", () => {
     const tool = createWebFetchTool({ config: {}, sandboxed: false });
@@ -200,6 +206,55 @@ describe("web tools defaults", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(String(mockFetch.mock.calls[0]?.[0])).toContain("generativelanguage.googleapis.com");
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
+  });
+
+  it("uses runtime-only web_search providers when runtime metadata is present", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "custom-search",
+      pluginName: "Custom Search",
+      source: "test",
+      provider: {
+        id: "custom",
+        label: "Custom Search",
+        hint: "Custom runtime provider",
+        envVars: ["CUSTOM_SEARCH_API_KEY"],
+        placeholder: "custom-...",
+        signupUrl: "https://example.com/signup",
+        autoDetectOrder: 1,
+        credentialPath: "tools.web.search.custom.apiKey",
+        getCredentialValue: () => "configured",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "custom runtime tool",
+          parameters: {},
+          execute: async () => ({ ok: true }),
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "custom",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+      runtimeWebSearch: {
+        providerConfigured: "custom",
+        providerSource: "configured",
+        selectedProvider: "custom",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+    });
+
+    expect(tool?.description).toBe("custom runtime tool");
   });
 });
 
@@ -571,7 +626,9 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     });
 
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(result?.details).toMatchObject({ error: "unsupported_domain_filter" });
+    expect((result?.details as { error?: string } | undefined)?.error).toMatch(
+      /^unsupported_(domain_filter|structured_filter)$/,
+    );
   });
 
   it("keeps Search API schema params visible before runtime auth routing", () => {

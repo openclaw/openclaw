@@ -1,4 +1,4 @@
-import type { Style } from "./zca-client.js";
+import type { Style } from "./zca-constants.js";
 
 export type ZcaFriend = {
   userId: string;

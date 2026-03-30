@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
@@ -29,24 +31,32 @@ const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
 
 type FallbackGatewayContextState = {
   context: GatewayRequestContext | undefined;
+  resolveContext: (() => GatewayRequestContext | undefined) | undefined;
 };
 
-const fallbackGatewayContextState = (() => {
-  const globalState = globalThis as typeof globalThis & {
-    [FALLBACK_GATEWAY_CONTEXT_STATE_KEY]?: FallbackGatewayContextState;
-  };
-  const existing = globalState[FALLBACK_GATEWAY_CONTEXT_STATE_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: FallbackGatewayContextState = { context: undefined };
-  globalState[FALLBACK_GATEWAY_CONTEXT_STATE_KEY] = created;
-  return created;
-})();
+const getFallbackGatewayContextState = () =>
+  resolveGlobalSingleton<FallbackGatewayContextState>(FALLBACK_GATEWAY_CONTEXT_STATE_KEY, () => ({
+    context: undefined,
+    resolveContext: undefined,
+  }));
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
-  // TODO: This startup snapshot can become stale if runtime config/context changes.
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
+  fallbackGatewayContextState.resolveContext = undefined;
+}
+
+export function setFallbackGatewayContextResolver(
+  resolveContext: () => GatewayRequestContext | undefined,
+): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.resolveContext = resolveContext;
+}
+
+function getFallbackGatewayContext(): GatewayRequestContext | undefined {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  const resolved = fallbackGatewayContextState.resolveContext?.();
+  return resolved ?? fallbackGatewayContextState.context;
 }
 
 type PluginSubagentOverridePolicy = {
@@ -64,20 +74,10 @@ const PLUGIN_SUBAGENT_POLICY_STATE_KEY: unique symbol = Symbol.for(
   "openclaw.pluginSubagentOverridePolicyState",
 );
 
-const pluginSubagentPolicyState: PluginSubagentPolicyState = (() => {
-  const globalState = globalThis as typeof globalThis & {
-    [PLUGIN_SUBAGENT_POLICY_STATE_KEY]?: PluginSubagentPolicyState;
-  };
-  const existing = globalState[PLUGIN_SUBAGENT_POLICY_STATE_KEY];
-  if (existing) {
-    return existing;
-  }
-  const created: PluginSubagentPolicyState = {
+const getPluginSubagentPolicyState = () =>
+  resolveGlobalSingleton<PluginSubagentPolicyState>(PLUGIN_SUBAGENT_POLICY_STATE_KEY, () => ({
     policies: {},
-  };
-  globalState[PLUGIN_SUBAGENT_POLICY_STATE_KEY] = created;
-  return created;
-})();
+  }));
 
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -100,7 +100,8 @@ function normalizeAllowedModelRef(raw: string): string | null {
   return `${normalized.provider}/${normalized.model}`;
 }
 
-function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): void {
+export function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): void {
+  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const normalized = normalizePluginsConfig(cfg.plugins);
   const policies: PluginSubagentPolicyState["policies"] = {};
   for (const [pluginId, entry] of Object.entries(normalized.entries)) {
@@ -143,6 +144,7 @@ function authorizeFallbackModelOverride(params: {
   provider?: string;
   model?: string;
 }): { allowed: true } | { allowed: false; reason: string } {
+  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const pluginId = params.pluginId?.trim();
   if (!pluginId) {
     return {
@@ -154,7 +156,10 @@ function authorizeFallbackModelOverride(params: {
   if (!policy?.allowModelOverride) {
     return {
       allowed: false,
-      reason: `plugin "${pluginId}" is not trusted for fallback provider/model override requests.`,
+      reason:
+        `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
+        "See https://docs.openclaw.ai/tools/plugin#runtime-helpers and search for: " +
+        "plugins.entries.<id>.subagent.allowModelOverride",
     };
   }
   if (policy.allowAnyModel) {
@@ -248,7 +253,7 @@ async function dispatchGatewayMethod<T>(
   },
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.context ?? fallbackGatewayContextState.context;
+  const context = scope?.context ?? getFallbackGatewayContext();
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
@@ -288,7 +293,7 @@ async function dispatchGatewayMethod<T>(
   return result.payload as T;
 }
 
-function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
+export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
       key: params.sessionKey,
@@ -363,16 +368,10 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod(
-        "sessions.delete",
-        {
-          key: params.sessionKey,
-          deleteTranscript: params.deleteTranscript ?? true,
-        },
-        {
-          syntheticScopes: [ADMIN_SCOPE],
-        },
-      );
+      await dispatchGatewayMethod("sessions.delete", {
+        key: params.sessionKey,
+        deleteTranscript: params.deleteTranscript ?? true,
+      });
     },
   };
 }
@@ -391,19 +390,19 @@ export function loadGatewayPlugins(params: {
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
-  logDiagnostics?: boolean;
 }) {
-  setPluginSubagentOverridePolicies(params.cfg);
-  // Set the process-global gateway subagent runtime BEFORE loading plugins.
-  // Gateway-owned registries may already exist from schema loads, so the
-  // gateway path opts those runtimes into late binding rather than changing
-  // the default subagent behavior for every plugin runtime in the process.
-  const gatewaySubagent = createGatewaySubagentRuntime();
-  setGatewaySubagentRuntime(gatewaySubagent);
-
-  const pluginRegistry = loadOpenClawPlugins({
+  const resolvedConfig = applyPluginAutoEnable({
     config: params.cfg,
+    env: process.env,
+  }).config;
+  const pluginRegistry = loadOpenClawPlugins({
+    config: resolvedConfig,
     workspaceDir: params.workspaceDir,
+    onlyPluginIds: resolveGatewayStartupPluginIds({
+      config: resolvedConfig,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+    }),
     logger: {
       info: (msg) => params.log.info(msg),
       warn: (msg) => params.log.warn(msg),
@@ -418,23 +417,5 @@ export function loadGatewayPlugins(params: {
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
-  if ((params.logDiagnostics ?? true) && pluginRegistry.diagnostics.length > 0) {
-    for (const diag of pluginRegistry.diagnostics) {
-      const details = [
-        diag.pluginId ? `plugin=${diag.pluginId}` : null,
-        diag.source ? `source=${diag.source}` : null,
-      ]
-        .filter((entry): entry is string => Boolean(entry))
-        .join(", ");
-      const message = details
-        ? `[plugins] ${diag.message} (${details})`
-        : `[plugins] ${diag.message}`;
-      if (diag.level === "error") {
-        params.log.error(message);
-      } else {
-        params.log.info(message);
-      }
-    }
-  }
   return { pluginRegistry, gatewayMethods };
 }

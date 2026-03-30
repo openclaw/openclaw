@@ -1,14 +1,20 @@
 import { appendCronStyleCurrentTimeLine } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveWhatsAppHeartbeatRecipients } from "openclaw/plugin-sdk/channel-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  emitHeartbeatEvent,
+  resolveHeartbeatVisibility,
+  resolveIndicatorType,
+} from "openclaw/plugin-sdk/channel-runtime";
+import { canonicalizeMainSessionAlias, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionKey,
   resolveStorePath,
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
-import { emitHeartbeatEvent, resolveIndicatorType } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveHeartbeatVisibility } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveHeartbeatReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -21,10 +27,17 @@ import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { newConnectionId } from "../reconnect.js";
+import { resolveWhatsAppHeartbeatRecipients } from "../runtime-api.js";
 import { sendMessageWhatsApp } from "../send.js";
 import { formatError } from "../session.js";
 import { whatsappHeartbeatLog } from "./loggers.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
+
+function resolveDefaultAgentIdFromConfig(cfg: ReturnType<typeof loadConfig>): string {
+  const agents = cfg.agents?.list ?? [];
+  const chosen = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
+  return chosen.trim().toLowerCase() || "main";
+}
 
 export async function runWebHeartbeatOnce(opts: {
   cfg?: ReturnType<typeof loadConfig>;
@@ -78,7 +91,13 @@ export async function runWebHeartbeatOnce(opts: {
   const sessionCfg = cfg.session;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  // Canonicalize so the written key matches what read paths produce (#29683).
+  const rawSessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolveDefaultAgentIdFromConfig(cfg),
+    sessionKey: rawSessionKey,
+  });
   if (sessionId) {
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);
@@ -97,7 +116,7 @@ export async function runWebHeartbeatOnce(opts: {
       };
     });
   }
-  const sessionSnapshot = getSessionSnapshot(cfg, to, true);
+  const sessionSnapshot = getSessionSnapshot(cfg, to, true, { sessionKey });
   if (verbose) {
     heartbeatLogger.info(
       {
@@ -178,10 +197,7 @@ export async function runWebHeartbeatOnce(opts: {
     );
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
 
-    if (
-      !replyPayload ||
-      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
-    ) {
+    if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
       heartbeatLogger.info(
         {
           to: redactedTo,
@@ -201,7 +217,8 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    const hasMedia = Boolean(replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0);
+    const reply = resolveSendableOutboundReplyParts(replyPayload);
+    const hasMedia = reply.hasMedia;
     const ackMaxChars = Math.max(
       0,
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -250,7 +267,7 @@ export async function runWebHeartbeatOnce(opts: {
       );
     }
 
-    const finalText = stripped.text || replyPayload.text || "";
+    const finalText = stripped.text || reply.text;
 
     // Check if alerts are disabled for WhatsApp
     if (!visibility.showAlerts) {

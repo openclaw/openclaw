@@ -4,9 +4,10 @@ import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
-import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { buildCliRespawnPlan } from "./entry.respawn.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
@@ -65,46 +66,16 @@ if (
     process.env.FORCE_COLOR = "0";
   }
 
-  const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-
-  function hasExperimentalWarningSuppressed(): boolean {
-    const nodeOptions = process.env.NODE_OPTIONS ?? "";
-    if (nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) || nodeOptions.includes("--no-warnings")) {
-      return true;
-    }
-    for (const arg of process.execArgv) {
-      if (arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings") {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function ensureExperimentalWarningSuppressed(): boolean {
-    if (shouldSkipRespawnForArgv(process.argv)) {
-      return false;
-    }
-    if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
-      return false;
-    }
-    if (isTruthyEnvValue(process.env.OPENCLAW_NODE_OPTIONS_READY)) {
-      return false;
-    }
-    if (hasExperimentalWarningSuppressed()) {
+  function ensureCliRespawnReady(): boolean {
+    const plan = buildCliRespawnPlan();
+    if (!plan) {
       return false;
     }
 
-    // Respawn guard (and keep recursion bounded if something goes wrong).
-    process.env.OPENCLAW_NODE_OPTIONS_READY = "1";
-    // Pass flag as a Node CLI option, not via NODE_OPTIONS (--disable-warning is disallowed in NODE_OPTIONS).
-    const child = spawn(
-      process.execPath,
-      [EXPERIMENTAL_WARNING_FLAG, ...process.execArgv, ...process.argv.slice(1)],
-      {
-        stdio: "inherit",
-        env: process.env,
-      },
-    );
+    const child = spawn(process.execPath, plan.argv, {
+      stdio: "inherit",
+      env: plan.env,
+    });
 
     attachChildProcessBridge(child);
 
@@ -129,6 +100,9 @@ if (
   }
 
   function tryHandleRootVersionFastPath(argv: string[]): boolean {
+    if (resolveCliContainerTarget(argv)) {
+      return false;
+    }
     if (!isRootVersionInvocation(argv)) {
       return false;
     }
@@ -150,11 +124,23 @@ if (
 
   process.argv = normalizeWindowsArgv(process.argv);
 
-  if (!ensureExperimentalWarningSuppressed()) {
-    const parsed = parseCliProfileArgs(process.argv);
+  if (!ensureCliRespawnReady()) {
+    const parsedContainer = parseCliContainerArgs(process.argv);
+    if (!parsedContainer.ok) {
+      console.error(`[openclaw] ${parsedContainer.error}`);
+      process.exit(2);
+    }
+
+    const parsed = parseCliProfileArgs(parsedContainer.argv);
     if (!parsed.ok) {
       // Keep it simple; Commander will handle rich help/errors after we strip flags.
       console.error(`[openclaw] ${parsed.error}`);
+      process.exit(2);
+    }
+
+    const containerTargetName = resolveCliContainerTarget(process.argv);
+    if (containerTargetName && parsed.profile) {
+      console.error("[openclaw] --container cannot be combined with --profile/--dev");
       process.exit(2);
     }
 
@@ -173,10 +159,14 @@ if (
 export function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
-    outputRootHelp?: () => void;
+    outputRootHelp?: () => void | Promise<void>;
     onError?: (error: unknown) => void;
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): boolean {
+  if (resolveCliContainerTarget(argv, deps.env)) {
+    return false;
+  }
   if (!isRootHelpInvocation(argv)) {
     return false;
   }
@@ -190,16 +180,14 @@ export function tryHandleRootHelpFastPath(
       process.exitCode = 1;
     });
   if (deps.outputRootHelp) {
-    try {
-      deps.outputRootHelp();
-    } catch (error) {
-      handleError(error);
-    }
+    Promise.resolve()
+      .then(() => deps.outputRootHelp?.())
+      .catch(handleError);
     return true;
   }
   import("./cli/program/root-help.js")
     .then(({ outputRootHelp }) => {
-      outputRootHelp();
+      return outputRootHelp();
     })
     .catch(handleError);
   return true;

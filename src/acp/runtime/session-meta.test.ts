@@ -10,27 +10,20 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
-  return {
-    ...actual,
-    resolveAllAgentSessionStoreTargets: (cfg: OpenClawConfig, opts: unknown) =>
-      hoisted.resolveAllAgentSessionStoreTargetsMock(cfg, opts),
-    loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
-  };
-});
-
-type SessionMetaModule = typeof import("./session-meta.js");
-
-let listAcpSessionEntries: SessionMetaModule["listAcpSessionEntries"];
+vi.mock("../../config/sessions.js", () => ({
+  loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+  resolveAllAgentSessionStoreTargets: (cfg: OpenClawConfig, opts: unknown) =>
+    hoisted.resolveAllAgentSessionStoreTargetsMock(cfg, opts),
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  updateSessionStore: vi.fn(),
+}));
+let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
 
 describe("listAcpSessionEntries", () => {
   beforeEach(async () => {
     vi.resetModules();
-    ({ listAcpSessionEntries } = await import("./session-meta.js"));
     vi.clearAllMocks();
+    ({ listAcpSessionEntries } = await import("./session-meta.js"));
   });
 
   it("reads ACP sessions from resolved configured store targets", async () => {

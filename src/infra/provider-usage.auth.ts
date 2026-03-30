@@ -110,9 +110,9 @@ async function resolveOAuthToken(params: {
     }
     try {
       const resolved = await resolveApiKeyForProfile({
-        // Usage snapshots should work even if config profile metadata is stale.
-        // (e.g. config says api_key but the store has a token profile.)
-        cfg: undefined,
+        // Reuse the already-resolved config snapshot for token/ref resolution so
+        // usage snapshots don't trigger a second ambient loadConfig() call.
+        cfg: params.state.cfg,
         store: params.state.store,
         profileId,
         agentDir: params.state.agentDir,
@@ -229,17 +229,19 @@ export async function resolveProviderAuths(params: {
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
   agentDir?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
     return params.auth;
   }
 
   const state: UsageAuthState = {
-    cfg: loadConfig(),
+    cfg: params.config ?? loadConfig(),
     store: ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
     }),
-    env: process.env,
+    env: params.env ?? process.env,
     agentDir: params.agentDir,
   };
   const auths: ProviderAuth[] = [];

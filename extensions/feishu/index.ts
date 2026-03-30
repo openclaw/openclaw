@@ -9,7 +9,8 @@ import { setFeishuRuntime } from "./src/runtime.js";
 import { registerFeishuSubagentHooks } from "./src/subagent-hooks.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
 
-export { monitorFeishuProvider } from "./src/monitor.js";
+export { feishuPlugin } from "./src/channel.js";
+export { setFeishuRuntime } from "./src/runtime.js";
 export {
   sendMessageFeishu,
   sendCardFeishu,
@@ -43,7 +44,22 @@ export {
   buildMentionedCardContent,
   type MentionTarget,
 } from "./src/mention.js";
-export { feishuPlugin } from "./src/channel.js";
+
+type MonitorFeishuProvider = typeof import("./src/monitor.js").monitorFeishuProvider;
+
+let feishuMonitorPromise: Promise<typeof import("./src/monitor.js")> | null = null;
+
+function loadFeishuMonitorModule() {
+  feishuMonitorPromise ??= import("./src/monitor.js");
+  return feishuMonitorPromise;
+}
+
+export async function monitorFeishuProvider(
+  ...args: Parameters<MonitorFeishuProvider>
+): ReturnType<MonitorFeishuProvider> {
+  const { monitorFeishuProvider } = await loadFeishuMonitorModule();
+  return await monitorFeishuProvider(...args);
+}
 
 export default defineChannelPluginEntry({
   id: "feishu",

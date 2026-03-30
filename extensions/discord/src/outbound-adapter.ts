@@ -1,12 +1,18 @@
 import {
-  resolvePayloadMediaUrls,
-  sendPayloadMediaSequence,
-  sendTextMediaPayload,
-} from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+  attachChannelToResult,
+  type ChannelOutboundAdapter,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/outbound-runtime";
+import {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequenceOrFallback,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -19,6 +25,33 @@ import {
 import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+
+function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+  return Boolean((channelData as { execApproval?: unknown }).execApproval);
+}
+
+function neutralizeDiscordApprovalMentions(value: string): string {
+  return value
+    .replace(/@everyone/gi, "@\u200beveryone")
+    .replace(/@here/gi, "@\u200bhere")
+    .replace(/<@/g, "<@\u200b")
+    .replace(/<#/g, "<#\u200b");
+}
+
+function normalizeDiscordApprovalPayload<T extends { text?: string; channelData?: unknown }>(
+  payload: T,
+): T {
+  return hasApprovalChannelData(payload) && payload.text
+    ? {
+        ...payload,
+        text: neutralizeDiscordApprovalMentions(payload.text),
+      }
+    : payload;
+}
 
 function resolveDiscordOutboundTarget(params: {
   to: string;
@@ -90,12 +123,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
+  normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) => {
-    const payload = {
+    const payload = normalizeDiscordApprovalPayload({
       ...ctx.payload,
       text: ctx.payload.text ?? "",
-    };
+    });
     const discordData = payload.channelData?.discord as
       | { components?: DiscordComponentMessageSpec }
       | undefined;
@@ -123,18 +157,17 @@ export const discordOutbound: ChannelOutboundAdapter = {
       resolveOutboundSendDep<typeof sendMessageDiscord>(ctx.deps, "discord") ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId });
     const mediaUrls = resolvePayloadMediaUrls(payload);
-    if (mediaUrls.length === 0) {
-      const result = await sendDiscordComponentMessage(target, componentSpec, {
-        replyTo: ctx.replyToId ?? undefined,
-        accountId: ctx.accountId ?? undefined,
-        silent: ctx.silent ?? undefined,
-        cfg: ctx.cfg,
-      });
-      return { channel: "discord", ...result };
-    }
-    const lastResult = await sendPayloadMediaSequence({
+    const result = await sendPayloadMediaSequenceOrFallback({
       text: payload.text ?? "",
       mediaUrls,
+      fallbackResult: { messageId: "", channelId: target },
+      sendNoMedia: async () =>
+        await sendDiscordComponentMessage(target, componentSpec, {
+          replyTo: ctx.replyToId ?? undefined,
+          accountId: ctx.accountId ?? undefined,
+          silent: ctx.silent ?? undefined,
+          cfg: ctx.cfg,
+        }),
       send: async ({ text, mediaUrl, isFirst }) => {
         if (isFirst) {
           return await sendDiscordComponentMessage(target, componentSpec, {
@@ -157,68 +190,63 @@ export const discordOutbound: ChannelOutboundAdapter = {
         });
       },
     });
-    return lastResult
-      ? { channel: "discord", ...lastResult }
-      : { channel: "discord", messageId: "" };
+    return attachChannelToResult("discord", result);
   },
-  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
-    if (!silent) {
-      const webhookResult = await maybeSendDiscordWebhookText({
-        cfg,
-        text,
-        threadId,
-        accountId,
-        identity,
-        replyToId,
-      }).catch(() => null);
-      if (webhookResult) {
-        return { channel: "discord", ...webhookResult };
+  ...createAttachedChannelResultAdapter({
+    channel: "discord",
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
+      if (!silent) {
+        const webhookResult = await maybeSendDiscordWebhookText({
+          cfg,
+          text,
+          threadId,
+          accountId,
+          identity,
+          replyToId,
+        }).catch(() => null);
+        if (webhookResult) {
+          return webhookResult;
+        }
       }
-    }
-    const send =
-      resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
-    const target = resolveDiscordOutboundTarget({ to, threadId });
-    const result = await send(target, text, {
-      verbose: false,
-      replyTo: replyToId ?? undefined,
-      accountId: accountId ?? undefined,
-      silent: silent ?? undefined,
+      const send =
+        resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
+      return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
+        verbose: false,
+        replyTo: replyToId ?? undefined,
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
+        cfg,
+      });
+    },
+    sendMedia: async ({
       cfg,
-    });
-    return { channel: "discord", ...result };
-  },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    accountId,
-    deps,
-    replyToId,
-    threadId,
-    silent,
-  }) => {
-    const send =
-      resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
-    const target = resolveDiscordOutboundTarget({ to, threadId });
-    const result = await send(target, text, {
-      verbose: false,
+      to,
+      text,
       mediaUrl,
       mediaLocalRoots,
-      replyTo: replyToId ?? undefined,
-      accountId: accountId ?? undefined,
-      silent: silent ?? undefined,
-      cfg,
-    });
-    return { channel: "discord", ...result };
-  },
-  sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) => {
-    const target = resolveDiscordOutboundTarget({ to, threadId });
-    return await sendPollDiscord(target, poll, {
-      accountId: accountId ?? undefined,
-      silent: silent ?? undefined,
-      cfg,
-    });
-  },
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      silent,
+    }) => {
+      const send =
+        resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
+      return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
+        verbose: false,
+        mediaUrl,
+        mediaLocalRoots,
+        replyTo: replyToId ?? undefined,
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
+        cfg,
+      });
+    },
+    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
+      await sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
+        cfg,
+      }),
+  }),
 };

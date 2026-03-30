@@ -18,7 +18,7 @@ export function makeDirectPlugin(params: {
     capabilities: { chatTypes: ["direct"] },
     config: params.config,
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }

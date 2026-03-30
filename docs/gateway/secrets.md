@@ -21,6 +21,7 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Startup fails fast when an effectively active SecretRef cannot be resolved.
 - Reload uses atomic swap: full success, or keep the last-known-good snapshot.
 - Runtime requests read from the active in-memory snapshot only.
+- After the first successful config activation/load, runtime code paths keep reading that active in-memory snapshot until a successful reload swaps it.
 - Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
 
 This keeps secret-provider outages off hot request paths.
@@ -51,7 +52,7 @@ Examples of inactive surfaces:
   - In local mode without those remote surfaces:
     - `gateway.remote.token` is active when token auth can win and no env/auth token is configured.
     - `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
-- `gateway.auth.token` SecretRef is inactive for startup auth resolution when `OPENCLAW_GATEWAY_TOKEN` (or `CLAWDBOT_GATEWAY_TOKEN`) is set, because env token input wins for that runtime.
+- `gateway.auth.token` SecretRef is inactive for startup auth resolution when `OPENCLAW_GATEWAY_TOKEN` is set, because env token input wins for that runtime.
 
 ## Gateway auth surface diagnostics
 
@@ -288,6 +289,39 @@ Optional per-id errors:
 }
 ```
 
+## MCP server environment variables
+
+MCP server env vars configured via `plugins.entries.acpx.config.mcpServers` support SecretInput. This keeps API keys and tokens out of plaintext config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      acpx: {
+        enabled: true,
+        config: {
+          mcpServers: {
+            github: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-github"],
+              env: {
+                GITHUB_PERSONAL_ACCESS_TOKEN: {
+                  source: "env",
+                  provider: "default",
+                  id: "MCP_GITHUB_PAT",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plaintext string values still work. Env-template refs like `${MCP_SERVER_API_KEY}` and SecretRef objects are resolved during gateway activation before the MCP server process is spawned. As with other SecretRef surfaces, unresolved refs only block activation when the `acpx` plugin is effectively active.
+
 ## Sandbox SSH auth material
 
 The core `ssh` sandbox backend also supports SecretRefs for SSH auth material:
@@ -414,6 +448,11 @@ Findings include:
 - precedence shadowing (`auth-profiles.json` taking priority over `openclaw.json` refs)
 - legacy residues (`auth.json`, OAuth reminders)
 
+Exec note:
+
+- By default, audit skips exec SecretRef resolvability checks to avoid command side effects.
+- Use `openclaw secrets audit --allow-exec` to execute exec providers during audit.
+
 Header residue note:
 
 - Sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).
@@ -428,6 +467,11 @@ Interactive helper that:
 - captures SecretRef details (`source`, `provider`, `id`)
 - runs preflight resolution
 - can apply immediately
+
+Exec note:
+
+- Preflight skips exec SecretRef checks unless `--allow-exec` is set.
+- If you apply directly from `configure --apply` and the plan includes exec refs/providers, keep `--allow-exec` set for the apply step too.
 
 Helpful modes:
 
@@ -447,8 +491,15 @@ Apply a saved plan:
 
 ```bash
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --allow-exec
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-exec
 ```
+
+Exec note:
+
+- dry-run skips exec checks unless `--allow-exec` is set.
+- write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec` is set.
 
 For strict target/path contract details and exact rejection rules, see:
 

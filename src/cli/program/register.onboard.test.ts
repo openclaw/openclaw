@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setupWizardCommandMock = vi.fn();
 
@@ -45,10 +45,26 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/auth-choice-options.static.js",
+  "../../commands/auth-choice-options.js",
+  "../../commands/onboard-core-auth-flags.js",
+  "../../plugins/provider-auth-choices.js",
+  "../../commands/onboard.js",
+  "../../runtime.js",
+];
+
 let registerOnboardCommand: typeof import("./register.onboard.js").registerOnboardCommand;
 
 beforeAll(async () => {
   ({ registerOnboardCommand } = await import("./register.onboard.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerOnboardCommand", () => {

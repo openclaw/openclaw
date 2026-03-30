@@ -1,19 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { writeSkill } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSkill } from "../../../src/agents/skills.e2e-test-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,
+  listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import {
-  pluginCommandMocks,
-  resetPluginCommandMocks,
-} from "./bot-native-commands.plugin-command-test-support.js";
+import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 const tempDirs: string[] = [];
 
@@ -62,6 +60,10 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
         },
       ],
     };
+    const actualSkillCommands = await import("../../../src/auto-reply/skill-commands.js");
+    listSkillCommandsForAgents.mockImplementation(({ cfg, agentIds }) =>
+      actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
+    );
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams(cfg, {

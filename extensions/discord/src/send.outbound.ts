@@ -3,18 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMediaRaw } from "../../whatsapp/src/media.js";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import {
@@ -48,6 +48,7 @@ type DiscordSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  filename?: string;
   mediaLocalRoots?: readonly string[];
   verbose?: boolean;
   rest?: RequestClient;
@@ -214,6 +215,7 @@ export async function sendMessageDiscord(
           threadId,
           mediaCaption ?? "",
           opts.mediaUrl,
+          opts.filename,
           opts.mediaLocalRoots,
           mediaMaxBytes,
           undefined,
@@ -275,6 +277,7 @@ export async function sendMessageDiscord(
         channelId,
         textWithMentions,
         opts.mediaUrl,
+        opts.filename,
         opts.mediaLocalRoots,
         mediaMaxBytes,
         opts.replyTo,

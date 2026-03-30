@@ -427,7 +427,7 @@ https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md
 
 ### 无法访问 docs.openclaw.ai（SSL 错误），怎么办
 
-一些 Comcast/Xfinity 连接通过 Xfinity Advanced Security 错误地拦截了 `docs.openclaw.ai`。禁用该功能或将 `docs.openclaw.ai` 加入白名单，然后重试。更多详情：[故障排除](/help/troubleshooting#docsopenclawai-shows-an-ssl-error-comcastxfinity)。
+一些 Comcast/Xfinity 连接通过 Xfinity Advanced Security 错误地拦截了 `docs.openclaw.ai`。禁用该功能或将 `docs.openclaw.ai` 加入白名单，然后重试。
 请帮助我们在此处报告以解除封锁：https://spa.xfinity.com/check_url_status。
 
 如果仍然无法访问该网站，文档在 GitHub 上有镜像：
@@ -1266,15 +1266,26 @@ Gateway 网关监视配置文件并支持热重载：
 
 ### 如何启用网络搜索（和网页抓取）
 
-`web_fetch` 无需 API 密钥即可工作。`web_search` 需要 Brave Search API 密钥。**推荐：** 运行 `openclaw configure --section web` 将其存储在 `tools.web.search.apiKey` 中。环境变量替代方案：为 Gateway 网关进程设置 `BRAVE_API_KEY`。
+`web_fetch` 无需 API 密钥即可工作。`web_search` 需要所选提供商的 API 密钥。**推荐：** 运行 `openclaw configure --section web`。新的提供商专属配置会存储在 `plugins.entries.<plugin>.config.webSearch.*` 下。环境变量替代方案：为 Gateway 网关进程设置相应的提供商环境变量。
 
 ```json5
 {
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "BRAVE_API_KEY_HERE",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         enabled: true,
-        apiKey: "BRAVE_API_KEY_HERE",
+        provider: "brave",
         maxResults: 5,
       },
       fetch: {
@@ -1290,6 +1301,7 @@ Gateway 网关监视配置文件并支持热重载：
 - 如果你使用允许列表，添加 `web_search`/`web_fetch` 或 `group:web`。
 - `web_fetch` 默认启用（除非明确禁用）。
 - 守护进程从 `~/.openclaw/.env`（或服务环境）读取环境变量。
+- 旧的 `tools.web.search.*` 提供商路径仍通过兼容层继续生效，但不应再用于新配置。
 
 文档：[Web 工具](/tools/web)。
 

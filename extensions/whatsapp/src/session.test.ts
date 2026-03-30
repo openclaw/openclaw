@@ -1,13 +1,16 @@
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
-  await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
+
+let createWaSocket: typeof import("./session.js").createWaSocket;
+let formatError: typeof import("./session.js").formatError;
+let logWebSelfId: typeof import("./session.js").logWebSelfId;
+let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -22,7 +25,7 @@ async function emitCredsUpdateAndReadSaveCreds() {
 }
 
 function mockCredsJsonSpies(readContents: string) {
-  const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
+  const credsSuffix = path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json");
   const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
   const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
     if (typeof p !== "string") {
@@ -55,7 +58,10 @@ function mockCredsJsonSpies(readContents: string) {
 }
 
 describe("web session", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
+      await import("./session.js"));
     vi.clearAllMocks();
     resetBaileysMocks();
     resetLoadConfigMock();
@@ -129,6 +135,36 @@ describe("web session", () => {
 
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net)"),
+    );
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it("logWebSelfId prints cached lid details when creds include a lid", () => {
+    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
+      if (typeof p !== "string") {
+        return false;
+      }
+      return p.endsWith("creds.json");
+    });
+    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
+      if (typeof p === "string" && p.endsWith("creds.json")) {
+        return JSON.stringify({
+          me: { id: "12345@s.whatsapp.net", lid: "777@lid" },
+        });
+      }
+      throw new Error(`unexpected readFileSync path: ${String(p)}`);
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    logWebSelfId("/tmp/wa-creds", runtime as never, true);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net, lid 777@lid)"),
     );
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -263,8 +299,8 @@ describe("web session", () => {
   it("rotates creds backup when creds.json is valid JSON", async () => {
     const creds = mockCredsJsonSpies("{}");
     const backupSuffix = path.join(
-      ".openclaw",
-      "credentials",
+      "/tmp",
+      "openclaw-oauth",
       "whatsapp",
       "default",
       "creds.json.bak",

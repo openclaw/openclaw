@@ -12,7 +12,7 @@ import {
   type SessionEntry,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import {
   resolveSessionStoreTargetsOrExit,
@@ -325,21 +325,15 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   if (opts.dryRun) {
     if (opts.json) {
       if (previewResults.length === 1) {
-        runtime.log(JSON.stringify(previewResults[0]?.summary ?? {}, null, 2));
+        writeRuntimeJson(runtime, previewResults[0]?.summary ?? {});
         return;
       }
-      runtime.log(
-        JSON.stringify(
-          {
-            allAgents: true,
-            mode,
-            dryRun: true,
-            stores: previewResults.map((result) => result.summary),
-          },
-          null,
-          2,
-        ),
-      );
+      writeRuntimeJson(runtime, {
+        allAgents: true,
+        mode,
+        dryRun: true,
+        stores: previewResults.map((result) => result.summary),
+      });
       return;
     }
 
@@ -436,21 +430,15 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
 
   if (opts.json) {
     if (appliedSummaries.length === 1) {
-      runtime.log(JSON.stringify(appliedSummaries[0] ?? {}, null, 2));
+      writeRuntimeJson(runtime, appliedSummaries[0] ?? {});
       return;
     }
-    runtime.log(
-      JSON.stringify(
-        {
-          allAgents: true,
-          mode,
-          dryRun: false,
-          stores: appliedSummaries,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      allAgents: true,
+      mode,
+      dryRun: false,
+      stores: appliedSummaries,
+    });
     return;
   }
 

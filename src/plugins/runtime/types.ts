@@ -50,6 +50,7 @@ export type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+/** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;

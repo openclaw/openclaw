@@ -1,7 +1,9 @@
+import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
 import {
+  RECENT_WINDOW_MINUTES,
   type SubagentsCommandContext,
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
@@ -12,7 +14,7 @@ function formatConversationBindingText(params: {
   channel: string;
   conversationId: string;
 }): string {
-  if (params.channel === "discord") {
+  if (params.channel === "discord" || params.channel === "matrix") {
     return `thread:${params.conversationId}`;
   }
   if (params.channel === "telegram") {
@@ -45,18 +47,48 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     return resolved;
   };
 
-  const visibleRuns = sortSubagentRuns(runs).filter((entry) => {
-    if (!entry.endedAt) {
-      return true;
+  const dedupedRuns: typeof runs = [];
+  const seenChildSessionKeys = new Set<string>();
+  for (const entry of sortSubagentRuns(runs)) {
+    if (seenChildSessionKeys.has(entry.childSessionKey)) {
+      continue;
     }
-    return resolveSessionBindings(entry.childSessionKey).length > 0;
-  });
+    seenChildSessionKeys.add(entry.childSessionKey);
+    dedupedRuns.push(entry);
+  }
+
+  const recentCutoff = Date.now() - RECENT_WINDOW_MINUTES * 60_000;
+  const numericOrder = [
+    ...dedupedRuns.filter(
+      (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
+    ),
+    ...dedupedRuns.filter(
+      (entry) =>
+        entry.endedAt &&
+        countPendingDescendantRuns(entry.childSessionKey) === 0 &&
+        entry.endedAt >= recentCutoff,
+    ),
+  ];
+  const indexByChildSessionKey = new Map(
+    numericOrder.map((entry, idx) => [entry.childSessionKey, idx + 1] as const),
+  );
+
+  const visibleRuns: typeof dedupedRuns = [];
+  for (const entry of dedupedRuns) {
+    const visible =
+      !entry.endedAt ||
+      countPendingDescendantRuns(entry.childSessionKey) > 0 ||
+      resolveSessionBindings(entry.childSessionKey).length > 0;
+    if (!visible) {
+      continue;
+    }
+    visibleRuns.push(entry);
+  }
 
   const lines = ["agents:", "-----"];
   if (visibleRuns.length === 0) {
     lines.push("(none)");
   } else {
-    let index = 1;
     for (const entry of visibleRuns) {
       const binding = resolveSessionBindings(entry.childSessionKey)[0];
       const bindingText = binding
@@ -64,11 +96,12 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
             channel,
             conversationId: binding.conversation.conversationId,
           })
-        : channel === "discord" || channel === "telegram"
+        : channel === "discord" || channel === "telegram" || channel === "matrix"
           ? "unbound"
           : "bindings available on discord/telegram";
-      lines.push(`${index}. ${formatRunLabel(entry)} (${bindingText})`);
-      index += 1;
+      const resolvedIndex = indexByChildSessionKey.get(entry.childSessionKey);
+      const prefix = resolvedIndex ? `${resolvedIndex}.` : "-";
+      lines.push(`${prefix} ${formatRunLabel(entry)} (${bindingText})`);
     }
   }
 

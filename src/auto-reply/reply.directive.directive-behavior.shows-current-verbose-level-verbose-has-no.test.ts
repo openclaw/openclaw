@@ -1,5 +1,5 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
@@ -14,7 +14,8 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
-import { getReplyFromConfig } from "./reply.js";
+
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 
 const COMMAND_MESSAGE_BASE = {
   From: "+1222",
@@ -124,6 +125,11 @@ function makeCommandMessage(body: string, from = "+1222") {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ getReplyFromConfig } = await import("./reply.js"));
+  });
+
   it("reports current directive defaults when no arguments are provided", async () => {
     await withTempHome(async (home) => {
       const fastText = await runCommand(home, "/fast", {
@@ -136,7 +142,7 @@ describe("directive behavior", () => {
         },
       });
       expect(fastText).toContain("Current fast mode: on (config)");
-      expect(fastText).toContain("Options: on, off.");
+      expect(fastText).toContain("Options: status, on, off.");
 
       const verboseText = await runCommand(home, "/verbose", {
         defaults: { verboseDefault: "on" },
@@ -165,10 +171,10 @@ describe("directive behavior", () => {
         },
       });
       expect(execText).toContain(
-        "Current exec defaults: host=gateway, security=allowlist, ask=always, node=mac-1.",
+        "Current exec defaults: host=gateway, effective=gateway, security=allowlist, ask=always, node=mac-1.",
       );
       expect(execText).toContain(
-        "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+        "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
       );
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
@@ -191,6 +197,23 @@ describe("directive behavior", () => {
 
       const fastText = await runCommand(home, "/fast");
       expect(fastText).toContain("Current fast mode: off");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+  it("treats /fast status like the no-argument status query", async () => {
+    await withTempHome(async (home) => {
+      const statusText = await runCommand(home, "/fast status", {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-5": {
+              params: { fastMode: true },
+            },
+          },
+        },
+      });
+
+      expect(statusText).toContain("Current fast mode: on (config)");
+      expect(statusText).toContain("Options: status, on, off.");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });

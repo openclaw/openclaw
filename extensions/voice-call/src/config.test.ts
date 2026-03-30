@@ -11,6 +11,15 @@ function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): Voi
   return createVoiceCallBaseConfig({ provider });
 }
 
+function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
+  const tts = config.tts;
+  const elevenlabs = tts?.providers?.elevenlabs;
+  if (!elevenlabs || typeof elevenlabs !== "object") {
+    throw new Error("voice-call config did not preserve nested elevenlabs TTS config");
+  }
+  return { tts, elevenlabs };
+}
+
 describe("validateProviderConfig", () => {
   const originalEnv = { ...process.env };
   const clearProviderEnv = () => {
@@ -194,25 +203,28 @@ describe("normalizeVoiceCallConfig", () => {
     const normalized = normalizeVoiceCallConfig({
       tts: {
         provider: "elevenlabs",
-        elevenlabs: {
-          apiKey: {
-            source: "env",
-            provider: "elevenlabs",
-            id: "ELEVENLABS_API_KEY",
-          },
-          voiceSettings: {
-            speed: 1.1,
+        providers: {
+          elevenlabs: {
+            apiKey: {
+              source: "env",
+              provider: "elevenlabs",
+              id: "ELEVENLABS_API_KEY",
+            },
+            voiceSettings: {
+              speed: 1.1,
+            },
           },
         },
       },
     });
 
-    expect(normalized.tts?.provider).toBe("elevenlabs");
-    expect(normalized.tts?.elevenlabs?.apiKey).toEqual({
+    const { tts, elevenlabs } = requireElevenLabsTtsConfig(normalized);
+    expect(tts.provider).toBe("elevenlabs");
+    expect(elevenlabs.apiKey).toEqual({
       source: "env",
       provider: "elevenlabs",
       id: "ELEVENLABS_API_KEY",
     });
-    expect(normalized.tts?.elevenlabs?.voiceSettings).toEqual({ speed: 1.1 });
+    expect(elevenlabs.voiceSettings).toEqual({ speed: 1.1 });
   });
 });

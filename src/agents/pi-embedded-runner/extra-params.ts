@@ -1,23 +1,28 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { SettingsManager } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  prepareProviderExtraParams,
-  wrapProviderStreamFn,
+  prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
   resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
+import { createBedrockNoCacheWrapper, isAnthropicBedrockModel } from "./bedrock-stream-wrappers.js";
+import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
+import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -31,10 +36,37 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
 } from "./openai-stream-wrappers.js";
-import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
+
+const defaultProviderRuntimeDeps = {
+  prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
+  wrapProviderStreamFn: wrapProviderStreamFnRuntime,
+};
+
+const providerRuntimeDeps = {
+  ...defaultProviderRuntimeDeps,
+};
+
+export const __testing = {
+  setProviderRuntimeDepsForTest(
+    deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
+  ): void {
+    providerRuntimeDeps.prepareProviderExtraParams =
+      deps?.prepareProviderExtraParams ?? defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.wrapProviderStreamFn =
+      deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
+  },
+  resetProviderRuntimeDepsForTest(): void {
+    providerRuntimeDeps.prepareProviderExtraParams =
+      defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.wrapProviderStreamFn = defaultProviderRuntimeDeps.wrapProviderStreamFn;
+  },
+};
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -71,6 +103,16 @@ export function resolveExtraParams(params: {
     delete merged.parallelToolCalls;
   }
 
+  const resolvedTextVerbosity = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "text_verbosity",
+    "textVerbosity",
+  );
+  if (resolvedTextVerbosity !== undefined) {
+    merged.text_verbosity = resolvedTextVerbosity;
+    delete merged.textVerbosity;
+  }
+
   return merged;
 }
 
@@ -78,6 +120,84 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   openaiWsWarmup?: boolean;
 };
+type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
+
+function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
+  return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
+}
+
+function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
+  return Object.hasOwn(settings, "transport");
+}
+
+export function resolvePreparedExtraParams(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+  extraParamsOverride?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+  agentId?: string;
+  resolvedExtraParams?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const resolvedExtraParams =
+    params.resolvedExtraParams ??
+    resolveExtraParams({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
+  const override =
+    params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
+      ? sanitizeExtraParamsRecord(
+          Object.fromEntries(
+            Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+          ),
+        )
+      : undefined;
+  const merged = {
+    ...sanitizeExtraParamsRecord(resolvedExtraParams),
+    ...override,
+  };
+  return (
+    providerRuntimeDeps.prepareProviderExtraParams({
+      provider: params.provider,
+      config: params.cfg,
+      context: {
+        config: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        extraParams: merged,
+        thinkingLevel: params.thinkingLevel,
+      },
+    }) ?? merged
+  );
+}
+
+function sanitizeExtraParamsRecord(
+  value: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
+    ),
+  );
+}
+
+export function resolveAgentTransportOverride(params: {
+  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  effectiveExtraParams: Record<string, unknown> | undefined;
+}): SupportedTransport | undefined {
+  const globalSettings = params.settingsManager.getGlobalSettings();
+  const projectSettings = params.settingsManager.getProjectSettings();
+  if (hasExplicitTransportSetting(globalSettings) || hasExplicitTransportSetting(projectSettings)) {
+    return undefined;
+  }
+  return resolveSupportedTransport(params.effectiveExtraParams?.transport);
+}
 
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
@@ -95,11 +215,14 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
-  const transport = extraParams.transport;
-  if (transport === "sse" || transport === "websocket" || transport === "auto") {
+  const transport = resolveSupportedTransport(extraParams.transport);
+  if (transport) {
     streamParams.transport = transport;
-  } else if (transport != null) {
-    const transportSummary = typeof transport === "string" ? transport : typeof transport;
+  } else if (extraParams.transport != null) {
+    const transportSummary =
+      typeof extraParams.transport === "string"
+        ? extraParams.transport
+        : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
@@ -125,95 +248,6 @@ function createStreamFnWithExtraParams(
   };
 
   return wrappedStreamFn;
-}
-
-function isGemini31Model(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
-  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
-}
-
-function mapThinkLevelToGoogleThinkingLevel(
-  thinkingLevel: ThinkLevel,
-): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
-  switch (thinkingLevel) {
-    case "minimal":
-      return "MINIMAL";
-    case "low":
-      return "LOW";
-    case "medium":
-    case "adaptive":
-      return "MEDIUM";
-    case "high":
-    case "xhigh":
-      return "HIGH";
-    default:
-      return undefined;
-  }
-}
-
-function sanitizeGoogleThinkingPayload(params: {
-  payload: unknown;
-  modelId?: string;
-  thinkingLevel?: ThinkLevel;
-}): void {
-  if (!params.payload || typeof params.payload !== "object") {
-    return;
-  }
-  const payloadObj = params.payload as Record<string, unknown>;
-  const config = payloadObj.config;
-  if (!config || typeof config !== "object") {
-    return;
-  }
-  const configObj = config as Record<string, unknown>;
-  const thinkingConfig = configObj.thinkingConfig;
-  if (!thinkingConfig || typeof thinkingConfig !== "object") {
-    return;
-  }
-  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
-  const thinkingBudget = thinkingConfigObj.thinkingBudget;
-  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
-    return;
-  }
-
-  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
-  // is invalid for Google-compatible backends and can lead to malformed handling.
-  delete thinkingConfigObj.thinkingBudget;
-
-  if (
-    typeof params.modelId === "string" &&
-    isGemini31Model(params.modelId) &&
-    params.thinkingLevel &&
-    params.thinkingLevel !== "off" &&
-    thinkingConfigObj.thinkingLevel === undefined
-  ) {
-    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
-    if (mappedLevel) {
-      thinkingConfigObj.thinkingLevel = mappedLevel;
-    }
-  }
-}
-
-function createGoogleThinkingPayloadWrapper(
-  baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const onPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (model.api === "google-generative-ai") {
-          sanitizeGoogleThinkingPayload({
-            payload,
-            modelId: model.id,
-            thinkingLevel,
-          });
-        }
-        return onPayload?.(payload, model);
-      },
-    });
-  };
 }
 
 function resolveAliasedParamValue(
@@ -250,17 +284,193 @@ function createParallelToolCallsWrapper(
     log.debug(
       `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
     );
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          (payload as Record<string, unknown>).parallel_tool_calls = enabled;
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      payloadObj.parallel_tool_calls = enabled;
     });
   };
+}
+
+type ApplyExtraParamsContext = {
+  agent: { streamFn?: StreamFn };
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+  workspaceDir?: string;
+  thinkingLevel?: ThinkLevel;
+  model?: ProviderRuntimeModel;
+  effectiveExtraParams: Record<string, unknown>;
+  resolvedExtraParams?: Record<string, unknown>;
+  override?: Record<string, unknown>;
+};
+
+function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
+  if (ctx.provider === "openai" || ctx.provider === "openai-codex") {
+    if (ctx.provider === "openai") {
+      // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+      ctx.agent.streamFn = createOpenAIDefaultTransportWrapper(ctx.agent.streamFn);
+    }
+    ctx.agent.streamFn = createOpenAIAttributionHeadersWrapper(ctx.agent.streamFn);
+  }
+
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    ctx.agent.streamFn,
+    ctx.effectiveExtraParams,
+    ctx.provider,
+  );
+
+  if (wrappedStreamFn) {
+    log.debug(`applying extraParams to agent streamFn for ${ctx.provider}/${ctx.modelId}`);
+    ctx.agent.streamFn = wrappedStreamFn;
+  }
+
+  const anthropicBetas = resolveAnthropicBetas(ctx.effectiveExtraParams, ctx.provider, ctx.modelId);
+  if (anthropicBetas?.length) {
+    log.debug(
+      `applying Anthropic beta header for ${ctx.provider}/${ctx.modelId}: ${anthropicBetas.join(",")}`,
+    );
+    ctx.agent.streamFn = createAnthropicBetaHeadersWrapper(ctx.agent.streamFn, anthropicBetas);
+  }
+
+  if (
+    shouldApplySiliconFlowThinkingOffCompat({
+      provider: ctx.provider,
+      modelId: ctx.modelId,
+      thinkingLevel: ctx.thinkingLevel,
+    })
+  ) {
+    log.debug(
+      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${ctx.provider}/${ctx.modelId})`,
+    );
+    ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
+  }
+
+  ctx.agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(ctx.agent.streamFn, {
+    config: ctx.cfg,
+    workspaceDir: ctx.workspaceDir,
+  });
+}
+
+function applyPostPluginStreamWrappers(
+  ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
+): void {
+  if (
+    !ctx.providerWrapperHandled &&
+    shouldApplyMoonshotPayloadCompat({ provider: ctx.provider, modelId: ctx.modelId })
+  ) {
+    // Preserve the legacy Moonshot compatibility path when no plugin wrapper
+    // actually handled the stream function. This mainly covers tests and
+    // disabled plugins for the native Moonshot provider.
+    const thinkingType = resolveMoonshotThinkingType({
+      configuredThinking: ctx.effectiveExtraParams?.thinking,
+      thinkingLevel: ctx.thinkingLevel,
+    });
+    ctx.agent.streamFn = createMoonshotThinkingWrapper(ctx.agent.streamFn, thinkingType);
+  }
+
+  if (ctx.provider === "amazon-bedrock" && !isAnthropicBedrockModel(ctx.modelId)) {
+    log.debug(
+      `disabling prompt caching for non-Anthropic Bedrock model ${ctx.provider}/${ctx.modelId}`,
+    );
+    ctx.agent.streamFn = createBedrockNoCacheWrapper(ctx.agent.streamFn);
+  }
+
+  // Guard Google payloads against invalid negative thinking budgets emitted by
+  // upstream model-ID heuristics for Gemini 3.1 variants.
+  ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
+
+  if (ctx.provider === "anthropic") {
+    const anthropicServiceTier = resolveAnthropicServiceTier(ctx.effectiveExtraParams);
+    if (anthropicServiceTier) {
+      log.debug(
+        `applying Anthropic service_tier=${anthropicServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createAnthropicServiceTierWrapper(
+        ctx.agent.streamFn,
+        anthropicServiceTier,
+      );
+    }
+  }
+
+  const anthropicFastMode = resolveAnthropicFastMode(ctx.effectiveExtraParams);
+  if (anthropicFastMode !== undefined) {
+    log.debug(
+      `applying Anthropic fast mode=${anthropicFastMode} for ${ctx.provider}/${ctx.modelId}`,
+    );
+    ctx.agent.streamFn = createAnthropicFastModeWrapper(ctx.agent.streamFn, anthropicFastMode);
+  }
+
+  if (typeof ctx.effectiveExtraParams?.fastMode === "boolean") {
+    log.debug(
+      `applying MiniMax fast mode=${ctx.effectiveExtraParams.fastMode} for ${ctx.provider}/${ctx.modelId}`,
+    );
+    ctx.agent.streamFn = createMinimaxFastModeWrapper(
+      ctx.agent.streamFn,
+      ctx.effectiveExtraParams.fastMode,
+    );
+  }
+
+  const openAIFastMode = resolveOpenAIFastMode(ctx.effectiveExtraParams);
+  if (openAIFastMode) {
+    log.debug(`applying OpenAI fast mode for ${ctx.provider}/${ctx.modelId}`);
+    ctx.agent.streamFn = createOpenAIFastModeWrapper(ctx.agent.streamFn);
+  }
+
+  if (ctx.provider === "openai" || ctx.provider === "openai-codex") {
+    const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
+    if (openAIServiceTier) {
+      log.debug(
+        `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    }
+
+    const rawTextVerbosity = resolveAliasedParamValue(
+      [ctx.resolvedExtraParams, ctx.override],
+      "text_verbosity",
+      "textVerbosity",
+    );
+    if (rawTextVerbosity === null) {
+      log.debug("text verbosity suppressed by null override, skipping injection");
+    } else if (rawTextVerbosity !== undefined) {
+      const openAITextVerbosity = resolveOpenAITextVerbosity({
+        text_verbosity: rawTextVerbosity,
+      });
+      if (openAITextVerbosity) {
+        log.debug(
+          `applying OpenAI text verbosity=${openAITextVerbosity} for ${ctx.provider}/${ctx.modelId}`,
+        );
+        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(ctx.agent.streamFn, openAITextVerbosity);
+      }
+    }
+  }
+
+  // Work around upstream pi-ai hardcoding `store: false` for Responses API.
+  // Force `store=true` for direct OpenAI Responses models and auto-enable
+  // server-side compaction for compatible OpenAI Responses payloads.
+  ctx.agent.streamFn = createOpenAIResponsesContextManagementWrapper(
+    ctx.agent.streamFn,
+    ctx.effectiveExtraParams,
+  );
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [ctx.resolvedExtraParams, ctx.override],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (rawParallelToolCalls === undefined) {
+    return;
+  }
+  if (typeof rawParallelToolCalls === "boolean") {
+    ctx.agent.streamFn = createParallelToolCallsWrapper(ctx.agent.streamFn, rawParallelToolCalls);
+    return;
+  }
+  if (rawParallelToolCalls === null) {
+    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
+    return;
+  }
+  const summary =
+    typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
+  log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
 }
 
 /**
@@ -277,7 +487,9 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
-): void {
+  workspaceDir?: string,
+  model?: ProviderRuntimeModel,
+): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
@@ -290,56 +502,32 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const merged = Object.assign({}, resolvedExtraParams, override);
-  const effectiveExtraParams =
-    prepareProviderExtraParams({
-      provider,
-      config: cfg,
-      context: {
-        config: cfg,
-        provider,
-        modelId,
-        extraParams: merged,
-        thinkingLevel,
-      },
-    }) ?? merged;
-
-  if (provider === "openai" || provider === "openai-codex") {
-    if (provider === "openai") {
-      // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
-      agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
-    }
-    agent.streamFn = createOpenAIAttributionHeadersWrapper(agent.streamFn);
-  }
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    agent.streamFn,
-    effectiveExtraParams,
+  const effectiveExtraParams = resolvePreparedExtraParams({
+    cfg,
     provider,
-  );
+    modelId,
+    extraParamsOverride,
+    thinkingLevel,
+    agentId,
+    resolvedExtraParams,
+  });
 
-  if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
-    agent.streamFn = wrappedStreamFn;
-  }
+  const wrapperContext: ApplyExtraParamsContext = {
+    agent,
+    cfg,
+    provider,
+    modelId,
+    workspaceDir,
+    thinkingLevel,
+    model,
+    effectiveExtraParams,
+    resolvedExtraParams,
+    override,
+  };
 
-  const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
-  if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
-  }
-
-  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
-    );
-    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
-  }
-
-  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+  applyPrePluginStreamWrappers(wrapperContext);
   const providerStreamBase = agent.streamFn;
-  const pluginWrappedStreamFn = wrapProviderStreamFn({
+  const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
     config: cfg,
     context: {
@@ -348,85 +536,17 @@ export function applyExtraParamsToAgent(
       modelId,
       extraParams: effectiveExtraParams,
       thinkingLevel,
+      model,
       streamFn: providerStreamBase,
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
+  applyPostPluginStreamWrappers({
+    ...wrapperContext,
+    providerWrapperHandled,
+  });
 
-  if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
-    // Preserve the legacy Moonshot compatibility path when no plugin wrapper
-    // actually handled the stream function. This covers tests/disabled plugins
-    // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
-    const thinkingType = resolveMoonshotThinkingType({
-      configuredThinking: effectiveExtraParams?.thinking,
-      thinkingLevel,
-    });
-    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
-  }
-
-  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
-    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
-    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
-  }
-
-  // Enable Z.AI tool_stream for real-time tool call streaming.
-  // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
-  if (provider === "zai" || provider === "z-ai") {
-    const toolStreamEnabled = effectiveExtraParams?.tool_stream !== false;
-    if (toolStreamEnabled) {
-      log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
-      agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
-    }
-  }
-
-  // Guard Google payloads against invalid negative thinking budgets emitted by
-  // upstream model-ID heuristics for Gemini 3.1 variants.
-  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
-
-  const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
-  if (anthropicFastMode !== undefined) {
-    log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
-    agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
-  }
-
-  const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
-  if (openAIFastMode) {
-    log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
-    agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);
-  }
-
-  const openAIServiceTier = resolveOpenAIServiceTier(effectiveExtraParams);
-  if (openAIServiceTier) {
-    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
-    agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
-  }
-
-  // Work around upstream pi-ai hardcoding `store: false` for Responses API.
-  // Force `store=true` for direct OpenAI Responses models and auto-enable
-  // server-side compaction for compatible OpenAI Responses payloads.
-  agent.streamFn = createOpenAIResponsesContextManagementWrapper(
-    agent.streamFn,
-    effectiveExtraParams,
-  );
-
-  const rawParallelToolCalls = resolveAliasedParamValue(
-    [resolvedExtraParams, override],
-    "parallel_tool_calls",
-    "parallelToolCalls",
-  );
-  if (rawParallelToolCalls !== undefined) {
-    if (typeof rawParallelToolCalls === "boolean") {
-      agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
-    } else if (rawParallelToolCalls === null) {
-      log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-    } else {
-      const summary =
-        typeof rawParallelToolCalls === "string"
-          ? rawParallelToolCalls
-          : typeof rawParallelToolCalls;
-      log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
-    }
-  }
+  return { effectiveExtraParams };
 }

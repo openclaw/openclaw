@@ -5,12 +5,13 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveAccountEntry,
+  resolveMergedAccountConfig,
   resolveUserPath,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/account-resolution";
+} from "openclaw/plugin-sdk/account-core";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "openclaw/plugin-sdk/whatsapp";
-import { hasWebCredsSync } from "./auth-store.js";
+import { hasWebCredsSync } from "./creds-files.js";
+import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "./runtime-api.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
@@ -18,6 +19,7 @@ export type ResolvedWhatsAppAccount = {
   enabled: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
+  defaultTo?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
@@ -122,33 +124,38 @@ export function resolveWhatsAppAccount(params: {
 }): ResolvedWhatsAppAccount {
   const rootCfg = params.cfg.channels?.whatsapp;
   const accountId = params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
-  const accountCfg = resolveAccountConfig(params.cfg, accountId);
-  const enabled = accountCfg?.enabled !== false;
+  const merged = resolveMergedAccountConfig<WhatsAppAccountConfig>({
+    channelConfig: rootCfg as WhatsAppAccountConfig | undefined,
+    accounts: rootCfg?.accounts as Record<string, Partial<WhatsAppAccountConfig>> | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+  });
+  const enabled = merged.enabled !== false;
   const { authDir, isLegacy } = resolveWhatsAppAuthDir({
     cfg: params.cfg,
     accountId,
   });
   return {
     accountId,
-    name: accountCfg?.name?.trim() || undefined,
+    name: merged.name?.trim() || undefined,
     enabled,
-    sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
-    messagePrefix:
-      accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    sendReadReceipts: merged.sendReadReceipts ?? true,
+    messagePrefix: merged.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    defaultTo: merged.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,
-    selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,
-    dmPolicy: accountCfg?.dmPolicy ?? rootCfg?.dmPolicy,
-    allowFrom: accountCfg?.allowFrom ?? rootCfg?.allowFrom,
-    groupAllowFrom: accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom,
-    groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,
-    textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
-    chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
-    mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,
-    blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
-    ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
-    groups: accountCfg?.groups ?? rootCfg?.groups,
-    debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
+    selfChatMode: merged.selfChatMode,
+    dmPolicy: merged.dmPolicy,
+    allowFrom: merged.allowFrom,
+    groupAllowFrom: merged.groupAllowFrom,
+    groupPolicy: merged.groupPolicy,
+    textChunkLimit: merged.textChunkLimit,
+    chunkMode: merged.chunkMode,
+    mediaMaxMb: merged.mediaMaxMb,
+    blockStreaming: merged.blockStreaming,
+    ackReaction: merged.ackReaction,
+    groups: merged.groups,
+    debounceMs: merged.debounceMs,
   };
 }
 

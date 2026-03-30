@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { captureEnv } from "./env.js";
+import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 const HOME_ENV_KEYS = [
   "HOME",
@@ -36,6 +37,7 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   return {
     home,
     restore: async () => {
+      await cleanupSessionStateForTest().catch(() => undefined);
       snapshot.restore();
       await fs.rm(home, { recursive: true, force: true });
     },

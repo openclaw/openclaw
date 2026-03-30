@@ -1,14 +1,13 @@
-// Narrow plugin-sdk surface for the bundled voice-call plugin.
-// Keep this list additive and scoped to symbols used under extensions/voice-call.
+// Private helper surface for the bundled voice-call plugin.
+// Keep this surface narrow and limited to the voice-call feature contract.
 
-export { definePluginEntry } from "./core.js";
+export { definePluginEntry } from "./plugin-entry.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,
   TtsModeSchema,
   TtsProviderSchema,
 } from "../config/zod-schema.core.js";
-export { resolveOpenAITtsInstructions } from "../tts/tts-core.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 export {
   isRequestBodyLimitError,

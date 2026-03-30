@@ -45,7 +45,7 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
-const SMS_DANGEROUS_COMMANDS = ["sms.send"];
+const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];

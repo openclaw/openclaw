@@ -14,6 +14,11 @@ title: "Cron Jobs"
 Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
 the right time, and can optionally deliver output back to a chat.
 
+All cron executions create [background task](/automation/tasks) records. The key difference is visibility:
+
+- `sessionTarget: "main"` creates a task with `silent` notify policy — it schedules a system event for the main session and heartbeat flow but does not generate notifications.
+- `sessionTarget: "isolated"` or `sessionTarget: "session:..."` creates a visible task that shows up in `openclaw tasks` with delivery notifications.
+
 If you want _“run this every morning”_ or _“poke the agent in 20 minutes”_,
 cron is the mechanism.
 
@@ -155,6 +160,8 @@ They must use `payload.kind = "systemEvent"`.
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
 
+Main-session cron jobs create [background task](/automation/tasks) records with `silent` notify policy (no notifications by default). They appear in `openclaw tasks list` but do not generate delivery messages.
+
 #### Isolated jobs (dedicated cron sessions)
 
 Isolated jobs run a dedicated agent turn in session `cron:<jobId>` or a custom session.
@@ -175,6 +182,8 @@ Key behaviors:
 
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
+
+These detached runs create [background task](/automation/tasks) records visible in `openclaw tasks` and subject to task audit and maintenance.
 
 ### Payload shapes (what runs)
 
@@ -261,7 +270,7 @@ Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
-- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
+- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `irc` / `googlechat` / `line` / `last`, plus extension channels like `msteams` / `mattermost` (plugins).
 - `delivery.to`: channel-specific recipient target.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
@@ -363,7 +372,7 @@ Recurring job in a custom persistent session:
 Notes:
 
 - `schedule.kind`: `at` (`at`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
-- `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
+- `schedule.at` accepts ISO 8601. Tool/API values without a timezone are treated as UTC; the CLI also accepts `openclaw cron add|edit --at "<offset-less-iso>" --tz <iana>` for local wall-clock one-shots.
 - `everyMs` is milliseconds.
 - `sessionTarget`: `"main"`, `"isolated"`, `"current"`, or `"session:<custom-id>"`.
 - `"current"` is resolved to `"session:<sessionKey>"` at creation time.
@@ -700,7 +709,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ## Troubleshooting
 
-### “Nothing runs”
+### "Nothing runs"
 
 - Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
 - Check the Gateway is running continuously (cron runs inside the Gateway process).

@@ -1,6 +1,7 @@
 export type PluginsCommand =
   | { action: "list" }
-  | { action: "show"; name?: string }
+  | { action: "inspect"; name?: string }
+  | { action: "install"; spec: string }
   | { action: "enable"; name: string }
   | { action: "disable"; name: string }
   | { action: "error"; message: string };
@@ -22,12 +23,25 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
 
   if (action === "list") {
     return name
-      ? { action: "error", message: "Usage: /plugins list|show|get|enable|disable [plugin]" }
+      ? {
+          action: "error",
+          message: "Usage: /plugins list|inspect|show|get|enable|disable [plugin]",
+        }
       : { action: "list" };
   }
 
-  if (action === "show" || action === "get") {
-    return { action: "show", name: name || undefined };
+  if (action === "inspect" || action === "show" || action === "get") {
+    return { action: "inspect", name: name || undefined };
+  }
+
+  if (action === "install" || action === "add") {
+    if (!name) {
+      return {
+        action: "error",
+        message: "Usage: /plugins install <path|archive|npm-spec|clawhub:pkg>",
+      };
+    }
+    return { action: "install", spec: name };
   }
 
   if (action === "enable" || action === "disable") {
@@ -42,6 +56,6 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
 
   return {
     action: "error",
-    message: "Usage: /plugins list|show|get|enable|disable [plugin]",
+    message: "Usage: /plugins list|inspect|show|get|install|enable|disable [plugin]",
   };
 }

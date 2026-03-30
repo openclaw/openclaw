@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedAcpxPluginConfig } from "../config.js";
 import { ACPX_PINNED_VERSION } from "../config.js";
 import { AcpxRuntime } from "../runtime.js";
@@ -41,6 +41,9 @@ if (args.includes("--version")) {
 }
 
 if (args.includes("--help")) {
+  if (process.env.MOCK_ACPX_HELP_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_HELP_SIGNAL);
+  }
   process.stdout.write("mock-acpx help\\n");
   process.exit(0);
 }
@@ -76,6 +79,17 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_ENSURE_EXIT_1 === "1") {
+    emitJson({
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32603,
+        message: "mock ensure failure",
+      },
+    });
+    process.exit(1);
+  }
   if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
     emitJson({ action: "session_ensured", name: ensureName });
   } else {
@@ -173,11 +187,17 @@ if (command === "set") {
 
 if (command === "status") {
   writeLog({ kind: "status", agent, args, sessionName: sessionFromOption });
+  if (process.env.MOCK_ACPX_STATUS_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_STATUS_SIGNAL);
+  }
+  const status = process.env.MOCK_ACPX_STATUS_STATUS || (sessionFromOption ? "alive" : "no-session");
+  const summary = process.env.MOCK_ACPX_STATUS_SUMMARY || "";
   emitJson({
     acpxRecordId: sessionFromOption ? "rec-" + sessionFromOption : null,
     acpxSessionId: sessionFromOption ? "sid-" + sessionFromOption : null,
     agentSessionId: sessionFromOption ? "inner-" + sessionFromOption : null,
-    status: sessionFromOption ? "alive" : "no-session",
+    status,
+    ...(summary ? { summary } : {}),
     pid: 4242,
     uptime: 120,
   });
@@ -254,6 +274,10 @@ if (command === "prompt") {
 
   if (stdinText.includes("permission-denied")) {
     process.exit(5);
+  }
+
+  if (process.env.MOCK_ACPX_PROMPT_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_PROMPT_SIGNAL);
   }
 
   if (stdinText.includes("split-spacing")) {
@@ -333,6 +357,7 @@ export async function createMockRuntimeFixture(params?: {
     cwd: dir,
     permissionMode: params?.permissionMode ?? "approve-all",
     nonInteractivePermissions: "fail",
+    pluginToolsMcpBridge: false,
     strictWindowsCmdWrapper: true,
     queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
     mcpServers: params?.mcpServers ?? {},
@@ -382,6 +407,9 @@ export async function readMockRuntimeLogEntries(
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
   delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+  delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+  delete process.env.MOCK_ACPX_STATUS_STATUS;
+  delete process.env.MOCK_ACPX_STATUS_SUMMARY;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;
   while (tempDirs.length > 0) {

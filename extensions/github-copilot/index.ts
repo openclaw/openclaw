@@ -1,23 +1,15 @@
-import {
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
+import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
   ensureAuthProfileStore,
-  githubCopilotLoginCommand,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
+import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-const PROVIDER_ID = "github-copilot";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
-const CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
 function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
@@ -52,27 +44,6 @@ function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.Proces
     };
   }
   return { githubToken: "", hasProfile };
-}
-
-function resolveCopilotForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmedModelId = ctx.modelId.trim();
-  if (trimmedModelId.toLowerCase() !== CODEX_GPT_53_MODEL_ID) {
-    return undefined;
-  }
-  for (const templateId of CODEX_TEMPLATE_MODEL_IDS) {
-    const template = ctx.modelRegistry.find(PROVIDER_ID, templateId) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
 }
 
 async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {

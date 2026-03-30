@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 const buildSessionLookup = (
@@ -8,7 +9,12 @@ const buildSessionLookup = (
     sessionId?: string;
     lastChannel?: string;
     lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
     updatedAt?: number;
+    label?: string;
+    spawnedBy?: string;
+    parentSessionKey?: string;
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
@@ -19,6 +25,11 @@ const buildSessionLookup = (
     updatedAt: entry.updatedAt ?? Date.now(),
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId,
+    label: entry.label,
+    spawnedBy: entry.spawnedBy,
+    parentSessionKey: entry.parentSessionKey,
   },
   canonicalKey: sessionKey,
   legacyKey: undefined,
@@ -33,13 +44,24 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
     privateKeyPem: "private",
   })),
 );
+const normalizeChannelIdMock = vi.hoisted(() =>
+  vi.fn((channel?: string | null) => channel ?? null),
+);
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: vi.fn(),
+vi.mock("../channels/plugins/index.js", () => ({
+  normalizeChannelId: normalizeChannelIdMock,
 }));
+vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+  return await mergeMockedModule(
+    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    () => ({
+      requestHeartbeatNow: vi.fn(),
+    }),
+  );
+});
 vi.mock("../commands/agent.js", () => ({
   agentCommand: ingressAgentCommandMock,
   agentCommandFromIngress: ingressAgentCommandMock,
@@ -73,6 +95,7 @@ vi.mock("./session-utils.js", () => ({
   })),
 }));
 
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
@@ -92,6 +115,7 @@ const agentCommandMock = vi.mocked(agentCommand);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
 const registerApnsRegistrationVi = vi.mocked(registerApnsRegistration);
+const normalizeChannelIdVi = vi.mocked(normalizeChannelId);
 
 function buildCtx(): NodeEventContext {
   return {
@@ -122,6 +146,8 @@ describe("node exec events", () => {
     requestHeartbeatNowMock.mockClear();
     registerApnsRegistrationVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
+    normalizeChannelIdVi.mockClear();
+    normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
   });
 
   it("enqueues exec.started events", async () => {
@@ -162,6 +188,33 @@ describe("node exec events", () => {
       { sessionKey: "node-node-2", contextKey: "exec:run-2" },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+  });
+
+  it("canonicalizes exec session key before enqueue and wake", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-2"),
+      canonicalKey: "agent:main:node-node-2",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-2",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+      }),
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-2");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-2, code 0)\ndone",
+      { sessionKey: "agent:main:node-node-2", contextKey: "exec:run-2" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:node-node-2",
+    });
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
@@ -410,7 +463,9 @@ describe("voice transcript events", () => {
   });
 
   it("forwards transcript with voice provenance", async () => {
+    const addChatRun = vi.fn();
     const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
 
     await handleNodeEvent(ctx, "node-v2", {
       event: "voice.transcript",
@@ -432,6 +487,12 @@ describe("voice transcript events", () => {
         sourceTool: "gateway.voice.transcript",
       },
     });
+    expect(typeof opts.runId).toBe("string");
+    expect(opts.runId).not.toBe(opts.sessionId);
+    expect(addChatRun).toHaveBeenCalledWith(
+      opts.runId,
+      expect.objectContaining({ clientRunId: expect.stringMatching(/^voice-/) }),
+    );
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
@@ -452,6 +513,64 @@ describe("voice transcript events", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session-store update failed"));
   });
+
+  it("preserves existing session metadata when touching the store for voice transcripts", async () => {
+    const ctx = buildCtx();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) =>
+      buildSessionLookup(sessionKey, {
+        sessionId: "sess-preserve",
+        updatedAt: 10,
+        label: "existing label",
+        spawnedBy: "agent:main:parent",
+        parentSessionKey: "agent:main:parent",
+        lastChannel: "discord",
+        lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
+      }),
+    );
+
+    let updatedStore: Record<string, unknown> | undefined;
+    updateSessionStoreMock.mockImplementationOnce(async (_storePath, update) => {
+      const store = {
+        "voice-preserve-session": {
+          sessionId: "sess-preserve",
+          updatedAt: 10,
+          label: "existing label",
+          spawnedBy: "agent:main:parent",
+          parentSessionKey: "agent:main:parent",
+          lastChannel: "discord",
+          lastTo: "thread-1",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
+        },
+      };
+      update(store);
+      updatedStore = structuredClone(store);
+    });
+
+    await handleNodeEvent(ctx, "node-v4", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({
+        text: "preserve metadata",
+        sessionKey: "voice-preserve-session",
+      }),
+    });
+    await Promise.resolve();
+
+    expect(updatedStore).toMatchObject({
+      "voice-preserve-session": {
+        sessionId: "sess-preserve",
+        label: "existing label",
+        spawnedBy: "agent:main:parent",
+        parentSessionKey: "agent:main:parent",
+        lastChannel: "discord",
+        lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
+      },
+    });
+  });
 });
 
 describe("notifications changed events", () => {
@@ -459,6 +578,8 @@ describe("notifications changed events", () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     loadSessionEntryMock.mockClear();
+    normalizeChannelIdVi.mockClear();
+    normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
     enqueueSystemEventMock.mockReturnValue(true);
   });
@@ -610,6 +731,8 @@ describe("agent request events", () => {
     agentCommandMock.mockClear();
     updateSessionStoreMock.mockClear();
     loadSessionEntryMock.mockClear();
+    normalizeChannelIdVi.mockClear();
+    normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
@@ -674,5 +797,6 @@ describe("agent request events", () => {
       channel: "telegram",
       to: "123",
     });
+    expect(opts.runId).toBe(opts.sessionId);
   });
 });

@@ -1,5 +1,10 @@
-import { toLocationContext } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+  toLocationContext,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeCommandBody } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type {
@@ -7,15 +12,11 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeCommandBody } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   buildPendingHistoryContextFromMap,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -63,7 +64,7 @@ export async function buildTelegramInboundContextPayload(params: {
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
   commandAuthorized: boolean;
-  locationData?: import("openclaw/plugin-sdk/channel-runtime").NormalizedLocation;
+  locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
   dmAllowFrom?: Array<string | number>;
 }): Promise<{
@@ -243,6 +244,7 @@ export async function buildTelegramInboundContextPayload(params: {
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
+    CommandSource: options?.commandSource,
     MessageThreadId: threadSpec.id,
     IsForum: isForum,
     OriginatingChannel: "telegram" as const,
@@ -260,32 +262,44 @@ export async function buildTelegramInboundContextPayload(params: {
     route,
     sessionKey: route.sessionKey,
   });
+  const shouldPersistGroupLastRouteThread = isGroup && route.matchedBy !== "binding.channel";
+  const updateLastRouteThreadId = isGroup
+    ? shouldPersistGroupLastRouteThread && resolvedThreadId != null
+      ? String(resolvedThreadId)
+      : undefined
+    : dmThreadId != null
+      ? String(dmThreadId)
+      : undefined;
 
   await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: !isGroup
-      ? {
-          sessionKey: updateLastRouteSessionKey,
-          channel: "telegram",
-          to: `telegram:${chatId}`,
-          accountId: route.accountId,
-          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
-          mainDmOwnerPin:
-            updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && senderId
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: senderId,
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        }
-      : undefined,
+    updateLastRoute:
+      !isGroup || updateLastRouteThreadId != null
+        ? {
+            sessionKey: updateLastRouteSessionKey,
+            channel: "telegram",
+            to: `telegram:${chatId}`,
+            accountId: route.accountId,
+            threadId: updateLastRouteThreadId,
+            mainDmOwnerPin:
+              !isGroup &&
+              updateLastRouteSessionKey === route.mainSessionKey &&
+              pinnedMainDmOwner &&
+              senderId
+                ? {
+                    ownerRecipient: pinnedMainDmOwner,
+                    senderRecipient: senderId,
+                    onSkip: ({ ownerRecipient, senderRecipient }) => {
+                      logVerbose(
+                        `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                      );
+                    },
+                  }
+                : undefined,
+          }
+        : undefined,
     onRecordError: (err) => {
       logVerbose(`telegram: failed updating session meta: ${String(err)}`);
     },

@@ -1,5 +1,9 @@
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
+  BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
+} from "./bundled-capability-metadata.js";
 import type { PluginRecord } from "./registry.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -28,52 +32,13 @@ export type NormalizedPluginsConfig = {
   >;
 };
 
-export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
-  "amazon-bedrock",
-  "anthropic",
-  "byteplus",
-  "cloudflare-ai-gateway",
-  "device-pair",
-  "github-copilot",
-  "google",
-  "huggingface",
-  "kilocode",
-  "kimi",
-  "minimax",
-  "mistral",
-  "modelstudio",
-  "moonshot",
-  "nvidia",
-  "ollama",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "phone-control",
-  "qianfan",
-  "qwen-portal-auth",
-  "sglang",
-  "synthetic",
-  "talk-voice",
-  "together",
-  "venice",
-  "vercel-ai-gateway",
-  "vllm",
-  "volcengine",
-  "xai",
-  "xiaomi",
-  "zai",
-]);
-
-const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
-  "openai-codex": "openai",
-  "kimi-coding": "kimi",
-  "minimax-portal-auth": "minimax",
-};
-
-function normalizePluginId(id: string): string {
+export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
-  return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
+  return (
+    BUNDLED_LEGACY_PLUGIN_ID_ALIASES[trimmed] ??
+    BUNDLED_PROVIDER_PLUGIN_ID_ALIASES[trimmed] ??
+    trimmed
+  );
 }
 
 const normalizeList = (value: unknown): string[] => {
@@ -193,7 +158,7 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
-const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
+export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (!plugins) {
     return false;
   }
@@ -274,6 +239,7 @@ export function resolveEnableState(
   id: string,
   origin: PluginRecord["origin"],
   config: NormalizedPluginsConfig,
+  enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
   if (!config.enabled) {
     return { enabled: false, reason: "plugins disabled" };
@@ -298,7 +264,7 @@ export function resolveEnableState(
   if (entry?.enabled === true) {
     return { enabled: true };
   }
-  if (origin === "bundled" && BUNDLED_ENABLED_BY_DEFAULT.has(id)) {
+  if (origin === "bundled" && enabledByDefault === true) {
     return { enabled: true };
   }
   if (origin === "bundled") {
@@ -331,8 +297,9 @@ export function resolveEffectiveEnableState(params: {
   origin: PluginRecord["origin"];
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
+  enabledByDefault?: boolean;
 }): { enabled: boolean; reason?: string } {
-  const base = resolveEnableState(params.id, params.origin, params.config);
+  const base = resolveEnableState(params.id, params.origin, params.config, params.enabledByDefault);
   if (
     !base.enabled &&
     base.reason === "bundled (disabled by default)" &&

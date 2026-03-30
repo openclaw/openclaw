@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
-vi.mock("../../../../src/auto-reply/commands-registry.js", () => {
+vi.mock("./slash-commands.runtime.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
@@ -185,7 +185,7 @@ let registerSlackMonitorSlashCommands: RegisterFn;
 const { dispatchMock } = getSlackSlashMocks();
 
 beforeAll(async () => {
-  ({ registerSlackMonitorSlashCommands } = (await import("./slash.js")) as unknown as {
+  ({ registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
     registerSlackMonitorSlashCommands: RegisterFn;
   });
 });
