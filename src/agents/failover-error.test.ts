@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  FailoverError,
   coerceToFailoverError,
   describeFailoverError,
   isTimeoutError,
@@ -507,5 +508,64 @@ describe("failover-error", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
+  });
+
+  it("carries partialExecution when provided", () => {
+    const err = new FailoverError("timeout", {
+      reason: "timeout",
+      partialExecution: {
+        toolNames: ["bash", "web_search"],
+        didSendViaMessagingTool: true,
+      },
+    });
+    expect(err.partialExecution).toEqual({
+      toolNames: ["bash", "web_search"],
+      didSendViaMessagingTool: true,
+    });
+  });
+
+  it("partialExecution is undefined when not provided", () => {
+    const err = new FailoverError("timeout", { reason: "timeout" });
+    expect(err.partialExecution).toBeUndefined();
+  });
+
+  it("sanitizeToolNames caps at 20 entries and sanitizes characters", () => {
+    const raw = Array.from({ length: 25 }, (_, i) => `tool_${i}`);
+    raw.push("mal!cious<script>");
+    const sanitized = FailoverError.sanitizeToolNames(raw);
+    expect(sanitized.length).toBeLessThanOrEqual(20);
+    expect(sanitized.every((n) => /^[a-zA-Z0-9_-]+$/.test(n))).toBe(true);
+  });
+
+  it("sanitizeToolNames truncates individual names to 100 chars", () => {
+    const long = "a".repeat(150);
+    const sanitized = FailoverError.sanitizeToolNames([long]);
+    expect(sanitized[0].length).toBeLessThanOrEqual(100);
+  });
+
+  it("sanitizeToolNames filters empty strings after sanitization", () => {
+    const sanitized = FailoverError.sanitizeToolNames(["!!!", "", "valid_tool"]);
+    expect(sanitized).toEqual(["valid_tool"]);
+  });
+
+  it("describeFailoverError includes partialExecution when present", () => {
+    const err = new FailoverError("timeout", {
+      reason: "timeout",
+      partialExecution: {
+        toolNames: ["bash"],
+        didSendViaMessagingTool: false,
+      },
+    });
+    const described = describeFailoverError(err);
+    expect(described.partialExecution).toEqual({
+      toolNames: ["bash"],
+      didSendViaMessagingTool: false,
+    });
+  });
+
+  it("describeFailoverError omits partialExecution when absent", () => {
+    const err = new FailoverError("rate limit", { reason: "rate_limit" });
+    const described = describeFailoverError(err);
+    expect(described.partialExecution).toBeUndefined();
   });
 });
