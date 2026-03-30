@@ -256,8 +256,17 @@ function discoverChannelConfigsFromSource(params: {
       ...result[channelId],
       schema: surface.schema,
       ...(surface.uiHints && Object.keys(surface.uiHints).length > 0
-        ? { uiHints: surface.uiHints }
-        : {}),
+        ? {
+            uiHints: {
+              ...surface.uiHints,
+              ...(result[channelId]?.uiHints && Object.keys(result[channelId].uiHints).length > 0
+                ? result[channelId].uiHints
+                : {}),
+            },
+          }
+        : result[channelId]?.uiHints
+          ? { uiHints: result[channelId].uiHints }
+          : {}),
     };
   }
 
