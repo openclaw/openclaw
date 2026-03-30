@@ -938,7 +938,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
-    suppressGlobalCommands: !shouldActivate,
+    activateGlobalSideEffects: shouldActivate,
   });
 
   const discovery = discoverOpenClawPlugins({

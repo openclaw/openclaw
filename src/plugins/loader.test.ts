@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { clearInternalHooks, getRegisteredEventKeys } from "../hooks/internal-hooks.js";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
@@ -1263,6 +1264,42 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     ]);
 
     clearPluginCommands();
+  });
+
+  it("does not register internal hooks globally during non-activating loads", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "internal-hook-snapshot",
+      filename: "internal-hook-snapshot.cjs",
+      body: `module.exports = {
+        id: "internal-hook-snapshot",
+        register(api) {
+          api.registerHook("gateway:startup", () => {}, { name: "snapshot-hook" });
+        },
+      };`,
+    });
+
+    clearInternalHooks();
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["internal-hook-snapshot"],
+        },
+      },
+      onlyPluginIds: ["internal-hook-snapshot"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "internal-hook-snapshot")?.status).toBe(
+      "loaded",
+    );
+    expect(scoped.hooks.map((entry) => entry.entry.hook.name)).toEqual(["snapshot-hook"]);
+    expect(getRegisteredEventKeys()).toEqual([]);
+
+    clearInternalHooks();
   });
 
   it("can scope bundled provider loads to deepseek without hanging", () => {
