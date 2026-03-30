@@ -322,7 +322,17 @@ function isRemoteUrl(value: string): boolean {
 }
 
 function shouldConvertHeicBuffer(opts: { contentType?: string; fileName?: string }): boolean {
-  return isHeicSource(opts);
+  if (!isHeicSource(opts)) {
+    return false;
+  }
+  const normalizedContentType = normalizeMimeType(opts.contentType);
+  if (!normalizedContentType) {
+    return true;
+  }
+  if (HEIC_MIME_RE.test(normalizedContentType)) {
+    return true;
+  }
+  return HEIC_EXT_RE.test(opts.fileName?.trim() ?? "");
 }
 
 async function normalizeAudioOnlyWebmMime(

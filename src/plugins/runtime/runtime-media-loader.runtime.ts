@@ -1,1 +1,1 @@
-export { loadWebMedia } from "../../../extensions/whatsapp/src/media.js";
+export { loadWebMedia } from "../../media/web-media.js";
