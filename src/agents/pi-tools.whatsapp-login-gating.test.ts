@@ -3,6 +3,7 @@ import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 vi.mock("./channel-tools.js", () => {
+  const passthrough = <T>(tool: T) => tool;
   const stubTool = (name: string) => ({
     name,
     description: `${name} stub`,
@@ -11,6 +12,8 @@ vi.mock("./channel-tools.js", () => {
   });
   return {
     listChannelAgentTools: () => [stubTool("whatsapp_login")],
+    copyChannelAgentToolMeta: passthrough,
+    getChannelAgentToolMeta: () => undefined,
   };
 });
 
@@ -47,5 +50,18 @@ describe("owner-only tool gating", () => {
     expect(toolNames).not.toContain("gateway");
     expect(toolNames).not.toContain("nodes");
     expect(toolNames).toContain("canvas");
+  });
+
+  it("restricts node-originated runs to the node-safe tool subset", () => {
+    const tools = createOpenClawCodingTools({ messageProvider: "node", senderIsOwner: false });
+    const toolNames = tools.map((tool) => tool.name);
+    expect(toolNames).toEqual(expect.arrayContaining(["canvas"]));
+    expect(toolNames).not.toContain("exec");
+    expect(toolNames).not.toContain("read");
+    expect(toolNames).not.toContain("write");
+    expect(toolNames).not.toContain("edit");
+    expect(toolNames).not.toContain("message");
+    expect(toolNames).not.toContain("sessions_send");
+    expect(toolNames).not.toContain("subagents");
   });
 });
