@@ -99,8 +99,8 @@ export type MattermostCommandAuthDecision =
         | "channel-no-allowlist";
       commandAuthorized: false;
       channelInfo: MattermostChannel | null;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
+      kind: "direct" | "group" | "channel" | "unknown";
+      chatType: "direct" | "group" | "channel" | "unknown";
       channelName: string;
       channelDisplay: string;
       roomLabel: string;
@@ -135,8 +135,8 @@ export function authorizeMattermostCommandInvocation(params: {
       denyReason: "unknown-channel",
       commandAuthorized: false,
       channelInfo: null,
-      kind: "channel",
-      chatType: "channel",
+      kind: "unknown",
+      chatType: "unknown",
       channelName: "",
       channelDisplay: "",
       roomLabel: `#${channelId}`,

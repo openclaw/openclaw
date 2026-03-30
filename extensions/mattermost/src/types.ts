@@ -2,7 +2,7 @@ import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runt
 import type { SecretInput } from "./secret-input.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all";
-export type MattermostChatTypeKey = "direct" | "channel" | "group";
+export type MattermostChatTypeKey = "direct" | "channel" | "group" | "unknown";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 

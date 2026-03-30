@@ -23,6 +23,7 @@ import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";
+import type { RoutePeer } from "../routing/resolve-route.js";
 
 export type {
   AnyAgentTool,
@@ -186,7 +187,7 @@ export function buildChannelOutboundSessionRoute(params: {
   agentId: string;
   channel: string;
   accountId?: string | null;
-  peer: { kind: "direct" | "group" | "channel"; id: string };
+  peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
   from: string;
   to: string;

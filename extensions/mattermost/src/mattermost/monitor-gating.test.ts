@@ -10,7 +10,7 @@ describe("mattermost monitor gating", () => {
     expect(mapMattermostChannelTypeToChatType("G")).toBe("group");
     expect(mapMattermostChannelTypeToChatType("P")).toBe("group");
     expect(mapMattermostChannelTypeToChatType("O")).toBe("channel");
-    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("channel");
+    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("unknown");
   });
 
   it("drops non-mentioned traffic when onchar is enabled but not triggered", () => {
