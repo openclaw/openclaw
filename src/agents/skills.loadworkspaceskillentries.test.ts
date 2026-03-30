@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { loadWorkspaceSkillEntries } from "./skills.js";
+import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
 import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -215,6 +216,29 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reads skill frontmatter when the allowed root is the filesystem root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillDir = path.join(workspaceDir, "skills", "root-allowed");
+      await writeSkill({
+        dir: skillDir,
+        name: "root-allowed",
+        description: "Readable from filesystem root",
+      });
+
+      const frontmatter = readSkillFrontmatterSafe({
+        rootDir: path.parse(skillDir).root,
+        filePath: path.join(skillDir, "SKILL.md"),
+      });
+
+      expect(frontmatter).toMatchObject({
+        name: "root-allowed",
+        description: "Readable from filesystem root",
+      });
     },
   );
 });

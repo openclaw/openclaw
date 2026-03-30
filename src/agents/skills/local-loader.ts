@@ -2,8 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { createSyntheticSourceInfo, type Skill } from "@mariozechner/pi-coding-agent";
 import { openVerifiedFileSync } from "../../infra/safe-open-sync.js";
-import { resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { parseFrontmatter } from "./frontmatter.js";
+import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
+
+function isPathWithinRoot(rootRealPath: string, candidatePath: string): boolean {
+  const relative = path.relative(rootRealPath, candidatePath);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
+}
 
 function readSkillFileSync(params: {
   rootRealPath: string;
@@ -19,10 +26,7 @@ function readSkillFileSync(params: {
     return null;
   }
   try {
-    if (
-      !opened.path.startsWith(params.rootRealPath + path.sep) &&
-      opened.path !== params.rootRealPath
-    ) {
+    if (!isPathWithinRoot(params.rootRealPath, opened.path)) {
       return null;
     }
     return fs.readFileSync(opened.fd, "utf8");
