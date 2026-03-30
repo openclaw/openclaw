@@ -5,6 +5,7 @@ import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   ensureBrowserControlAuth,
   resolveBrowserControlAuth,
+  resolveBrowserConfig,
 } from "../../plugin-sdk/browser-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
@@ -156,6 +157,7 @@ export async function resolveSandboxContext(params: {
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+  const ssrfPolicy = resolveBrowserConfig(params.config?.browser).ssrfPolicy;
 
   const bridgeAuth = cfg.browser.enabled
     ? await (async () => {
@@ -186,6 +188,7 @@ export async function resolveSandboxContext(params: {
           agentWorkspaceDir,
           cfg: resolvedCfg,
           evaluateEnabled,
+          ssrfPolicy,
           bridgeAuth,
         })
       : null;
