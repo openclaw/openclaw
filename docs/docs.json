@@ -7,8 +7,8 @@
     "library": "lucide"
   },
   "logo": {
-    "light": "/assets/pixel-lobster.svg",
-    "dark": "/assets/pixel-lobster.svg"
+    "light": "/assets/openclaw-logo-text.svg",
+    "dark": "/assets/openclaw-logo-text.svg"
   },
   "fonts": {
     "body": {
@@ -18,7 +18,7 @@
       "family": "DM Sans"
     }
   },
-  "favicon": "/assets/pixel-lobster.svg",
+  "favicon": "/assets/openclaw-logo-text.svg",
   "colors": {
     "primary": "#FF5A36",
     "dark": "#FF5A36",

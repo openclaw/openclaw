@@ -64,7 +64,7 @@ Today we ship multiple memory options; over time we plan to converge on one reco
 ### Skills
 
 We still ship some bundled skills for baseline UX.
-New skills should be published to ClawHub first (`clawhub.ai`), not added to core by default.
+New skills should be published to Skills Hub first (`clawhub.ai`), not added to core by default.
 Core skill additions should be rare and require a strong product or security reason.
 
 ### MCP Support
@@ -96,7 +96,7 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 
 ## What We Will Not Merge (For Now)
 
-- New core skills when they can live on ClawHub
+- New core skills when they can live on Skills Hub
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
