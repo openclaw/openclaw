@@ -21,8 +21,15 @@ const DEFAULT_MAX_QUEUE_SIZE = 200;
 const DEFAULT_MAX_ROOM_QUEUES = 1000;
 /** Maximum number of (agentId, roomId) watermark entries to retain. */
 const MAX_WATERMARK_ENTRIES = 5000;
+/** Maximum prepared trigger snapshots retained per room for retry reuse. */
+const MAX_PREPARED_TRIGGER_ENTRIES = 500;
 
 export type { HistoryEntry };
+
+export type PreparedTriggerResult = {
+  history: HistoryEntry[];
+  snapshotIdx: number;
+};
 
 export type RoomHistoryTracker = {
   /**
@@ -45,16 +52,33 @@ export type RoomHistoryTracker = {
   recordTrigger: (roomId: string, entry: HistoryEntry) => number;
 
   /**
+   * Capture pending history and append the trigger as one idempotent operation.
+   * Retries of the same Matrix event reuse the original prepared history window.
+   */
+  prepareTrigger: (
+    agentId: string,
+    roomId: string,
+    limit: number,
+    entry: HistoryEntry,
+  ) => PreparedTriggerResult;
+
+  /**
    * Advance the agent's watermark to the snapshot index returned by recordTrigger.
    * Only messages appended after that snapshot remain visible on the next trigger.
    */
-  consumeHistory: (agentId: string, roomId: string, snapshotIdx: number) => void;
+  consumeHistory: (
+    agentId: string,
+    roomId: string,
+    snapshotIdx: number,
+    messageId?: string,
+  ) => void;
 };
 
 type RoomQueue = {
   entries: HistoryEntry[];
   /** Absolute index of entries[0] — increases as old entries are trimmed. */
   baseIndex: number;
+  preparedTriggers: Map<string, PreparedTriggerResult>;
 };
 
 export function createRoomHistoryTracker(
@@ -77,7 +101,7 @@ export function createRoomHistoryTracker(
   function getOrCreateQueue(roomId: string): RoomQueue {
     let queue = roomQueues.get(roomId);
     if (!queue) {
-      queue = { entries: [], baseIndex: 0 };
+      queue = { entries: [], baseIndex: 0, preparedTriggers: new Map() };
       roomQueues.set(roomId, queue);
       // FIFO eviction to prevent unbounded growth across many rooms
       if (roomQueues.size > maxRoomQueues) {
@@ -105,6 +129,30 @@ export function createRoomHistoryTracker(
     return `${agentId}:${roomId}`;
   }
 
+  function preparedTriggerKey(agentId: string, messageId?: string): string | null {
+    if (!messageId?.trim()) {
+      return null;
+    }
+    return `${agentId}:${messageId.trim()}`;
+  }
+
+  function computePendingHistory(
+    queue: RoomQueue,
+    agentId: string,
+    roomId: string,
+    limit: number,
+  ): HistoryEntry[] {
+    if (limit <= 0 || queue.entries.length === 0) {
+      return [];
+    }
+    const wm = agentWatermarks.get(wmKey(agentId, roomId)) ?? 0;
+    // startAbs: the first absolute index the agent hasn't seen yet
+    const startAbs = Math.max(wm, queue.baseIndex);
+    const startRel = startAbs - queue.baseIndex;
+    const available = queue.entries.slice(startRel);
+    return available.length > limit ? available.slice(-limit) : available;
+  }
+
   return {
     recordPending(roomId, entry) {
       const queue = getOrCreateQueue(roomId);
@@ -112,16 +160,9 @@ export function createRoomHistoryTracker(
     },
 
     getPendingHistory(agentId, roomId, limit) {
-      if (limit <= 0) return [];
       const queue = roomQueues.get(roomId);
-      if (!queue || queue.entries.length === 0) return [];
-      const wm = agentWatermarks.get(wmKey(agentId, roomId)) ?? 0;
-      // startAbs: the first absolute index the agent hasn't seen yet
-      const startAbs = Math.max(wm, queue.baseIndex);
-      const startRel = startAbs - queue.baseIndex;
-      const available = queue.entries.slice(startRel);
-      // Cap to the last `limit` entries
-      return limit > 0 && available.length > limit ? available.slice(-limit) : available;
+      if (!queue) return [];
+      return computePendingHistory(queue, agentId, roomId, limit);
     },
 
     recordTrigger(roomId, entry) {
@@ -129,12 +170,42 @@ export function createRoomHistoryTracker(
       return appendToQueue(queue, entry);
     },
 
-    consumeHistory(agentId, roomId, snapshotIdx) {
+    prepareTrigger(agentId, roomId, limit, entry) {
+      const queue = getOrCreateQueue(roomId);
+      const retryKey = preparedTriggerKey(agentId, entry.messageId);
+      if (retryKey) {
+        const prepared = queue.preparedTriggers.get(retryKey);
+        if (prepared) {
+          return prepared;
+        }
+      }
+      const prepared = {
+        history: computePendingHistory(queue, agentId, roomId, limit),
+        snapshotIdx: appendToQueue(queue, entry),
+      };
+      if (retryKey) {
+        queue.preparedTriggers.set(retryKey, prepared);
+        if (queue.preparedTriggers.size > MAX_PREPARED_TRIGGER_ENTRIES) {
+          const oldest = queue.preparedTriggers.keys().next().value;
+          if (oldest !== undefined) {
+            queue.preparedTriggers.delete(oldest);
+          }
+        }
+      }
+      return prepared;
+    },
+
+    consumeHistory(agentId, roomId, snapshotIdx, messageId) {
       const key = wmKey(agentId, roomId);
       // Monotone write: never regress an already-advanced watermark.
       // Guards against out-of-order completion when two triggers for the same
       // (agentId, roomId) are in-flight concurrently.
       agentWatermarks.set(key, Math.max(agentWatermarks.get(key) ?? 0, snapshotIdx));
+      const queue = roomQueues.get(roomId);
+      const retryKey = preparedTriggerKey(agentId, messageId);
+      if (queue && retryKey) {
+        queue.preparedTriggers.delete(retryKey);
+      }
       // LRU-style eviction to prevent unbounded growth
       if (agentWatermarks.size > MAX_WATERMARK_ENTRIES) {
         const oldest = agentWatermarks.keys().next().value;

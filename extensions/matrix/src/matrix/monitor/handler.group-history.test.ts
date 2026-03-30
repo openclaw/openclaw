@@ -372,6 +372,72 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     }
   });
 
+  it("retrying the same failed trigger reuses the original history window", async () => {
+    let capturedOnError:
+      | ((err: unknown, info: { kind: "tool" | "block" | "final" }) => void)
+      | undefined;
+
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createMatrixHandlerTestHarness({
+      historyLimit: 20,
+      groupPolicy: "open",
+      isDirectMessage: false,
+      finalizeInboundContext,
+      dispatchReplyFromConfig: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
+      createReplyDispatcherWithTyping: (params?: {
+        onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+      }) => {
+        capturedOnError = params?.onError;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+      withReplyDispatcher: async <T>(params: {
+        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
+        run: () => Promise<T>;
+        onSettled?: () => void | Promise<void>;
+      }) => {
+        const result = await params.run();
+        capturedOnError?.(new Error("simulated delivery failure"), { kind: "final" });
+        params.dispatcher.markComplete?.();
+        await params.dispatcher.waitForIdle?.();
+        await params.onSettled?.();
+        return result;
+      },
+    });
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomPlainEvent({ eventId: "$p", body: "pending msg", ts: 1000 }),
+    );
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$same", body: "trigger", ts: 2000 }),
+    );
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$same", body: "trigger", ts: 2000 }),
+    );
+
+    expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
+    const firstHistory = (finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>)[
+      "InboundHistory"
+    ] as Array<{ body: string }>;
+    const retryHistory = (finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>)[
+      "InboundHistory"
+    ] as Array<{ body: string }>;
+
+    expect(firstHistory.map((entry) => entry.body)).toEqual(["pending msg"]);
+    expect(retryHistory.map((entry) => entry.body)).toEqual(["pending msg"]);
+  });
+
   it("records pending history before sender-name lookup resolves", async () => {
     let resolveFirstName: (() => void) | undefined;
     let firstNameLookupStarted = false;
@@ -417,5 +483,53 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
     const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
     expect(history?.some((entry) => entry.body.includes("plain before trigger"))).toBe(true);
+  });
+
+  it("preserves arrival order when a plain message starts before a later trigger", async () => {
+    let releaseFirstGetUserId: (() => void) | undefined;
+    let getUserIdCalls = 0;
+
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createMatrixHandlerTestHarness({
+      historyLimit: 20,
+      groupPolicy: "open",
+      isDirectMessage: false,
+      client: {
+        async getUserId() {
+          getUserIdCalls += 1;
+          if (getUserIdCalls === 1) {
+            await new Promise<void>((resolve) => {
+              releaseFirstGetUserId = resolve;
+            });
+          }
+          return "@bot:example.org";
+        },
+        getEvent: async () => ({ sender: "@bot:example.org" }),
+      },
+      finalizeInboundContext,
+      dispatchReplyFromConfig: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
+    });
+
+    const plainPromise = handler(
+      DEFAULT_ROOM,
+      makeRoomPlainEvent({ eventId: "$a", body: "msg A", ts: 1000 }),
+    );
+    await vi.waitFor(() => {
+      expect(releaseFirstGetUserId).toBeTypeOf("function");
+    });
+    const triggerPromise = handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$b", body: "msg B", ts: 2000 }),
+    );
+
+    releaseFirstGetUserId?.();
+    await Promise.all([plainPromise, triggerPromise]);
+
+    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const history = ctx["InboundHistory"] as Array<{ body: string }>;
+    expect(history.map((entry) => entry.body)).toEqual(["msg A"]);
   });
 });

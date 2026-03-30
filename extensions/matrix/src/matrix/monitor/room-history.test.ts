@@ -42,6 +42,28 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     tracker.consumeHistory(AGENT, ROOM, snap3); // watermark → 7
     expect(tracker.getPendingHistory(AGENT, ROOM, 100)).toHaveLength(0);
   });
+
+  it("prepareTrigger reuses the original history window for a retried event", () => {
+    const tracker = createRoomHistoryTracker();
+
+    tracker.recordPending(ROOM, { sender: "user", body: "msg1", messageId: "$m1" });
+    const first = tracker.prepareTrigger(AGENT, ROOM, 100, {
+      sender: "user",
+      body: "trigger",
+      messageId: "$trigger",
+    });
+
+    tracker.recordPending(ROOM, { sender: "user", body: "msg2", messageId: "$m2" });
+    const retried = tracker.prepareTrigger(AGENT, ROOM, 100, {
+      sender: "user",
+      body: "trigger",
+      messageId: "$trigger",
+    });
+
+    expect(first.history.map((entry) => entry.body)).toEqual(["msg1"]);
+    expect(retried.history.map((entry) => entry.body)).toEqual(["msg1"]);
+    expect(retried.snapshotIdx).toBe(first.snapshotIdx);
+  });
 });
 
 describe("createRoomHistoryTracker — roomQueues eviction", () => {
