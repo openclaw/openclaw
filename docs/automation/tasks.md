@@ -232,6 +232,7 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 
 ## Related
 
+- [Automation Overview](/automation) — all automation mechanisms at a glance
 - [Cron Jobs](/automation/cron-jobs) — scheduling background work
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
