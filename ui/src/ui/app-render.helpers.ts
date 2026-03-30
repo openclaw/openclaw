@@ -257,7 +257,6 @@ export function renderChatControls(state: AppViewState) {
       >
         ${refreshIcon}
       </button>
-      <span class="chat-controls__separator">|</span>
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}
@@ -322,6 +321,9 @@ export function renderChatControls(state: AppViewState) {
           : t("chat.hideCronSessions")}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
+        ${hiddenCronCount > 0
+          ? html`<span class="chat-controls__count">${hiddenCronCount}</span>`
+          : nothing}
       </button>
     </div>
   `;

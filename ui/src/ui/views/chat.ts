@@ -651,11 +651,13 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
         : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
             <img src=${logoUrl} alt="OpenClaw" />
           </div>`}
-      <h2>${name}</h2>
+      <h2>Start a new conversation with ${name}</h2>
       <div class="agent-chat__badges">
-        <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
+        <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Session-first chat</span>
       </div>
-      <p class="agent-chat__hint">Type a message below &middot; <kbd>/</kbd> for commands</p>
+      <p class="agent-chat__hint">
+        Each session keeps its own context. Pick a prompt below or type your own message.
+      </p>
       <div class="agent-chat__suggestions">
         ${WELCOME_SUGGESTIONS.map(
           (text) => html`

@@ -758,12 +758,38 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
+  padding: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .chat-page-controls .chat-controls {
   gap: 8px;
+}
+
+.chat-controls .btn--icon {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 999px;
+}
+
+.chat-controls__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  background: color-mix(in srgb, var(--accent) 88%, white 12%);
+  color: var(--accent-foreground, white);
 }
 
 .chat-controls__session {
@@ -958,13 +984,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--muted);
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: var(--radius-full);
-  padding: 4px 12px;
+  padding: 5px 12px;
 }
 
 .agent-chat__badge img {
@@ -977,6 +1003,7 @@
   font-size: 14px;
   color: var(--muted);
   margin: 0;
+  max-width: 42rem;
 }
 
 .agent-chat__hint kbd {

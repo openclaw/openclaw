@@ -528,11 +528,14 @@ function renderChatSidebar(state: AppViewState, navCollapsed: boolean) {
 
 function renderChatHeader(state: AppViewState) {
   const active = resolveChatActiveSession(state);
-  const subline = active?.preview || active?.updatedLabel || t("subtitles.chat");
+  const hasMessages = state.chatMessages.length > 0;
+  const subline = hasMessages
+    ? active?.preview || active?.updatedLabel || t("subtitles.chat")
+    : "Pick a recent chat or start a fresh session to keep work separated.";
   return html`
     <section class="content-header content-header--chat-shell">
       <div class="chat-page-heading">
-        <div class="chat-page-heading__eyebrow">OpenClaw chat</div>
+        <div class="chat-page-heading__eyebrow">Session workspace</div>
         <div class="chat-page-heading__title-row">
           <div class="chat-page-heading__title">${active?.title ?? t("tabs.chat")}</div>
           ${active?.updatedLabel
