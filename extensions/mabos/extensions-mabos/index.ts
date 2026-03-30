@@ -18,6 +18,7 @@ import { onAgentEvent, type AgentEventPayload } from "../../../src/infra/agent-e
 import { readJsonBodyWithLimit } from "../../../src/infra/http-body.js";
 import { createCronBridgeService } from "./src/cron-bridge.js";
 import { registerGovernance } from "./src/governance/index.js";
+import { registerModelRouter } from "./src/model-router/index.js";
 import { createSecurityModule } from "./src/security/index.js";
 import { createBdiTools } from "./src/tools/bdi-tools.js";
 import { createBpmnMigrateTools } from "./src/tools/bpmn-migrate.js";
@@ -79,6 +80,11 @@ export default function register(api: OpenClawPluginApi) {
   // ── 0b. Governance Module ─────────────────────────────────────
   if (pluginConfig.governanceEnabled) {
     registerGovernance(api, pluginConfig);
+  }
+
+  // ── 0c. Model Router ─────────────────────────────────────────
+  if (pluginConfig.modelRouterEnabled) {
+    registerModelRouter(api, pluginConfig);
   }
 
   // ── 1. Register all tools ─────────────────────────────────────

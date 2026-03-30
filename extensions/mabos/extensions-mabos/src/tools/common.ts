@@ -31,6 +31,8 @@ export interface MabosPluginConfig {
   security?: import("../security/types.js").SecurityConfig;
   governanceEnabled?: boolean;
   governance?: import("../governance/types.js").GovernanceConfig;
+  modelRouterEnabled?: boolean;
+  modelRouter?: import("../model-router/types.js").ModelRouterConfig;
 }
 
 /**
