@@ -258,4 +258,45 @@ describe("subagent announce seam flow", () => {
     );
     expect(agentSpy).not.toHaveBeenCalled();
   });
+
+  it("keeps completion direct announce session-only when requester origin is webchat", async () => {
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:webchat",
+      childRunId: "run-webchat-direct-announce",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "webchat",
+        to: "chat:123",
+        accountId: "default",
+      },
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          deliver: false,
+          bestEffortDeliver: true,
+          channel: undefined,
+          to: undefined,
+          accountId: undefined,
+        }),
+      }),
+    );
+  });
 });
