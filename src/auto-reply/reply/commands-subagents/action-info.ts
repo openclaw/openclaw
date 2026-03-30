@@ -46,6 +46,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     `Task: ${run.task}`,
     `Run: ${run.runId}`,
     linkedTask ? `TaskId: ${linkedTask.taskId}` : undefined,
+    linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
     `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
@@ -57,6 +58,9 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     run.archiveAtMs ? `Archive: ${formatTimestampWithAge(run.archiveAtMs)}` : undefined,
     run.cleanupHandled ? "Cleanup handled: yes" : undefined,
     `Outcome: ${outcome}`,
+    linkedTask?.progressSummary ? `Progress: ${linkedTask.progressSummary}` : undefined,
+    linkedTask?.terminalSummary ? `Task summary: ${linkedTask.terminalSummary}` : undefined,
+    linkedTask?.error ? `Task error: ${linkedTask.error}` : undefined,
     linkedTask ? `Delivery: ${linkedTask.deliveryStatus}` : undefined,
   ].filter(Boolean);
 

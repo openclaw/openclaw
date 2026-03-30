@@ -734,16 +734,17 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
+    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
+      return true;
+    }
     if (!listed.path) {
       // Older qmd versions may only return names from `collection list --json`.
-      // Do not perform destructive rebinds when metadata is incomplete: remove+add
-      // can permanently drop collections if add fails (for example on timeout).
+      // If the pattern is also missing, do not perform destructive rebinds when
+      // metadata is incomplete: remove+add can permanently drop collections if
+      // add fails (for example on timeout).
       return false;
     }
     if (!this.pathsMatch(listed.path, collection.path)) {
-      return true;
-    }
-    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
       return true;
     }
     return false;
@@ -2191,15 +2192,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     relativeToWorkspace: string,
     absPath: string,
   ): string {
+    const sanitized = collectionRelativePath.replace(/^\/+/, "");
     const insideWorkspace = this.isInsideWorkspace(relativeToWorkspace);
     if (insideWorkspace) {
       const normalized = relativeToWorkspace.replace(/\\/g, "/");
       if (!normalized) {
         return path.basename(absPath);
       }
+      // `qmd/<collection>/...` is a reserved virtual path namespace consumed by
+      // readFile(). If a real workspace file happens to live under `qmd/...`,
+      // return the explicit collection-scoped virtual path so search->read
+      // remains roundtrip-safe.
+      if (normalized === "qmd" || normalized.startsWith("qmd/")) {
+        return `qmd/${collection}/${sanitized}`;
+      }
       return normalized;
     }
-    const sanitized = collectionRelativePath.replace(/^\/+/, "");
     return `qmd/${collection}/${sanitized}`;
   }
 

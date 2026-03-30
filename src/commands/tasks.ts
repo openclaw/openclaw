@@ -246,14 +246,6 @@ export async function tasksShowCommand(
     ...(task.error ? [`error: ${task.error}`] : []),
     ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
-    ...(task.recentEvents?.length
-      ? task.recentEvents.map(
-          (event, index) =>
-            `recentEvent[${index}]: ${new Date(event.at).toISOString()} ${event.kind}${
-              event.summary ? ` ${event.summary}` : ""
-            }`,
-        )
-      : []),
   ];
   for (const line of lines) {
     runtime.log(line);
