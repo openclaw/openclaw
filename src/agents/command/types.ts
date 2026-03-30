@@ -88,6 +88,8 @@ export type AgentCommandOpts = {
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Preserve gateway-bound plugin subagents during gateway-originated agent runs. */
+  allowGatewaySubagentBinding?: boolean;
 };
 
 export type AgentCommandIngressOpts = Omit<

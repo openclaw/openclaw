@@ -373,6 +373,18 @@ describe("gateway server agent", () => {
     expectAgentRoutingCall({ channel: "webchat", deliver: false });
   });
 
+  test("agent preserves gateway subagent binding for gateway-originated runs", async () => {
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      idempotencyKey: "idem-agent-gateway-subagent-binding",
+    });
+    expect(res.ok).toBe(true);
+
+    const call = readAgentCommandCall(1);
+    expect(call.allowGatewaySubagentBinding).toBe(true);
+  });
+
   test("agent routes bare /new through session reset before running greeting prompt", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
     const spy = vi.mocked(agentCommand);
