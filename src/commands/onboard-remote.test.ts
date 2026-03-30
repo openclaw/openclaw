@@ -138,7 +138,7 @@ describe("promptRemoteGatewayConfig", () => {
     const manualUrl = "wss://manual.example.com:18789";
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
-        expect(params.initialValue).toBe("wss://evil.example:443");
+        expect(params.initialValue).toBe("ws://127.0.0.1:18789");
         return manualUrl;
       }
       return "";
