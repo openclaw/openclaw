@@ -8,7 +8,7 @@ import path from "node:path";
 import { logWarn } from "../logger.js";
 import { resolveBoundaryPath } from "./boundary-path.js";
 import { sameFileIdentity } from "./file-identity.js";
-import { runPinnedPathHelper } from "./fs-pinned-path-helper.js";
+import { isPinnedPathHelperSpawnError, runPinnedPathHelper } from "./fs-pinned-path-helper.js";
 import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape, PATH_ALIAS_POLICIES } from "./path-alias-guards.js";
@@ -562,6 +562,10 @@ export async function removePathWithinRoot(params: {
       relativePath: resolved.relativePosix,
     });
   } catch (error) {
+    if (isPinnedPathHelperSpawnError(error)) {
+      await removePathWithinRootLegacy(resolved);
+      return;
+    }
     throw normalizePinnedPathError(error);
   }
 }
@@ -583,6 +587,10 @@ export async function mkdirPathWithinRoot(params: {
       relativePath: resolved.relativePosix,
     });
   } catch (error) {
+    if (isPinnedPathHelperSpawnError(error)) {
+      await mkdirPathWithinRootLegacy(resolved);
+      return;
+    }
     throw normalizePinnedPathError(error);
   }
 }

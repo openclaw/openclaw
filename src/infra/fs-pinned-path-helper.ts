@@ -124,6 +124,19 @@ function buildPinnedPathError(stderr: string, code: number | null, signal: NodeJ
   );
 }
 
+export function isPinnedPathHelperSpawnError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const maybeErrno = error as NodeJS.ErrnoException;
+  if (typeof maybeErrno.syscall !== "string" || !maybeErrno.syscall.startsWith("spawn")) {
+    return false;
+  }
+
+  return ["EACCES", "ENOENT", "ENOEXEC"].includes(maybeErrno.code ?? "");
+}
+
 export async function runPinnedPathHelper(params: {
   operation: "mkdirp" | "remove";
   rootPath: string;

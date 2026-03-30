@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
@@ -343,6 +343,80 @@ describe("fs-safe", () => {
       await expect(fs.stat(path.join(realDir, "target.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to legacy remove when the pinned helper cannot spawn",
+    async () => {
+      vi.resetModules();
+      vi.doMock("./fs-pinned-path-helper.js", async () => {
+        const actual = await vi.importActual<typeof import("./fs-pinned-path-helper.js")>(
+          "./fs-pinned-path-helper.js",
+        );
+        const error = new Error("spawn missing python ENOENT") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        error.syscall = "spawn python3";
+        return {
+          ...actual,
+          runPinnedPathHelper: vi.fn(async () => {
+            throw error;
+          }),
+        };
+      });
+
+      const { removePathWithinRoot: removePathWithinRootWithFallback } =
+        await import("./fs-safe.js");
+
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const targetPath = path.join(root, "nested", "out.txt");
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, "hello");
+
+      await removePathWithinRootWithFallback({
+        rootDir: root,
+        relativePath: "nested/out.txt",
+      });
+
+      await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      vi.doUnmock("./fs-pinned-path-helper.js");
+      vi.resetModules();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to legacy mkdir when the pinned helper cannot spawn",
+    async () => {
+      vi.resetModules();
+      vi.doMock("./fs-pinned-path-helper.js", async () => {
+        const actual = await vi.importActual<typeof import("./fs-pinned-path-helper.js")>(
+          "./fs-pinned-path-helper.js",
+        );
+        const error = new Error("spawn missing python ENOENT") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        error.syscall = "spawn python3";
+        return {
+          ...actual,
+          runPinnedPathHelper: vi.fn(async () => {
+            throw error;
+          }),
+        };
+      });
+
+      const { mkdirPathWithinRoot: mkdirPathWithinRootWithFallback } = await import("./fs-safe.js");
+
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+
+      await mkdirPathWithinRootWithFallback({
+        rootDir: root,
+        relativePath: "nested/deeper",
+      });
+
+      await expect(fs.stat(path.join(root, "nested", "deeper"))).resolves.toMatchObject({
+        isDirectory: expect.any(Function),
+      });
+      vi.doUnmock("./fs-pinned-path-helper.js");
+      vi.resetModules();
     },
   );
 
