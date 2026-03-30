@@ -552,6 +552,63 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
   });
 
+  it("re-resolves a token re-auth when refresh throws", async () => {
+    const profileId = "openai-codex:default";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+    let releaseRefreshError: ((error: Error) => void) | undefined;
+
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          releaseRefreshError = reject;
+        }),
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const resolving = resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+    });
+
+    await vi.waitFor(() =>
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1),
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "token",
+            provider: "openai-codex",
+            token: "replacement-token",
+            expires: freshExpiry,
+          },
+        },
+      },
+      agentDir,
+    );
+    releaseRefreshError?.(new Error("invalid_grant"));
+
+    await expect(resolving).resolves.toEqual({
+      apiKey: "replacement-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const currentStore = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(currentStore.profiles[profileId]).toMatchObject({
+      type: "token",
+      token: "replacement-token",
+    });
+  });
+
   it("re-resolves inherited main-store updates when refresh returns null", async () => {
     const profileId = "openai-codex:default";
     const freshExpiry = Date.now() + 60 * 60 * 1000;

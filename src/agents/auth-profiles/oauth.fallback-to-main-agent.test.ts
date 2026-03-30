@@ -81,6 +81,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expires: number;
     provider?: string;
     accountId?: string;
+    email?: string;
   }): AuthProfileStore {
     return {
       version: 1,
@@ -92,6 +93,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           refresh: params.refresh,
           expires: params.expires,
           accountId: params.accountId,
+          email: params.email,
         },
       },
     };
@@ -238,6 +240,49 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
       access: "secondary-expired-access-token",
       expires: expiredTime,
+    });
+  });
+
+  it("inherits main agent credentials when only one side has accountId but emails match", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const expiredTime = now - 60 * 60 * 1000;
+    const freshTime = now + 60 * 60 * 1000;
+
+    await writeAuthProfilesStore(
+      secondaryAgentDir,
+      createOauthStore({
+        profileId,
+        access: "secondary-expired-access-token",
+        refresh: "secondary-expired-refresh-token",
+        expires: expiredTime,
+        email: "shared@example.com",
+      }),
+    );
+
+    await writeAuthProfilesStore(
+      mainAgentDir,
+      createOauthStore({
+        profileId,
+        access: "main-fresh-access-token",
+        refresh: "main-fresh-refresh-token",
+        expires: freshTime,
+        accountId: "acct-shared",
+        email: "shared@example.com",
+      }),
+    );
+
+    const result = await resolveFromSecondaryAgent(profileId);
+
+    expect(result?.apiKey).toBe("main-fresh-access-token");
+
+    const updatedSecondaryStore = JSON.parse(
+      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
+      access: "main-fresh-access-token",
+      expires: freshTime,
+      email: "shared@example.com",
     });
   });
 

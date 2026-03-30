@@ -158,14 +158,14 @@ function hasPositiveOAuthIdentityMatch(a: OAuthCredential, b: OAuthCredential): 
   // accountId is the strongest identity signal (used by Codex CLI credentials).
   const aAcct = normalizeOAuthIdentityValue(a.accountId);
   const bAcct = normalizeOAuthIdentityValue(b.accountId);
-  if (aAcct || bAcct) {
-    return aAcct !== undefined && aAcct === bAcct;
+  if (aAcct !== undefined && bAcct !== undefined) {
+    return aAcct === bAcct;
   }
 
   const aEmail = normalizeOAuthEmail(a.email);
   const bEmail = normalizeOAuthEmail(b.email);
-  if (aEmail || bEmail) {
-    return aEmail !== undefined && aEmail === bEmail;
+  if (aEmail !== undefined && bEmail !== undefined) {
+    return aEmail === bEmail;
   }
 
   return false;
@@ -176,6 +176,32 @@ function canShareOAuthCredentialAcrossAgents(a: OAuthCredential, b: OAuthCredent
     return false;
   }
   return hasPositiveOAuthIdentityMatch(a, b) || areOAuthCredentialsEquivalent(a, b);
+}
+
+async function resolveChangedProfileAfterRefresh(params: {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+  previousCred: OAuthCredential;
+}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+  const current = params.store.profiles[params.profileId];
+  if (!current) {
+    return null;
+  }
+  if (current.type === "oauth" && areOAuthCredentialsEquivalent(current, params.previousCred)) {
+    return null;
+  }
+  try {
+    return await resolveApiKeyForProfile({
+      cfg: params.cfg,
+      store: params.store,
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function shouldOverwriteOAuthCredential(
@@ -747,17 +773,15 @@ export async function resolveApiKeyForProfile(
         params.agentDir,
         READ_ONLY_AUTH_STORE_OPTIONS,
       );
-      const current = refreshedStore.profiles[profileId];
-      if (
-        current &&
-        (current.type !== "oauth" || !areOAuthCredentialsEquivalent(current, oauthCred))
-      ) {
-        return await resolveApiKeyForProfile({
-          cfg,
-          store: refreshedStore,
-          profileId,
-          agentDir: params.agentDir,
-        });
+      const reResolved = await resolveChangedProfileAfterRefresh({
+        cfg,
+        store: refreshedStore,
+        profileId,
+        agentDir: params.agentDir,
+        previousCred: oauthCred,
+      });
+      if (reResolved) {
+        return reResolved;
       }
       return null;
     }
@@ -767,14 +791,19 @@ export async function resolveApiKeyForProfile(
       email: oauthCred.email,
     });
   } catch (error) {
-    const refreshedStore = ensureAuthProfileStore(params.agentDir);
-    const refreshed = refreshedStore.profiles[profileId];
-    if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
-      return await buildOAuthProfileResult({
-        provider: refreshed.provider,
-        credentials: refreshed,
-        email: refreshed.email ?? cred.email,
-      });
+    const refreshedStore = loadAuthProfileStoreForRuntime(
+      params.agentDir,
+      READ_ONLY_AUTH_STORE_OPTIONS,
+    );
+    const reResolved = await resolveChangedProfileAfterRefresh({
+      cfg,
+      store: refreshedStore,
+      profileId,
+      agentDir: params.agentDir,
+      previousCred: oauthCred,
+    });
+    if (reResolved) {
+      return reResolved;
     }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
