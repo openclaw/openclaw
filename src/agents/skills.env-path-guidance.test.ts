@@ -17,6 +17,7 @@ const CASES: GuidanceCase[] = [
     forbidden: [
       "for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl",
       'rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl',
+      "~/.openclaw/agents/<agentId>/sessions/<id>.jsonl",
     ],
   },
   {
@@ -35,10 +36,15 @@ const CASES: GuidanceCase[] = [
   },
   {
     file: "skills/sherpa-onnx-tts/SKILL.md",
-    required: ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"],
+    required: [
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      'STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"',
+    ],
     forbidden: [
       'SHERPA_ONNX_RUNTIME_DIR: "~/.openclaw/tools/sherpa-onnx-tts/runtime"',
       'SHERPA_ONNX_MODEL_DIR: "~/.openclaw/tools/sherpa-onnx-tts/models/vits-piper-en_US-lessac-high"',
+      "<state-dir>",
     ],
   },
   {
