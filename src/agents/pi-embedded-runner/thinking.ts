@@ -78,7 +78,7 @@ export function stripThinkingSignatures(messages: AgentMessage[]): AgentMessage[
         touched = true;
         changed = true;
         const { thinkingSignature: _, ...rest } = b as Record<string, unknown>;
-        nextContent.push(rest as AssistantContentBlock);
+        nextContent.push(rest as unknown as AssistantContentBlock);
         continue;
       }
       nextContent.push(block);
