@@ -203,9 +203,9 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const previewStreamingEnabled = streamMode !== "off";
-  const canStreamAnswerDraft =
-    previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
-  const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
+  const canStreamAnswerDraft = previewStreamingEnabled && !accountBlockStreamingEnabled;
+  const canStreamReasoningDraft =
+    (canStreamAnswerDraft && !forceBlockStreamingForReasoning) || streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;

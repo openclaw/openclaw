@@ -465,7 +465,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps block streaming enabled when session reasoning level is on", async () => {
+  it("initializes answer stream even when session reasoning level is on", async () => {
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "on" },
     });
@@ -482,7 +482,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
