@@ -433,7 +433,7 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.waitDecision");
   });
 
-  it("starts a direct agent follow-up after approved gateway exec completes", async () => {
+  it("starts an internal agent follow-up after approved gateway exec completes without an external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -637,6 +637,55 @@ describe("exec approvals", () => {
 
     expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
     expect(calls).toContain("exec.approval.request");
+  });
+
+  it("runs a skill wrapper chain without prompting when the wrapper is allowlisted", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-wrapper-"));
+    try {
+      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const binDir = path.join(tempDir, "bin");
+      const wrapperPath = path.join(binDir, "gog-wrapper");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(skillPath, "# gog skill\n");
+      await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
+      await fs.chmod(wrapperPath, 0o755);
+
+      await writeExecApprovalsConfig({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        agents: {
+          main: {
+            allowlist: [{ pattern: wrapperPath }],
+          },
+        },
+      });
+
+      const calls: string[] = [];
+      mockGatewayOkCalls(calls);
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "off",
+        security: "allowlist",
+        approvalRunningNoticeMs: 0,
+      });
+
+      const result = await tool.execute("call-skill-wrapper", {
+        command: `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
+        workdir: tempDir,
+      });
+
+      expect(result.details.status).toBe("completed");
+      expect(getResultText(result)).toContain('{"events":[]}');
+      expect(calls).not.toContain("exec.approval.request");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("shows full chained node commands in approval-pending message", async () => {
