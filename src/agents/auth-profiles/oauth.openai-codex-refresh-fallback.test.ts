@@ -258,6 +258,10 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       access: "fresh-access-token",
       refresh: "fresh-refresh-token",
     });
+    await expect(readStoredProfile(workerAgentDir, profileId)).resolves.toMatchObject({
+      access: "fresh-access-token", // pragma: allowlist secret
+      refresh: "fresh-refresh-token",
+    });
   });
 
   it("reloads stored oauth credentials after refresh_token_reused and retries with the updated token", async () => {

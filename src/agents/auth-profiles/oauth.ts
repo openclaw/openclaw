@@ -58,6 +58,7 @@ const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
 type OAuthRefreshResult = {
   apiKey: string;
   newCredentials: OAuthCredentials;
+  originAgentDir?: string;
 };
 
 const OAUTH_REFRESH_IN_FLIGHT_KEY = Symbol.for("openclaw.authProfiles.oauthRefreshInFlight");
@@ -224,6 +225,7 @@ async function loadFreshStoredOAuthCredential(params: {
   return {
     apiKey: await buildOAuthApiKey(reloaded.provider, reloaded),
     newCredentials: reloaded,
+    originAgentDir: params.agentDir,
   };
 }
 
@@ -232,7 +234,11 @@ async function awaitOAuthRefreshResult(
   params: { profileId: string; agentDir?: string; provider: string; email?: string },
 ): Promise<OAuthRefreshResult | null> {
   const result = await refreshPromise;
-  if (result && params.agentDir) {
+  if (
+    result &&
+    params.agentDir &&
+    (!result.originAgentDir || result.originAgentDir !== params.agentDir)
+  ) {
     await syncOAuthCredentialToStore({
       profileId: params.profileId,
       agentDir: params.agentDir,
@@ -308,6 +314,7 @@ async function refreshOAuthTokenFromStoreWithLock(params: {
       return {
         apiKey: await buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
+        originAgentDir: params.agentDir,
       };
     }
 
@@ -351,7 +358,10 @@ async function refreshOAuthTokenFromStoreWithLock(params: {
     };
     saveAuthProfileStore(store, params.agentDir);
 
-    return result;
+    return {
+      ...result,
+      originAgentDir: params.agentDir,
+    };
   });
 }
 
