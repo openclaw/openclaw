@@ -201,6 +201,18 @@ function rejectExecApprovalShellCommand(command: string): void {
   const isEnvAssignmentToken = (token: string): boolean =>
     /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
   const shellWrappers = new Set(["bash", "dash", "fish", "ksh", "sh", "zsh"]);
+  const envOptionsWithValues = new Set([
+    "-C",
+    "-S",
+    "-u",
+    "--argv0",
+    "--block-signal",
+    "--chdir",
+    "--default-signal",
+    "--ignore-signal",
+    "--split-string",
+    "--unset",
+  ]);
   const sudoOptionsWithValues = new Set([
     "-C",
     "-D",
@@ -238,6 +250,27 @@ function rejectExecApprovalShellCommand(command: string): void {
       }
       if (token === "env") {
         remaining.shift();
+        while (remaining.length > 0) {
+          while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
+            remaining.shift();
+          }
+          const envToken = remaining[0];
+          if (!envToken) {
+            break;
+          }
+          if (envToken === "--") {
+            remaining.shift();
+            continue;
+          }
+          if (!envToken.startsWith("-") || envToken === "-") {
+            break;
+          }
+          const option = remaining.shift()!;
+          const normalized = option.split("=", 1)[0];
+          if (envOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
+            remaining.shift();
+          }
+        }
         continue;
       }
       if (token === "command" || token === "builtin" || token === "exec") {
