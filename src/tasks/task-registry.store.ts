@@ -1,12 +1,18 @@
 import {
-  loadTaskRegistrySnapshotFromJson,
-  saveTaskRegistrySnapshotToJson,
-} from "./task-registry.store.json.js";
+  closeTaskRegistrySqliteStore,
+  deleteTaskRegistryRecordFromSqlite,
+  loadTaskRegistrySnapshotFromSqlite,
+  saveTaskRegistrySnapshotToSqlite,
+  upsertTaskRegistryRecordToSqlite,
+} from "./task-registry.store.sqlite.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export type TaskRegistryStore = {
   loadSnapshot: () => Map<string, TaskRecord>;
   saveSnapshot: (tasks: ReadonlyMap<string, TaskRecord>) => void;
+  upsertTask?: (task: TaskRecord) => void;
+  deleteTask?: (taskId: string) => void;
+  close?: () => void;
 };
 
 export type TaskRegistryHookEvent =
@@ -31,8 +37,11 @@ export type TaskRegistryHooks = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
-  loadSnapshot: loadTaskRegistrySnapshotFromJson,
-  saveSnapshot: saveTaskRegistrySnapshotToJson,
+  loadSnapshot: loadTaskRegistrySnapshotFromSqlite,
+  saveSnapshot: saveTaskRegistrySnapshotToSqlite,
+  upsertTask: upsertTaskRegistryRecordToSqlite,
+  deleteTask: deleteTaskRegistryRecordFromSqlite,
+  close: closeTaskRegistrySqliteStore,
 };
 
 let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
@@ -59,6 +68,7 @@ export function configureTaskRegistryRuntime(params: {
 }
 
 export function resetTaskRegistryRuntimeForTests() {
+  configuredTaskRegistryStore.close?.();
   configuredTaskRegistryStore = defaultTaskRegistryStore;
   configuredTaskRegistryHooks = null;
 }
