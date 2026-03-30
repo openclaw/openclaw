@@ -279,4 +279,36 @@ describe("generic current-conversation bindings", () => {
       targetSessionKey: "agent:main:session:1",
     });
   });
+
+  it("restores previous binding when specialist expires via TTL", async () => {
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "dm:U555",
+    };
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation,
+    });
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:coder:acp:2",
+      targetKind: "session",
+      conversation,
+      ttlMs: 1,
+    });
+
+    // Wait for TTL to expire
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Resolve triggers pruneExpiredBinding which should restore main
+    const restored = resolveGenericCurrentConversationBinding(conversation);
+    expect(restored).toMatchObject({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+    });
+    expect(restored?.metadata?.restoredFrom).toBe("agent:coder:acp:2");
+  });
 });
