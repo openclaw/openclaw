@@ -714,7 +714,7 @@ describe("Agent-specific tool filtering", () => {
     const mainExecTool = mainTools.find((tool) => tool.name === "exec");
     expect(mainExecTool).toBeDefined();
     const mainResult = await mainExecTool!.execute("call-main-default", {
-      command: "wc -l",
+      command: "echo done",
       yieldMs: 1000,
     });
     const mainDetails = mainResult?.details as { status?: string } | undefined;

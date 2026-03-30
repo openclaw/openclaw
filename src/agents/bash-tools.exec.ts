@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { parseExecApprovalCommandText } from "../infra/exec-approval-reply.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -176,33 +175,52 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+type ParsedExecApprovalCommand = {
+  approvalId: string;
+  decision: "allow-once" | "allow-always" | "deny";
+};
+
+function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
+  const normalized = raw.trimStart();
+  const match = normalized.match(
+    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
+  );
+  if (!match) {
+    return null;
+  }
+  return {
+    approvalId: match[1],
+    decision:
+      match[2].toLowerCase() === "always"
+        ? "allow-always"
+        : (match[2].toLowerCase() as ParsedExecApprovalCommand["decision"]),
+  };
+}
+
 function rejectExecApprovalShellCommand(command: string): void {
   const isEnvAssignmentToken = (token: string): boolean =>
     /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
+  const shellWrappers = new Set(["bash", "dash", "fish", "ksh", "sh", "zsh"]);
   const sudoOptionsWithValues = new Set([
-    "-A",
     "-C",
     "-D",
-    "-E",
     "-g",
-    "-h",
     "-p",
     "-R",
     "-T",
     "-U",
     "-u",
-    "--askpass",
     "--chdir",
     "--close-from",
     "--group",
     "--host",
     "--other-user",
-    "--preserve-env",
     "--prompt",
     "--role",
     "--type",
     "--user",
   ]);
+  const sudoStandaloneOptions = new Set(["-A", "-E", "--askpass", "--preserve-env"]);
   const stripApprovalCommandPrefixes = (argv: string[]): string[] => {
     const remaining = [...argv];
     while (remaining.length > 0) {
@@ -234,6 +252,9 @@ function rejectExecApprovalShellCommand(command: string): void {
             break;
           }
           const normalized = option.split("=", 1)[0];
+          if (sudoStandaloneOptions.has(normalized)) {
+            continue;
+          }
           if (sudoOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
             remaining.shift();
           }
@@ -244,21 +265,47 @@ function rejectExecApprovalShellCommand(command: string): void {
     }
     return remaining;
   };
+  const extractShellWrapperPayload = (argv: string[]): string[] => {
+    const [commandName, ...rest] = argv;
+    if (!commandName || !shellWrappers.has(path.basename(commandName))) {
+      return [];
+    }
+    for (let i = 0; i < rest.length; i += 1) {
+      const token = rest[i];
+      if (!token) {
+        continue;
+      }
+      if (token === "-c" || token === "-lc" || token === "-ic" || token === "-xc") {
+        return rest[i + 1] ? [rest[i + 1]] : [];
+      }
+      if (/^-[^-]*c[^-]*$/u.test(token)) {
+        return rest[i + 1] ? [rest[i + 1]] : [];
+      }
+    }
+    return [];
+  };
+  const buildCandidates = (argv: string[]): string[] => {
+    const stripped = stripApprovalCommandPrefixes(argv);
+    if (stripped.length === 0) {
+      return [];
+    }
+    return [stripped.join(" "), ...extractShellWrapperPayload(stripped)];
+  };
 
   const rawCommand = command.trim();
   const analysis = analyzeShellCommand({ command: rawCommand });
   const candidates = analysis.ok
-    ? analysis.segments.map((segment) => stripApprovalCommandPrefixes(segment.argv).join(" "))
+    ? analysis.segments.flatMap((segment) => buildCandidates(segment.argv))
     : rawCommand
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean)
-        .map((line) => {
+        .flatMap((line) => {
           const argv = splitShellArgs(line);
-          return argv ? stripApprovalCommandPrefixes(argv).join(" ") : line;
+          return argv ? buildCandidates(argv) : [line];
         });
   for (const candidate of candidates) {
-    if (!parseExecApprovalCommandText(candidate)) {
+    if (!parseExecApprovalShellCommand(candidate)) {
       continue;
     }
     throw new Error(

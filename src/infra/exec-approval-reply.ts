@@ -109,23 +109,6 @@ export function formatExecApprovalExpiresIn(expiresAtMs: number, nowMs: number):
   return parts.join(" ");
 }
 
-export function parseExecApprovalCommandText(
-  raw: string,
-): { approvalId: string; decision: ExecApprovalReplyDecision } | null {
-  const normalized = raw.trimStart();
-  const match = normalized.match(
-    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
-  );
-  if (!match) {
-    return null;
-  }
-  const decisionToken = match[2].toLowerCase();
-  return {
-    approvalId: match[1],
-    decision: decisionToken === "always" ? "allow-always" : (decisionToken as ExecApprovalReplyDecision),
-  };
-}
-
 function buildFence(text: string, language?: string): string {
   let fence = "```";
   while (text.includes(fence)) {
