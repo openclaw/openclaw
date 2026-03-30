@@ -210,6 +210,8 @@ function fromSessionBindingInput(params: {
               targetSessionKey: existing.targetSessionKey,
               targetKind: existing.targetKind,
               metadata: existing.metadata,
+              idleTimeoutMs: existing.idleTimeoutMs,
+              maxAgeMs: existing.maxAgeMs,
             },
           }
         : {}),
@@ -249,6 +251,8 @@ function maybeRestorePreviousThreadBinding(params: {
           targetSessionKey: string;
           targetKind: string;
           metadata?: Record<string, unknown>;
+          idleTimeoutMs?: number;
+          maxAgeMs?: number;
         })
       : undefined;
   if (!prev?.targetSessionKey) {
@@ -262,6 +266,8 @@ function maybeRestorePreviousThreadBinding(params: {
     targetSessionKey: prev.targetSessionKey,
     boundAt: now,
     lastActivityAt: now,
+    ...(typeof prev.idleTimeoutMs === "number" ? { idleTimeoutMs: prev.idleTimeoutMs } : {}),
+    ...(typeof prev.maxAgeMs === "number" ? { maxAgeMs: prev.maxAgeMs } : {}),
     metadata: {
       ...prev.metadata,
       lastActivityAt: now,

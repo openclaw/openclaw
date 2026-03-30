@@ -190,6 +190,7 @@ export async function bindGenericCurrentConversation(
               targetSessionKey: existing.targetSessionKey,
               targetKind: existing.targetKind,
               metadata: existing.metadata,
+              expiresAt: existing.expiresAt,
             },
           }
         : {}),
@@ -250,6 +251,7 @@ function maybeRestorePreviousBinding(key: string, removed: SessionBindingRecord)
           targetSessionKey: string;
           targetKind: string;
           metadata?: Record<string, unknown>;
+          expiresAt?: number;
         })
       : undefined;
   if (!prev?.targetSessionKey) {
@@ -263,6 +265,7 @@ function maybeRestorePreviousBinding(key: string, removed: SessionBindingRecord)
     conversation: removed.conversation,
     status: "active",
     boundAt: now,
+    ...(typeof prev.expiresAt === "number" ? { expiresAt: prev.expiresAt } : {}),
     metadata: {
       ...prev.metadata,
       lastActivityAt: now,
