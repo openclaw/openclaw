@@ -449,7 +449,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           kind,
           postId: post.id || undefined,
           replyToMode,
-          threadRootId: post.root_id,
+          // Don't thread if channel lookup failed — we might be in a DM masquerading
+          // as "channel" via the mapMattermostChannelTypeToChatType fallback.
+          threadRootId: channelInfo != null ? post.root_id : undefined,
         }).sessionKey;
       },
       dispatchButtonClick: async (opts) => {
@@ -481,7 +483,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           kind,
           postId: opts.post.id || opts.postId,
           replyToMode,
-          threadRootId: opts.post.root_id,
+          // Don't thread if channel lookup failed — we might be in a DM masquerading
+          // as "channel" via the mapMattermostChannelTypeToChatType fallback.
+          threadRootId: channelInfo != null ? opts.post.root_id : undefined,
         });
         const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
         const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
@@ -1220,7 +1224,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
+    // Don't thread if channel lookup failed and the websocket event didn't include
+    // channel_type — we might be in a DM masquerading as "channel" via the
+    // mapMattermostChannelTypeToChatType fallback.
+    const channelTypeKnown = channelInfo != null || payload.data?.channel_type != null;
+    const threadRootId = channelTypeKnown ? (post.root_id?.trim() || undefined) : undefined;
     const replyToMode = resolveMattermostReplyToMode(account, kind);
     const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
