@@ -16,6 +16,7 @@ import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runti
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
+  resolveChannelNativeApprovalDeliveryPlan,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { buildExecApprovalActionDescriptors } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
@@ -36,10 +37,12 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
+import { createDiscordNativeApprovalAdapter } from "../approval-native.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
+export { extractDiscordChannelId } from "../approval-native.js";
 export type {
   ExecApprovalRequest,
   ExecApprovalResolved,
@@ -51,16 +54,6 @@ type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 type ApprovalKind = "exec" | "plugin";
 
-/** Extract Discord channel ID from a session key like "agent:main:discord:channel:123456789" */
-export function extractDiscordChannelId(sessionKey?: string | null): string | null {
-  if (!sessionKey) {
-    return null;
-  }
-  // Session key format: agent:<id>:discord:channel:<channelId> or agent:<id>:discord:group:<channelId>
-  const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
-  return match ? match[1] : null;
-}
-
 function buildDiscordApprovalDmRedirectNotice(): { content: string } {
   return {
     content: getExecApprovalApproverDmNoticeText(),
@@ -70,6 +63,7 @@ function buildDiscordApprovalDmRedirectNotice(): { content: string } {
 type PendingApproval = {
   discordMessageId: string;
   discordChannelId: string;
+  timeoutId?: NodeJS.Timeout;
 };
 
 function resolveApprovalKindFromId(approvalId: string): ApprovalKind {
@@ -514,7 +508,11 @@ export class DiscordExecApprovalHandler {
 
   constructor(opts: DiscordExecApprovalHandlerOpts) {
     this.opts = opts;
-    this.runtime = createExecApprovalChannelRuntime<PendingApproval, ApprovalRequest, ApprovalResolved>({
+    this.runtime = createExecApprovalChannelRuntime<
+      PendingApproval,
+      ApprovalRequest,
+      ApprovalResolved
+    >({
       label: "discord/exec-approvals",
       clientDisplayName: "Discord Exec Approvals",
       cfg: this.opts.cfg,
@@ -615,22 +613,22 @@ export class DiscordExecApprovalHandler {
         });
     const payload = buildExecApprovalPayload(container);
     const body = stripUndefinedFields(serializePayload(payload));
-
-    const target = this.opts.config.target ?? "dm";
-    const sendToDm = target === "dm" || target === "both";
-    const sendToChannel = target === "channel" || target === "both";
-    let fallbackToDm = false;
+    const approvalKind: ApprovalKind = isPluginApprovalRequest(request) ? "plugin" : "exec";
+    const nativeApprovalAdapter = createDiscordNativeApprovalAdapter(this.opts.config);
+    const deliveryPlan = await resolveChannelNativeApprovalDeliveryPlan({
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+      approvalKind,
+      request,
+      adapter: nativeApprovalAdapter.native,
+    });
     const pendingEntries: PendingApproval[] = [];
-    const originatingChannelId =
-      target === "dm"
-        ? extractDiscordChannelId(resolveApprovalSessionKey(request))
-        : null;
-
-    if (target === "dm" && originatingChannelId) {
+    const originTarget = deliveryPlan.originTarget;
+    if (deliveryPlan.notifyOriginWhenDmOnly && originTarget) {
       try {
         await discordRequest(
           () =>
-            rest.post(Routes.channelMessages(originatingChannelId), {
+            rest.post(Routes.channelMessages(originTarget.to), {
               body: buildDiscordApprovalDmRedirectNotice(),
             }) as Promise<{ id: string; channel_id: string }>,
           "send-approval-dm-redirect-notice",
@@ -640,15 +638,12 @@ export class DiscordExecApprovalHandler {
       }
     }
 
-    // Send to originating channel if configured
-    if (sendToChannel) {
-      const sessionKey = resolveApprovalSessionKey(request);
-      const channelId = extractDiscordChannelId(sessionKey);
-      if (channelId) {
+    for (const deliveryTarget of deliveryPlan.targets) {
+      if (deliveryTarget.surface === "origin") {
         try {
           const message = (await discordRequest(
             () =>
-              rest.post(Routes.channelMessages(channelId), {
+              rest.post(Routes.channelMessages(deliveryTarget.target.to), {
                 body,
               }) as Promise<{ id: string; channel_id: string }>,
             "send-approval-channel",
@@ -657,70 +652,55 @@ export class DiscordExecApprovalHandler {
           if (message?.id) {
             pendingEntries.push({
               discordMessageId: message.id,
-              discordChannelId: channelId,
+              discordChannelId: deliveryTarget.target.to,
             });
 
-            logDebug(`discord exec approvals: sent approval ${request.id} to channel ${channelId}`);
+            logDebug(
+              `discord exec approvals: sent approval ${request.id} to channel ${deliveryTarget.target.to}`,
+            );
           }
         } catch (err) {
           logError(`discord exec approvals: failed to send to channel: ${String(err)}`);
         }
-      } else {
-        if (!sendToDm) {
-          logError(
-            `discord exec approvals: target is "channel" but could not extract channel id from session key "${sessionKey ?? "(none)"}" — falling back to DM delivery for approval ${request.id}`,
-          );
-          fallbackToDm = true;
-        } else {
-          logDebug("discord exec approvals: could not extract channel id from session key");
-        }
+        continue;
       }
-    }
 
-    // Send to approver DMs if configured (or as fallback when channel extraction fails)
-    if (sendToDm || fallbackToDm) {
-      const approvers = this.opts.config.approvers ?? [];
+      const userId = deliveryTarget.target.to;
+      try {
+        const dmChannel = (await discordRequest(
+          () =>
+            rest.post(Routes.userChannels(), {
+              body: { recipient_id: userId },
+            }) as Promise<{ id: string }>,
+          "dm-channel",
+        )) as { id: string };
 
-      for (const approver of approvers) {
-        const userId = String(approver);
-        try {
-          // Create DM channel
-          const dmChannel = (await discordRequest(
-            () =>
-              rest.post(Routes.userChannels(), {
-                body: { recipient_id: userId },
-              }) as Promise<{ id: string }>,
-            "dm-channel",
-          )) as { id: string };
-
-          if (!dmChannel?.id) {
-            logError(`discord exec approvals: failed to create DM for user ${userId}`);
-            continue;
-          }
-
-          // Send message with components v2 + buttons
-          const message = (await discordRequest(
-            () =>
-              rest.post(Routes.channelMessages(dmChannel.id), {
-                body,
-              }) as Promise<{ id: string; channel_id: string }>,
-            "send-approval",
-          )) as { id: string; channel_id: string };
-
-          if (!message?.id) {
-            logError(`discord exec approvals: failed to send message to user ${userId}`);
-            continue;
-          }
-
-          pendingEntries.push({
-            discordMessageId: message.id,
-            discordChannelId: dmChannel.id,
-          });
-
-          logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
-        } catch (err) {
-          logError(`discord exec approvals: failed to notify user ${userId}: ${String(err)}`);
+        if (!dmChannel?.id) {
+          logError(`discord exec approvals: failed to create DM for user ${userId}`);
+          continue;
         }
+
+        const message = (await discordRequest(
+          () =>
+            rest.post(Routes.channelMessages(dmChannel.id), {
+              body,
+            }) as Promise<{ id: string; channel_id: string }>,
+          "send-approval",
+        )) as { id: string; channel_id: string };
+
+        if (!message?.id) {
+          logError(`discord exec approvals: failed to send message to user ${userId}`);
+          continue;
+        }
+
+        pendingEntries.push({
+          discordMessageId: message.id,
+          discordChannelId: dmChannel.id,
+        });
+
+        logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
+      } catch (err) {
+        logError(`discord exec approvals: failed to notify user ${userId}: ${String(err)}`);
       }
     }
     return pendingEntries;

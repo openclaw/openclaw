@@ -2,7 +2,6 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -42,6 +41,7 @@ import {
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
+import { telegramNativeApprovalAdapter } from "./approval-native.js";
 import * as auditModule from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
@@ -423,25 +423,6 @@ async function resolveTelegramTargets(params: {
   );
 }
 
-const telegramNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
-  channel: "telegram",
-  channelLabel: "Telegram",
-  listAccountIds: listTelegramAccountIds,
-  hasApprovers: ({ cfg, accountId }) =>
-    getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
-  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
-  isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isTelegramExecApprovalApprover({ cfg, accountId, senderId }),
-  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
-    isTelegramExecApprovalClientEnabled({ cfg, accountId }),
-  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
-    resolveTelegramExecApprovalTarget({ cfg, accountId }),
-  requireMatchingTurnSourceChannel: true,
-  resolveSuppressionAccountId: ({ target, request }) =>
-    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
-});
-
 const resolveTelegramAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
   resolveRecord: (account: ResolvedTelegramAccount) => account.config.groups,
   outerLabel: (groupId) => groupId,
@@ -596,6 +577,7 @@ export const telegramPlugin = createChatChannelPlugin({
     auth: telegramNativeApprovalAdapter.auth,
     approvals: {
       delivery: telegramNativeApprovalAdapter.delivery,
+      native: telegramNativeApprovalAdapter.native,
       render: {
         exec: {
           buildPendingPayload: ({ request, nowMs }) =>

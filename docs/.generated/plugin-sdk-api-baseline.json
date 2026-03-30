@@ -109,7 +109,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 607,
+            "line": 650,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -118,7 +118,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 612,
+            "line": 655,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 628,
+            "line": 671,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1206,7 +1206,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 616,
+            "line": 659,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1824,7 +1824,7 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 551,
+            "line": 594,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1833,7 +1833,7 @@
           "exportName": "ChannelApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 546,
+            "line": 588,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1914,7 +1914,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 616,
+            "line": 659,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1932,7 +1932,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 607,
+            "line": 650,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1941,7 +1941,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 612,
+            "line": 655,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1950,7 +1950,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 628,
+            "line": 671,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1959,7 +1959,7 @@
           "exportName": "ChannelConversationBindingSupport",
           "kind": "type",
           "source": {
-            "line": 644,
+            "line": 687,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2319,7 +2319,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 675,
+            "line": 718,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
