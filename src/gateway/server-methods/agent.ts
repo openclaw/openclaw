@@ -42,7 +42,12 @@ import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  hasGatewayClientCap,
+} from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -86,6 +91,23 @@ function resolveAllowModelOverrideFromClient(
 
 function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   return resolveSenderIsOwnerFromClient(client);
+}
+
+function resolveCliWorkspaceOverrideFromClient(
+  client: GatewayRequestHandlerOptions["client"],
+  workspaceDir?: string,
+): string | undefined {
+  const trimmed = typeof workspaceDir === "string" ? workspaceDir.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  const info = client?.connect?.client;
+  const isCliCaller =
+    info?.id === GATEWAY_CLIENT_NAMES.CLI && info?.mode === GATEWAY_CLIENT_MODES.CLI;
+  if (!isCliCaller) {
+    throw new Error("invalid agent params: workspaceDir override is restricted to CLI agent runs");
+  }
+  return trimmed;
 }
 
 async function runSessionResetFromAgent(params: {
@@ -298,6 +320,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupSpace?: string;
       lane?: string;
       extraSystemPrompt?: string;
+      workspaceDir?: string;
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
       timeout?: number;
@@ -322,6 +345,13 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const providerOverride = allowModelOverride ? request.provider : undefined;
     const modelOverride = allowModelOverride ? request.model : undefined;
+    let cliWorkspaceOverride: string | undefined;
+    try {
+      cliWorkspaceOverride = resolveCliWorkspaceOverrideFromClient(client, request.workspaceDir);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+      return;
+    }
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
@@ -797,11 +827,14 @@ export const agentHandlers: GatewayRequestHandlers = {
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
         inputProvenance,
-        // Internal-only: allow workspace override for spawned subagent runs.
-        workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
-          spawnedBy: spawnedByValue,
-          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-        }),
+        // Internal-only: allow workspace override only for trusted CLI runs,
+        // otherwise keep the existing spawned-session inheritance path.
+        workspaceDir:
+          cliWorkspaceOverride ??
+          resolveIngressWorkspaceOverrideForSpawnedRun({
+            spawnedBy: spawnedByValue,
+            workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+          }),
         senderIsOwner,
         allowModelOverride,
       },

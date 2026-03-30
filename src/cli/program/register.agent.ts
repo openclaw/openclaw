@@ -36,6 +36,7 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     .option("--reply-to <target>", "Delivery target override (separate from session routing)")
     .option("--reply-channel <channel>", "Delivery channel override (separate from routing)")
     .option("--reply-account <id>", "Delivery account id override")
+    .option("--cwd <dir>", "Workspace directory override for this agent run")
     .option(
       "--local",
       "Run the embedded agent locally (requires model provider API keys in your shell)",
@@ -62,6 +63,10 @@ ${formatHelpExamples([
   [
     'openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json',
     "Enable verbose logging and JSON output.",
+  ],
+  [
+    'openclaw agent --agent ops --cwd ~/src/project --message "Review this repo"',
+    "Run the turn against a specific workspace.",
   ],
   ['openclaw agent --to +15555550123 --message "Summon reply" --deliver', "Deliver reply."],
   [

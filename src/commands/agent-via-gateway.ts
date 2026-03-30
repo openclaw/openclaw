@@ -51,6 +51,7 @@ export type AgentCliOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  cwd?: string;
   local?: boolean;
 };
 
@@ -146,6 +147,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
+          workspaceDir: opts.cwd,
           idempotencyKey,
         },
         expectFinal: true,
@@ -183,6 +185,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    workspaceDir: opts.cwd,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

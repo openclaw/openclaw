@@ -768,7 +768,7 @@ describe("gateway agent handler", () => {
     );
   });
 
-  it("rejects public spawned-run metadata fields", async () => {
+  it("rejects workspaceDir override for non-CLI callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
@@ -777,7 +777,6 @@ describe("gateway agent handler", () => {
       {
         message: "spawned run",
         sessionKey: "agent:main:main",
-        spawnedBy: "agent:main:subagent:parent",
         workspaceDir: "/tmp/injected",
         idempotencyKey: "workspace-rejected",
       } as AgentParams,
@@ -789,9 +788,35 @@ describe("gateway agent handler", () => {
       false,
       undefined,
       expect.objectContaining({
-        message: expect.stringContaining("invalid agent params"),
+        message: expect.stringContaining("workspaceDir override is restricted to CLI agent runs"),
       }),
     );
+  });
+
+  it("forwards workspaceDir override for CLI callers only", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "cli workspace run",
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/cli-workspace",
+        idempotencyKey: "workspace-cli-forwarded",
+      } as AgentParams,
+      {
+        reqId: "workspace-cli-forwarded-1",
+        client: {
+          connect: {
+            client: { id: "cli", mode: "cli" },
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const cliCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
+    expect(cliCall.workspaceDir).toBe("/tmp/cli-workspace");
   });
 
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {

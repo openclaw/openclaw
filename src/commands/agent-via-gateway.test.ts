@@ -107,6 +107,19 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("forwards --cwd to gateway workspaceDir", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", cwd: "~/src/project" }, runtime);
+
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { workspaceDir?: string };
+      };
+      expect(request.params?.workspaceDir).toBe("~/src/project");
+    });
+  });
+
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
@@ -136,6 +149,25 @@ describe("agentCliCommand", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("forwards --cwd to embedded workspaceDir when --local is set", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          cwd: "~/src/project",
+          local: true,
+        },
+        runtime,
+      );
+
+      const localCall = vi.mocked(agentCommand).mock.calls[0]?.[0] as { workspaceDir?: string };
+      expect(localCall.workspaceDir).toBe("~/src/project");
     });
   });
 });
