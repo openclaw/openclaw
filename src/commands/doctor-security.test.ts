@@ -17,14 +17,17 @@ import { noteSecurityWarnings } from "./doctor-security.js";
 describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
   let prevPassword: string | undefined;
+  let prevSkipAuthWarning: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
     pluginRegistry.list = [];
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    prevSkipAuthWarning = process.env.OPENCLAW_SKIP_AUTH_WARNING;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_SKIP_AUTH_WARNING;
   });
 
   afterEach(() => {
@@ -38,30 +41,35 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
     }
+    if (prevSkipAuthWarning === undefined) {
+      delete process.env.OPENCLAW_SKIP_AUTH_WARNING;
+    } else {
+      process.env.OPENCLAW_SKIP_AUTH_WARNING = prevSkipAuthWarning;
+    }
   });
 
   const lastMessage = () => String(note.mock.calls.at(-1)?.[0] ?? "");
 
-  it("warns when exposed without auth", async () => {
-    const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+  it("warns when auth is disabled on a wildcard bind", async () => {
+    const cfg = { gateway: { bind: "lan", auth: { mode: "none" } } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("CRITICAL");
     expect(message).toContain("without authentication");
-    expect(message).toContain("Safer remote access");
-    expect(message).toContain("ssh -N -L 18789:127.0.0.1:18789");
+    expect(message).toContain("config set gateway.bind loopback");
+    expect(message).toContain("config set gateway.auth.mode token");
   });
 
-  it("uses env token to avoid critical warning", async () => {
+  it("does not warn when auth is enabled via env token", async () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "token-123";
     const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("WARNING");
-    expect(message).not.toContain("CRITICAL");
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain("Gateway bound");
   });
 
-  it("treats SecretRef token config as authenticated for exposure warning level", async () => {
+  it("does not warn when token auth is configured through SecretRef", async () => {
     const cfg = {
       gateway: {
         bind: "lan",
@@ -73,17 +81,18 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("WARNING");
-    expect(message).not.toContain("CRITICAL");
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain("Gateway bound");
   });
 
-  it("treats whitespace token as missing", async () => {
+  it("does not warn when auth mode is token, even if token is invalid", async () => {
     const cfg = {
       gateway: { bind: "lan", auth: { mode: "token", token: "   " } },
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("CRITICAL");
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain("Gateway bound");
   });
 
   it("skips warning for loopback bind", async () => {
@@ -92,6 +101,15 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain("No channel security warnings detected");
     expect(message).not.toContain("Gateway bound");
+  });
+
+  it("suppresses gateway auth exposure warning when override env is set", async () => {
+    process.env.OPENCLAW_SKIP_AUTH_WARNING = "true";
+    const cfg = { gateway: { bind: "lan", auth: { mode: "none" } } } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain("without authentication");
   });
 
   it("shows explicit dmScope config command for multi-user DMs", async () => {

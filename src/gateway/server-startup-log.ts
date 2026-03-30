@@ -1,11 +1,16 @@
 import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { loadConfig } from "../config/config.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+import {
+  OPENCLAW_SKIP_AUTH_WARNING_ENV,
+  assessGatewayExposureWarning,
+} from "./gateway-exposure-warning.js";
 
-export function logGatewayStartup(params: {
+export async function logGatewayStartup(params: {
   cfg: ReturnType<typeof loadConfig>;
   bindHost: string;
   bindHosts?: string[];
@@ -40,5 +45,24 @@ export function logGatewayStartup(params: {
       `security warning: dangerous config flags enabled: ${enabledDangerousFlags.join(", ")}. ` +
       "Run `openclaw security audit`.";
     params.log.warn(warning);
+  }
+
+  const exposure = assessGatewayExposureWarning({
+    cfg: params.cfg,
+    bindHost: params.bindHost,
+  });
+  if (exposure.isUnsafe) {
+    params.log.warn(
+      `security warning: Gateway bound to "${exposure.bindHost}" without authentication. Anyone on your network can control your agent.`,
+    );
+    params.log.warn(
+      `security warning: Fix: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
+    );
+    params.log.warn(
+      `security warning: Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
+    );
+    params.log.warn(
+      `security warning: Override (only if intentional): set ${OPENCLAW_SKIP_AUTH_WARNING_ENV}=true`,
+    );
   }
 }

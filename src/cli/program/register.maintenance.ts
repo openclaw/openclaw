@@ -36,7 +36,8 @@ export function registerMaintenanceCommands(program: Command) {
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
         });
-        defaultRuntime.exit(0);
+        const doctorExitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
+        defaultRuntime.exit(doctorExitCode);
       });
     });
 

@@ -1,11 +1,9 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
-import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
-import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { assessGatewayExposureWarning } from "../gateway/gateway-exposure-warning.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
@@ -48,7 +46,9 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
   return warnings;
 }
 
-export async function noteSecurityWarnings(cfg: OpenClawConfig) {
+export async function noteSecurityWarnings(cfg: OpenClawConfig): Promise<{
+  hasCriticalGatewayExposure: boolean;
+}> {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
 
@@ -68,69 +68,14 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   // Check for dangerous gateway binding configurations
   // that expose the gateway to network without proper auth
 
-  const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
-  const customBindHost = cfg.gateway?.customBindHost?.trim();
-  const bindModes: GatewayBindMode[] = ["auto", "lan", "loopback", "custom", "tailnet"];
-  const bindMode = bindModes.includes(gatewayBind as GatewayBindMode)
-    ? (gatewayBind as GatewayBindMode)
-    : undefined;
-  const resolvedBindHost = bindMode
-    ? await resolveGatewayBindHost(bindMode, customBindHost)
-    : "0.0.0.0";
-  const isExposed = !isLoopbackHost(resolvedBindHost);
-
-  const resolvedAuth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
-    env: process.env,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
-  });
-  const authToken = resolvedAuth.token?.trim() ?? "";
-  const authPassword = resolvedAuth.password?.trim() ?? "";
-  const hasToken =
-    authToken.length > 0 ||
-    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
-  const hasPassword =
-    authPassword.length > 0 ||
-    hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults);
-  const hasSharedSecret =
-    (resolvedAuth.mode === "token" && hasToken) ||
-    (resolvedAuth.mode === "password" && hasPassword);
-  const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
-  const saferRemoteAccessLines = [
-    "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
-    "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
-    "  Docs: https://docs.openclaw.ai/gateway/remote",
-  ];
-
-  if (isExposed) {
-    if (!hasSharedSecret) {
-      const authFixLines =
-        resolvedAuth.mode === "password"
-          ? [
-              `  Fix: ${formatCliCommand("openclaw configure")} to set a password`,
-              `  Or switch to token: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
-            ]
-          : [
-              `  Fix: ${formatCliCommand("openclaw doctor --fix")} to generate a token`,
-              `  Or set token directly: ${formatCliCommand(
-                "openclaw config set gateway.auth.mode token",
-              )}`,
-            ];
-      warnings.push(
-        `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
-        `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
-        `  Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
-        ...saferRemoteAccessLines,
-        ...authFixLines,
-      );
-    } else {
-      // Auth is configured, but still warn about network exposure
-      warnings.push(
-        `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
-        `  Ensure your auth credentials are strong and not exposed.`,
-        ...saferRemoteAccessLines,
-      );
-    }
+  const gatewayExposure = assessGatewayExposureWarning({ cfg });
+  if (gatewayExposure.isUnsafe) {
+    warnings.push(
+      `- CRITICAL: Gateway bound to "${gatewayExposure.bindHost}" without authentication. Anyone on your network can control your agent.`,
+      `- Fix: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
+      `- Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
+      "- Override (only if intentional): set OPENCLAW_SKIP_AUTH_WARNING=true",
+    );
   }
 
   const warnDmPolicy = async (params: {
@@ -236,4 +181,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
   lines.push(auditHint);
   note(lines.join("\n"), "Security");
+  return {
+    hasCriticalGatewayExposure: gatewayExposure.isUnsafe,
+  };
 }

@@ -293,7 +293,10 @@ async function runStartupMatrixHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  await noteSecurityWarnings(ctx.cfg);
+  const securityWarnings = await noteSecurityWarnings(ctx.cfg);
+  if (securityWarnings.hasCriticalGatewayExposure) {
+    process.exitCode = 1;
+  }
 }
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
