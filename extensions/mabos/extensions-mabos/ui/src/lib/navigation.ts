@@ -18,6 +18,11 @@ import {
   GitBranch,
   Network,
   ClipboardList,
+  Wallet,
+  Shield,
+  Sparkles,
+  FileSearch,
+  Terminal,
 } from "lucide-react";
 
 export type NavItem = {
@@ -78,8 +83,17 @@ export const navSections: NavSection[] = [
   {
     title: "Governance",
     items: [
+      { icon: Wallet, label: "Budget & Audit", path: "/governance" },
       { icon: Scale, label: "Legal", path: "/legal" },
       { icon: ShieldCheck, label: "Compliance", path: "/compliance" },
+      { icon: Shield, label: "Security", path: "/security" },
+    ],
+  },
+  {
+    title: "Intelligence",
+    items: [
+      { icon: Sparkles, label: "Skills", path: "/skills" },
+      { icon: FileSearch, label: "Sessions", path: "/sessions" },
     ],
   },
 ];

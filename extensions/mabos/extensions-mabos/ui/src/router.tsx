@@ -9,6 +9,7 @@ import { CompliancePage } from "@/pages/CompliancePage";
 import { CustomersPage } from "@/pages/CustomersPage";
 import { DecisionsPage } from "@/pages/DecisionsPage";
 import { EcommercePage } from "@/pages/EcommercePage";
+import { GovernancePage } from "@/pages/GovernancePage";
 import { InventoryPage } from "@/pages/InventoryPage";
 import { KnowledgeGraphPage } from "@/pages/KnowledgeGraphPage";
 import { LegalPage } from "@/pages/LegalPage";
@@ -17,13 +18,15 @@ import { OnboardingPage } from "@/pages/OnboardingPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { PerformancePage } from "@/pages/PerformancePage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
+import { SecurityPage } from "@/pages/SecurityPage";
+import { SessionsPage } from "@/pages/SessionsPage";
+import { SkillsPage } from "@/pages/SkillsPage";
 import { SuppliersPage } from "@/pages/SuppliersPage";
 import { SupplyChainPage } from "@/pages/SupplyChainPage";
 import { TasksPage } from "@/pages/TasksPage";
 import { TimelinePage } from "@/pages/TimelinePage";
 import { WorkflowEditorPage } from "@/pages/WorkflowEditorPage";
 import { WorkflowsPage } from "@/pages/WorkflowsPage";
-import { WorkflowEditorPage } from "@/pages/WorkflowEditorPage";
 
 // Root layout
 const rootRoute = createRootRoute({
@@ -152,6 +155,26 @@ const knowledgeGraphRoute = createRoute({
   path: "/knowledge-graph",
   component: KnowledgeGraphPage,
 });
+const governanceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/governance",
+  component: GovernancePage,
+});
+const skillsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/skills",
+  component: SkillsPage,
+});
+const sessionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions",
+  component: SessionsPage,
+});
+const securityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/security",
+  component: SecurityPage,
+});
 // Workflows layout route: renders Outlet for child routes
 const workflowsLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -192,6 +215,10 @@ const routeTree = rootRoute.addChildren([
   decisionsRoute,
   goalsRoute,
   knowledgeGraphRoute,
+  governanceRoute,
+  skillsRoute,
+  sessionsRoute,
+  securityRoute,
   workflowsLayoutRoute.addChildren([workflowsIndexRoute, workflowEditorRoute]),
 ]);
 
