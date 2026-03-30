@@ -3,7 +3,9 @@ import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
+  lockPath: "/tmp/test-gateway.lock",
   release: vi.fn(async () => {}),
+  releaseSync: vi.fn(),
 }));
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
@@ -360,7 +362,9 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const lockRelease = vi.fn(async () => {});
       acquireGatewayLock.mockResolvedValueOnce({
+        lockPath: "/tmp/test-gateway.lock",
         release: lockRelease,
+        releaseSync: vi.fn(),
       });
 
       // Override process-respawn to return "spawned" mode
@@ -457,7 +461,9 @@ describe("runGatewayLoop", () => {
       const lockRelease = vi.fn(async () => {});
       acquireGatewayLock
         .mockResolvedValueOnce({
+          lockPath: "/tmp/test-gateway.lock",
           release: lockRelease,
+          releaseSync: vi.fn(),
         })
         .mockRejectedValueOnce(new Error("lock timeout"));
 

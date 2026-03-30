@@ -48,10 +48,24 @@ export async function runGatewayLoop(params: {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGUSR1", onSigusr1);
+    process.removeListener("exit", onProcessExit);
+  };
+  /** Synchronous best-effort lock release for forced-exit paths. */
+  const releaseLockSync = () => {
+    if (!lock) {
+      return;
+    }
+    lock.releaseSync();
+    lock = null;
   };
   const exitProcess = (code: number) => {
+    process.removeListener("exit", onProcessExit);
     cleanupSignals();
     params.runtime.exit(code);
+  };
+  /** Safety-net: release lock if the process exits without going through exitProcess. */
+  const onProcessExit = () => {
+    releaseLockSync();
   };
   const releaseLockIfHeld = async (): Promise<boolean> => {
     if (!lock) {
@@ -144,6 +158,9 @@ export async function runGatewayLoop(params: {
       : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
+      // Best-effort synchronous lock release before forced exit to prevent
+      // stale lock files from blocking subsequent gateway starts. (#57052)
+      releaseLockSync();
       // Keep the in-process watchdog below the supervisor stop budget so this
       // path wins before launchd/systemd escalates to a hard kill. Exit
       // non-zero on any timeout so supervised installs restart cleanly.
@@ -242,6 +259,7 @@ export async function runGatewayLoop(params: {
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
   process.on("SIGUSR1", onSigusr1);
+  process.on("exit", onProcessExit);
 
   try {
     const onIteration = createRestartIterationHook(() => {

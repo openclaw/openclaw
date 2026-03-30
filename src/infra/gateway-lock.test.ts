@@ -419,4 +419,73 @@ describe("gateway lock", () => {
 
     connectSpy.mockRestore();
   });
+
+  it("cleans up stale lock left by a dead pid on non-linux platforms", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { lockPath } = resolveLockPath(env);
+
+    const deadPid = 2_147_483_647;
+    const lockDir = path.dirname(lockPath);
+    await fs.mkdir(lockDir, { recursive: true });
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: deadPid,
+        createdAt: new Date().toISOString(),
+        configPath: resolveLockPath(env).configPath,
+      }),
+      "utf8",
+    );
+
+    const lock = await acquireForTest(env, {
+      timeoutMs: 200,
+      pollIntervalMs: 5,
+      platform: "darwin",
+    });
+    expect(lock).not.toBeNull();
+
+    const payload = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(payload.pid).toBe(process.pid);
+
+    await lock?.release();
+  });
+
+  it("releaseSync removes lock file synchronously", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env);
+    expect(lock).not.toBeNull();
+
+    const exists = fsSync.existsSync(lock!.lockPath);
+    expect(exists).toBe(true);
+
+    lock!.releaseSync();
+    const existsAfter = fsSync.existsSync(lock!.lockPath);
+    expect(existsAfter).toBe(false);
+  });
+
+  it("releaseSync is idempotent and does not throw", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env);
+    expect(lock).not.toBeNull();
+
+    lock!.releaseSync();
+    expect(() => lock!.releaseSync()).not.toThrow();
+  });
+
+  it("acquires lock after stale lock left by shutdown timeout (no port)", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+
+    const firstLock = await acquireForTest(env);
+    expect(firstLock).not.toBeNull();
+
+    firstLock!.releaseSync();
+
+    const secondLock = await acquireForTest(env);
+    expect(secondLock).not.toBeNull();
+    await secondLock?.release();
+  });
 });

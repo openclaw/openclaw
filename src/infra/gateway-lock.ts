@@ -33,6 +33,12 @@ export type GatewayLockHandle = {
   lockPath: string;
   configPath: string;
   release: () => Promise<void>;
+  /**
+   * Synchronous best-effort lock release for use in forced-exit paths
+   * (signal handlers, process.on('exit'), shutdown timeouts) where async
+   * operations cannot be awaited.
+   */
+  releaseSync: () => void;
 };
 
 export type GatewayLockOptions = {
@@ -288,6 +294,18 @@ export async function acquireGatewayLock(
         release: async () => {
           await handle.close().catch(() => undefined);
           await fs.rm(lockPath, { force: true });
+        },
+        releaseSync: () => {
+          try {
+            handle.close().catch(() => undefined);
+          } catch {
+            // best-effort
+          }
+          try {
+            fsSync.rmSync(lockPath, { force: true });
+          } catch {
+            // best-effort
+          }
         },
       };
     } catch (err) {
