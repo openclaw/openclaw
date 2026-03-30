@@ -17,7 +17,7 @@ async def classify_intent(gateway, prompt: str) -> str:
     """
     LLM-based intent classification.
     Uses model from config (model_router.risk_analysis) for routing.
-    Falls back to keyword matching if vLLM is unavailable.
+    Falls back to keyword matching if cloud API is unavailable.
 
     v14.4: Fast-Intent — prefix commands bypass LLM entirely.
     """
@@ -53,7 +53,7 @@ async def classify_intent(gateway, prompt: str) -> str:
         "маржа", "профит", "листинг",
     ]
     openclaw_keywords = [
-        "config", "конфиг", "pipeline", "модел", "model", "vllm",
+        "config", "конфиг", "pipeline", "модел", "model",
         "бригад", "brigade", "роль", "role", "mcp", "плагин", "plugin",
         "бот", "bot", "openclaw", "gateway", "память", "memory",
         # CLI tool execution keywords → always needs full pipeline with run_command

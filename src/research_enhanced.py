@@ -27,6 +27,8 @@ from urllib.parse import urlparse
 import aiohttp
 import structlog
 
+from src.llm_gateway import route_llm
+
 logger = structlog.get_logger("ResearchEnhanced")
 
 
@@ -95,7 +97,6 @@ class QualityMetrics:
 # ────────────────────────────────────────────────────────────────────
 
 async def _llm_call(
-    vllm_url: str,
     model: str,
     system: str,
     user: str,
@@ -103,39 +104,28 @@ async def _llm_call(
     max_tokens: int = 2048,
     temperature: float = 0.2,
     retries: int = 2,
+    vllm_url: str = "",
 ) -> str:
-    """Shared LLM inference with retry-backoff."""
+    """Shared LLM inference via cloud gateway with retry-backoff.
+
+    The vllm_url parameter is accepted for backwards compatibility but unused.
+    """
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
 
     for attempt in range(retries + 1):
         try:
-            async with aiohttp.ClientSession() as session:
-                timeout = aiohttp.ClientTimeout(total=120)
-                async with session.post(
-                    f"{vllm_url}/chat/completions",
-                    json=payload,
-                    timeout=timeout,
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return data["choices"][0]["message"]["content"].strip()
-                    if attempt < retries:
-                        logger.warning(
-                            "LLM retry", status=resp.status, attempt=attempt,
-                        )
-                        await asyncio.sleep(2**attempt)
-                        continue
-                    return ""
+            result = await route_llm(
+                "",
+                messages=messages,
+                model=model,
+                task_type="research",
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return result.strip() if result else ""
         except Exception as exc:
             if attempt < retries:
                 logger.warning("LLM retry on error", error=str(exc), attempt=attempt)
@@ -159,12 +149,9 @@ class MultiPerspectiveResearcher:
     - Advocate: finds supporting evidence
     - Critic: finds counterarguments and weaknesses
     - Synthesizer: merges perspectives into balanced view
-
-    Works sequentially on a single GPU.
     """
 
-    def __init__(self, vllm_url: str, model: str) -> None:
-        self.vllm_url = vllm_url.rstrip("/")
+    def __init__(self, model: str, vllm_url: str = "") -> None:
         self.model = model
 
     async def research(
@@ -201,7 +188,6 @@ class MultiPerspectiveResearcher:
     async def _advocate_perspective(self, question: str, evidence: str) -> str:
         """Find and emphasize supporting evidence."""
         return await _llm_call(
-            self.vllm_url,
             self.model,
             system=(
                 "Ты — адвокат гипотезы. Твоя задача — найти и подчеркнуть все "
@@ -224,7 +210,6 @@ class MultiPerspectiveResearcher:
     async def _critic_perspective(self, question: str, evidence: str) -> str:
         """Find weaknesses, counterarguments, and gaps."""
         return await _llm_call(
-            self.vllm_url,
             self.model,
             system=(
                 "Ты — критик-скептик. Твоя задача — найти ВСЕ слабости, "
@@ -248,7 +233,6 @@ class MultiPerspectiveResearcher:
     ) -> str:
         """Synthesize balanced conclusion from both perspectives."""
         return await _llm_call(
-            self.vllm_url,
             self.model,
             system=(
                 "Ты — нейтральный синтезатор. Тебе даны два анализа одного "
@@ -500,11 +484,10 @@ class CrossValidator:
 
     def __init__(
         self,
-        vllm_url: str,
         model: str,
         mcp_client: Any = None,
+        vllm_url: str = "",
     ) -> None:
-        self.vllm_url = vllm_url.rstrip("/")
         self.model = model
         self.mcp_client = mcp_client
 
@@ -523,7 +506,7 @@ class CrossValidator:
                 validated_count=0, refuted_count=0,
             )
 
-        # Validate sequentially (single-GPU; avoids prompt flooding)
+        # Validate sequentially (avoids prompt flooding)
         validations: List[ClaimValidation] = []
         for claim in claims:
             cv = await self._validate_single_claim(claim, sources)
@@ -549,7 +532,6 @@ class CrossValidator:
     async def _extract_claims(self, report: str) -> str:
         """Extract verifiable claims from text."""
         return await _llm_call(
-            self.vllm_url,
             self.model,
             system=(
                 "Извлеки из текста ключевые ФАКТИЧЕСКИЕ утверждения, "
@@ -578,7 +560,6 @@ class CrossValidator:
         sources_block = "\n".join(existing_sources[:10]) if existing_sources else "Нет источников."
 
         raw = await _llm_call(
-            self.vllm_url,
             self.model,
             system=(
                 "Ты — верификатор утверждений. Оцени ОДНО утверждение.\n"

@@ -15,7 +15,7 @@ class OpenClawMCPClient:
     """
     MCP Client integrated into OpenClaw Gateway.
     Responsible for initializing and managing connections to local MCP tools (Filesystem, SQLite)
-    and exposing their tools in OpenAI-compatible format for vLLM.
+    and exposing their tools in OpenAI-compatible format for the LLM API.
     """
 
     def __init__(self, db_path: Optional[str], fs_allowed_dirs: List[str]):
@@ -30,7 +30,7 @@ class OpenClawMCPClient:
         self._server_sessions: List[ClientSession] = []
         self._exit_stack = contextlib.AsyncExitStack()
         
-        # Aggregated tools (OpenAI-compatible format for vLLM)
+        # Aggregated tools (OpenAI-compatible format for LLM API)
         self.available_tools_openai: List[Dict[str, Any]] = []
         self._tool_route_map: Dict[str, ClientSession] = {}
 
@@ -184,7 +184,7 @@ class OpenClawMCPClient:
             print(f"[MCP Error] Failed to start Filesystem Server: {e}")
 
     def _register_tool(self, tool_spec: Any, session: ClientSession):
-        """Converts MCP tool specification into OpenAI-compatible payload for vLLM"""
+        """Converts MCP tool specification into OpenAI-compatible payload for the LLM API."""
         # MCP tool_spec has attributes like name, description, inputSchema
         tool_name = tool_spec.name
         self._tool_route_map[tool_name] = session

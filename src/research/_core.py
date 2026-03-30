@@ -98,13 +98,12 @@ class DeepResearchPipeline:
 
     def __init__(
         self,
-        vllm_url: str,
         model: str,
         mcp_client,
         openrouter_config: Optional[Dict[str, Any]] = None,
         openrouter_model: str = "",
+        vllm_url: str = "",
     ):
-        self.vllm_url = vllm_url.rstrip("/")
         self.model = model
         self.mcp_client = mcp_client
         self._research_context: List[str] = []
@@ -344,7 +343,7 @@ class DeepResearchPipeline:
     async def _llm_call(
         self, system: str, user: str, max_tokens: int = 2048, retries: int = 2
     ) -> str:
-        """LLM inference via Unified LLM Gateway (handles OpenRouter/vLLM routing)."""
+        """LLM inference via Unified LLM Gateway (handles OpenRouter routing)."""
         messages = [{"role": "system", "content": system}]
         if self._research_context:
             ctx = "\n".join(self._research_context[-6:])

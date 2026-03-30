@@ -57,17 +57,6 @@ COLD_MEMORY = os.path.join(MEMORY_BANK_DIR, "Cold_Memory.md")
 
 CONFIG_PATH = "config/openclaw_config.json"
 KNOWLEDGE_DIR = os.path.join(MEMORY_BANK_DIR, "knowledge")
-def get_config_vllm_url():
-    try:
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, "r") as f:
-                cfg = json.loads(os.path.expandvars(f.read()))
-                return cfg.get("system", {}).get("vllm_base_url", "http://localhost:8000/v1")
-    except Exception:
-        pass
-    return "http://localhost:8000/v1"
-
-VLLM_URL = os.environ.get("VLLM_BASE_URL", get_config_vllm_url()).rstrip("/")
 
 INDEX_FILE = os.path.join(MEMORY_BANK_DIR, "embeddings.json")
 
@@ -85,23 +74,11 @@ def _get_running_model() -> str:
     return "meta-llama/llama-3.3-70b-instruct:free"
 
 async def get_embeddings(text: str) -> List[float]:
-    """Get embeddings for a text snippet using vLLM /embeddings endpoint.
-    Returns [] if cloud-only mode is active or the running model doesn't support embeddings.
-    In that case vector_search() falls back to TF-IDF search automatically.
+    """Get embeddings for a text snippet.
+    Returns [] in cloud-only mode — vector_search() falls back to TF-IDF automatically.
     """
     if is_cloud_only():
-        return []  # Cloud-only: no local vLLM, use TF-IDF fallback
-    try:
-        async with aiohttp.ClientSession(trust_env=False) as session:
-            async with session.post(f"{VLLM_URL}/embeddings", json={
-                "model": _get_running_model(),
-                "input": text,
-            }, timeout=aiohttp.ClientTimeout(total=10), proxy=None) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("data", [{}])[0].get("embedding", [])
-    except Exception:
-        pass
+        return []  # Cloud-only: use TF-IDF fallback
     return []
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
@@ -113,8 +90,7 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
 
 def _tfidf_search(query: str, memory_files: List[str], top_k: int = 5) -> List[str]:
     """Pure-Python TF-IDF cosine similarity search over memory file sections.
-    Used as a fallback when vLLM embeddings endpoint is not available
-    (e.g., when serving a causal LM instead of a dedicated embedding model).
+    Used as the primary search method in cloud-only mode.
     """
     query_terms = re.findall(r'\b\w+\b', query.lower())
     if not query_terms:
@@ -177,8 +153,7 @@ def _tfidf_search(query: str, memory_files: List[str], top_k: int = 5) -> List[s
 
 async def vector_search(query: str, tier: str, top_k: int = 5) -> List[str]:
     """Semantic search: tries pre-built dense-embedding index first, then falls back
-    to pure-Python TF-IDF search over memory files when the embedding endpoint is
-    unavailable (e.g., when vLLM is serving a causal LM without --task embed).
+    to pure-Python TF-IDF search over memory files.
     """
     # ── Path 1: dense-embedding index (populated by scripts/index_memory.py) ──
     query_vec = await get_embeddings(query)

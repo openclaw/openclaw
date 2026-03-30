@@ -230,7 +230,7 @@ def sanitize_file_content(content: str) -> str:
     return content
 
 
-# Static protocol fragments — kept as module-level constants so vLLM prefix caching
+# Static protocol fragments — kept as module-level constants so LLM prefix caching
 # can reuse KV-cache across requests that share the same system prompt prefix.
 
 # Compact Kill List injected into ALL roles — prevents robotic phrasing

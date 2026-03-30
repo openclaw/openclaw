@@ -5,7 +5,7 @@ Architecture:
 - Each agent is defined by AgentDefinition (role, model tier, system prompt, tools)
 - AgentOrchestrator registers agents, routes tasks, and runs the autonomous loop
 - Tasks are dispatched based on intent classification → agent capability matching
-- OpenRouter is the primary LLM provider; vLLM is fallback
+- OpenRouter is the primary LLM provider (cloud-only)
 
 The orchestrator supports:
 - Parallel agent execution for independent tasks

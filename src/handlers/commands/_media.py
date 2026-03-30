@@ -3,21 +3,21 @@
 import base64
 import io
 
-import aiohttp
 import structlog
 from aiogram.types import Message
 from src.bot_commands.media import PHOTO_PROMPT_COUNTER
+from src.llm_gateway import route_llm
 
 logger = structlog.get_logger("GatewayCommands.Media")
 
 
 async def handle_photo(gateway, message: Message):
-    """Handle image inputs via vLLM vision model."""
+    """Handle image inputs via cloud vision model."""
     if message.from_user.id != gateway.admin_id:
         return
 
     PHOTO_PROMPT_COUNTER.inc()
-    status_msg = await message.reply("🖼️ Анализирую изображение через vLLM Vision...")
+    status_msg = await message.reply("🖼️ Анализирую изображение через Vision...")
 
     try:
         photo = message.photo[-1]
@@ -26,39 +26,31 @@ async def handle_photo(gateway, message: Message):
         base64_img = base64.b64encode(file_bytes.read()).decode("utf-8")
 
         prompt = message.caption or "Опиши это изображение"
-        vision_model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 
-        if gateway.vllm_manager:
-            await gateway.vllm_manager.ensure_model_loaded(vision_model)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}},
+                ],
+            }
+        ]
 
-        payload = {
-            "model": vision_model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}},
-                    ],
-                }
-            ],
-            "stream": False,
-            "max_tokens": 1024,
-        }
+        content = await route_llm(
+            "",
+            messages=messages,
+            task_type="vision",
+            max_tokens=1024,
+        )
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{gateway.vllm_url}/chat/completions", json=payload, timeout=60
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    content = data["choices"][0]["message"]["content"].strip()
-                    await status_msg.edit_text(
-                        f"🖼️ *Анализ Vision:*\n\n{content}",
-                        parse_mode="Markdown",
-                    )
-                else:
-                    await status_msg.edit_text(f"⚠️ Ошибка vLLM Vision ({resp.status})")
+        if content:
+            await status_msg.edit_text(
+                f"🖼️ *Анализ Vision:*\n\n{content}",
+                parse_mode="Markdown",
+            )
+        else:
+            await status_msg.edit_text("⚠️ Ошибка Vision: пустой ответ от API")
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка обработки фото: {e}")
 
@@ -106,25 +98,7 @@ async def handle_voice(gateway, message: Message):
 
 
 async def _transcribe_audio(gateway, audio_data: bytes) -> str:
-    """Transcribe audio bytes using vLLM whisper endpoint or local fallback."""
-    try:
-        form = aiohttp.FormData()
-        form.add_field("file", audio_data, filename="voice.ogg", content_type="audio/ogg")
-        form.add_field("model", "whisper-1")
-
-        base_url = gateway.vllm_url.replace("/v1", "")
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{base_url}/v1/audio/transcriptions",
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    return result.get("text", "")
-    except Exception as e:
-        logger.debug("Whisper API transcription failed", error=str(e))
-
+    """Transcribe audio bytes using local whisper fallbacks."""
     # Fallback: whisper-cpp via subprocess
     try:
         import tempfile

@@ -3,10 +3,8 @@ Tailscale Monitor — Network health and connectivity for OpenClaw bot.
 
 Monitors Tailscale VPN status and provides:
   1. Tailnet connectivity check (is the node online?)
-  2. MagicDNS-based vLLM URL resolution
-  3. Peer device monitoring (active/offline)
-  4. Secure vLLM endpoint via Tailscale IP fallback
-  5. /tailscale status command for Telegram
+  2. Peer device monitoring (active/offline)
+  3. /tailscale status command for Telegram
 
 Uses 'tailscale' CLI (must be installed and running).
 """
@@ -59,13 +57,10 @@ class TailscaleMonitor:
         self._config = config
         self._ts_cli = self._find_cli()
         self._last_status: Optional[TailscaleStatus] = None
-        self._vllm_tailscale_url: Optional[str] = None
 
         # Configuration from openclaw_config.json
         ts_cfg = config.get("tailscale", {})
         self.enabled = ts_cfg.get("enabled", True)
-        self.vllm_use_tailscale = ts_cfg.get("vllm_use_tailscale", False)
-        self.preferred_vllm_peer = ts_cfg.get("vllm_peer_hostname", "")
         self.health_interval = ts_cfg.get("health_interval_sec", 60)
 
     @staticmethod
@@ -144,38 +139,6 @@ class TailscaleMonitor:
             "error": status.error,
         }
 
-    async def get_vllm_url(self, default_url: str) -> str:
-        """
-        Get the best vLLM URL. If Tailscale is enabled and a peer is running vLLM,
-        return Tailscale-based URL. Otherwise, return the default localhost URL.
-        """
-        if not self.vllm_use_tailscale or not self._ts_cli:
-            return default_url
-
-        status = await self.get_status()
-        if not status.connected:
-            logger.warning("Tailscale not connected, falling back to default vLLM URL")
-            return default_url
-
-        # If vLLM runs on this machine (localhost), Tailscale IP is also valid
-        # Use MagicDNS name for readability
-        if self.preferred_vllm_peer:
-            for peer in status.peers:
-                if peer.hostname.lower() == self.preferred_vllm_peer.lower() and peer.online:
-                    port = self._config.get("system", {}).get("vllm_port", 8000)
-                    url = f"http://{peer.tailscale_ips[0]}:{port}/v1"
-                    logger.info("Using Tailscale peer for vLLM", url=url, peer=peer.hostname)
-                    return url
-
-        # If vLLM is on this machine, use Tailscale self IP
-        if status.self_ip:
-            port = self._config.get("system", {}).get("vllm_port", 8000)
-            url = f"http://{status.self_ip}:{port}/v1"
-            self._vllm_tailscale_url = url
-            return url
-
-        return default_url
-
     async def ping_peer(self, hostname: str) -> dict:
         """Ping a Tailscale peer using tailscale ping."""
         if not self._ts_cli:
@@ -223,9 +186,5 @@ class TailscaleMonitor:
                 lines.append(
                     f"  {emoji} {peer.hostname} ({peer.os}) — <code>{ip}</code>"
                 )
-
-        if self._vllm_tailscale_url:
-            lines.append("")
-            lines.append(f"🤖 vLLM URL: <code>{self._vllm_tailscale_url}</code>")
 
         return "\n".join(lines)

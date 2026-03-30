@@ -1,9 +1,8 @@
 """
-OpenRouter inference client with local vLLM fallback.
+OpenRouter inference client (cloud-only).
 
-Provides call_openrouter() — tries OpenRouter API first (primary),
-falls back to local vLLM server on failure. Both use OpenAI-compatible
-chat/completions endpoint.
+Provides call_openrouter() — sends requests to OpenRouter API with
+per-model circuit breaker and automatic fallback chain.
 
 Enhanced features:
 - Retry with exponential backoff (configurable max_retries)
@@ -109,7 +108,6 @@ def get_rate_limit_info() -> Dict[str, Any]:
 
 async def call_openrouter(
     openrouter_config: Dict[str, Any],
-    vllm_url: str,
     model: str,
     fallback_model: str,
     system_prompt: str,
@@ -118,10 +116,11 @@ async def call_openrouter(
     role_config: Dict[str, Any],
     mcp_client: Any,
     config: Dict[str, Any],
-    vllm_manager: Any = None,
     preserve_think: bool = False,
     json_schema: Optional[Dict] = None,
     tools: Optional[List[Dict]] = None,
+    vllm_url: str = "",
+    vllm_manager: Any = None,
 ) -> str:
     """
     Try OpenRouter with per-model circuit breaker + automatic fallback chain.
@@ -129,6 +128,9 @@ async def call_openrouter(
     Fallback order: primary model → fallback_model → LAST_RESORT_MODEL.
     Each model has an independent circuit breaker so one flaky model
     doesn't poison the rest of the pipeline.
+
+    Note: vllm_url and vllm_manager parameters are accepted for backwards
+    compatibility but are unused (cloud-only mode).
     """
     from src.pipeline_schemas import ROLE_TOKEN_BUDGET
 
@@ -301,43 +303,16 @@ async def call_openrouter(
                         continue
                     break
 
-    # --- All models in chain failed. Try local vLLM if allowed ---
-    force_cloud = openrouter_config.get("force_cloud", False)
-    use_local_models = openrouter_config.get("use_local_models", True)
-    allow_fallback = (
-        openrouter_config.get("fallback_to_vllm", True)
-        and not force_cloud
-        and use_local_models
+    # --- All models in chain failed ---
+    tried = ", ".join(models_to_try)
+    logger.error(
+        f"All OpenRouter models failed for {role_name}. "
+        f"Models tried: {tried}. Last error: {last_error[:200]}"
     )
-
-    if not allow_fallback:
-        tried = ", ".join(models_to_try)
-        logger.error(
-            f"All OpenRouter models failed for {role_name} — local models DISABLED. "
-            f"Models tried: {tried}. Last error: {last_error[:200]}"
-        )
-        return (
-            f"[ERROR] API недоступно для роли {role_name}. "
-            f"Все модели ({tried}) недоступны. "
-            "Локальные модели отключены (use_local_models=false). "
-            "Проверьте API-ключ OpenRouter или включите локальные модели."
-        )
-
-    logger.info(f"Using vLLM fallback for {role_name}", model=fallback_model)
-    from src.vllm_inference import call_vllm
-
-    return await call_vllm(
-        vllm_url=vllm_url,
-        model=fallback_model,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        role_name=role_name,
-        role_config=role_config,
-        mcp_client=mcp_client,
-        config=config,
-        vllm_manager=vllm_manager,
-        preserve_think=preserve_think,
-        json_schema=json_schema,
+    return (
+        f"[ERROR] API недоступно для роли {role_name}. "
+        f"Все модели ({tried}) недоступны. "
+        "Проверьте API-ключ OpenRouter или попробуйте позже."
     )
 
 

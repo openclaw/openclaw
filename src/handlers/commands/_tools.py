@@ -2,9 +2,10 @@
 
 import asyncio
 
-import aiohttp
 import structlog
 from aiogram.types import Message
+
+from src.llm_gateway import route_llm
 
 logger = structlog.get_logger("GatewayCommands.Tools")
 
@@ -26,7 +27,7 @@ async def cmd_test(gateway, message: Message):
         return
 
     await message.reply(
-        "🔬 Запускаю VRAM-тестирование всех моделей...\nЭто может занять 10-20 минут.",
+        "🔬 Запускаю тестирование всех моделей...\nЭто может занять 10-20 минут.",
         parse_mode="Markdown",
     )
 
@@ -42,7 +43,7 @@ async def cmd_test(gateway, message: Message):
 
         if process.returncode == 0:
             await message.reply(
-                "✅ VRAM-тест завершён! Результаты отправлены в чат.", parse_mode="Markdown"
+                "✅ Тест моделей завершён! Результаты отправлены в чат.", parse_mode="Markdown"
             )
         else:
             error = stderr.decode()[:500] if stderr else "Unknown error"
@@ -65,45 +66,38 @@ async def cmd_test_all_models(gateway, message: Message):
     final_report = "📊 *Отчет: Парад Планет (20 Ролей)*\n\n"
 
     async def fetch_hello(session, role_name, model_name, sys_prompt):
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": f"{sys_prompt}. Представься одним коротким предложением (максимум 5-7 слов), используя свои эмодзи.",
-                },
-                {"role": "user", "content": "Привет, проверка связи!"},
-            ],
-            "stream": False,
-            "max_tokens": 128,
-        }
+        messages = [
+            {
+                "role": "system",
+                "content": f"{sys_prompt}. Представься одним коротким предложением (максимум 5-7 слов), используя свои эмодзи.",
+            },
+            {"role": "user", "content": "Привет, проверка связи!"},
+        ]
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with session.post(
-                f"{gateway.vllm_url}/chat/completions", json=payload, timeout=timeout
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data["choices"][0]["message"]["content"].strip().replace("\n", " ")
-                else:
-                    return f"⚠️ Ошибка vLLM ({resp.status})"
+            response = await route_llm(
+                "",
+                messages=messages,
+                model=model_name,
+                task_type="test",
+                max_tokens=128,
+            )
+            return response.strip().replace("\n", " ") if response else "⚠️ Пустой ответ"
         except Exception as e:
             return f"❌ Error: {e}"
 
-    async with aiohttp.ClientSession() as session:
-        for brigade_name, brigade_info in gateway.config["brigades"].items():
-            final_report += f"🏴 *Бригада: {brigade_name}*\n"
+    for brigade_name, brigade_info in gateway.config["brigades"].items():
+        final_report += f"🏴 *Бригада: {brigade_name}*\n"
 
-            for role, data in brigade_info["roles"].items():
-                sys_prompt = data.get("system_prompt", "Обычный ассистент")
-                model_name = data.get("model")
+        for role, data in brigade_info["roles"].items():
+            sys_prompt = data.get("system_prompt", "Обычный ассистент")
+            model_name = data.get("model")
 
-                await gateway.archivist.send_status(role, model_name, "Пингую vLLM...")
+            await gateway.archivist.send_status(role, model_name, "Тестирую модель...")
 
-                response_text = await fetch_hello(session, role, model_name, sys_prompt)
-                final_report += f"• `{role}`: {response_text}\n"
+            response_text = await fetch_hello(None, role, model_name, sys_prompt)
+            final_report += f"• `{role}`: {response_text}\n"
 
-            final_report += "\n"
+        final_report += "\n"
 
     await gateway.archivist.send_summary("Результаты тестирования всех ролей", final_report)
     await status_msg.edit_text(
@@ -135,7 +129,6 @@ async def cmd_research(gateway, message: Message):
         router = gateway.config["system"]["model_router"]
         research_model = router.get("research", router.get("general", "meta-llama/llama-3.3-70b-instruct:free"))
         dr = DeepResearchPipeline(
-            vllm_url=gateway.vllm_url,
             model=research_model,
             mcp_client=gateway.pipeline.openclaw_mcp,
         )

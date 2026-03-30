@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.ai.agents._shared import call_vllm
+from src.llm_gateway import route_llm
 
 logger = structlog.get_logger("MARCH")
 
@@ -127,7 +127,7 @@ class MARCHProtocol:
     """Cross-verification protocol between agents.
 
     Usage in the pipeline:
-        march = MARCHProtocol(supermemory=mem, vllm_url=url, model=model)
+        march = MARCHProtocol(supermemory=mem, model=model)
         result = await march.cross_verify_agents(
             executor_response="...",
             archivist_response="...",
@@ -141,11 +141,9 @@ class MARCHProtocol:
     def __init__(
         self,
         supermemory: Any = None,
-        vllm_url: str = "",
         model: str = "",
     ):
         self.supermemory = supermemory
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
         self.model = model
 
     async def cross_verify_agents(
@@ -210,7 +208,7 @@ class MARCHProtocol:
         )
 
         # Step 3: Reflexion cycle if needed
-        if not is_consistent and self.vllm_url and prompt:
+        if not is_consistent and prompt:
             logger.warning(
                 "march_discrepancy_detected",
                 disc_rate=round(disc_rate, 2),
@@ -318,9 +316,6 @@ class MARCHProtocol:
         discrepancies: List[VerificationResult],
     ) -> Optional[str]:
         """Use LLM to correct the response based on identified discrepancies."""
-        if not self.vllm_url:
-            return None
-
         disc_text = "\n".join(
             f"- {d.discrepancy}" for d in discrepancies[:5] if d.discrepancy
         )
@@ -335,13 +330,13 @@ class MARCHProtocol:
         )
 
         try:
-            corrected = await call_vllm(
-                self.vllm_url,
-                self.model,
-                [
+            corrected = await route_llm(
+                "",
+                messages=[
                     {"role": "system", "content": "You are a fact-checking agent. Correct factual errors."},
                     {"role": "user", "content": correction_prompt},
                 ],
+                model=self.model,
                 temperature=0.2,
                 max_tokens=2048,
             )
