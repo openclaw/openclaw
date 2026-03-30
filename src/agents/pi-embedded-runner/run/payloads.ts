@@ -5,6 +5,7 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { AssistantOutputEntry } from "../../pi-embedded-commentary.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -90,6 +91,9 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantOutputs?: AssistantOutputEntry[];
+  deliveredCommentarySegmentIds?: string[];
+  deliveredCommentarySegmentTexts?: ReadonlyMap<string, string>;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -199,7 +203,6 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -250,14 +253,42 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  const deliveredCommentarySegmentIds = new Set(params.deliveredCommentarySegmentIds ?? []);
+  const resolvedAssistantTexts = (() => {
+    if (params.assistantOutputs && params.assistantOutputs.length > 0) {
+      const filteredAssistantOutputs = params.assistantOutputs
+        .map((segment) => {
+          if (segment.phase !== "commentary") {
+            return segment.text;
+          }
+          const deliveredText = params.deliveredCommentarySegmentTexts?.get(segment.segmentId);
+          if (deliveredText) {
+            if (segment.text === deliveredText) {
+              return null;
+            }
+            if (segment.text.startsWith(deliveredText)) {
+              const suffix = segment.text.slice(deliveredText.length);
+              return suffix.length > 0 ? suffix : null;
+            }
+          }
+          return deliveredCommentarySegmentIds.has(segment.segmentId) ? null : segment.text;
+        })
+        .filter((text): text is string => Boolean(text));
+      if (filteredAssistantOutputs.length > 0) {
+        return filteredAssistantOutputs;
+      }
+    }
+    if (params.assistantTexts.length > 0) {
+      return params.assistantTexts;
+    }
+    const lastAssistantText = params.lastAssistant
+      ? extractAssistantText(params.lastAssistant)
+      : "";
+    return lastAssistantText ? [lastAssistantText] : [];
+  })();
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
-        : fallbackAnswerText
-          ? [fallbackAnswerText]
-          : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+    : resolvedAssistantTexts.filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

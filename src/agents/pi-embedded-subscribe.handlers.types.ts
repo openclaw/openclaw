@@ -4,6 +4,7 @@ import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
+import type { AssistantOutputEntry } from "./pi-embedded-commentary.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type {
@@ -61,6 +62,15 @@ export type EmbeddedPiSubscribeState = {
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
+  assistantOutputs: AssistantOutputEntry[];
+  pendingCommentarySegmentIds: Set<string>;
+  deliveredCommentarySegmentIds: Set<string>;
+  deliveredCommentarySegmentTexts: Map<string, string>;
+  commentaryGeneration: number;
+  commentaryQueueVersion: number;
+  commentaryAbortControllers: Set<AbortController>;
+  currentAssistantFallbackMessageId?: string;
+  nextAssistantFallbackMessageId: number;
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
@@ -128,6 +138,14 @@ export type EmbeddedPiSubscribeContext = {
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
   emitBlockReply: (payload: BlockReplyPayload) => void;
+  resolveCurrentAssistantFallbackMessageId: () => string;
+  queueCommentaryDelivery: (
+    segment: AssistantOutputEntry,
+    options?: { allowRedelivery?: boolean; deliveredText?: string },
+  ) => void;
+  waitForCommentaryDeliveryRound: () => Promise<boolean>;
+  waitForCommentaryDelivery: () => Promise<void>;
+  abortCommentaryDelivery: (reason?: unknown) => void;
 };
 
 /**

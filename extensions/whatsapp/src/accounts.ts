@@ -31,6 +31,7 @@ export type ResolvedWhatsAppAccount = {
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
   blockStreaming?: boolean;
+  commentaryDelivery?: "off" | "live";
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
@@ -153,6 +154,7 @@ export function resolveWhatsAppAccount(params: {
     chunkMode: merged.chunkMode,
     mediaMaxMb: merged.mediaMaxMb,
     blockStreaming: merged.blockStreaming,
+    commentaryDelivery: merged.commentaryDelivery,
     ackReaction: merged.ackReaction,
     groups: merged.groups,
     debounceMs: merged.debounceMs,

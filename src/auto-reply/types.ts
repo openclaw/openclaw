@@ -7,6 +7,8 @@ export type BlockReplyContext = {
   timeoutMs?: number;
 };
 
+export const COMMENTARY_REPLY_TIMEOUT_MS = 15_000;
+
 /** Context passed to onModelSelected callback with actual model used. */
 export type ModelSelectedContext = {
   provider: string;
@@ -51,6 +53,7 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
+  onCommentaryReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */

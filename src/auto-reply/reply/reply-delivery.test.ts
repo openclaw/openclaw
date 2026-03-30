@@ -124,6 +124,27 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("normalizes directive aliases only when explicitly enabled", () => {
+    const untouched = normalizeReplyPayloadDirectives({
+      payload: { text: "[[replyToCurrent]] hi" },
+      parseMode: "auto",
+    });
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "[[replyToCurrent]] hi" },
+      parseMode: "auto",
+      normalizeDirectiveAliases: true,
+    });
+
+    expect(untouched.payload).toMatchObject({
+      text: "[[replyToCurrent]] hi",
+      replyToCurrent: false,
+    });
+    expect(normalized.payload).toMatchObject({
+      text: "hi",
+      replyToCurrent: true,
+    });
+  });
+
   it("passes normalized media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

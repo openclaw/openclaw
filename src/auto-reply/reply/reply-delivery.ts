@@ -10,16 +10,25 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
+function normalizeDirectiveAliases(text: string): string {
+  return text
+    .replaceAll("[[replyToCurrent]]", "[[reply_to_current]]")
+    .replace(/\[\[\s*replyTo\s*:/g, "[[reply_to:")
+    .replaceAll("[[audioAsVoice]]", "[[audio_as_voice]]");
+}
+
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
   silentToken?: string;
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
+  normalizeDirectiveAliases?: boolean;
 }): { payload: ReplyPayload; isSilent: boolean } {
   const parseMode = params.parseMode ?? "always";
   const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
-  const sourceText = params.payload.text ?? "";
+  const rawSourceText = params.payload.text ?? "";
+  const sourceText = params.trimLeadingWhitespace ? rawSourceText.trimStart() : rawSourceText;
 
   const shouldParse =
     parseMode === "always" ||
@@ -27,9 +36,13 @@ export function normalizeReplyPayloadDirectives(params: {
       (sourceText.includes("[[") ||
         sourceText.includes("MEDIA:") ||
         sourceText.includes(silentToken)));
+  const parseSourceText =
+    shouldParse && params.normalizeDirectiveAliases
+      ? normalizeDirectiveAliases(sourceText)
+      : sourceText;
 
   const parsed = shouldParse
-    ? parseReplyDirectives(sourceText, {
+    ? parseReplyDirectives(parseSourceText, {
         currentMessageId: params.currentMessageId,
         silentToken,
       })
@@ -63,6 +76,7 @@ export function createBlockReplyDeliveryHandler(params: {
   currentMessageId?: string;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+  normalizeDirectiveAliases?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   typingSignals: TypingSignaler;
   blockStreamingEnabled: boolean;
@@ -98,6 +112,7 @@ export function createBlockReplyDeliveryHandler(params: {
       silentToken: SILENT_REPLY_TOKEN,
       trimLeadingWhitespace: true,
       parseMode: "auto",
+      normalizeDirectiveAliases: params.normalizeDirectiveAliases,
     });
 
     const mediaNormalizedPayload = params.normalizeMediaPaths

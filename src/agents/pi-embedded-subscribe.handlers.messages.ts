@@ -1,9 +1,10 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { extractAssistantOutputCandidates } from "./pi-embedded-commentary.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -53,6 +54,34 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   }
   ctx.state.reasoningStreamOpen = false;
   void ctx.params.onReasoningEnd?.();
+}
+
+function extractAssistantOutputsForMessage(ctx: EmbeddedPiSubscribeContext, msg: AgentMessage) {
+  const messageRecord =
+    msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
+  const fallbackMessageStableId =
+    typeof messageRecord?.id === "string" && messageRecord.id.trim().length > 0
+      ? undefined
+      : ctx.resolveCurrentAssistantFallbackMessageId();
+  return extractAssistantOutputCandidates(msg, { fallbackMessageStableId });
+}
+
+export function resolveLiveCommentaryDeltaText(params: {
+  currentText: string;
+  deliveredText?: string;
+}): string | null {
+  const { currentText, deliveredText } = params;
+  if (!deliveredText) {
+    return currentText;
+  }
+  if (currentText === deliveredText) {
+    return null;
+  }
+  if (currentText.startsWith(deliveredText)) {
+    const deltaText = currentText.slice(deliveredText.length);
+    return deltaText.length > 0 ? deltaText : null;
+  }
+  return currentText;
 }
 
 export function resolveSilentReplyFallbackText(params: {
@@ -338,6 +367,34 @@ export function handleMessageUpdate(
   ) {
     ctx.flushBlockReplyBuffer();
   }
+
+  for (const segment of extractAssistantOutputsForMessage(ctx, msg)) {
+    if (segment.phase !== "commentary" || segment.isTerminal) {
+      continue;
+    }
+    if (ctx.state.pendingCommentarySegmentIds.has(segment.segmentId)) {
+      continue;
+    }
+    const deliveredText = ctx.state.deliveredCommentarySegmentTexts.get(segment.segmentId);
+    const unsentText = resolveLiveCommentaryDeltaText({
+      currentText: segment.text,
+      deliveredText,
+    });
+    if (!unsentText) {
+      continue;
+    }
+    const { isTerminal: _isTerminal, ...commentarySegment } = segment;
+    ctx.queueCommentaryDelivery(
+      {
+        ...commentarySegment,
+        text: unsentText,
+      },
+      {
+        allowRedelivery: Boolean(deliveredText),
+        deliveredText: commentarySegment.text,
+      },
+    );
+  }
 }
 
 export function handleMessageEnd(
@@ -392,7 +449,11 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.params.silentExpected && !ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  if (
+    !ctx.params.silentExpected &&
+    !ctx.state.emittedAssistantUpdate &&
+    (cleanedText || hasMedia)
+  ) {
     const data = buildAssistantStreamData({
       text: cleanedText,
       delta: cleanedText,
@@ -518,6 +579,42 @@ export function handleMessageEnd(
 
   if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
+  }
+
+  for (const segment of extractAssistantOutputsForMessage(ctx, assistantMessage)) {
+    const { isTerminal: _isTerminal, ...finalizedSegment } = segment;
+    const existingSegment = ctx.state.assistantOutputs.find(
+      (entry) => entry.segmentId === finalizedSegment.segmentId,
+    );
+    if (existingSegment) {
+      existingSegment.text = finalizedSegment.text;
+      existingSegment.phase = finalizedSegment.phase;
+    } else {
+      ctx.state.assistantOutputs.push(finalizedSegment);
+    }
+    if (finalizedSegment.phase !== "commentary") {
+      continue;
+    }
+    if (ctx.state.pendingCommentarySegmentIds.has(finalizedSegment.segmentId)) {
+      continue;
+    }
+    const deliveredText = ctx.state.deliveredCommentarySegmentTexts.get(finalizedSegment.segmentId);
+    const unsentText = resolveLiveCommentaryDeltaText({
+      currentText: finalizedSegment.text,
+      deliveredText,
+    });
+    if (unsentText) {
+      ctx.queueCommentaryDelivery(
+        {
+          ...finalizedSegment,
+          text: unsentText,
+        },
+        {
+          allowRedelivery: Boolean(deliveredText),
+          deliveredText: finalizedSegment.text,
+        },
+      );
+    }
   }
 
   ctx.state.deltaBuffer = "";

@@ -91,6 +91,101 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("strips commentary that was actually delivered live", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+        { segmentId: "f1", text: "Lint passed cleanly.", phase: "final_answer" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Lint passed cleanly.");
+  });
+
+  it("keeps commentary in the final reply when it was not sent live", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+        { segmentId: "f1", text: "Lint passed cleanly.", phase: "final_answer" },
+      ],
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Checking the repo state now.",
+      "Lint passed cleanly.",
+    ]);
+  });
+
+  it("keeps an undelivered commentary suffix in the final reply", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+        { segmentId: "f1", text: "Lint passed cleanly.", phase: "final_answer" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      deliveredCommentarySegmentTexts: new Map([["c1", "Checking the "]]),
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "repo state now.",
+      "Lint passed cleanly.",
+    ]);
+  });
+
+  it("falls back to assistantTexts when delivered commentary strips all assistant outputs", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      assistantTexts: ["Lint passed cleanly."],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Lint passed cleanly.");
+  });
+
+  it("falls back to assistantTexts when no assistant outputs were finalized", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [],
+      assistantTexts: ["Still working through the repo state."],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Still working through the repo state.");
+  });
+
+  it("falls back to lastAssistant text when finalized assistant outputs are empty", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [],
+      assistantTexts: [],
+      lastAssistant: {
+        role: "assistant",
+        content: [{ type: "text", text: "Still working through the repo state." }],
+        stopReason: "stop",
+        api: "openai-responses",
+        provider: "openai",
+        model: "mock-1",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Still working through the repo state.");
+  });
+
   it("suppresses JSON NO_REPLY assistant payloads", () => {
     expectNoPayloads({
       assistantTexts: ['{"action":"NO_REPLY"}'],

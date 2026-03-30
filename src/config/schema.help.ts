@@ -1453,4 +1453,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
+  "channels.whatsapp.commentaryDelivery":
+    'WhatsApp live assistant commentary delivery. Use "live" to send interim `commentary` messages during the run; "off" keeps final-only delivery.',
 };

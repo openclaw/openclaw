@@ -250,6 +250,9 @@ export async function runAgentTurnWithFallback(params: {
             currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
+            normalizeDirectiveAliases:
+              resolveMessageChannel(params.sessionCtx.Surface, params.sessionCtx.Provider) ===
+              "whatsapp",
             normalizeMediaPaths: normalizeReplyMediaPaths,
             typingSignals: params.typingSignals,
             blockStreamingEnabled: params.blockStreamingEnabled,
@@ -433,6 +436,7 @@ export async function runAgentTurnWithFallback(params: {
                   await params.typingSignals.signalMessageStart();
                   await params.opts?.onAssistantMessageStart?.();
                 },
+                onCommentaryReply: params.opts?.onCommentaryReply,
                 onReasoningStream:
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {
@@ -510,6 +514,7 @@ export async function runAgentTurnWithFallback(params: {
                         await blockReplyPipeline.flush({ force: true });
                       }
                     : undefined,
+                blockReplyTimeoutMs: params.opts?.blockReplyTimeoutMs,
                 shouldEmitToolResult: params.shouldEmitToolResult,
                 shouldEmitToolOutput: params.shouldEmitToolOutput,
                 bootstrapPromptWarningSignaturesSeen,

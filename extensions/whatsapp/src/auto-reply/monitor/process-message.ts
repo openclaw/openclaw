@@ -15,7 +15,13 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  COMMENTARY_REPLY_TIMEOUT_MS,
+  normalizeReplyPayloadDirectives,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-runtime";
+import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -272,6 +278,11 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
+  const whatsAppAccount = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.route.accountId,
+  });
+  const commentaryDelivery = whatsAppAccount.commentaryDelivery ?? "off";
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
@@ -398,6 +409,79 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
+  const sendWhatsAppPayload = async (
+    payload: ReplyPayload,
+    kind: "commentary" | "final",
+    context?: BlockReplyContext,
+  ): Promise<void> => {
+    if (context?.abortSignal?.aborted) {
+      throw context.abortSignal.reason instanceof Error
+        ? context.abortSignal.reason
+        : new Error(String(context.abortSignal.reason ?? "aborted"));
+    }
+
+    const normalized = normalizeReplyPayloadDirectives({
+      payload,
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+      normalizeDirectiveAliases: true,
+    });
+    const hasMedia = resolveSendableOutboundReplyParts(normalized.payload).hasMedia;
+    const hasVisibleContent =
+      Boolean(normalized.payload.text) || hasMedia || Boolean(normalized.payload.audioAsVoice);
+    if (!hasVisibleContent) {
+      return;
+    }
+    if (normalized.isSilent && !hasMedia) {
+      return;
+    }
+
+    await deliverWebReply({
+      replyResult: normalized.payload,
+      msg: params.msg,
+      mediaLocalRoots,
+      maxMediaBytes: params.maxMediaBytes,
+      textLimit,
+      chunkMode,
+      replyLogger: params.replyLogger,
+      connectionId: params.connectionId,
+      abortSignal: context?.abortSignal,
+      timeoutMs: context?.timeoutMs,
+      skipLog: false,
+      tableMode,
+    });
+    didSendReply = true;
+
+    params.rememberSentText(
+      normalized.payload.text,
+      kind === "final"
+        ? {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: normalized.payload.text ? true : undefined,
+          }
+        : {
+            logVerboseMessage: normalized.payload.text ? true : undefined,
+          },
+    );
+
+    const fromDisplay =
+      params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+    if (kind === "commentary") {
+      whatsappOutboundLog.info(
+        `Sent commentary update to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
+      );
+    } else {
+      whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+    }
+    if (shouldLogVerbose()) {
+      const preview =
+        normalized.payload.text != null ? elide(normalized.payload.text, 400) : "<media>";
+      const prefix = kind === "commentary" ? "Commentary body" : "Reply body";
+      whatsappOutboundLog.debug(`${prefix}: ${preview}${hasMedia ? " (media)" : ""}`);
+    }
+  };
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: params.cfg,
@@ -418,34 +502,7 @@ export async function processMessage(params: {
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
         }
-        await deliverWebReply({
-          replyResult: payload,
-          msg: params.msg,
-          mediaLocalRoots,
-          maxMediaBytes: params.maxMediaBytes,
-          textLimit,
-          chunkMode,
-          replyLogger: params.replyLogger,
-          connectionId: params.connectionId,
-          skipLog: false,
-          tableMode,
-        });
-        didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
-          combinedBody,
-          combinedBodySessionKey: params.route.sessionKey,
-          logVerboseMessage: shouldLog,
-        });
-        const fromDisplay =
-          params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-        const reply = resolveSendableOutboundReplyParts(payload);
-        const hasMedia = reply.hasMedia;
-        whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
-        if (shouldLogVerbose()) {
-          const preview = payload.text != null ? elide(reply.text, 400) : "<media>";
-          whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
-        }
+        await sendWhatsAppPayload(payload, "final");
       },
       onError: (err, info) => {
         const label =
@@ -464,6 +521,13 @@ export async function processMessage(params: {
       // WhatsApp delivery intentionally suppresses non-final payloads.
       // Keep block streaming disabled so final replies are still produced.
       disableBlockStreaming: true,
+      blockReplyTimeoutMs: COMMENTARY_REPLY_TIMEOUT_MS,
+      onCommentaryReply:
+        commentaryDelivery === "live"
+          ? async (payload, context) => {
+              await sendWhatsAppPayload(payload, "commentary", context);
+            }
+          : undefined,
       onModelSelected,
     },
   });
@@ -472,8 +536,10 @@ export async function processMessage(params: {
     if (shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }
-    logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
-    return false;
+    if (!didSendReply) {
+      logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
+    }
+    return didSendReply;
   }
 
   if (shouldClearGroupHistory) {
