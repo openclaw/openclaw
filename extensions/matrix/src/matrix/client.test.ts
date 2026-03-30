@@ -55,6 +55,17 @@ beforeEach(async () => {
   sdkModule = await import("./sdk.js");
 });
 
+vi.mock("matrix-js-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("matrix-js-sdk")>();
+  return {
+    ...actual,
+    createClient: vi.fn(() => ({
+      // Minimal stub — auth tests spy on MatrixClient.prototype.doRequest
+      // rather than exercising the underlying js-sdk client.
+    })),
+  };
+});
+
 describe("resolveMatrixConfig", () => {
   it("prefers config over env", () => {
     const cfg = {
@@ -529,6 +540,51 @@ describe("resolveMatrixConfig", () => {
         allowPrivateNetwork: true,
       }),
     ).toBe("http://matrix-synapse:8008");
+  });
+
+  it("resolves an explicit proxy dispatcher from top-level Matrix config", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "tok-123",
+          proxy: "http://127.0.0.1:7890",
+        },
+      },
+    } as CoreConfig;
+
+    const resolved = resolveMatrixConfig(cfg, {} as NodeJS.ProcessEnv);
+
+    expect(resolved.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://127.0.0.1:7890",
+    });
+  });
+
+  it("prefers account proxy overrides over top-level Matrix proxy config", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "base-token",
+          proxy: "http://127.0.0.1:7890",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+              proxy: "http://127.0.0.1:7891",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", {} as NodeJS.ProcessEnv);
+
+    expect(resolved.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://127.0.0.1:7891",
+    });
   });
 
   it("rejects public http homeservers even when private-network access is enabled", async () => {

@@ -84,6 +84,22 @@ describe("buildTelegramInteractiveButtons", () => {
       [{ text: "Alpha", callback_data: "alpha", style: undefined }],
     ]);
   });
+
+  it("drops shared buttons whose callback data exceeds Telegram's limit", () => {
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "keep" },
+              { label: "Too long", value: `a${"b".repeat(64)}` },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([[{ text: "Keep", callback_data: "keep", style: undefined }]]);
+  });
 });
 
 describe("resolveTelegramInlineButtons", () => {

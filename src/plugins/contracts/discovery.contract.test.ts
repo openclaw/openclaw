@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import {
-  loadBundledPluginPublicSurfaceSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../../test-utils/bundled-plugin-public-surface.js";
 import { registerProviders, requireProvider } from "./testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -138,23 +134,16 @@ function runCatalog(params: {
   });
 }
 
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return `../../../extensions/${pluginId}/${artifactBasename}`;
+}
+
 describe("provider discovery contract", () => {
   beforeEach(async () => {
-    const githubCopilotTokenModuleId = resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "github-copilot",
-      artifactBasename: "token.js",
-    });
-    const vllmApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "vllm",
-      artifactBasename: "api.js",
-    });
-    const sglangApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "sglang",
-      artifactBasename: "api.js",
-    });
+    const githubCopilotTokenModuleId = buildBundledPluginModuleId("github-copilot", "token.js");
+    const ollamaApiModuleId = buildBundledPluginModuleId("ollama", "api.js");
+    const vllmApiModuleId = buildBundledPluginModuleId("vllm", "api.js");
+    const sglangApiModuleId = buildBundledPluginModuleId("sglang", "api.js");
     vi.resetModules();
     vi.doMock("openclaw/plugin-sdk/agent-runtime", async () => {
       // Import the direct source module, not the mocked subpath, so bundled
@@ -181,23 +170,11 @@ describe("provider discovery contract", () => {
         resolveCopilotApiToken: resolveCopilotApiTokenMock,
       };
     });
-    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
-      const actual = await vi.importActual<object>("openclaw/plugin-sdk/provider-setup");
+    vi.doMock(ollamaApiModuleId, async () => {
+      const actual = await vi.importActual<object>(ollamaApiModuleId);
       return {
         ...actual,
         buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
-        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/self-hosted-provider-setup", async () => {
-      const actual = await vi.importActual<object>(
-        "openclaw/plugin-sdk/self-hosted-provider-setup",
-      );
-      return {
-        ...actual,
-        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
       };
     });
     vi.doMock(vllmApiModuleId, async () => {
@@ -224,27 +201,27 @@ describe("provider discovery contract", () => {
       { default: modelStudioPlugin },
       { default: cloudflareAiGatewayPlugin },
     ] = await Promise.all([
-      loadBundledPluginPublicSurfaceSync<{
+      import(buildBundledPluginModuleId("github-copilot", "index.js")) as Promise<{
         default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "github-copilot", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      }>,
+      import(buildBundledPluginModuleId("ollama", "index.js")) as Promise<{
         default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "ollama", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      }>,
+      import(buildBundledPluginModuleId("vllm", "index.js")) as Promise<{
         default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "vllm", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      }>,
+      import(buildBundledPluginModuleId("sglang", "index.js")) as Promise<{
         default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "sglang", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      }>,
+      import(buildBundledPluginModuleId("minimax", "index.js")) as Promise<{
         default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "minimax", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      }>,
+      import(buildBundledPluginModuleId("modelstudio", "index.js")) as Promise<{
         default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "modelstudio", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      }>,
+      import(buildBundledPluginModuleId("cloudflare-ai-gateway", "index.js")) as Promise<{
         default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "cloudflare-ai-gateway", artifactBasename: "index.js" }),
+      }>,
     ]);
     githubCopilotProvider = requireProvider(
       registerProviders(githubCopilotPlugin),
