@@ -208,8 +208,15 @@ export function resolveMattermostThreadSessionContext(params: {
   });
   // messageThreadId reflects the actual thread the inbound message came from,
   // regardless of replyToMode. This ensures MessageThreadId is always set for
-  // thread messages even when replyToMode is "off" (which only controls reply routing).
-  const messageThreadId = params.threadRootId?.trim() || effectiveReplyToId;
+  // thread messages even when replyToMode is "off" (which only controls session
+  // forking, not delivery routing).
+  // Exception: direct messages are never threaded by contract (resolveMattermostReplyToMode
+  // hardcodes "off" for DMs), so we don't pull from threadRootId for DMs — a DM
+  // reply that happens to have post.root_id should still go to the main DM window.
+  const messageThreadId =
+    params.kind !== "direct"
+      ? params.threadRootId?.trim() || effectiveReplyToId
+      : effectiveReplyToId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,
