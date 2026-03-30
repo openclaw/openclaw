@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -191,6 +191,32 @@ describe("validateBindMounts", () => {
     vi.stubEnv("OPENCLAW_HOME", linkedHome);
 
     expect(() => validateBindMounts([`${join(realHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
+      /blocked path/,
+    );
+  });
+
+  it("refreshes canonical blocked aliases when OPENCLAW_HOME symlinks retarget", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const firstHome = join(dir, "home-a");
+    const secondHome = join(dir, "home-b");
+    const linkedHome = join(dir, "linked-home");
+    mkdirSync(join(firstHome, ".ssh"), { recursive: true });
+    mkdirSync(join(secondHome, ".ssh"), { recursive: true });
+    symlinkSync(firstHome, linkedHome);
+    vi.stubEnv("OPENCLAW_HOME", linkedHome);
+
+    expect(() => validateBindMounts([`${join(firstHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
+      /blocked path/,
+    );
+
+    unlinkSync(linkedHome);
+    symlinkSync(secondHome, linkedHome);
+
+    expect(() => validateBindMounts([`${join(secondHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
       /blocked path/,
     );
   });

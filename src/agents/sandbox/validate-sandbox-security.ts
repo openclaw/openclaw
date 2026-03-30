@@ -49,6 +49,11 @@ let cachedBlockedHostPaths:
     }
   | undefined;
 
+type BlockedHostPathAlias = {
+  lexical: string;
+  canonical: string;
+};
+
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
 const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
@@ -137,37 +142,48 @@ export function getBlockedHostPaths(): string[] {
   const effectiveHome = normalizeHostPath(resolveRequiredHomeDir(process.env, os.homedir));
   const osHome = normalizeHostPath(resolveRequiredOsHomeDir(process.env, os.homedir));
   const stateDir = normalizeHostPath(resolveStateDir());
-  const cacheKey = `${effectiveHome}\u0000${osHome}\u0000${stateDir}`;
-  if (cachedBlockedHostPaths?.key === cacheKey) {
-    return cachedBlockedHostPaths.paths;
-  }
-
-  const blocked = new Set<string>();
+  const aliases: BlockedHostPathAlias[] = [];
   for (const candidate of BLOCKED_HOST_PATHS) {
-    addBlockedHostPath(blocked, candidate);
+    aliases.push(resolveBlockedHostPathAlias(candidate));
   }
   for (const home of new Set([effectiveHome, osHome])) {
     if (home === "/") {
       continue;
     }
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
-      addBlockedHostPath(blocked, path.posix.join(home, suffix));
+      aliases.push(resolveBlockedHostPathAlias(path.posix.join(home, suffix)));
     }
   }
-  addBlockedHostPath(blocked, stateDir);
+  aliases.push(resolveBlockedHostPathAlias(stateDir));
+
+  const cacheKey = aliases.flatMap(({ lexical, canonical }) => [lexical, canonical]).join("\u0000");
+  if (cachedBlockedHostPaths?.key === cacheKey) {
+    return cachedBlockedHostPaths.paths;
+  }
+
+  const blocked = new Set<string>();
+  for (const alias of aliases) {
+    addBlockedHostPath(blocked, alias);
+  }
 
   const paths = [...blocked];
   cachedBlockedHostPaths = { key: cacheKey, paths };
   return paths;
 }
 
-function addBlockedHostPath(blocked: Set<string>, candidate: string): void {
-  const normalized = normalizeHostPath(candidate);
-  blocked.add(normalized);
+function resolveBlockedHostPathAlias(candidate: string): BlockedHostPathAlias {
+  const lexical = normalizeHostPath(candidate);
+  return {
+    lexical,
+    canonical: resolveSandboxHostPathViaExistingAncestor(lexical),
+  };
+}
 
-  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
-  if (canonical !== normalized) {
-    blocked.add(canonical);
+function addBlockedHostPath(blocked: Set<string>, alias: BlockedHostPathAlias): void {
+  blocked.add(alias.lexical);
+
+  if (alias.canonical !== alias.lexical) {
+    blocked.add(alias.canonical);
   }
 }
 
