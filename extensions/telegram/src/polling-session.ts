@@ -108,69 +108,76 @@ export class TelegramPollingSession {
 
     // Start the heartbeat loop — it runs for the entire session lifetime.
     const heartbeatLoop = (async () => {
-      while (!heartbeatAborted()) {
-        await sleepWithAbort(HEARTBEAT_INTERVAL_MS, heartbeatStop.signal).catch(() => {});
-        if (heartbeatAborted()) return;
+      const heartbeatSleepAbort = new AbortController();
+      const onSessionAbort = () => heartbeatSleepAbort.abort();
+      this.opts.abortSignal?.addEventListener("abort", onSessionAbort, { once: true });
+      try {
+        while (!heartbeatAborted()) {
+          await sleepWithAbort(HEARTBEAT_INTERVAL_MS, heartbeatSleepAbort.signal).catch(() => {});
+          if (heartbeatAborted()) return;
 
-        let heartbeat: "ok" | "network-failure" | "fatal-api-failure" = "network-failure";
-        try {
-          heartbeat = await this.#probeHeartbeatOnce({
-            stopSignal: heartbeatStop.signal,
-            rebuildTransportIfDirty: heartbeatSuspended,
-          });
-        } catch (err) {
-          const errMsg = formatErrorMessage(err);
-          this.opts.log(`[telegram][diag] Heartbeat probe threw before completion: ${errMsg}`);
-          heartbeat = "network-failure";
-        }
-        if (heartbeat === "ok") {
-          if (heartbeatConsecutiveFailures > 0) {
+          let heartbeat: "ok" | "network-failure" | "fatal-api-failure" = "network-failure";
+          try {
+            heartbeat = await this.#probeHeartbeatOnce({
+              stopSignal: heartbeatStop.signal,
+              rebuildTransportIfDirty: heartbeatSuspended,
+            });
+          } catch (err) {
+            const errMsg = formatErrorMessage(err);
+            this.opts.log(`[telegram][diag] Heartbeat probe threw before completion: ${errMsg}`);
+            heartbeat = "network-failure";
+          }
+          if (heartbeat === "ok") {
+            if (heartbeatConsecutiveFailures > 0) {
+              this.opts.log(
+                `[telegram] Heartbeat recovered after ${heartbeatConsecutiveFailures} failure(s).`,
+              );
+            }
+            heartbeatConsecutiveFailures = 0;
+            if (heartbeatSuspended) {
+              heartbeatSuspended = false;
+              heartbeatRecoveryWake.abort();
+              heartbeatRecoveryWake = new AbortController();
+            }
+            continue;
+          }
+
+          if (heartbeat === "fatal-api-failure") {
             this.opts.log(
-              `[telegram] Heartbeat recovered after ${heartbeatConsecutiveFailures} failure(s).`,
+              `[telegram] Heartbeat probe hit a fatal API error; releasing heartbeat suspension so the normal fatal path can surface the error.`,
             );
+            heartbeatConsecutiveFailures = 0;
+            if (heartbeatSuspended) {
+              heartbeatSuspended = false;
+              heartbeatRecoveryWake.abort();
+              heartbeatRecoveryWake = new AbortController();
+            }
+            continue;
           }
-          heartbeatConsecutiveFailures = 0;
+
+          heartbeatConsecutiveFailures += 1;
           if (heartbeatSuspended) {
-            heartbeatSuspended = false;
-            heartbeatRecoveryWake.abort();
-            heartbeatRecoveryWake = new AbortController();
+            this.#transportState.markDirty();
           }
-          continue;
-        }
-
-        if (heartbeat === "fatal-api-failure") {
-          this.opts.log(
-            `[telegram] Heartbeat probe hit a fatal API error; releasing heartbeat suspension so the normal fatal path can surface the error.`,
-          );
-          heartbeatConsecutiveFailures = 0;
-          if (heartbeatSuspended) {
-            heartbeatSuspended = false;
-            heartbeatRecoveryWake.abort();
-            heartbeatRecoveryWake = new AbortController();
+          if (heartbeatConsecutiveFailures < HEARTBEAT_FAIL_THRESHOLD) {
+            this.opts.log(
+              `[telegram][diag] Heartbeat failed (${heartbeatConsecutiveFailures}/${HEARTBEAT_FAIL_THRESHOLD}).`,
+            );
+            continue;
           }
-          continue;
-        }
 
-        heartbeatConsecutiveFailures += 1;
-        if (heartbeatSuspended) {
-          this.#transportState.markDirty();
+          if (!heartbeatSuspended) {
+            this.opts.log(
+              `[telegram] Heartbeat failed ${heartbeatConsecutiveFailures} consecutive times; stopping polling and waiting for recovery.`,
+            );
+            heartbeatSuspended = true;
+            this.#transportState.markDirty();
+          }
+          // Always abort the current polling cycle if one is running.
+          currentCycleAbort?.abort();
         }
-        if (heartbeatConsecutiveFailures < HEARTBEAT_FAIL_THRESHOLD) {
-          this.opts.log(
-            `[telegram][diag] Heartbeat failed (${heartbeatConsecutiveFailures}/${HEARTBEAT_FAIL_THRESHOLD}).`,
-          );
-          continue;
-        }
-
-        if (!heartbeatSuspended) {
-          this.opts.log(
-            `[telegram] Heartbeat failed ${heartbeatConsecutiveFailures} consecutive times; stopping polling and waiting for recovery.`,
-          );
-          heartbeatSuspended = true;
-          this.#transportState.markDirty();
-        }
-        // Always abort the current polling cycle if one is running.
-        currentCycleAbort?.abort();
+      } finally {
+        this.opts.abortSignal?.removeEventListener("abort", onSessionAbort);
       }
     })();
 
