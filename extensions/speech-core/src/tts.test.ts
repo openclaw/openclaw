@@ -99,8 +99,8 @@ describe("resolveTtsConfig", () => {
   });
 
   it("respects custom mode", () => {
-    const result = resolveTtsConfig({ messages: { tts: { mode: "stream" } } });
-    expect(result.mode).toBe("stream");
+    const result = resolveTtsConfig({ messages: { tts: { mode: "all" } } });
+    expect(result.mode).toBe("all");
   });
 
   it("collects provider-specific configs from providers map", () => {

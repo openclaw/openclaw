@@ -17,9 +17,9 @@ const {
 } = vi.hoisted(() => ({
   mockGetImageGenerationProvider: vi.fn(),
   mockParseImageGenerationModelRef: vi.fn(),
-  mockListImageGenerationProviders: vi.fn(() => []),
+  mockListImageGenerationProviders: vi.fn(),
   mockResolveAgentModelPrimaryValue: vi.fn((v: unknown) => v),
-  mockResolveAgentModelFallbackValues: vi.fn(() => []),
+  mockResolveAgentModelFallbackValues: vi.fn(),
   mockIsFailoverError: vi.fn(() => false),
   mockDescribeFailoverError: vi.fn(),
   mockLog: { debug: vi.fn() },
