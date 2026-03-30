@@ -259,13 +259,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  getSessionBindingService: () => ({
-    resolveByConversation: mockResolveBoundConversation,
-    touch: mockTouchBinding,
-  }),
-}));
-
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
   await handleFeishuMessage({
