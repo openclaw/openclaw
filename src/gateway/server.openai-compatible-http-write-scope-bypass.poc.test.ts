@@ -51,7 +51,12 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
       expect(body.error?.message).toBe("missing scope: operator.write");
       expect(agentCommand).toHaveBeenCalledTimes(0);
 
+      // Requests without x-openclaw-scopes header now receive default
+      // CLI_DEFAULT_OPERATOR_SCOPES (which include operator.write), so they
+      // are authorised.  The explicit-header test above still proves that a
+      // caller who *declares* only operator.approvals is correctly rejected.
       agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
       const missingHeaderRes = await fetch(`http://127.0.0.1:${started.port}/v1/chat/completions`, {
         method: "POST",
         headers: {
@@ -64,13 +69,14 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
         }),
       });
 
-      expect(missingHeaderRes.status).toBe(403);
+      expect(missingHeaderRes.status).toBe(200);
       const missingHeaderBody = (await missingHeaderRes.json()) as {
-        error?: { type?: string; message?: string };
+        object?: string;
+        choices?: Array<{ message?: { content?: string } }>;
       };
-      expect(missingHeaderBody.error?.type).toBe("forbidden");
-      expect(missingHeaderBody.error?.message).toBe("missing scope: operator.write");
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(missingHeaderBody.object).toBe("chat.completion");
+      expect(missingHeaderBody.choices?.[0]?.message?.content).toBe("hello");
+      expect(agentCommand).toHaveBeenCalledTimes(1);
     } finally {
       started.ws.close();
       await started.server.close();
