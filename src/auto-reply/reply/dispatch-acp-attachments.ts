@@ -47,9 +47,6 @@ export async function resolveAcpAttachments(params: {
     if (!mediaType.startsWith("image/")) {
       continue;
     }
-    if (!normalizeOptionalString(attachment.path)) {
-      continue;
-    }
     try {
       const { buffer } = await cache.getBuffer({
         attachmentIndex: attachment.index,
