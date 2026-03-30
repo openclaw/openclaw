@@ -112,15 +112,19 @@ function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefa
     if (entry.mode === "api_key") {
       return "api_key";
     }
-    if (entry.mode === "oauth" || entry.mode === "token") {
+    if (entry.mode === "oauth") {
       return "oauth";
+    }
+    // token mode should route as api_key, not oauth (regression fix for #57956)
+    if (entry.mode === "token") {
+      return "api_key";
     }
   }
 
-  const hasApiKey = anthropicProfiles.some(([, profile]) => profile?.mode === "api_key");
-  const hasOauth = anthropicProfiles.some(
-    ([, profile]) => profile?.mode === "oauth" || profile?.mode === "token",
+  const hasApiKey = anthropicProfiles.some(
+    ([, profile]) => profile?.mode === "api_key" || profile?.mode === "token",
   );
+  const hasOauth = anthropicProfiles.some(([, profile]) => profile?.mode === "oauth");
   if (hasApiKey && !hasOauth) {
     return "api_key";
   }
