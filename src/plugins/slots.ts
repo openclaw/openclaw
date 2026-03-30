@@ -54,8 +54,8 @@ export function kindsEqual(
   a: PluginKind | PluginKind[] | undefined,
   b: PluginKind | PluginKind[] | undefined,
 ): boolean {
-  const aN = normalizeKinds(a).sort();
-  const bN = normalizeKinds(b).sort();
+  const aN = normalizeKinds(a).toSorted();
+  const bN = normalizeKinds(b).toSorted();
   return aN.length === bN.length && aN.every((k, i) => k === bN[i]);
 }
 
