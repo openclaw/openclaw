@@ -774,9 +774,16 @@ describe("POST /tools/invoke", () => {
       tool: "nodes",
       sessionKey: "main",
     });
+    const nodesAdminRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "nodes",
+      sessionKey: "main",
+    });
 
     expect(execRes.status).toBe(404);
     expect(patchRes.status).toBe(404);
     expect(nodesRes.status).toBe(404);
+    expect(nodesAdminRes.status).toBe(404);
   });
 });
