@@ -1,9 +1,0 @@
-{
-  "id": "whatsapp-business",
-  "channels": ["whatsapp-business"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}
