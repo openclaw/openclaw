@@ -60,7 +60,7 @@ function stripToolCallTags(text: string): string {
       continue;
     }
 
-    const isClose = match[1] === "/";
+    const isClose = match[1] === "/" || /\/\s*>$/.test(match[0]);
     if (!inToolCallBlock) {
       result += text.slice(lastIndex, idx);
       if (!isClose) {

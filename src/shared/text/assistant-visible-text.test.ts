@@ -96,6 +96,11 @@ describe("stripAssistantInternalScaffolding", () => {
       expected: "Before ",
     },
     {
+      name: "strips self-closing tool_call tags without truncating trailing text",
+      input: ["Before", '<tool_call name="exec" />', "After"].join(" "),
+      expected: "Before  After",
+    },
+    {
       name: "keeps relevant-memories tags inside fenced code",
       input: createLiteralRelevantMemoriesCodeBlock(),
       expected: undefined,

@@ -133,6 +133,14 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("Here is my response ");
   });
 
+  it("strips self-closing tool_call scaffolding without truncating trailing reply text", () => {
+    const result = normalizeReplyPayload({
+      text: 'Here is my response <tool_call name="exec" /> after',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Here is my response  after");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(result).not.toBeNull();
