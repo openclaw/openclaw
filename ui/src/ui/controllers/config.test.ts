@@ -41,6 +41,7 @@ function createState(): ConfigState {
     updateRunning: false,
     updateSkippedReason: null,
     updateConfirmPending: false,
+    updateProgress: null,
   };
 }
 

@@ -53,6 +53,16 @@ export type ConfigState = {
   updateRunning: boolean;
   updateSkippedReason: UpdateSkippedReason;
   updateConfirmPending: boolean;
+  updateProgress: {
+    currentStep: { name: string; index: number; total: number } | null;
+    completedSteps: Array<{
+      name: string;
+      index: number;
+      durationMs: number;
+      exitCode: number | null;
+    }>;
+    startedAtMs: number | null;
+  } | null;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown;
   configSchemaVersion: string | null;
@@ -230,6 +240,7 @@ export async function runUpdate(state: ConfigState, force = false) {
   state.lastError = null;
   state.updateSkippedReason = null;
   state.updateConfirmPending = false;
+  state.updateProgress = { currentStep: null, completedSteps: [], startedAtMs: Date.now() };
   try {
     const res = await state.client.request<UpdateRunResponse>("update.run", {
       sessionKey: state.applySessionKey,
@@ -253,6 +264,13 @@ export async function runUpdate(state: ConfigState, force = false) {
     state.lastError = String(err);
   } finally {
     state.updateRunning = false;
+    if (state.lastError || state.updateConfirmPending) {
+      state.updateProgress = null;
+    } else {
+      setTimeout(() => {
+        state.updateProgress = null;
+      }, 2000);
+    }
   }
 }
 

@@ -620,9 +620,33 @@ export function renderApp(state: AppViewState) {
                     </div>
                   `
                 : state.updateRunning
-                  ? html`<span class="update-banner__status"
-                      >Updating to v${state.updateAvailable.latestVersion}…</span
-                    >`
+                  ? html`<div class="update-banner__progress">
+                      <div class="update-banner__progress-header">
+                        Updating to v${state.updateAvailable.latestVersion}…
+                        ${state.updateProgress?.currentStep?.total
+                          ? html`<span class="update-banner__progress-count">
+                              Step
+                              ${(state.updateProgress.currentStep?.index ??
+                                state.updateProgress.completedSteps.length) + 1}/${state
+                                .updateProgress.currentStep.total}
+                            </span>`
+                          : nothing}
+                      </div>
+                      ${state.updateProgress?.currentStep
+                        ? html`<div class="update-banner__progress-step">
+                            <span class="update-banner__spinner"></span>
+                            ${state.updateProgress.currentStep.name}
+                          </div>`
+                        : nothing}
+                      ${state.updateProgress?.completedSteps
+                        .slice(-2)
+                        .map(
+                          (s) => html`<div class="update-banner__progress-done">
+                            ${s.exitCode === 0 ? "+" : "x"} ${s.name}
+                            (${(s.durationMs / 1000).toFixed(1)}s)
+                          </div>`,
+                        )}
+                    </div>`
                   : html`
                       <button
                         class="btn btn--sm update-banner__btn"

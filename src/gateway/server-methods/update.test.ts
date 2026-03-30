@@ -230,6 +230,21 @@ describe("update.run force parameter", () => {
   });
 });
 
+describe("update.run progress broadcast", () => {
+  it("passes progress callbacks to runGatewayUpdate", async () => {
+    await invokeUpdateRun({});
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        progress: expect.objectContaining({
+          onStepStart: expect.any(Function),
+          onStepComplete: expect.any(Function),
+        }),
+      }),
+    );
+  });
+});
+
 describe("update.run restart scheduling", () => {
   it("schedules restart when update succeeds", async () => {
     let payload: { ok: boolean; restart: unknown } | undefined;

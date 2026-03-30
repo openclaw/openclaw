@@ -10,6 +10,10 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
+import {
+  GATEWAY_EVENT_UPDATE_PROGRESS,
+  type GatewayUpdateProgressEventPayload,
+} from "../events.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -46,6 +50,21 @@ export const updateHandlers: GatewayRequestHandlers = {
         argv1: process.argv[1],
         channel: configChannel ?? undefined,
         force,
+        progress: {
+          onStepStart: (step) => {
+            context?.broadcast?.(GATEWAY_EVENT_UPDATE_PROGRESS, {
+              kind: "step.start",
+              step: { name: step.name, index: step.index, total: step.total },
+            } satisfies GatewayUpdateProgressEventPayload);
+          },
+          onStepComplete: (step) => {
+            context?.broadcast?.(GATEWAY_EVENT_UPDATE_PROGRESS, {
+              kind: "step.complete",
+              step: { name: step.name, index: step.index, total: step.total },
+              completion: { durationMs: step.durationMs, exitCode: step.exitCode },
+            } satisfies GatewayUpdateProgressEventPayload);
+          },
+        },
       });
     } catch (err) {
       result = {
@@ -118,6 +137,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         `update.run restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
       );
     }
+
+    context?.broadcast?.(GATEWAY_EVENT_UPDATE_PROGRESS, {
+      kind: "finished",
+      result: { status: result.status, reason: result.reason },
+    } satisfies GatewayUpdateProgressEventPayload);
 
     respond(
       true,

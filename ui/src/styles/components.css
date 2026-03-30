@@ -267,6 +267,58 @@
   opacity: 0.8;
 }
 
+.update-banner__progress {
+  display: block;
+  margin-top: 8px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.update-banner__progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.update-banner__progress-count {
+  font-size: 11px;
+  opacity: 0.7;
+  font-weight: 400;
+}
+
+.update-banner__progress-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.update-banner__spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--danger);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: update-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes update-spin {
+  to { transform: rotate(360deg); }
+}
+
+.update-banner__progress-done {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  opacity: 0.6;
+  padding: 1px 0;
+}
+
 /* ===========================================
    Cards - Refined with depth
    =========================================== */

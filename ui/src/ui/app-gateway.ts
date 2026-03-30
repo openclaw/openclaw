@@ -1,6 +1,8 @@
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_PROGRESS,
   type GatewayUpdateAvailableEventPayload,
+  type GatewayUpdateProgressEventPayload,
 } from "../../../src/gateway/events.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
@@ -88,6 +90,7 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  updateProgress: import("./controllers/config.ts").ConfigState["updateProgress"];
 };
 
 type SessionDefaultsSnapshot = {
@@ -460,6 +463,34 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const resolved = parseExecApprovalResolved(evt.payload);
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    }
+    return;
+  }
+
+  if (evt.event === GATEWAY_EVENT_UPDATE_PROGRESS) {
+    const p = evt.payload as GatewayUpdateProgressEventPayload | undefined;
+    if (!p || !host.updateProgress) {
+      return;
+    }
+    if (p.kind === "step.start" && p.step) {
+      host.updateProgress = {
+        ...host.updateProgress,
+        currentStep: p.step,
+      };
+    } else if (p.kind === "step.complete" && p.step && p.completion) {
+      host.updateProgress = {
+        ...host.updateProgress,
+        currentStep: null,
+        completedSteps: [
+          ...host.updateProgress.completedSteps,
+          {
+            name: p.step.name,
+            index: p.step.index,
+            durationMs: p.completion.durationMs,
+            exitCode: p.completion.exitCode,
+          },
+        ],
+      };
     }
     return;
   }
