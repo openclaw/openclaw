@@ -40,6 +40,19 @@ function createFakeSpawnedChild() {
   return { child, stdout, stderr, kill };
 }
 
+function emitProcessExit(
+  fake: ReturnType<typeof createFakeSpawnedChild>,
+  params?: {
+    code?: number | null;
+    signal?: NodeJS.Signals | null;
+  },
+) {
+  const code = params?.code ?? null;
+  const signal = params?.signal ?? null;
+  fake.child.emit("exit", code, signal);
+  fake.child.emit("close", code, signal);
+}
+
 describe("runCommandWithTimeout no-output timer", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -91,7 +104,7 @@ describe("runCommandWithTimeout no-output timer", () => {
     await vi.advanceTimersByTimeAsync(81);
     expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
 
-    fake.child.emit("close", null, null);
+    emitProcessExit(fake, { signal: "SIGKILL" });
     const result = await runPromise;
 
     expect(result.termination).toBe("no-output-timeout");
@@ -111,7 +124,7 @@ describe("runCommandWithTimeout no-output timer", () => {
     await vi.advanceTimersByTimeAsync(81);
     expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
 
-    fake.child.emit("close", null, null);
+    emitProcessExit(fake, { signal: "SIGKILL" });
     const result = await runPromise;
 
     expect(result.termination).toBe("timeout");
