@@ -486,6 +486,38 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.ReplyToIsQuote).toBe(true);
   });
 
+  it("marks media-only Signal quotes as quoted replies", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "replying to photo",
+          attachments: [],
+          quote: {
+            id: 1700000001000,
+            author: {
+              uuid: "8f8f8f8f-1111-2222-3333-444444444444",
+              name: "Photo Sender",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBe("1700000001000");
+    expect(capture.ctx?.ReplyToBody).toBeUndefined();
+    expect(capture.ctx?.ReplyToSender).toBe("Photo Sender");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+  });
+
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

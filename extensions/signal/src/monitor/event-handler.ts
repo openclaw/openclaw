@@ -832,9 +832,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       quote?.id !== undefined && quote?.id !== null && String(quote.id).trim().length > 0
         ? String(quote.id).trim()
         : undefined;
-    const hasVisibleQuoteContext = quoteVisibilityDecision.include
-      ? Boolean(quotedId || visibleQuoteText || visibleQuoteSender)
-      : false;
+    const hasVisibleQuoteContext = quoteVisibilityDecision.include && Boolean(quote);
     const visibleQuoteId = hasVisibleQuoteContext ? quotedId : undefined;
     const bodyText = messageText || placeholder || visibleQuoteText || "";
     if (!bodyText) {
