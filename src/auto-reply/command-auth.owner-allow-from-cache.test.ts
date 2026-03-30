@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
@@ -29,6 +33,7 @@ describe("resolveCommandAuthorization owner allowlist hot path", () => {
   });
 
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(createTestRegistry());
   });
 
@@ -160,6 +165,67 @@ describe("resolveCommandAuthorization owner allowlist hot path", () => {
     });
 
     expect(authA.ownerList).toEqual(["A:123", "A:456", "A:789"]);
+    expect(authB.ownerList).toEqual(["B:123", "B:456", "B:789"]);
+  });
+
+  it("does not reuse cached ownerAllowFrom after channel registry re-pin", () => {
+    const sharedOwnerAllowFrom = ["123", "456", "789"];
+    const cfg = {
+      channels: { discord: {} },
+      commands: { ownerAllowFrom: sharedOwnerAllowFrom },
+    } as OpenClawConfig;
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:123",
+      SenderId: "123",
+    } as MsgContext;
+
+    const pluginA = createOutboundTestPlugin({
+      id: "discord",
+      outbound: { deliveryMode: "direct" },
+    });
+    pluginA.config = {
+      ...pluginA.config,
+      formatAllowFrom: ({ allowFrom }) => allowFrom.map((entry) => `A:${String(entry)}`),
+    };
+    const registryA = createTestRegistry([
+      { pluginId: "discord", plugin: pluginA, source: "test-registry-a" },
+    ]);
+    setActivePluginRegistry(registryA, "owner-cache-channel-repin-a");
+    pinActivePluginChannelRegistry(registryA);
+    const authA = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    const pluginB = createOutboundTestPlugin({
+      id: "discord",
+      outbound: { deliveryMode: "direct" },
+    });
+    pluginB.config = {
+      ...pluginB.config,
+      formatAllowFrom: ({ allowFrom }) => allowFrom.map((entry) => `B:${String(entry)}`),
+    };
+    const registryB = createTestRegistry([
+      { pluginId: "discord", plugin: pluginB, source: "test-registry-b" },
+    ]);
+    setActivePluginRegistry(registryB, "owner-cache-channel-repin-b");
+    const authPinnedA = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    pinActivePluginChannelRegistry(registryB);
+    const authB = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(authA.ownerList).toEqual(["A:123", "A:456", "A:789"]);
+    expect(authPinnedA.ownerList).toEqual(["A:123", "A:456", "A:789"]);
     expect(authB.ownerList).toEqual(["B:123", "B:456", "B:789"]);
   });
 });

@@ -2,7 +2,7 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
+import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -222,7 +222,7 @@ function resolveOwnerAllowFromList(params: {
   if (!Array.isArray(raw) || raw.length === 0) {
     return [];
   }
-  const registryVersion = getActivePluginRegistryVersion();
+  const registryVersion = getActivePluginChannelRegistryVersion();
   const cacheKey = `${registryVersion}\u0000${params.plugin?.id ?? ""}\u0000${params.accountId ?? ""}\u0000${params.providerId ?? ""}`;
   const cached = ownerAllowFromListCache.get(params.cfg)?.get(raw)?.get(cacheKey);
   if (cached !== undefined) {
