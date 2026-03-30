@@ -8,22 +8,177 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
   sanitizeHostExecEnv,
+  sanitizeHostExecEnvWithDiagnostics,
   sanitizeSystemRunEnvOverrides,
 } from "./host-env-security.js";
+import { OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
+
+function findSystemCommandPath(command: string) {
+  if (process.platform === "win32") {
+    return null;
+  }
+  for (const dir of (process.env.PATH ?? "/usr/bin:/bin").split(path.delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    const candidate = path.join(dir, command);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function getSystemGitPath() {
+  return findSystemCommandPath("git");
+}
+
+function getSystemMakePath() {
+  return findSystemCommandPath("make");
+}
+
+function clearMarker(marker: string) {
+  try {
+    fs.unlinkSync(marker);
+  } catch {
+    // no-op
+  }
+}
+
+async function runGitLsRemote(gitPath: string, target: string, env: NodeJS.ProcessEnv) {
+  await new Promise<void>((resolve) => {
+    const child = spawn(gitPath, ["ls-remote", target], { env, stdio: "ignore" });
+    child.once("error", () => resolve());
+    child.once("close", () => resolve());
+  });
+}
+
+async function runGitCommand(
+  gitPath: string,
+  args: string[],
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+) {
+  await new Promise<void>((resolve) => {
+    const child = spawn(gitPath, args, {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: "ignore",
+    });
+    child.once("error", () => resolve());
+    child.once("close", () => resolve());
+  });
+}
+
+async function runGitClone(
+  gitPath: string,
+  source: string,
+  destination: string,
+  env: NodeJS.ProcessEnv,
+) {
+  await runGitCommand(gitPath, ["clone", source, destination], { env });
+}
+
+async function initGitRepoWithCommits(gitPath: string, repoDir: string, commitCount: number) {
+  await runGitCommand(gitPath, ["init", repoDir]);
+  for (let index = 1; index <= commitCount; index += 1) {
+    fs.writeFileSync(path.join(repoDir, `commit-${index}.txt`), `commit ${index}\n`, "utf8");
+    await runGitCommand(gitPath, ["-C", repoDir, "add", "."], {
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+      },
+    });
+    await runGitCommand(
+      gitPath,
+      [
+        "-C",
+        repoDir,
+        "-c",
+        "user.name=OpenClaw Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        `commit ${index}`,
+      ],
+      {
+        env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+        },
+      },
+    );
+  }
+}
+
+async function runMakeCommand(makePath: string, cwd: string, env: NodeJS.ProcessEnv) {
+  await new Promise<void>((resolve) => {
+    const child = spawn(makePath, ["all"], {
+      cwd,
+      env,
+      stdio: "ignore",
+    });
+    child.once("error", () => resolve());
+    child.once("close", () => resolve());
+  });
+}
 
 describe("isDangerousHostEnvVarName", () => {
   it("matches dangerous keys and prefixes case-insensitively", () => {
     expect(isDangerousHostEnvVarName("BASH_ENV")).toBe(true);
     expect(isDangerousHostEnvVarName("bash_env")).toBe(true);
+    expect(isDangerousHostEnvVarName("BROWSER")).toBe(true);
+    expect(isDangerousHostEnvVarName("browser")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELL")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_EDITOR")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EXTERNAL_DIFF")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_exec_path")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_SEQUENCE_EDITOR")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_sequence_editor")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_TEMPLATE_DIR")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_template_dir")).toBe(true);
+    expect(isDangerousHostEnvVarName("CC")).toBe(true);
+    expect(isDangerousHostEnvVarName("cxx")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
+    expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
+    expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cmake_cxx_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
     expect(isDangerousHostEnvVarName("ld_preload")).toBe(true);
     expect(isDangerousHostEnvVarName("BASH_FUNC_echo%%")).toBe(true);
+    expect(isDangerousHostEnvVarName("JAVA_TOOL_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("java_tool_options")).toBe(true);
+    expect(isDangerousHostEnvVarName("_JAVA_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("_java_options")).toBe(true);
+    expect(isDangerousHostEnvVarName("JDK_JAVA_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("jdk_java_options")).toBe(true);
+    expect(isDangerousHostEnvVarName("PYTHONBREAKPOINT")).toBe(true);
+    expect(isDangerousHostEnvVarName("pythonbreakpoint")).toBe(true);
+    expect(isDangerousHostEnvVarName("DOTNET_STARTUP_HOOKS")).toBe(true);
+    expect(isDangerousHostEnvVarName("dotnet_startup_hooks")).toBe(true);
+    expect(isDangerousHostEnvVarName("DOTNET_ADDITIONAL_DEPS")).toBe(true);
+    expect(isDangerousHostEnvVarName("dotnet_additional_deps")).toBe(true);
+    expect(isDangerousHostEnvVarName("GLIBC_TUNABLES")).toBe(true);
+    expect(isDangerousHostEnvVarName("glibc_tunables")).toBe(true);
+    expect(isDangerousHostEnvVarName("MAVEN_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("maven_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("SBT_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("sbt_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("GRADLE_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
+    expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
+    expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
   });
 });
 
@@ -33,14 +188,21 @@ describe("sanitizeHostExecEnv", () => {
       baseEnv: {
         PATH: "/usr/bin:/bin",
         BASH_ENV: "/tmp/pwn.sh",
+        BROWSER: "/tmp/pwn-browser",
+        GIT_EDITOR: "/tmp/pwn-editor",
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
+        GIT_TEMPLATE_DIR: "/tmp/git-template",
+        GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
+        AWS_CONFIG_FILE: "/tmp/aws-config",
         LD_PRELOAD: "/tmp/pwn.so",
         OK: "1",
       },
     });
 
     expect(env).toEqual({
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
+      AWS_CONFIG_FILE: "/tmp/aws-config",
       OK: "1",
     });
   });
@@ -57,24 +219,54 @@ describe("sanitizeHostExecEnv", () => {
         HOME: "/tmp/evil-home",
         ZDOTDIR: "/tmp/evil-zdotdir",
         BASH_ENV: "/tmp/pwn.sh",
+        BROWSER: "/tmp/browser",
+        CC: "/tmp/evil-cc",
+        CXX: "/tmp/evil-cxx",
+        CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
+        CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
+        CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
+        GIT_EDITOR: "/tmp/git-editor",
+        GIT_EXEC_PATH: "/tmp/git-exec-path",
+        GIT_SEQUENCE_EDITOR: "/tmp/git-sequence-editor",
         EDITOR: "/tmp/editor",
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+        AWS_CONFIG_FILE: "/tmp/override-aws-config",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
+        CLASSPATH: "/tmp/evil-classpath",
+        GOFLAGS: "-mod=mod",
+        PHPRC: "/tmp/evil-php.ini",
+        XDG_CONFIG_HOME: "/tmp/evil-config",
         SAFE: "ok",
       },
     });
 
     expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.BASH_ENV).toBeUndefined();
+    expect(env.BROWSER).toBeUndefined();
+    expect(env.GIT_EDITOR).toBeUndefined();
+    expect(env.CC).toBeUndefined();
+    expect(env.CXX).toBeUndefined();
+    expect(env.CARGO_BUILD_RUSTC).toBeUndefined();
+    expect(env.CMAKE_C_COMPILER).toBeUndefined();
+    expect(env.CMAKE_CXX_COMPILER).toBeUndefined();
+    expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
+    expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
+    expect(env.AWS_CONFIG_FILE).toBeUndefined();
     expect(env.GIT_SSH_COMMAND).toBeUndefined();
+    expect(env.GIT_EXEC_PATH).toBeUndefined();
     expect(env.EDITOR).toBeUndefined();
     expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
+    expect(env.CLASSPATH).toBeUndefined();
+    expect(env.GOFLAGS).toBeUndefined();
+    expect(env.PHPRC).toBeUndefined();
+    expect(env.XDG_CONFIG_HOME).toBeUndefined();
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/trusted-home");
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
@@ -91,6 +283,7 @@ describe("sanitizeHostExecEnv", () => {
     });
 
     expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.OK).toBe("1");
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
@@ -109,8 +302,45 @@ describe("sanitizeHostExecEnv", () => {
     });
 
     expect(env.GOOD_KEY).toBe("ok");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env[" BAD KEY"]).toBeUndefined();
     expect(env["NOT-PORTABLE"]).toBeUndefined();
+  });
+
+  it("can allow PATH overrides when explicitly opted out of blocking", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        PATH: "/custom/bin",
+      },
+      blockPathOverrides: false,
+    });
+
+    expect(env.PATH).toBe("/custom/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+  });
+
+  it("drops non-string inherited values while preserving non-portable inherited keys", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        GOOD: "1",
+        // oxlint-disable-next-line typescript/no-explicit-any
+        BAD_NUMBER: 1 as any,
+        "NOT-PORTABLE": "x",
+        "ProgramFiles(x86)": "C:\\Program Files (x86)",
+      },
+    });
+
+    expect(env).toEqual({
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      PATH: "/usr/bin:/bin",
+      GOOD: "1",
+      "NOT-PORTABLE": "x",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
   });
 });
 
@@ -122,8 +352,68 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CLASSPATH")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("classpath")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GOFLAGS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("goflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CORECLR_PROFILER_PATH")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("AWS_CONFIG_FILE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("aws_config_file")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
+  });
+});
+
+describe("sanitizeHostExecEnvWithDiagnostics", () => {
+  it("reports blocked and invalid requested overrides", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        PATH: "/tmp/evil",
+        CXX: "/tmp/evil-cxx",
+        CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
+        CLASSPATH: "/tmp/evil-classpath",
+        SAFE_KEY: "ok",
+        "BAD-KEY": "bad",
+      },
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "CLASSPATH",
+      "CMAKE_C_COMPILER",
+      "CXX",
+      "PATH",
+    ]);
+    expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
+    expect(result.env.SAFE_KEY).toBe("ok");
+    expect(result.env.PATH).toBe("/usr/bin:/bin");
+    expect(result.env.CLASSPATH).toBeUndefined();
+    expect(result.env.CXX).toBeUndefined();
+    expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
+  });
+
+  it("allows Windows-style override names while still rejecting invalid keys", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        "ProgramFiles(x86)": "C:\\Program Files (x86)",
+      },
+      overrides: {
+        "ProgramFiles(x86)": "D:\\SDKs",
+        "BAD-KEY": "bad",
+      },
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual([]);
+    expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
+    expect(result.env["ProgramFiles(x86)"]).toBe("D:\\SDKs");
   });
 });
 
@@ -166,6 +456,33 @@ describe("sanitizeSystemRunEnvOverrides", () => {
       LC_ALL: "C",
     });
   });
+
+  it("returns undefined when no shell-wrapper overrides survive", () => {
+    expect(
+      sanitizeSystemRunEnvOverrides({
+        shellWrapper: true,
+        overrides: {
+          TOKEN: "abc",
+        },
+      }),
+    ).toBeUndefined();
+    expect(sanitizeSystemRunEnvOverrides({ shellWrapper: true })).toBeUndefined();
+  });
+
+  it("keeps allowlisted shell-wrapper overrides case-insensitively", () => {
+    expect(
+      sanitizeSystemRunEnvOverrides({
+        shellWrapper: true,
+        overrides: {
+          lang: "C",
+          ColorTerm: "truecolor",
+        },
+      }),
+    ).toEqual({
+      lang: "C",
+      ColorTerm: "truecolor",
+    });
+  });
 });
 
 describe("shell wrapper exploit regression", () => {
@@ -206,21 +523,204 @@ describe("shell wrapper exploit regression", () => {
 });
 
 describe("git env exploit regression", () => {
-  it("blocks GIT_SSH_COMMAND override so git cannot execute helper payloads", async () => {
-    if (process.platform === "win32") {
+  it("blocks inherited GIT_SEQUENCE_EDITOR so git rebase -i cannot execute helper payloads", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
       return;
     }
-    const gitPath = "/usr/bin/git";
-    if (!fs.existsSync(gitPath)) {
+
+    const repoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-sequence-editor-${process.pid}-${Date.now()}-`),
+    );
+    const safeRepoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-sequence-editor-safe-${process.pid}-${Date.now()}-`),
+    );
+    const editorPath = path.join(repoDir, "sequence-editor.sh");
+    const safeEditorPath = path.join(safeRepoDir, "sequence-editor.sh");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-sequence-editor-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      await initGitRepoWithCommits(gitPath, repoDir, 2);
+      await initGitRepoWithCommits(gitPath, safeRepoDir, 2);
+      clearMarker(marker);
+      fs.writeFileSync(editorPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, "utf8");
+      fs.chmodSync(editorPath, 0o755);
+      fs.writeFileSync(safeEditorPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, "utf8");
+      fs.chmodSync(safeEditorPath, 0o755);
+
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_SEQUENCE_EDITOR: editorPath,
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await runGitCommand(gitPath, ["-C", repoDir, "rebase", "-i", "HEAD~1"], {
+        env: unsafeEnv,
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          GIT_SEQUENCE_EDITOR: safeEditorPath,
+          GIT_TERMINAL_PROMPT: "0",
+        },
+      });
+
+      await runGitCommand(gitPath, ["-C", safeRepoDir, "rebase", "-i", "HEAD~1"], {
+        env: safeEnv,
+      });
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(safeRepoDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("blocks inherited GIT_EXEC_PATH so git cannot execute helper payloads", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const helperDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-exec-path-${process.pid}-${Date.now()}-`),
+    );
+    const helperPath = path.join(helperDir, "git-remote-https");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-exec-path-marker-${process.pid}-${Date.now()}`,
+    );
+    try {
+      clearMarker(marker);
+      fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
+      fs.chmodSync(helperPath, 0o755);
+
+      const target = "https://127.0.0.1:1/does-not-matter";
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_EXEC_PATH: helperDir,
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await runGitLsRemote(gitPath, target, unsafeEnv);
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: unsafeEnv,
+      });
+
+      await runGitLsRemote(gitPath, target, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(helperDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("blocks inherited GIT_TEMPLATE_DIR so git clone cannot install hook payloads", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const repoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-template-source-${process.pid}-${Date.now()}-`),
+    );
+    const cloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-template-clone-${process.pid}-${Date.now()}`,
+    );
+    const safeCloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-template-safe-clone-${process.pid}-${Date.now()}`,
+    );
+    const templateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-template-dir-${process.pid}-${Date.now()}-`),
+    );
+    const hooksDir = path.join(templateDir, "hooks");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-template-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      fs.mkdirSync(hooksDir, { recursive: true });
+      clearMarker(marker);
+      fs.writeFileSync(
+        path.join(hooksDir, "post-checkout"),
+        `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`,
+        "utf8",
+      );
+      fs.chmodSync(path.join(hooksDir, "post-checkout"), 0o755);
+
+      await runGitCommand(gitPath, ["init", repoDir]);
+      await runGitCommand(
+        gitPath,
+        [
+          "-C",
+          repoDir,
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        {
+          env: {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+          },
+        },
+      );
+
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_TEMPLATE_DIR: templateDir,
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await runGitClone(gitPath, repoDir, cloneDir, unsafeEnv);
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: unsafeEnv,
+      });
+
+      await runGitClone(gitPath, repoDir, safeCloneDir, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(cloneDir, { recursive: true, force: true });
+      fs.rmSync(safeCloneDir, { recursive: true, force: true });
+      fs.rmSync(templateDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("blocks GIT_SSH_COMMAND override so git cannot execute helper payloads", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
       return;
     }
 
     const marker = path.join(os.tmpdir(), `openclaw-git-ssh-command-${process.pid}-${Date.now()}`);
-    try {
-      fs.unlinkSync(marker);
-    } catch {
-      // no-op
-    }
+    clearMarker(marker);
 
     const target = "ssh://127.0.0.1:1/does-not-matter";
     const exploitValue = `touch ${JSON.stringify(marker)}; false`;
@@ -234,14 +734,10 @@ describe("git env exploit regression", () => {
       GIT_SSH_COMMAND: exploitValue,
     };
 
-    await new Promise<void>((resolve) => {
-      const child = spawn(gitPath, ["ls-remote", target], { env: unsafeEnv, stdio: "ignore" });
-      child.once("error", () => resolve());
-      child.once("close", () => resolve());
-    });
+    await runGitLsRemote(gitPath, target, unsafeEnv);
 
     expect(fs.existsSync(marker)).toBe(true);
-    fs.unlinkSync(marker);
+    clearMarker(marker);
 
     const safeEnv = sanitizeHostExecEnv({
       baseEnv,
@@ -250,12 +746,65 @@ describe("git env exploit regression", () => {
       },
     });
 
-    await new Promise<void>((resolve) => {
-      const child = spawn(gitPath, ["ls-remote", target], { env: safeEnv, stdio: "ignore" });
-      child.once("error", () => resolve());
-      child.once("close", () => resolve());
-    });
+    await runGitLsRemote(gitPath, target, safeEnv);
 
     expect(fs.existsSync(marker)).toBe(false);
+  });
+});
+
+describe("compiler override exploit regression", () => {
+  it("blocks CC overrides so make cannot execute a substituted compiler", async () => {
+    const makePath = getSystemMakePath();
+    if (!makePath) {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-compiler-override-${process.pid}-${Date.now()}-`),
+    );
+    const exploitPath = path.join(tempDir, "evil-cc");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-compiler-override-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      // `CC` is a representative proof for the whole class because all compiler override keys
+      // flow through the same host env sanitization boundary; unit tests cover the sibling keys.
+      clearMarker(marker);
+      fs.writeFileSync(
+        path.join(tempDir, "Makefile"),
+        "all:\n\t@$(CC) --version >/dev/null 2>&1 || true\n",
+        "utf8",
+      );
+      fs.writeFileSync(exploitPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
+      fs.chmodSync(exploitPath, 0o755);
+
+      const baseEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+      };
+
+      await runMakeCommand(makePath, tempDir, {
+        ...baseEnv,
+        CC: exploitPath,
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv,
+        overrides: {
+          CC: exploitPath,
+        },
+      });
+
+      await runMakeCommand(makePath, tempDir, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
   });
 });

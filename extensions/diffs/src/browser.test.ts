@@ -1,12 +1,20 @@
 import fs from "node:fs/promises";
-import os from "node:os";
+import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/diffs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import type { OpenClawConfig } from "../api.js";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
+import plugin from "../index.js";
+import { createTempDiffRoot } from "./test-helpers.js";
 
 const { launchMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
 }));
+
+let PlaywrightDiffScreenshotter: typeof import("./browser.js").PlaywrightDiffScreenshotter;
+let resetSharedBrowserStateForTests: typeof import("./browser.js").resetSharedBrowserStateForTests;
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -17,21 +25,26 @@ vi.mock("playwright-core", () => ({
 describe("PlaywrightDiffScreenshotter", () => {
   let rootDir: string;
   let outputPath: string;
+  let cleanupRootDir: () => Promise<void>;
+
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ PlaywrightDiffScreenshotter, resetSharedBrowserStateForTests } =
+      await import("./browser.js"));
+  });
 
   beforeEach(async () => {
     vi.useFakeTimers();
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-diffs-browser-"));
+    ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
     launchMock.mockReset();
-    const browserModule = await import("./browser.js");
-    await browserModule.resetSharedBrowserStateForTests();
+    await resetSharedBrowserStateForTests();
   });
 
   afterEach(async () => {
-    const browserModule = await import("./browser.js");
-    await browserModule.resetSharedBrowserStateForTests();
+    await resetSharedBrowserStateForTests();
     vi.useRealTimers();
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await cleanupRootDir();
   });
 
   it("reuses the same browser across renders and closes it after the idle window", async () => {
@@ -130,8 +143,6 @@ describe("PlaywrightDiffScreenshotter", () => {
       boundingBox: { x: 40, y: 40, width: 960, height: 60_000 },
     });
     launchMock.mockResolvedValue(browser);
-    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
-
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
       browserIdleMs: 1_000,
@@ -181,12 +192,164 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 });
 
+describe("diffs plugin registration", () => {
+  it("registers the tool, http route, and system-prompt guidance hook", async () => {
+    const registerTool = vi.fn();
+    const registerHttpRoute = vi.fn();
+    const on = vi.fn();
+
+    plugin.register?.(
+      createTestPluginApi({
+        id: "diffs",
+        name: "Diffs",
+        description: "Diffs",
+        source: "test",
+        config: {},
+        runtime: {} as never,
+        registerTool,
+        registerHttpRoute,
+        on,
+      }),
+    );
+
+    expect(registerTool).toHaveBeenCalledTimes(1);
+    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(registerHttpRoute.mock.calls[0]?.[0]).toMatchObject({
+      path: "/plugins/diffs",
+      auth: "plugin",
+      match: "prefix",
+    });
+    expect(on).toHaveBeenCalledTimes(1);
+    expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");
+    const beforePromptBuild = on.mock.calls[0]?.[1];
+    const result = await beforePromptBuild?.({}, {});
+    expect(result).toMatchObject({
+      prependSystemContext: expect.stringContaining("prefer the `diffs` tool"),
+    });
+    expect(result?.prependContext).toBeUndefined();
+  });
+
+  it("applies plugin-config defaults through registered tool and viewer handler", async () => {
+    type RegisteredTool = {
+      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    };
+    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
+
+    let registeredToolFactory:
+      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
+      | undefined;
+    let registeredHttpRouteHandler: RegisteredHttpRouteParams["handler"] | undefined;
+
+    const api = createTestPluginApi({
+      id: "diffs",
+      name: "Diffs",
+      description: "Diffs",
+      source: "test",
+      config: {
+        gateway: {
+          port: 18789,
+          bind: "loopback",
+        },
+      },
+      pluginConfig: {
+        defaults: {
+          mode: "view",
+          theme: "light",
+          background: false,
+          layout: "split",
+          showLineNumbers: false,
+          diffIndicators: "classic",
+          lineSpacing: 2,
+        },
+        security: {
+          allowRemoteViewer: true,
+        },
+      },
+      runtime: {} as never,
+      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
+        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
+      },
+      registerHttpRoute(params: RegisteredHttpRouteParams) {
+        registeredHttpRouteHandler = params.handler;
+      },
+    });
+
+    plugin.register?.(api as unknown as OpenClawPluginApi);
+
+    const registeredTool = registeredToolFactory?.({
+      agentId: "main",
+      sessionId: "session-123",
+      messageChannel: "discord",
+      agentAccountId: "default",
+    }) as RegisteredTool | undefined;
+    const result = await registeredTool?.execute?.("tool-1", {
+      before: "one\n",
+      after: "two\n",
+    });
+    const viewerPath = String(
+      (result as { details?: Record<string, unknown> } | undefined)?.details?.viewerPath,
+    );
+    const res = createMockServerResponse();
+    const handled = await registeredHttpRouteHandler?.(
+      localReq({
+        method: "GET",
+        url: viewerPath,
+      }),
+      res,
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(String(res.body)).toContain('body data-theme="light"');
+    expect(String(res.body)).toContain('"backgroundEnabled":false');
+    expect(String(res.body)).toContain('"diffStyle":"split"');
+    expect(String(res.body)).toContain('"disableLineNumbers":true');
+    expect(String(res.body)).toContain('"diffIndicators":"classic"');
+    expect(String(res.body)).toContain("--diffs-line-height: 30px;");
+    expect((result as { details?: Record<string, unknown> } | undefined)?.details?.context).toEqual(
+      {
+        agentId: "main",
+        sessionId: "session-123",
+        messageChannel: "discord",
+        agentAccountId: "default",
+      },
+    );
+
+    const proxiedRes = createMockServerResponse();
+    const proxiedHandled = await registeredHttpRouteHandler?.(
+      localReq({
+        method: "GET",
+        url: viewerPath,
+        headers: {
+          "x-forwarded-for": "203.0.113.10",
+        },
+      }),
+      proxiedRes,
+    );
+
+    expect(proxiedHandled).toBe(true);
+    expect(proxiedRes.statusCode).toBe(200);
+  });
+});
+
 function createConfig(): OpenClawConfig {
   return {
     browser: {
       executablePath: process.execPath,
     },
   } as OpenClawConfig;
+}
+
+function localReq(input: {
+  method: string;
+  url: string;
+  headers?: IncomingMessage["headers"];
+}): IncomingMessage {
+  return {
+    ...input,
+    headers: input.headers ?? {},
+    socket: { remoteAddress: "127.0.0.1" },
+  } as unknown as IncomingMessage;
 }
 
 async function createScreenshotterHarness(options?: {
@@ -199,7 +362,6 @@ async function createScreenshotterHarness(options?: {
   }> = [];
   const browser = createMockBrowser(pages, options);
   launchMock.mockResolvedValue(browser);
-  const { PlaywrightDiffScreenshotter } = await import("./browser.js");
   const screenshotter = new PlaywrightDiffScreenshotter({
     config: createConfig(),
     browserIdleMs: 1_000,

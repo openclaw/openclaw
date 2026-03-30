@@ -1,20 +1,108 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "./runtime.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+
+type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+
+const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
+
+const mockedModuleIds = [
+  "../plugins/web-search-providers.js",
+  "../plugins/web-search-providers.runtime.js",
+] as const;
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function createTestProvider(params: {
+  id: WebProviderUnderTest;
+  pluginId: string;
+  order: number;
+}): PluginWebSearchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
+    const providerConfig =
+      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
+        ? (searchConfig[params.id] as { apiKey?: unknown })
+        : undefined;
+    return providerConfig?.apiKey ?? searchConfig?.apiKey;
+  };
+  return {
+    pluginId: params.pluginId,
+    id: params.id,
+    label: params.id,
+    hint: `${params.id} test provider`,
+    envVars: [`${params.id.toUpperCase()}_API_KEY`],
+    placeholder: `${params.id}-...`,
+    signupUrl: `https://example.com/${params.id}`,
+    autoDetectOrder: params.order,
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    getCredentialValue: readSearchConfigKey,
+    setCredentialValue: (searchConfigTarget, value) => {
+      const providerConfig =
+        params.id === "brave" || params.id === "firecrawl"
+          ? searchConfigTarget
+          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
+      providerConfig.apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) =>
+      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
+        ?.webSearch?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
+      const entries = (plugins.entries ??= {});
+      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
+      const config = (entry.config ??= {});
+      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
+      webSearch.apiKey = value;
+    },
+    resolveRuntimeMetadata:
+      params.id === "perplexity"
+        ? () => ({
+            perplexityTransport: "search_api" as const,
+          })
+        : undefined,
+    createTool: () => null,
+  };
+}
+
+function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  return [
+    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
+    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
+    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
+    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
+  ];
+}
+
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
+
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
+let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
+let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;
+let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
 function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
   return {
@@ -36,8 +124,37 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 }
 
 describe("secrets runtime snapshot", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
+    ({
+      activateSecretsRuntimeSnapshot,
+      clearSecretsRuntimeSnapshot,
+      getActiveRuntimeWebToolsMetadata,
+      prepareSecretsRuntimeSnapshot,
+    } = await import("./runtime.js"));
+  });
+
+  beforeEach(() => {
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
+    resolvePluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
+  });
+
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReset();
+  });
+
+  afterAll(() => {
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    vi.resetModules();
   });
 
   it("resolves env refs for config and auth profiles", async () => {
@@ -194,9 +311,8 @@ describe("secrets runtime snapshot", () => {
       id: "SLACK_WORK_APP_TOKEN_REF",
     });
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.warnings).toHaveLength(4);
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.slack.accounts.work.appToken",
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining(["channels.slack.accounts.work.appToken"]),
     );
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
@@ -214,6 +330,319 @@ describe("secrets runtime snapshot", () => {
     expect(
       (snapshot.authStores[0].store.profiles["openai:inline"] as Record<string, unknown>).keyRef,
     ).toEqual({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
+  });
+
+  it("resolves top-level Matrix accessToken refs even when named accounts exist", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          matrix: {
+            accessToken: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_ACCESS_TOKEN",
+            },
+            accounts: {
+              ops: {
+                homeserver: "https://matrix.example.org",
+                accessToken: "ops-token",
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        MATRIX_ACCESS_TOKEN: "default-matrix-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.matrix?.accessToken).toBe("default-matrix-token");
+  });
+
+  it("ignores Matrix password refs that are shadowed by scoped env access tokens", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          matrix: {
+            accounts: {
+              ops: {
+                password: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_OPS_PASSWORD",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.matrix?.accounts?.ops?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_OPS_PASSWORD",
+    });
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.accounts.ops.password",
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "channels.matrix.accounts.default.accessToken config",
+      config: {
+        channels: {
+          matrix: {
+            password: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_PASSWORD",
+            },
+            accounts: {
+              default: {
+                accessToken: "default-token",
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    },
+    {
+      name: "channels.matrix.accounts.default.accessToken SecretRef config",
+      config: {
+        channels: {
+          matrix: {
+            password: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_PASSWORD",
+            },
+            accounts: {
+              default: {
+                accessToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_DEFAULT_ACCESS_TOKEN_REF",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {
+        MATRIX_DEFAULT_ACCESS_TOKEN_REF: "default-token",
+      },
+    },
+    {
+      name: "MATRIX_DEFAULT_ACCESS_TOKEN env auth",
+      config: {
+        channels: {
+          matrix: {
+            password: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_PASSWORD",
+            },
+          },
+        },
+      },
+      env: {
+        MATRIX_DEFAULT_ACCESS_TOKEN: "default-token",
+      },
+    },
+  ])("ignores top-level Matrix password refs shadowed by $name", async ({ config, env }) => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig(config),
+      env,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.matrix?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_PASSWORD",
+    });
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.password",
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "top-level Matrix accessToken config",
+      config: {
+        channels: {
+          matrix: {
+            accessToken: "default-token",
+            accounts: {
+              default: {
+                password: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_DEFAULT_PASSWORD",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    },
+    {
+      name: "top-level Matrix accessToken SecretRef config",
+      config: {
+        channels: {
+          matrix: {
+            accessToken: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_ACCESS_TOKEN_REF",
+            },
+            accounts: {
+              default: {
+                password: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_DEFAULT_PASSWORD",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {
+        MATRIX_ACCESS_TOKEN_REF: "default-token",
+      },
+    },
+    {
+      name: "MATRIX_ACCESS_TOKEN env auth",
+      config: {
+        channels: {
+          matrix: {
+            accounts: {
+              default: {
+                password: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_DEFAULT_PASSWORD",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {
+        MATRIX_ACCESS_TOKEN: "default-token",
+      },
+    },
+  ])("ignores default-account Matrix password refs shadowed by $name", async ({ config, env }) => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig(config),
+      env,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.matrix?.accounts?.default?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_DEFAULT_PASSWORD",
+    });
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.accounts.default.password",
+      }),
+    );
+  });
+
+  it("resolves sandbox ssh secret refs for active ssh backends", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "ssh",
+              ssh: {
+                target: "peter@example.com:22",
+                identityData: { source: "env", provider: "default", id: "SSH_IDENTITY_DATA" },
+                certificateData: {
+                  source: "env",
+                  provider: "default",
+                  id: "SSH_CERTIFICATE_DATA",
+                },
+                knownHostsData: {
+                  source: "env",
+                  provider: "default",
+                  id: "SSH_KNOWN_HOSTS_DATA",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        SSH_IDENTITY_DATA: "PRIVATE KEY",
+        SSH_CERTIFICATE_DATA: "SSH CERT",
+        SSH_KNOWN_HOSTS_DATA: "example.com ssh-ed25519 AAAATEST",
+      },
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh).toMatchObject({
+      identityData: "PRIVATE KEY",
+      certificateData: "SSH CERT",
+      knownHostsData: "example.com ssh-ed25519 AAAATEST",
+    });
+  });
+
+  it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "docker",
+              ssh: {
+                identityData: { source: "env", provider: "default", id: "SSH_IDENTITY_DATA" },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual({
+      source: "env",
+      provider: "default",
+      id: "SSH_IDENTITY_DATA",
+    });
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "agents.defaults.sandbox.ssh.identityData",
+        }),
+      ]),
+    );
   });
 
   it("normalizes inline SecretRef object on token to tokenRef", async () => {
@@ -332,13 +761,13 @@ describe("secrets runtime snapshot", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.grok.apiKey",
+          path: "plugins.entries.xai.config.webSearch.apiKey",
         }),
       ]),
     );
   });
 
-  it("resolves provider-specific refs in web search auto mode", async () => {
+  it("keeps non-selected provider refs inactive in web search auto mode", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         tools: {
@@ -362,9 +791,19 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.web.search.gemini.apiKey",
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "WEB_SEARCH_GEMINI_API_KEY",
+    });
+    expect(snapshot.webTools.search.selectedProvider).toBe("brave");
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.google.config.webSearch.apiKey",
+        }),
+      ]),
     );
   });
 
@@ -393,8 +832,73 @@ describe("secrets runtime snapshot", () => {
 
     expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.web.search.gemini.apiKey",
+      "plugins.entries.google.config.webSearch.apiKey",
     );
+  });
+
+  it("fails fast at startup when selected web search provider ref is unresolved", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+                provider: "gemini",
+                gemini: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow("[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]");
+  });
+
+  it("exposes active runtime web tool metadata as a defensive clone", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    const first = getActiveRuntimeWebToolsMetadata();
+    expect(first?.search.providerConfigured).toBe("gemini");
+    expect(first?.search.selectedProvider).toBe("gemini");
+    expect(first?.search.selectedProviderKeySource).toBe("secretRef");
+    if (!first) {
+      throw new Error("missing runtime web tools metadata");
+    }
+    first.search.providerConfigured = "brave";
+    first.search.selectedProvider = "brave";
+
+    const second = getActiveRuntimeWebToolsMetadata();
+    expect(second?.search.providerConfigured).toBe("gemini");
+    expect(second?.search.selectedProvider).toBe("gemini");
   });
 
   it("resolves file refs via configured file provider", async () => {
@@ -492,41 +996,6 @@ describe("secrets runtime snapshot", () => {
     }
   });
 
-  it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
-    const prepared = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      }),
-      env: { OPENAI_API_KEY: "sk-runtime" }, // pragma: allowlist secret
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: OPENAI_ENV_KEY_REF,
-          },
-        }),
-    });
-
-    activateSecretsRuntimeSnapshot(prepared);
-
-    expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
-    const store = ensureAuthProfileStore("/tmp/openclaw-agent-main");
-    expect(store.profiles["openai:default"]).toMatchObject({
-      type: "api_key",
-      key: "sk-runtime",
-    });
-  });
-
   it("skips inactive-surface refs and emits diagnostics", async () => {
     const config = asConfig({
       agents: {
@@ -593,15 +1062,15 @@ describe("secrets runtime snapshot", () => {
       snapshot.warnings.filter(
         (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
       ),
-    ).toHaveLength(6);
+    ).toHaveLength(10);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
         "gateway.auth.password",
         "channels.telegram.botToken",
         "channels.telegram.accounts.disabled.botToken",
-        "tools.web.search.apiKey",
-        "tools.web.search.gemini.apiKey",
+        "plugins.entries.brave.config.webSearch.apiKey",
+        "plugins.entries.google.config.webSearch.apiKey",
       ]),
     );
   });
@@ -726,6 +1195,29 @@ describe("secrets runtime snapshot", () => {
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       }),
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/i);
+  });
+
+  it("fails when an active exec ref id contains traversal segments", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          talk: {
+            apiKey: { source: "exec", provider: "vault", id: "a/../b" },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                command: process.execPath,
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow(/must not include "\." or "\.\." path segments/i);
   });
 
   it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
@@ -1699,20 +2191,22 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.channels?.discord?.voice?.tts?.openai?.apiKey).toEqual({
+    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_DISCORD_VOICE_TTS_OPENAI",
     });
-    expect(snapshot.config.channels?.discord?.accounts?.work?.voice?.tts?.openai?.apiKey).toEqual({
+    expect(
+      snapshot.config.channels?.discord?.accounts?.work?.voice?.tts?.providers?.openai?.apiKey,
+    ).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_DISCORD_WORK_VOICE_TTS_OPENAI",
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
-        "channels.discord.voice.tts.openai.apiKey",
-        "channels.discord.accounts.work.voice.tts.openai.apiKey",
+        "channels.discord.voice.tts.providers.openai.apiKey",
+        "channels.discord.accounts.work.voice.tts.providers.openai.apiKey",
       ]),
     );
   });
@@ -1724,8 +2218,10 @@ describe("secrets runtime snapshot", () => {
           discord: {
             voice: {
               tts: {
-                openai: {
-                  apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OPENAI" },
+                providers: {
+                  openai: {
+                    apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OPENAI" },
+                  },
                 },
               },
             },
@@ -1740,11 +2236,13 @@ describe("secrets runtime snapshot", () => {
                 enabled: true,
                 voice: {
                   tts: {
-                    openai: {
-                      apiKey: {
-                        source: "env",
-                        provider: "default",
-                        id: "DISCORD_ENABLED_OVERRIDE_TTS_OPENAI",
+                    providers: {
+                      openai: {
+                        apiKey: {
+                          source: "env",
+                          provider: "default",
+                          id: "DISCORD_ENABLED_OVERRIDE_TTS_OPENAI",
+                        },
                       },
                     },
                   },
@@ -1754,11 +2252,13 @@ describe("secrets runtime snapshot", () => {
                 enabled: false,
                 voice: {
                   tts: {
-                    openai: {
-                      apiKey: {
-                        source: "env",
-                        provider: "default",
-                        id: "DISCORD_DISABLED_OVERRIDE_TTS_OPENAI",
+                    providers: {
+                      openai: {
+                        apiKey: {
+                          source: "env",
+                          provider: "default",
+                          id: "DISCORD_DISABLED_OVERRIDE_TTS_OPENAI",
+                        },
                       },
                     },
                   },
@@ -1784,13 +2284,17 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.channels?.discord?.voice?.tts?.openai?.apiKey).toBe("base-tts-openai");
+    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toBe(
+      "base-tts-openai",
+    );
     expect(snapshot.config.channels?.discord?.pluralkit?.token).toBe("base-pk-token");
     expect(
-      snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.openai?.apiKey,
+      snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.providers?.openai
+        ?.apiKey,
     ).toBe("enabled-override-tts-openai");
     expect(
-      snapshot.config.channels?.discord?.accounts?.disabledOverride?.voice?.tts?.openai?.apiKey,
+      snapshot.config.channels?.discord?.accounts?.disabledOverride?.voice?.tts?.providers?.openai
+        ?.apiKey,
     ).toEqual({
       source: "env",
       provider: "default",
@@ -1805,7 +2309,7 @@ describe("secrets runtime snapshot", () => {
     );
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
-        "channels.discord.accounts.disabledOverride.voice.tts.openai.apiKey",
+        "channels.discord.accounts.disabledOverride.voice.tts.providers.openai.apiKey",
         "channels.discord.accounts.disabledOverride.pluralkit.token",
       ]),
     );
@@ -1818,11 +2322,13 @@ describe("secrets runtime snapshot", () => {
           discord: {
             voice: {
               tts: {
-                openai: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "DISCORD_UNUSED_BASE_TTS_OPENAI",
+                providers: {
+                  openai: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "DISCORD_UNUSED_BASE_TTS_OPENAI",
+                    },
                   },
                 },
               },
@@ -1832,11 +2338,13 @@ describe("secrets runtime snapshot", () => {
                 enabled: true,
                 voice: {
                   tts: {
-                    openai: {
-                      apiKey: {
-                        source: "env",
-                        provider: "default",
-                        id: "DISCORD_ENABLED_ONLY_TTS_OPENAI",
+                    providers: {
+                      openai: {
+                        apiKey: {
+                          source: "env",
+                          provider: "default",
+                          id: "DISCORD_ENABLED_ONLY_TTS_OPENAI",
+                        },
                       },
                     },
                   },
@@ -1857,15 +2365,16 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(
-      snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.openai?.apiKey,
+      snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.providers?.openai
+        ?.apiKey,
     ).toBe("enabled-only-tts-openai");
-    expect(snapshot.config.channels?.discord?.voice?.tts?.openai?.apiKey).toEqual({
+    expect(snapshot.config.channels?.discord?.voice?.tts?.providers?.openai?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "DISCORD_UNUSED_BASE_TTS_OPENAI",
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.discord.voice.tts.openai.apiKey",
+      "channels.discord.voice.tts.providers.openai.apiKey",
     );
   });
 
@@ -1877,8 +2386,10 @@ describe("secrets runtime snapshot", () => {
             discord: {
               voice: {
                 tts: {
-                  openai: {
-                    apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OK" },
+                  providers: {
+                    openai: {
+                      apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OK" },
+                    },
                   },
                 },
               },
@@ -1887,11 +2398,13 @@ describe("secrets runtime snapshot", () => {
                   enabled: true,
                   voice: {
                     tts: {
-                      openai: {
-                        apiKey: {
-                          source: "env",
-                          provider: "default",
-                          id: "DISCORD_ENABLED_OVERRIDE_TTS_MISSING",
+                      providers: {
+                        openai: {
+                          apiKey: {
+                            source: "env",
+                            provider: "default",
+                            id: "DISCORD_ENABLED_OVERRIDE_TTS_MISSING",
+                          },
                         },
                       },
                     },
@@ -1910,6 +2423,165 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow(
       'Environment variable "DISCORD_ENABLED_OVERRIDE_TTS_MISSING" is missing or empty.',
     );
+  });
+
+  it("resolves SecretRef objects for active acpx MCP env vars", async () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            config: {
+              mcpServers: {
+                github: {
+                  command: "npx",
+                  env: {
+                    GITHUB_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "GH_TOKEN_SECRET",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        GH_TOKEN_SECRET: "ghp-object-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const sourceEntries = snapshot.sourceConfig.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const sourceMcpServers = sourceEntries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    const entries = snapshot.config.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const mcpServers = entries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+
+    expect(mcpServers?.github?.env?.GITHUB_TOKEN).toBe("ghp-object-token");
+    expect(sourceMcpServers?.github?.env?.GITHUB_TOKEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GH_TOKEN_SECRET",
+    });
+  });
+
+  it("resolves inline env-template refs for active acpx MCP env vars", async () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            config: {
+              mcpServers: {
+                github: {
+                  command: "npx",
+                  env: {
+                    GITHUB_TOKEN: "${GH_TOKEN_SECRET}",
+                    SECOND_TOKEN: "${SECOND_SECRET}",
+                    LITERAL: "literal-value",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        GH_TOKEN_SECRET: "ghp-inline-token",
+        SECOND_SECRET: "ghp-second-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const entries = snapshot.config.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const mcpServers = entries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    expect(mcpServers?.github?.env?.GITHUB_TOKEN).toBe("ghp-inline-token");
+    expect(mcpServers?.github?.env?.SECOND_TOKEN).toBe("ghp-second-token");
+    expect(mcpServers?.github?.env?.LITERAL).toBe("literal-value");
+  });
+
+  it("treats bundled acpx MCP env refs as inactive until the plugin is enabled", async () => {
+    const config = asConfig({
+      plugins: {
+        entries: {
+          acpx: {
+            config: {
+              mcpServers: {
+                github: {
+                  command: "npx",
+                  env: {
+                    GITHUB_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "GH_TOKEN_SECRET",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      snapshot.warnings.some(
+        (warning) =>
+          warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" &&
+          warning.path === "plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN",
+      ),
+    ).toBe(true);
+
+    const entries = snapshot.config.plugins?.entries as Record<
+      string,
+      { config?: Record<string, unknown> }
+    >;
+    const mcpServers = entries?.acpx?.config?.mcpServers as Record<
+      string,
+      { env?: Record<string, unknown> }
+    >;
+    expect(mcpServers?.github?.env?.GITHUB_TOKEN).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GH_TOKEN_SECRET",
+    });
   });
 
   it("does not write inherited auth stores during runtime secret activation", async () => {

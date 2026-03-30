@@ -2,9 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
-import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 const callGatewayMock = vi.fn();
 
@@ -16,6 +14,9 @@ let storeTemplatePath = "";
 let configOverride: Record<string, unknown> = {
   session: createPerSenderSessionConfig(),
 };
+let addSubagentRunForTests: typeof import("./subagent-registry.js").addSubagentRunForTests;
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let createSessionsSpawnTool: typeof import("./tools/sessions-spawn-tool.js").createSessionsSpawnTool;
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -60,8 +61,26 @@ function seedDepthTwoAncestryStore(params?: { sessionIds?: boolean }) {
   return { depth1, callerKey };
 }
 
+async function loadFreshSessionsSpawnModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => configOverride,
+    };
+  });
+  ({ addSubagentRunForTests, resetSubagentRegistryForTests } =
+    await import("./subagent-registry.js"));
+  ({ createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js"));
+}
+
 describe("sessions_spawn depth + child limits", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshSessionsSpawnModulesForTest();
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
     storeTemplatePath = path.join(
@@ -85,7 +104,10 @@ describe("sessions_spawn depth + child limits", () => {
   });
 
   it("rejects spawning when caller depth reaches maxSpawnDepth", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+      workspaceDir: "/parent/workspace",
+    });
     const result = await tool.execute("call-depth-reject", { task: "hello" });
 
     expect(result.details).toMatchObject({
@@ -109,13 +131,20 @@ describe("sessions_spawn depth + child limits", () => {
     const calls = callGatewayMock.mock.calls.map(
       (call) => call[0] as { method?: string; params?: Record<string, unknown> },
     );
-    const agentCall = calls.find((entry) => entry.method === "agent");
-    expect(agentCall?.params?.spawnedBy).toBe("agent:main:subagent:parent");
+    const spawnedByPatch = calls.find(
+      (entry) =>
+        entry.method === "sessions.patch" &&
+        entry.params?.spawnedBy === "agent:main:subagent:parent",
+    );
+    expect(spawnedByPatch?.params?.key).toMatch(/^agent:main:subagent:/);
+    expect(typeof spawnedByPatch?.params?.spawnedWorkspaceDir).toBe("string");
 
     const spawnDepthPatch = calls.find(
       (entry) => entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,
     );
     expect(spawnDepthPatch?.params?.key).toMatch(/^agent:main:subagent:/);
+    expect(spawnDepthPatch?.params?.subagentRole).toBe("leaf");
+    expect(spawnDepthPatch?.params?.subagentControlScope).toBe("none");
   });
 
   it("rejects depth-2 callers when maxSpawnDepth is 2 (using stored spawnDepth on flat keys)", async () => {
@@ -195,6 +224,62 @@ describe("sessions_spawn depth + child limits", () => {
     expect(result.details).toMatchObject({
       status: "forbidden",
       error: "sessions_spawn has reached max active children for this session (1/1)",
+    });
+  });
+
+  it("does not double-count restarted child sessions toward maxChildrenPerAgent", async () => {
+    configOverride = {
+      session: createPerSenderSessionConfig({ store: storeTemplatePath }),
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    };
+
+    const childSessionKey = "agent:main:subagent:restarted-child";
+    addSubagentRunForTests({
+      runId: "existing-old-run",
+      childSessionKey,
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "agent:main:subagent:parent",
+      task: "old orchestration run",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+      endedAt: Date.now() - 20_000,
+      cleanupCompletedAt: undefined,
+    });
+    addSubagentRunForTests({
+      runId: "existing-current-run",
+      childSessionKey,
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "agent:main:subagent:parent",
+      task: "current orchestration run",
+      cleanup: "keep",
+      createdAt: Date.now() - 10_000,
+      startedAt: Date.now() - 10_000,
+    });
+    addSubagentRunForTests({
+      runId: "existing-descendant-run",
+      childSessionKey: `${childSessionKey}:subagent:leaf`,
+      requesterSessionKey: childSessionKey,
+      requesterDisplayKey: childSessionKey,
+      task: "descendant still running",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 5_000,
+    });
+
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const result = await tool.execute("call-max-children-dedupe", { task: "hello" });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-depth",
     });
   });
 

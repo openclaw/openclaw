@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import type { ResolvedMattermostAccount } from "./accounts.js";
+import type { MattermostChannel } from "./client.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import {
   evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
   resolveAllowlistMatchSimple,
   resolveControlCommandGate,
   resolveEffectiveAllowFromLists,
-} from "openclaw/plugin-sdk/mattermost";
-import type { ResolvedMattermostAccount } from "./accounts.js";
-import type { MattermostChannel } from "./client.js";
+} from "./runtime-api.js";
 
 export function normalizeMattermostAllowEntry(entry: string): string {
   const trimmed = entry.trim();

@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { ChatSendSessionKeyString, NonEmptyString } from "./primitives.js";
+import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 
 export const LogsTailParamsSchema = Type.Object(
   {
@@ -37,8 +37,14 @@ export const ChatSendParamsSchema = Type.Object(
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
+    originatingChannel: Type.Optional(Type.String()),
+    originatingTo: Type.Optional(Type.String()),
+    originatingAccountId: Type.Optional(Type.String()),
+    originatingThreadId: Type.Optional(Type.String()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    systemInputProvenance: Type.Optional(InputProvenanceSchema),
+    systemProvenanceReceipt: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

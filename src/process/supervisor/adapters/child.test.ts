@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -27,7 +27,10 @@ function createStubChild(pid = 1234) {
   Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   const killMock = vi.fn(() => true);
   child.kill = killMock as ChildProcess["kill"];
-  return { child, killMock };
+  const emitClose = (code: number | null, signal: NodeJS.Signals | null = null) => {
+    child.emit("close", code, signal);
+  };
+  return { child, killMock, emitClose };
 }
 
 async function createAdapterHarness(params?: {
@@ -51,14 +54,13 @@ async function createAdapterHarness(params?: {
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ createChildAdapter } = await import("./child.js"));
-  });
-
-  beforeEach(() => {
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
     delete process.env.OPENCLAW_SERVICE_MARKER;
+    vi.useRealTimers();
   });
 
   afterAll(() => {
@@ -67,6 +69,10 @@ describe("createChildAdapter", () => {
     } else {
       process.env.OPENCLAW_SERVICE_MARKER = originalServiceMarker;
     }
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {
@@ -89,7 +95,7 @@ describe("createChildAdapter", () => {
     adapter.kill();
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
-    expect(killMock).not.toHaveBeenCalled();
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("uses direct child.kill for non-SIGKILL signals", async () => {
@@ -99,6 +105,52 @@ describe("createChildAdapter", () => {
 
     expect(killProcessTreeMock).not.toHaveBeenCalled();
     expect(killMock).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("wait does not settle immediately on SIGKILL", async () => {
+    vi.useFakeTimers();
+    const { adapter } = await createAdapterHarness({ pid: 4567 });
+
+    const waitPromise = adapter.wait();
+    const settled = vi.fn();
+    void waitPromise.then(() => settled());
+
+    adapter.kill();
+
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  });
+
+  it("prefers real child close over the SIGKILL fallback settle", async () => {
+    vi.useFakeTimers();
+    const { adapter, emitClose, killMock } = await (async () => {
+      const stub = createStubChild(2468);
+      spawnWithFallbackMock.mockResolvedValue({
+        child: stub.child,
+        usedFallback: false,
+      });
+      const adapter = await createChildAdapter({
+        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        stdinMode: "pipe-open",
+      });
+      return { ...stub, adapter };
+    })();
+
+    const waitPromise = adapter.wait();
+    adapter.kill();
+    emitClose(0, "SIGKILL");
+
+    await expect(waitPromise).resolves.toEqual({ code: 0, signal: "SIGKILL" });
+
+    await vi.advanceTimersByTimeAsync(4_001);
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: "SIGKILL" });
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("disables detached mode in service-managed runtime", async () => {

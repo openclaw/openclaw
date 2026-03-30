@@ -61,7 +61,7 @@ export function registerNodesLocationCommands(nodes: Command) {
               : {};
 
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(payload, null, 2));
+            defaultRuntime.writeJson(payload);
             return;
           }
 
@@ -73,7 +73,7 @@ export function registerNodesLocationCommands(nodes: Command) {
             defaultRuntime.log(`${lat},${lon}${accText}`);
             return;
           }
-          defaultRuntime.log(JSON.stringify(payload));
+          defaultRuntime.writeJson(payload, 0);
         });
       }),
     { timeoutMs: 30_000 },

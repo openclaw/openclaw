@@ -1,3 +1,5 @@
+import { parseBuffer, type IFileInfo } from "music-metadata";
+import { getMatrixRuntime } from "../../runtime.js";
 import type {
   DimensionalFileInfo,
   EncryptedFile,
@@ -5,8 +7,7 @@ import type {
   MatrixClient,
   TimedFileInfo,
   VideoFileInfo,
-} from "@vector-im/matrix-bot-sdk";
-import { getMatrixRuntime } from "../../runtime.js";
+} from "../sdk.js";
 import { applyMatrixFormatting } from "./formatting.js";
 import {
   type MatrixMediaContent,
@@ -17,7 +18,6 @@ import {
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
-type IFileInfo = import("music-metadata").IFileInfo;
 
 export function buildMatrixMediaInfo(params: {
   size: number;
@@ -113,6 +113,7 @@ const THUMBNAIL_QUALITY = 80;
 export async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
+  encrypted?: boolean;
 }): Promise<DimensionalFileInfo | undefined> {
   const meta = await getCore()
     .media.getImageMetadata(params.buffer)
@@ -133,12 +134,16 @@ export async function prepareImageInfo(params: {
       const thumbMeta = await getCore()
         .media.getImageMetadata(thumbBuffer)
         .catch(() => null);
-      const thumbUri = await params.client.uploadContent(
-        thumbBuffer,
-        "image/jpeg",
-        "thumbnail.jpg",
-      );
-      imageInfo.thumbnail_url = thumbUri;
+      const result = await uploadMediaWithEncryption(params.client, thumbBuffer, {
+        contentType: "image/jpeg",
+        filename: "thumbnail.jpg",
+        encrypted: params.encrypted === true,
+      });
+      if (result.file) {
+        imageInfo.thumbnail_file = result.file;
+      } else {
+        imageInfo.thumbnail_url = result.url;
+      }
       if (thumbMeta) {
         imageInfo.thumbnail_info = {
           w: thumbMeta.width,
@@ -164,7 +169,6 @@ export async function resolveMediaDurationMs(params: {
     return undefined;
   }
   try {
-    const { parseBuffer } = await import("music-metadata");
     const fileInfo: IFileInfo | string | undefined =
       params.contentType || params.fileName
         ? {
@@ -198,6 +202,29 @@ async function uploadFile(
   return await client.uploadContent(file, params.contentType, params.filename);
 }
 
+async function uploadMediaWithEncryption(
+  client: MatrixClient,
+  buffer: Buffer,
+  params: {
+    contentType?: string;
+    filename?: string;
+    encrypted: boolean;
+  },
+): Promise<{ url: string; file?: EncryptedFile }> {
+  if (params.encrypted && client.crypto) {
+    const encrypted = await client.crypto.encryptMedia(buffer);
+    const mxc = await client.uploadContent(encrypted.buffer, params.contentType, params.filename);
+    const file: EncryptedFile = { url: mxc, ...encrypted.file };
+    return {
+      url: mxc,
+      file,
+    };
+  }
+
+  const mxc = await uploadFile(client, buffer, params);
+  return { url: mxc };
+}
+
 /**
  * Upload media with optional encryption for E2EE rooms.
  */
@@ -211,20 +238,9 @@ export async function uploadMediaMaybeEncrypted(
   },
 ): Promise<{ url: string; file?: EncryptedFile }> {
   // Check if room is encrypted and crypto is available
-  const isEncrypted = client.crypto && (await client.crypto.isRoomEncrypted(roomId));
-
-  if (isEncrypted && client.crypto) {
-    // Encrypt the media before uploading
-    const encrypted = await client.crypto.encryptMedia(buffer);
-    const mxc = await client.uploadContent(encrypted.buffer, params.contentType, params.filename);
-    const file: EncryptedFile = { url: mxc, ...encrypted.file };
-    return {
-      url: mxc,
-      file,
-    };
-  }
-
-  // Upload unencrypted
-  const mxc = await uploadFile(client, buffer, params);
-  return { url: mxc };
+  const isEncrypted = Boolean(client.crypto && (await client.crypto.isRoomEncrypted(roomId)));
+  return await uploadMediaWithEncryption(client, buffer, {
+    ...params,
+    encrypted: isEncrypted,
+  });
 }

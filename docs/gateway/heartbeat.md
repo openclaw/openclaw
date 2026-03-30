@@ -13,6 +13,9 @@ title: "Heartbeat"
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
 
+Heartbeat is a scheduled main-session turn — it does **not** create [background task](/automation/tasks) records.
+Task records are for detached work (ACP runs, subagents, isolated cron jobs).
+
 Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 
 ## Quick start (beginner)
@@ -22,7 +25,8 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 3. Decide where heartbeat messages should go (`target: "none"` is the default; set `target: "last"` to route to the last contact).
 4. Optional: enable heartbeat reasoning delivery for transparency.
 5. Optional: use lightweight bootstrap context if heartbeat runs only need `HEARTBEAT.md`.
-6. Optional: restrict heartbeats to active hours (local time).
+6. Optional: enable isolated sessions to avoid sending full conversation history each heartbeat.
+7. Optional: restrict heartbeats to active hours (local time).
 
 Example config:
 
@@ -35,6 +39,7 @@ Example config:
         target: "last", // explicit delivery to last contact (default is "none")
         directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         lightContext: true, // optional: only inject HEARTBEAT.md from bootstrap files
+        isolatedSession: true, // optional: fresh session each run (no conversation history)
         // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       },
@@ -62,6 +67,8 @@ The default prompt is intentionally broad:
 - **Human check-in**: “Checkup sometimes on your human during day time” nudges an
   occasional lightweight “anything you need?” message, but avoids night-time spam
   by using your configured local timezone (see [/concepts/timezone](/concepts/timezone)).
+
+Heartbeat can react to completed [background tasks](/automation/tasks), but a heartbeat run itself does not create a task record.
 
 If you want a heartbeat to do something very specific (e.g. “check Gmail PubSub
 stats” or “verify gateway health”), set `agents.defaults.heartbeat.prompt` (or
@@ -91,6 +98,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
+        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
@@ -212,6 +220,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
+- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
 - `session`: optional session key for heartbeat runs.
   - `main` (default): agent main session.
   - Explicit session key (copy from `openclaw sessions --json` or the [sessions CLI](/cli/sessions)).
@@ -249,6 +258,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   outbound message is sent.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
+- Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.
 
 ## Visibility controls
 
@@ -380,6 +390,18 @@ off in group chats.
 
 ## Cost awareness
 
-Heartbeats run full agent turns. Shorter intervals burn more tokens. Keep
-`HEARTBEAT.md` small and consider a cheaper `model` or `target: "none"` if you
-only want internal state updates.
+Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce cost:
+
+- Use `isolatedSession: true` to avoid sending full conversation history (~100K tokens down to ~2-5K per run).
+- Use `lightContext: true` to limit bootstrap files to just `HEARTBEAT.md`.
+- Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).
+- Keep `HEARTBEAT.md` small.
+- Use `target: "none"` if you only want internal state updates.
+
+## Related
+
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — when to use each
+- [Background Tasks](/automation/tasks) — how detached work is tracked
+- [Timezone](/concepts/timezone) — how timezone affects heartbeat scheduling
+- [Troubleshooting](/automation/troubleshooting) — debugging automation issues
