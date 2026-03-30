@@ -44,7 +44,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { createTaskRecord } from "../tasks/task-registry.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -953,7 +953,7 @@ export async function spawnAcpDirect(
     }
     parentRelay?.notifyStarted();
     try {
-      createTaskRecord({
+      createRunningTaskRun({
         runtime: "acp",
         sourceId: childRunId,
         requesterSessionKey: requesterInternalKey,
@@ -963,7 +963,6 @@ export async function spawnAcpDirect(
         label: params.label,
         task: params.task,
         preferMetadata: true,
-        status: "running",
         deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
         startedAt: Date.now(),
       });
@@ -985,7 +984,7 @@ export async function spawnAcpDirect(
   }
 
   try {
-    createTaskRecord({
+    createRunningTaskRun({
       runtime: "acp",
       sourceId: childRunId,
       requesterSessionKey: requesterInternalKey,
@@ -995,7 +994,6 @@ export async function spawnAcpDirect(
       label: params.label,
       task: params.task,
       preferMetadata: true,
-      status: "running",
       deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
       startedAt: Date.now(),
     });
