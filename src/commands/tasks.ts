@@ -387,9 +387,10 @@ export async function tasksMaintenanceCommand(
   opts: { json?: boolean; apply?: boolean },
   runtime: RuntimeEnv,
 ) {
+  const auditBefore = getInspectableTaskAuditSummary();
   const maintenance = opts.apply ? runTaskRegistryMaintenance() : previewTaskRegistryMaintenance();
   const summary = getInspectableTaskRegistrySummary();
-  const audit = getInspectableTaskAuditSummary();
+  const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
 
   if (opts.json) {
     runtime.log(
@@ -398,7 +399,8 @@ export async function tasksMaintenanceCommand(
           mode: opts.apply ? "apply" : "preview",
           maintenance,
           tasks: summary,
-          audit,
+          auditBefore,
+          auditAfter,
         },
         null,
         2,
@@ -414,9 +416,16 @@ export async function tasksMaintenanceCommand(
   );
   runtime.log(
     info(
-      `Task health: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${audit.errors} audit errors · ${audit.warnings} audit warnings`,
+      `${opts.apply ? "Task health after apply" : "Task health"}: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${auditAfter.errors} audit errors · ${auditAfter.warnings} audit warnings`,
     ),
   );
+  if (opts.apply) {
+    runtime.log(
+      info(
+        `Task health before apply: ${auditBefore.errors} audit errors · ${auditBefore.warnings} audit warnings`,
+      ),
+    );
+  }
   if (!opts.apply) {
     runtime.log("Dry run only. Re-run with `openclaw tasks maintenance --apply` to write changes.");
   }

@@ -324,4 +324,72 @@ describe("tasks commands", () => {
     );
     expect(runtimeLogs[2]).toContain("Dry run only.");
   });
+
+  it("shows before and after audit health when applying maintenance", async () => {
+    runTaskRegistryMaintenanceMock.mockReturnValue({
+      reconciled: 2,
+      cleanupStamped: 1,
+      pruned: 3,
+    });
+    getInspectableTaskRegistrySummaryMock.mockReturnValue({
+      total: 4,
+      active: 2,
+      terminal: 2,
+      failures: 1,
+      byStatus: {
+        queued: 1,
+        running: 1,
+        succeeded: 1,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 1,
+      },
+      byRuntime: {
+        subagent: 1,
+        acp: 1,
+        cli: 0,
+        cron: 2,
+      },
+    });
+    getInspectableTaskAuditSummaryMock
+      .mockReturnValueOnce({
+        total: 3,
+        warnings: 2,
+        errors: 1,
+        byCode: {
+          stale_queued: 0,
+          stale_running: 1,
+          lost: 1,
+          delivery_failed: 0,
+          missing_cleanup: 1,
+          inconsistent_timestamps: 0,
+        },
+      })
+      .mockReturnValueOnce({
+        total: 1,
+        warnings: 1,
+        errors: 0,
+        byCode: {
+          stale_queued: 0,
+          stale_running: 0,
+          lost: 1,
+          delivery_failed: 0,
+          missing_cleanup: 0,
+          inconsistent_timestamps: 0,
+        },
+      });
+
+    await tasksMaintenanceCommand({ apply: true }, runtime);
+
+    expect(previewTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
+    expect(runTaskRegistryMaintenanceMock).toHaveBeenCalled();
+    expect(runtimeLogs[0]).toContain(
+      "Task maintenance (applied): 2 reconcile · 1 cleanup stamp · 3 prune",
+    );
+    expect(runtimeLogs[1]).toContain(
+      "Task health after apply: 1 queued · 1 running · 0 audit errors · 1 audit warnings",
+    );
+    expect(runtimeLogs[2]).toContain("Task health before apply: 1 audit errors · 2 audit warnings");
+  });
 });

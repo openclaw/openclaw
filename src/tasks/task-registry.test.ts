@@ -887,7 +887,7 @@ describe("task-registry", () => {
         cleanupStamped: 1,
         pruned: 0,
       });
-      expect(getTaskById("task-missing-cleanup")?.cleanupAfter).toBeGreaterThan(200);
+      expect(getTaskById("task-missing-cleanup")?.cleanupAfter).toBeGreaterThan(now);
     });
   });
 
