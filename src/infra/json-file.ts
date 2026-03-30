@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeTextFileAtomic } from "../secrets/shared.js";
 
 export function loadJsonFile(pathname: string): unknown {
   try {
@@ -18,6 +19,5 @@ export function saveJsonFile(pathname: string, data: unknown) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  writeTextFileAtomic(pathname, `${JSON.stringify(data, null, 2)}\n`, 0o600);
 }
