@@ -11,6 +11,14 @@ export type ImageMetadata = {
 };
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
+export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
+
+class ImagePixelLimitError extends Error {
+  constructor(metadata?: ImageMetadata) {
+    const detail = metadata ? ` (${metadata.width}x${metadata.height})` : "";
+    super(`Image dimensions exceed the maximum allowed pixel count${detail}`);
+  }
+}
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
@@ -33,7 +41,138 @@ function prefersSips(): boolean {
 async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
   const mod = (await import("sharp")) as unknown as { default?: Sharp };
   const sharp = mod.default ?? (mod as unknown as Sharp);
-  return (buffer) => sharp(buffer, { failOnError: false });
+  return (buffer) =>
+    sharp(buffer, { failOnError: false, limitInputPixels: MAX_IMAGE_INPUT_PIXELS });
+}
+
+function normalizeImageMetadata(width: number, height: number): ImageMetadata | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    return null;
+  }
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
+}
+
+function exceedsImagePixelLimit(metadata: ImageMetadata): boolean {
+  return metadata.width > Math.floor(MAX_IMAGE_INPUT_PIXELS / metadata.height);
+}
+
+function assertImagePixelLimit(metadata: ImageMetadata): void {
+  if (exceedsImagePixelLimit(metadata)) {
+    throw new ImagePixelLimitError(metadata);
+  }
+}
+
+function readPngMetadata(buffer: Buffer): ImageMetadata | null {
+  const pngSignature = "\x89PNG\r\n\x1a\n";
+  if (buffer.length < 24 || buffer.toString("latin1", 0, 8) !== pngSignature) {
+    return null;
+  }
+  if (buffer.toString("ascii", 12, 16) !== "IHDR") {
+    return null;
+  }
+  return normalizeImageMetadata(buffer.readUInt32BE(16), buffer.readUInt32BE(20));
+}
+
+function readGifMetadata(buffer: Buffer): ImageMetadata | null {
+  const signature = buffer.toString("ascii", 0, 6);
+  if (buffer.length < 10 || (signature !== "GIF87a" && signature !== "GIF89a")) {
+    return null;
+  }
+  return normalizeImageMetadata(buffer.readUInt16LE(6), buffer.readUInt16LE(8));
+}
+
+function isJpegStartOfFrameMarker(marker: number): boolean {
+  return (
+    (marker >= 0xc0 && marker <= 0xc3) ||
+    (marker >= 0xc5 && marker <= 0xc7) ||
+    (marker >= 0xc9 && marker <= 0xcb) ||
+    (marker >= 0xcd && marker <= 0xcf)
+  );
+}
+
+function readJpegMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+
+  let offset = 2;
+  while (offset + 3 < buffer.length) {
+    while (offset < buffer.length && buffer[offset] === 0xff) {
+      offset += 1;
+    }
+    if (offset >= buffer.length) {
+      break;
+    }
+
+    const marker = buffer[offset];
+    offset += 1;
+
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01) {
+      continue;
+    }
+    if (marker >= 0xd0 && marker <= 0xd7) {
+      continue;
+    }
+    if (offset + 1 >= buffer.length) {
+      break;
+    }
+
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > buffer.length) {
+      break;
+    }
+    if (isJpegStartOfFrameMarker(marker)) {
+      if (segmentLength < 7 || offset + 6 >= buffer.length) {
+        break;
+      }
+      return normalizeImageMetadata(
+        buffer.readUInt16BE(offset + 5),
+        buffer.readUInt16BE(offset + 3),
+      );
+    }
+    offset += segmentLength;
+  }
+
+  return null;
+}
+
+export function probeImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
+  return readPngMetadata(buffer) ?? readGifMetadata(buffer) ?? readJpegMetadata(buffer);
+}
+
+function isSharpPixelLimitError(error: unknown): boolean {
+  return error instanceof Error && /pixel limit/i.test(error.message);
+}
+
+async function getSharpImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
+  const sharp = await loadSharp();
+  try {
+    const meta = await sharp(buffer).metadata();
+    const metadata = normalizeImageMetadata(Number(meta.width ?? 0), Number(meta.height ?? 0));
+    if (!metadata) {
+      return null;
+    }
+    assertImagePixelLimit(metadata);
+    return metadata;
+  } catch (error) {
+    if (isSharpPixelLimitError(error)) {
+      throw new ImagePixelLimitError();
+    }
+    throw error;
+  }
+}
+
+async function assertImageBufferWithinPixelLimit(buffer: Buffer): Promise<void> {
+  const headerMetadata = probeImageMetadataFromHeader(buffer);
+  if (headerMetadata) {
+    assertImagePixelLimit(headerMetadata);
+    return;
+  }
+
+  await getSharpImageMetadata(buffer);
 }
 
 /**
@@ -215,22 +354,29 @@ async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
 }
 
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
+  const headerMetadata = probeImageMetadataFromHeader(buffer);
+  if (headerMetadata) {
+    try {
+      assertImagePixelLimit(headerMetadata);
+      return headerMetadata;
+    } catch {
+      return null;
+    }
+  }
+
   if (prefersSips()) {
-    return await sipsMetadataFromBuffer(buffer).catch(() => null);
+    try {
+      // Keep sips as the metadata backend on preferred platforms, but only
+      // after the shared pixel-limit guard confirms the buffer is safe.
+      await assertImageBufferWithinPixelLimit(buffer);
+      return await sipsMetadataFromBuffer(buffer);
+    } catch {
+      return null;
+    }
   }
 
   try {
-    const sharp = await loadSharp();
-    const meta = await sharp(buffer).metadata();
-    const width = Number(meta.width ?? 0);
-    const height = Number(meta.height ?? 0);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) {
-      return null;
-    }
-    if (width <= 0 || height <= 0) {
-      return null;
-    }
-    return { width, height };
+    return await getSharpImageMetadata(buffer);
   } catch {
     return null;
   }
@@ -289,6 +435,7 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
  */
 export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
   if (prefersSips()) {
+    await assertImageBufferWithinPixelLimit(buffer);
     try {
       const orientation = readJpegExifOrientation(buffer);
       if (!orientation || orientation === 1) {
@@ -317,6 +464,7 @@ export async function resizeToJpeg(params: {
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
   if (prefersSips()) {
+    await assertImageBufferWithinPixelLimit(params.buffer);
     // Normalize EXIF orientation BEFORE resizing (sips resize doesn't auto-rotate)
     const normalized = await normalizeExifOrientationSips(params.buffer);
 
@@ -357,6 +505,7 @@ export async function resizeToJpeg(params: {
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   if (prefersSips()) {
+    await assertImageBufferWithinPixelLimit(buffer);
     return await sipsConvertToJpeg(buffer);
   }
   const sharp = await loadSharp();
