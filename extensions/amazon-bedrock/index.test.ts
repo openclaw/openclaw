@@ -7,6 +7,35 @@ import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
 
+// Minimal shapes for the deeply generic pi-ai/plugin types used in tests.
+// Tests return the options object (not a real stream) to assert injected fields.
+type TestStreamModel = { api: string; provider: string; id: string };
+type TestStreamContext = { messages: unknown[] };
+type TestStreamOptions = Record<string, unknown>;
+type TestStreamFn = (model: TestStreamModel, context: TestStreamContext, options: TestStreamOptions) => TestStreamOptions;
+type TestConfig = {
+  models?: {
+    bedrockDiscovery?: { region?: string };
+    providers?: Record<string, { baseUrl?: string; models?: Array<{ id: string; name: string }> }>;
+  };
+};
+
+const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+const passThroughFn: TestStreamFn = (_model, _context, options) => options;
+
+function wrapStream(modelId: string, config?: TestConfig) {
+  return provider.wrapStreamFn?.({
+    provider: "amazon-bedrock",
+    modelId,
+    config,
+    streamFn: passThroughFn,
+  } as never) as TestStreamFn | null | undefined;
+}
+
+function invokeWrapped(wrapped: TestStreamFn | null | undefined, modelId: string, api = "bedrock-converse-stream") {
+  return wrapped?.({ api, provider: "amazon-bedrock", id: modelId }, { messages: [] }, {});
+}
+
 type RegisteredProviderPlugin = ReturnType<typeof registerSingleProviderPlugin>;
 
 /** Register the amazon-bedrock plugin with an optional pluginConfig override. */
@@ -89,31 +118,25 @@ function callWrappedStream(
 
 describe("amazon-bedrock provider plugin", () => {
   it("marks Claude 4.6 Bedrock models as adaptive by default", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-
     expect(
       provider.resolveDefaultThinkingLevel?.({
         provider: "amazon-bedrock",
         modelId: "us.anthropic.claude-opus-4-6-v1",
-      } as never),
+      }),
     ).toBe("adaptive");
     expect(
       provider.resolveDefaultThinkingLevel?.({
         provider: "amazon-bedrock",
         modelId: "amazon.nova-micro-v1:0",
-      } as never),
+      }),
     ).toBeUndefined();
   });
 
-  it("enables prompt caching for Application Inference Profile ARNs with Claude model name", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
-    const arn =
-      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
-    const result = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: arn,
-      config: {
+  describe("prompt caching", () => {
+    it("enables prompt caching for inference profile ARNs with 'claude' in profile ID", () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+      const result = wrapStream(arn, {
         models: {
           providers: {
             "amazon-bedrock": {
@@ -121,48 +144,29 @@ describe("amazon-bedrock provider plugin", () => {
             },
           },
         },
-      },
-      streamFn: baseFn,
-    } as never);
+      });
+      expect(result).toBe(passThroughFn);
+    });
 
-    // Should return the original streamFn (no no-cache wrapper)
-    expect(result).toBe(baseFn);
-  });
-
-  it("enables prompt caching for inference profile when config uses provider alias", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
-    const arn =
-      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
-    const result = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: arn,
-      config: {
+    it("enables prompt caching for inference profile when config uses provider alias", () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+      const result = wrapStream(arn, {
         models: {
           providers: {
-            // "bedrock" is a known alias that normalizeProviderId maps to "amazon-bedrock"
             bedrock: {
               models: [{ id: arn, name: "Claude Sonnet 4.6 via Inference Profile" }],
             },
           },
         },
-      },
-      streamFn: baseFn,
-    } as never);
+      });
+      expect(result).toBe(passThroughFn);
+    });
 
-    // Should return the original streamFn even when config key is "bedrock" alias
-    expect(result).toBe(baseFn);
-  });
-
-  it("disables prompt caching for Application Inference Profile ARNs with non-Claude model name", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
-    const arn =
-      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/llama-profile";
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: arn,
-      config: {
+    it("disables prompt caching for inference profile ARNs without 'claude' in profile ID", () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/llama-profile";
+      const wrapped = wrapStream(arn, {
         models: {
           providers: {
             "amazon-bedrock": {
@@ -170,59 +174,27 @@ describe("amazon-bedrock provider plugin", () => {
             },
           },
         },
-      },
-      streamFn: baseFn,
-    } as never);
+      });
+      expect(invokeWrapped(wrapped, arn, "openai-completions")).toMatchObject({
+        cacheRetention: "none",
+      });
+    });
 
-    expect(
-      wrapped?.(
-        { api: "openai-completions", provider: "amazon-bedrock", id: arn } as never,
-        { messages: [] } as never,
-        {},
-      ),
-    ).toMatchObject({ cacheRetention: "none" });
-  });
+    it("disables prompt caching for inference profile ARNs with no config entry", () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unknown-profile";
+      const wrapped = wrapStream(arn);
+      expect(invokeWrapped(wrapped, arn, "openai-completions")).toMatchObject({
+        cacheRetention: "none",
+      });
+    });
 
-  it("disables prompt caching for Application Inference Profile ARNs with no config entry", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
-    const arn =
-      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unknown-profile";
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: arn,
-      streamFn: baseFn,
-    } as never);
-
-    expect(
-      wrapped?.(
-        { api: "openai-completions", provider: "amazon-bedrock", id: arn } as never,
-        { messages: [] } as never,
-        {},
-      ),
-    ).toMatchObject({ cacheRetention: "none" });
-  });
-
-  it("disables prompt caching for non-Anthropic Bedrock models", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: "amazon.nova-micro-v1:0",
-      streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
-    } as never);
-
-    expect(
-      wrapped?.(
-        {
-          api: "openai-completions",
-          provider: "amazon-bedrock",
-          id: "amazon.nova-micro-v1:0",
-        } as never,
-        { messages: [] } as never,
-        {},
-      ),
-    ).toMatchObject({
-      cacheRetention: "none",
+    it("disables prompt caching for non-Anthropic Bedrock models", () => {
+      const modelId = "amazon.nova-micro-v1:0";
+      const wrapped = wrapStream(modelId);
+      expect(invokeWrapped(wrapped, modelId, "openai-completions")).toMatchObject({
+        cacheRetention: "none",
+      });
     });
   });
 
@@ -349,39 +321,18 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
-  it("injects region from bedrockDiscovery config into stream options", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: "eu.anthropic.claude-sonnet-4-6",
-      config: {
-        models: {
-          bedrockDiscovery: { region: "eu-west-1" },
-        },
-      },
-      streamFn: baseFn,
-    } as never);
+  describe("region injection", () => {
+    it("injects region from bedrockDiscovery config", () => {
+      const modelId = "eu.anthropic.claude-sonnet-4-6";
+      const wrapped = wrapStream(modelId, {
+        models: { bedrockDiscovery: { region: "eu-west-1" } },
+      });
+      expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-west-1" });
+    });
 
-    const result = wrapped?.(
-      {
-        api: "bedrock-converse-stream",
-        provider: "amazon-bedrock",
-        id: "eu.anthropic.claude-sonnet-4-6",
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-    expect(result).toMatchObject({ region: "eu-west-1" });
-  });
-
-  it("injects region extracted from provider baseUrl into stream options", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: "eu.anthropic.claude-sonnet-4-6",
-      config: {
+    it("injects region extracted from provider baseUrl", () => {
+      const modelId = "eu.anthropic.claude-sonnet-4-6";
+      const wrapped = wrapStream(modelId, {
         models: {
           providers: {
             "amazon-bedrock": {
@@ -390,32 +341,29 @@ describe("amazon-bedrock provider plugin", () => {
             },
           },
         },
-      },
-      streamFn: baseFn,
-    } as never);
+      });
+      expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-central-1" });
+    });
 
-    const result = wrapped?.(
-      {
-        api: "bedrock-converse-stream",
-        provider: "amazon-bedrock",
-        id: "eu.anthropic.claude-sonnet-4-6",
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-    expect(result).toMatchObject({ region: "eu-central-1" });
-  });
+    it("prefers provider baseUrl region over bedrockDiscovery region", () => {
+      const modelId = "eu.anthropic.claude-sonnet-4-6";
+      const wrapped = wrapStream(modelId, {
+        models: {
+          bedrockDiscovery: { region: "us-east-1" },
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.eu-west-1.amazonaws.com",
+              models: [],
+            },
+          },
+        },
+      });
+      expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-west-1" });
+    });
 
-  it("does not inject region when neither bedrockDiscovery nor baseUrl is configured", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
-    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
-    const result = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: "anthropic.claude-sonnet-4-6",
-      streamFn: baseFn,
-    } as never);
-
-    // Without region config, Claude model returns the base streamFn directly
-    expect(result).toBe(baseFn);
+    it("does not inject region when neither bedrockDiscovery nor baseUrl is configured", () => {
+      const result = wrapStream("anthropic.claude-sonnet-4-6");
+      expect(result).toBe(passThroughFn);
+    });
   });
 });
