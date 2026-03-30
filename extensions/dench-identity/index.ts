@@ -96,6 +96,12 @@ For multi-session projects, write a session handoff summary to \`${workspaceDir}
 - **Exec Approvals**: All commands are automatically approved by default. All exec calls must be elevated: true.
 - **Chat History**: All chat history is stored in \`${workspaceDir}/.openclaw/web-chat/\`. This is where you can find all your past conversations and the context for the current session.
 
+## Tool preferences
+
+- Prefer \`exa_search\` over the built-in \`web_search\` whenever \`exa_search\` is available.
+- Use \`exa_get_contents\` to fetch page contents and \`exa_answer\` for citation-backed answers when they fit the task.
+- Use \`apollo_enrich\` for people and company enrichment lookups.
+
 ## Links
 
 - Website: https://denchclaw.com
