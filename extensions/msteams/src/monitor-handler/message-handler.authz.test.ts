@@ -454,4 +454,81 @@ describe("msteams monitor handler authz", () => {
       String((dispatched?.ctxPayload as { BodyForAgent?: string }).BodyForAgent),
     ).not.toContain("<<<END_EXTERNAL_UNTRUSTED_CONTENT");
   });
+
+  it("keeps thread messages when allowlist name matching applies without a sender id", async () => {
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    graphThreadMockState.resolveTeamGroupId.mockClear();
+    graphThreadMockState.fetchChannelMessage.mockReset();
+    graphThreadMockState.fetchThreadReplies.mockReset();
+
+    graphThreadMockState.fetchChannelMessage.mockResolvedValue({
+      id: "parent-msg",
+      from: { user: { displayName: "Alice" } },
+      body: {
+        content: "Allowlisted by display name",
+        contentType: "text",
+      },
+    });
+    graphThreadMockState.fetchThreadReplies.mockResolvedValue([
+      {
+        id: "current-msg",
+        from: { user: { id: "alice-aad", displayName: "Alice" } },
+        body: { content: "Current message", contentType: "text" },
+      },
+    ]);
+
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["alice"],
+          dangerouslyAllowNameMatching: true,
+          requireMention: false,
+          teams: {
+            team123: {
+              channels: {
+                "19:channel@thread.tacv2": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "current-msg",
+        type: "message",
+        text: "Current message",
+        from: {
+          id: "alice-botframework-id",
+          aadObjectId: "alice-aad",
+          name: "Alice",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        replyToId: "parent-msg",
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    const dispatched =
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    expect(dispatched?.ctxPayload).toMatchObject({
+      BodyForAgent:
+        "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
+    });
+  });
 });

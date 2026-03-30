@@ -462,13 +462,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         const threadMessages =
           groupPolicy === "allowlist"
             ? allMessages.filter((msg) => {
-                const threadSenderId = msg.from?.user?.id;
-                if (!threadSenderId) {
-                  return false;
-                }
                 return resolveMSTeamsAllowlistMatch({
                   allowFrom: effectiveGroupAllowFrom,
-                  senderId: threadSenderId,
+                  senderId: msg.from?.user?.id ?? "",
                   senderName: msg.from?.user?.displayName,
                   allowNameMatching,
                 }).allowed;
