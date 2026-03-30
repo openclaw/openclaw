@@ -14,6 +14,7 @@ import {
   resolveTestRunExitCode,
 } from "../../scripts/test-parallel-utils.mjs";
 import { loadTestCatalog } from "../../scripts/test-planner/catalog.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 const clearPlannerShardEnv = (env) => {
   const nextEnv = { ...env };
@@ -54,10 +55,10 @@ const sharedTargetedUnitProxyFiles = (() => {
 
 const targetedChannelProxyFiles = [
   ...sharedTargetedChannelProxyFiles,
-  "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
-  "extensions/discord/src/monitor/monitor.agent-components.test.ts",
-  "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-  "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test.ts",
+  bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
+  bundledPluginFile("discord", "src/monitor/monitor.agent-components.test.ts"),
+  bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
+  bundledPluginFile("whatsapp", "src/monitor-inbox.streams-inbound-messages.test.ts"),
 ];
 
 const targetedUnitProxyFiles = [
@@ -377,8 +378,13 @@ describe("scripts/test-parallel lane planning", () => {
       parseNumericPlanField(line, "filters"),
     );
 
-    expect(unitBatchLines.length).toBe(2);
-    expect(unitBatchFilterCounts).toEqual([50, 50]);
+    expect(unitBatchLines.length).toBeGreaterThanOrEqual(3);
+    expect(unitBatchLines.every((line) => line.includes("maxWorkers=6"))).toBe(true);
+    expect(Math.max(...unitBatchFilterCounts)).toBeLessThan(40);
+    expect(unitBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
+      sharedTargetedUnitProxyFiles.length,
+    );
+    expect(output).toContain("unit-qr-dashboard.integration-isolated filters=1 maxWorkers=2");
   });
 
   it("explains targeted file ownership and execution policy", () => {

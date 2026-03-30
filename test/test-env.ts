@@ -50,34 +50,67 @@ function loadProfileEnv(homeDir = os.homedir()): void {
   if (!fs.existsSync(profilePath)) {
     return;
   }
+  const applyEntry = (entry: string) => {
+    const idx = entry.indexOf("=");
+    if (idx <= 0) {
+      return false;
+    }
+    const key = entry.slice(0, idx).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || (process.env[key] ?? "") !== "") {
+      return false;
+    }
+    process.env[key] = entry.slice(idx + 1);
+    return true;
+  };
+  const countAppliedEntries = (entries: Iterable<string>) => {
+    let applied = 0;
+    for (const entry of entries) {
+      if (applyEntry(entry)) {
+        applied += 1;
+      }
+    }
+    return applied;
+  };
   try {
     const output = execFileSync(
       "/bin/bash",
       ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
       { encoding: "utf8" },
     );
-    const entries = output.split("\0");
-    let applied = 0;
-    for (const entry of entries) {
-      if (!entry) {
-        continue;
-      }
-      const idx = entry.indexOf("=");
-      if (idx <= 0) {
-        continue;
-      }
-      const key = entry.slice(0, idx);
-      if (!key || (process.env[key] ?? "") !== "") {
-        continue;
-      }
-      process.env[key] = entry.slice(idx + 1);
-      applied += 1;
-    }
+    const applied = countAppliedEntries(output.split("\0").filter(Boolean));
     if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
       console.log(`[live] loaded ${applied} env vars from ~/.profile`);
     }
   } catch {
-    // ignore profile load failures
+    try {
+      const fallbackEntries = fs
+        .readFileSync(profilePath, "utf8")
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"))
+        .map((line) => line.replace(/^export\s+/u, ""))
+        .map((line) => {
+          const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u);
+          if (!match) {
+            return "";
+          }
+          let value = match[2].trim();
+          if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+          ) {
+            value = value.slice(1, -1);
+          }
+          return `${match[1]}=${value}`;
+        })
+        .filter(Boolean);
+      const applied = countAppliedEntries(fallbackEntries);
+      if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
+        console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+      }
+    } catch {
+      // ignore profile load failures
+    }
   }
 }
 
@@ -194,7 +227,12 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
 
 function sanitizeLiveConfig(raw: string): string {
   try {
-    const parsed = JSON5.parse(raw);
+    const parsed: {
+      agents?: {
+        defaults?: Record<string, unknown>;
+        list?: Array<Record<string, unknown>>;
+      };
+    } = JSON5.parse(raw);
     if (!parsed || typeof parsed !== "object") {
       return raw;
     }
@@ -239,9 +277,20 @@ function stageLiveTestState(params: {
   realHome: string;
   tempHome: string;
 }): void {
-  const realStateDir = params.env.OPENCLAW_STATE_DIR?.trim()
-    ? resolveHomeRelativePath(params.env.OPENCLAW_STATE_DIR, params.realHome)
+  const rawStateDir = params.env.OPENCLAW_STATE_DIR?.trim();
+  let realStateDir = rawStateDir
+    ? resolveHomeRelativePath(rawStateDir, params.realHome)
     : path.join(params.realHome, ".openclaw");
+  const priorIsolatedHome = params.env.OPENCLAW_TEST_HOME?.trim();
+  const snapshotHome = params.env.HOME?.trim();
+  if (
+    priorIsolatedHome &&
+    snapshotHome &&
+    snapshotHome !== priorIsolatedHome &&
+    realStateDir === path.join(priorIsolatedHome, ".openclaw")
+  ) {
+    realStateDir = path.join(params.realHome, ".openclaw");
+  }
   const tempStateDir = path.join(params.tempHome, ".openclaw");
   fs.mkdirSync(tempStateDir, { recursive: true });
 

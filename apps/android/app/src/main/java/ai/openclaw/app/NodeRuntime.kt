@@ -45,6 +45,12 @@ class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
 ) {
+  data class GatewayConnectAuth(
+    val token: String?,
+    val bootstrapToken: String?,
+    val password: String?,
+  )
+
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deviceAuthStore = DeviceAuthStore(prefs)
@@ -139,6 +145,7 @@ class NodeRuntime(
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
     readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    smsSearchPossible = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.hasTelephonyFeature() },
     callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
@@ -164,6 +171,8 @@ class NodeRuntime(
     locationEnabled = { locationMode.value != LocationMode.Off },
     sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
     readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    smsFeatureEnabled = { BuildConfig.OPENCLAW_ENABLE_SMS },
+    smsTelephonyAvailable = { sms.hasTelephonyFeature() },
     callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
@@ -534,6 +543,17 @@ class NodeRuntime(
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
+    prefs.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
+    prefs.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
+    prefs.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   private var didAutoConnect = false
 
@@ -686,6 +706,34 @@ class NodeRuntime(
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
+  fun setNotificationForwardingEnabled(value: Boolean) {
+    prefs.setNotificationForwardingEnabled(value)
+  }
+
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    prefs.setNotificationForwardingMode(mode)
+  }
+
+  fun setNotificationForwardingPackages(packages: List<String>) {
+    prefs.setNotificationForwardingPackages(packages)
+  }
+
+  fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ): Boolean {
+    return prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  }
+
+  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    prefs.setNotificationForwardingMaxEventsPerMinute(value)
+  }
+
+  fun setNotificationForwardingSessionKey(value: String?) {
+    prefs.setNotificationForwardingSessionKey(value)
+  }
+
   fun setVoiceScreenActive(active: Boolean) {
     if (!active) {
       stopActiveVoiceSession()
@@ -733,28 +781,51 @@ class NodeRuntime(
       }
     operatorStatusText = "Connecting…"
     updateStatus()
-    val token = prefs.loadGatewayToken()
-    val bootstrapToken = prefs.loadGatewayBootstrapToken()
-    val password = prefs.loadGatewayPassword()
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
+  }
+
+  private fun connectWithAuth(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    reconnect: Boolean = false,
+  ) {
     val tls = connectionManager.resolveTlsParams(endpoint)
-    operatorSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildOperatorConnectOptions(),
-      tls,
-    )
+    val connectOperator =
+      shouldConnectOperatorSession(
+        auth.token,
+        auth.bootstrapToken,
+        auth.password,
+        loadStoredRoleDeviceToken("operator"),
+      )
+    if (!connectOperator) {
+      operatorConnected = false
+      operatorStatusText = "Offline"
+      operatorSession.disconnect()
+      updateStatus()
+    } else {
+      operatorSession.connect(
+        endpoint,
+        auth.token,
+        auth.bootstrapToken,
+        auth.password,
+        connectionManager.buildOperatorConnectOptions(),
+        tls,
+      )
+    }
     nodeSession.connect(
       endpoint,
-      token,
-      bootstrapToken,
-      password,
+      auth.token,
+      auth.bootstrapToken,
+      auth.password,
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    operatorSession.reconnect()
-    nodeSession.reconnect()
+    if (reconnect && connectOperator) {
+      operatorSession.reconnect()
+    }
+    if (reconnect) {
+      nodeSession.reconnect()
+    }
   }
 
   fun connect(endpoint: GatewayEndpoint) {
@@ -776,25 +847,27 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    val token = prefs.loadGatewayToken()
-    val bootstrapToken = prefs.loadGatewayBootstrapToken()
-    val password = prefs.loadGatewayPassword()
-    operatorSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildOperatorConnectOptions(),
-      tls,
-    )
-    nodeSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildNodeConnectOptions(),
-      tls,
-    )
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth())
+  }
+
+  fun connect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
+    connectedEndpoint = endpoint
+    operatorStatusText = "Connecting…"
+    nodeStatusText = "Connecting…"
+    updateStatus()
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
+  }
+
+  internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth {
+    return explicitAuth
+      ?: GatewayConnectAuth(
+        token = prefs.loadGatewayToken(),
+        bootstrapToken = prefs.loadGatewayBootstrapToken(),
+        password = prefs.loadGatewayPassword(),
+      )
   }
 
   fun acceptGatewayTrustPrompt() {
@@ -824,6 +897,11 @@ class NodeRuntime(
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
+  }
+
+  private fun loadStoredRoleDeviceToken(role: String): String? {
+    val deviceId = identityStore.loadOrCreate().deviceId
+    return deviceAuthStore.loadToken(deviceId, role)
   }
 
   fun disconnect() {
@@ -1153,6 +1231,20 @@ class NodeRuntime(
     }
   }
 
+}
+
+internal fun shouldConnectOperatorSession(
+  token: String?,
+  bootstrapToken: String?,
+  password: String?,
+  storedOperatorToken: String?,
+): Boolean {
+  return (
+    !token.isNullOrBlank() ||
+      !bootstrapToken.isNullOrBlank() ||
+      !password.isNullOrBlank() ||
+      !storedOperatorToken.isNullOrBlank()
+    )
 }
 
 private enum class HomeCanvasGatewayState {

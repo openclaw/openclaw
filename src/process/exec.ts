@@ -227,6 +227,8 @@ export async function runCommandWithTimeout(
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  const usesWindowsExitCodeShim =
+    process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
@@ -341,8 +343,18 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
-      const resolvedCode = childExitState?.code ?? code ?? child.exitCode ?? null;
       const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
+      const resolvedCode =
+        childExitState?.code ??
+        code ??
+        child.exitCode ??
+        (usesWindowsExitCodeShim &&
+        resolvedSignal == null &&
+        !timedOut &&
+        !noOutputTimedOut &&
+        !child.killed
+          ? 0
+          : null);
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut

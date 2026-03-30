@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
@@ -32,6 +33,9 @@ export function createSubagentRunManager(params: {
   resumedRuns: Set<string>;
   endedHookInFlightRunIds: Set<string>;
   persist(): void;
+  callGateway: typeof callGateway;
+  loadConfig: typeof loadConfig;
+  ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoaded;
   ensureListener(): void;
   startSweeper(): void;
   stopSweeper(): void;
@@ -65,7 +69,7 @@ export function createSubagentRunManager(params: {
   const waitForSubagentCompletion = async (runId: string, waitTimeoutMs: number) => {
     try {
       const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-      const wait = await callGateway<{
+      const wait = await params.callGateway<{
         status?: string;
         startedAt?: number;
         endedAt?: number;
@@ -199,7 +203,7 @@ export function createSubagentRunManager(params: {
     }
 
     const now = Date.now();
-    const cfg = loadConfig();
+    const cfg = params.loadConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -276,7 +280,7 @@ export function createSubagentRunManager(params: {
     retainAttachmentsOnKeep?: boolean;
   }) => {
     const now = Date.now();
-    const cfg = loadConfig();
+    const cfg = params.loadConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -315,6 +319,27 @@ export function createSubagentRunManager(params: {
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
+    try {
+      createRunningTaskRun({
+        runtime: "subagent",
+        sourceId: registerParams.runId,
+        requesterSessionKey: registerParams.requesterSessionKey,
+        requesterOrigin,
+        childSessionKey: registerParams.childSessionKey,
+        runId: registerParams.runId,
+        label: registerParams.label,
+        task: registerParams.task,
+        deliveryStatus:
+          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+        startedAt: now,
+        lastEventAt: now,
+      });
+    } catch (error) {
+      log.warn("Failed to create background task for subagent run", {
+        runId: registerParams.runId,
+        error,
+      });
+    }
     params.ensureListener();
     params.persist();
     if (archiveAtMs) {
@@ -410,8 +435,8 @@ export function createSubagentRunManager(params: {
           cleanup: entry.cleanup,
           completedAt: now,
         });
-        const cfg = loadConfig();
-        ensureRuntimePluginsLoaded({
+        const cfg = params.loadConfig();
+        params.ensureRuntimePluginsLoaded({
           config: cfg,
           workspaceDir: entry.workspaceDir,
           allowGatewaySubagentBinding: true,

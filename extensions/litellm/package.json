@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/litellm-provider",
-  "version": "2026.3.28-beta.1",
+  "version": "2026.3.30",
   "private": true,
   "description": "OpenClaw LiteLLM provider plugin",
   "type": "module",

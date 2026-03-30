@@ -1,5 +1,5 @@
+import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-helpers/http.js";
 import {
   enrichOllamaModelsWithContext,
   resolveOllamaApiBase,

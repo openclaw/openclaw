@@ -70,6 +70,8 @@ export type MatrixConfig = {
   homeserver?: string;
   /** Allow Matrix homeserver traffic to private/internal hosts. */
   allowPrivateNetwork?: boolean;
+  /** Optional HTTP(S) proxy URL for Matrix connections (e.g. http://127.0.0.1:7890). */
+  proxy?: string;
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */
@@ -133,6 +135,14 @@ export type MatrixConfig = {
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /**
+   * Streaming mode for Matrix replies.
+   * - `"partial"`: edit a single message in place as the model generates text.
+   * - `"off"`: deliver the full reply once the model finishes.
+   * - `true` maps to `"partial"`, `false` maps to `"off"`.
+   * Default: `"off"`.
+   */
+  streaming?: "partial" | "off" | boolean;
 };
 
 export type CoreConfig = {
