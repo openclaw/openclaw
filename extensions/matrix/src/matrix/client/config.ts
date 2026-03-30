@@ -1,8 +1,8 @@
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import {
   coerceSecretRef,
   resolveConfiguredSecretInputString,
 } from "openclaw/plugin-sdk/config-runtime";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -291,18 +291,19 @@ function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
 const MATRIX_HTTP_HOMESERVER_ERROR =
   "Matrix homeserver must use https:// unless it targets a private or loopback host";
 
-function buildMatrixNetworkFields(
-  allowPrivateNetwork: boolean | undefined,
-  proxy?: string,
-): Pick<MatrixResolvedConfig, "allowPrivateNetwork" | "ssrfPolicy" | "dispatcherPolicy"> {
-  const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxy
-    ? { mode: "explicit-proxy", proxyUrl: proxy }
-    : undefined;
-  if (!allowPrivateNetwork && !dispatcherPolicy) {
+function buildMatrixNetworkFields(params: {
+  allowPrivateNetwork: boolean | undefined;
+  proxy?: string;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): Pick<MatrixResolvedConfig, "allowPrivateNetwork" | "ssrfPolicy" | "dispatcherPolicy"> {
+  const dispatcherPolicy: PinnedDispatcherPolicy | undefined =
+    params.dispatcherPolicy ??
+    (params.proxy ? { mode: "explicit-proxy", proxyUrl: params.proxy } : undefined);
+  if (!params.allowPrivateNetwork && !dispatcherPolicy) {
     return {};
   }
   return {
-    ...(allowPrivateNetwork
+    ...(params.allowPrivateNetwork
       ? { allowPrivateNetwork: true, ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(true) }
       : {}),
     ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
@@ -499,7 +500,7 @@ export function resolveMatrixConfig(
     deviceName: resolvedStrings.deviceName || undefined,
     initialSyncLimit,
     encryption,
-    ...buildMatrixNetworkFields(allowPrivateNetwork, matrix.proxy),
+    ...buildMatrixNetworkFields({ allowPrivateNetwork, proxy: matrix.proxy }),
   };
 }
 
@@ -569,7 +570,10 @@ export function resolveMatrixConfigForAccount(
     deviceName: resolvedStrings.deviceName || undefined,
     initialSyncLimit,
     encryption,
-    ...buildMatrixNetworkFields(allowPrivateNetwork, account.proxy ?? matrix.proxy),
+    ...buildMatrixNetworkFields({
+      allowPrivateNetwork,
+      proxy: account.proxy ?? matrix.proxy,
+    }),
   };
 }
 
@@ -718,12 +722,10 @@ export async function resolveMatrixAuth(params?: {
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
-      ...buildMatrixNetworkFields(
-        resolved.allowPrivateNetwork,
-        resolved.dispatcherPolicy?.mode === "explicit-proxy"
-          ? resolved.dispatcherPolicy.proxyUrl
-          : undefined,
-      ),
+      ...buildMatrixNetworkFields({
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        dispatcherPolicy: resolved.dispatcherPolicy,
+      }),
     };
   }
 
@@ -740,12 +742,10 @@ export async function resolveMatrixAuth(params?: {
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
-      ...buildMatrixNetworkFields(
-        resolved.allowPrivateNetwork,
-        resolved.dispatcherPolicy?.mode === "explicit-proxy"
-          ? resolved.dispatcherPolicy.proxyUrl
-          : undefined,
-      ),
+      ...buildMatrixNetworkFields({
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        dispatcherPolicy: resolved.dispatcherPolicy,
+      }),
     };
   }
 
@@ -799,12 +799,10 @@ export async function resolveMatrixAuth(params?: {
     deviceName: resolved.deviceName,
     initialSyncLimit: resolved.initialSyncLimit,
     encryption: resolved.encryption,
-    ...buildMatrixNetworkFields(
-      resolved.allowPrivateNetwork,
-      resolved.dispatcherPolicy?.mode === "explicit-proxy"
-        ? resolved.dispatcherPolicy.proxyUrl
-        : undefined,
-    ),
+    ...buildMatrixNetworkFields({
+      allowPrivateNetwork: resolved.allowPrivateNetwork,
+      dispatcherPolicy: resolved.dispatcherPolicy,
+    }),
   };
 
   const { saveMatrixCredentials } = await loadCredentialsWriter();
