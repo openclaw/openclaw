@@ -12,19 +12,6 @@ import type { AppViewState } from "../app-view-state.ts";
 import { loadChatHistory } from "../controllers/chat.ts";
 import { refreshChatAvatar } from "../app-chat.ts";
 
-// 懒加载模块
-import { createLazy, lazyRender } from "./lazy-helpers.ts";
-
-const lazyAgents = createLazy(() => import("../views/agents.ts"));
-const lazyChannels = createLazy(() => import("../views/channels.ts"));
-const lazyCron = createLazy(() => import("../views/cron.ts"));
-const lazyDebug = createLazy(() => import("../views/debug.ts"));
-const lazyInstances = createLazy(() => import("../views/instances.ts"));
-const lazyLogs = createLazy(() => import("../views/logs.ts"));
-const lazyNodes = createLazy(() => import("../views/nodes.ts"));
-const lazySessions = createLazy(() => import("../views/sessions.ts"));
-const lazySkills = createLazy(() => import("../views/skills.ts"));
-
 /**
  * 渲染主内容区域
  */
@@ -66,67 +53,32 @@ function renderTabContent(
       return renderUsageTab(state);
 
     case "sessions":
-      return lazyRender(lazySessions, (m) =>
-        m.renderSessions({
-          // ... sessions props
-        }),
-      );
+      // TODO: Implement proper lazy loading with props
+      return html`<sessions-view></sessions-view>`;
 
     case "cron":
-      return lazyRender(lazyCron, (m) =>
-        m.renderCron({
-          // ... cron props
-        }),
-      );
+      return html`<cron-view></cron-view>`;
 
     case "agents":
-      return lazyRender(lazyAgents, (m) =>
-        m.renderAgents({
-          // ... agents props
-        }),
-      );
+      return html`<agents-view></agents-view>`;
 
     case "channels":
-      return lazyRender(lazyChannels, (m) =>
-        m.renderChannels({
-          // ... channels props
-        }),
-      );
+      return html`<channels-view></channels-view>`;
 
     case "skills":
-      return lazyRender(lazySkills, (m) =>
-        m.renderSkills({
-          // ... skills props
-        }),
-      );
+      return html`<skills-view></skills-view>`;
 
     case "instances":
-      return lazyRender(lazyInstances, (m) =>
-        m.renderInstances({
-          // ... instances props
-        }),
-      );
+      return html`<instances-view></instances-view>`;
 
     case "nodes":
-      return lazyRender(lazyNodes, (m) =>
-        m.renderNodes({
-          // ... nodes props
-        }),
-      );
+      return html`<nodes-view></nodes-view>`;
 
     case "debug":
-      return lazyRender(lazyDebug, (m) =>
-        m.renderDebug({
-          // ... debug props
-        }),
-      );
+      return html`<debug-view></debug-view>`;
 
     case "logs":
-      return lazyRender(lazyLogs, (m) =>
-        m.renderLogs({
-          // ... logs props
-        }),
-      );
+      return html`<logs-view></logs-view>`;
 
     default:
       return nothing;
