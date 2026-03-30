@@ -40,6 +40,53 @@ const { whatsappPlugin } = loadBundledPluginPublicSurfaceSync<{
   artifactBasename: "index.ts",
 });
 
+function normalizeDiscordDirectApproverId(value: string | number): string | undefined {
+  const normalized = String(value)
+    .trim()
+    .replace(/^(discord|user|pk):/i, "")
+    .replace(/^<@!?(\d+)>$/, "$1")
+    .toLowerCase();
+  return normalized || undefined;
+}
+
+function getDiscordExecApprovalApproversForTests(params: { cfg: OpenClawConfig }): string[] {
+  const discord = params.cfg.channels?.discord;
+  return resolveApprovalApprovers({
+    explicit: discord?.execApprovals?.approvers,
+    allowFrom: discord?.allowFrom,
+    extraAllowFrom: discord?.dm?.allowFrom,
+    defaultTo: discord?.defaultTo,
+    normalizeApprover: normalizeDiscordDirectApproverId,
+    normalizeDefaultTo: (value) => normalizeDiscordDirectApproverId(value),
+  });
+}
+
+const discordNativeApprovalAdapterForTests = createApproverRestrictedNativeApprovalAdapter({
+  channel: "discord",
+  channelLabel: "Discord",
+  listAccountIds: () => [DEFAULT_ACCOUNT_ID],
+  hasApprovers: ({ cfg }) => getDiscordExecApprovalApproversForTests({ cfg }).length > 0,
+  isExecAuthorizedSender: ({ cfg, senderId }) => {
+    const normalizedSenderId =
+      senderId === undefined || senderId === null
+        ? undefined
+        : normalizeDiscordDirectApproverId(senderId);
+    return Boolean(
+      normalizedSenderId &&
+        getDiscordExecApprovalApproversForTests({ cfg }).includes(normalizedSenderId),
+    );
+  },
+  isNativeDeliveryEnabled: ({ cfg }) =>
+    Boolean(cfg.channels?.discord?.execApprovals?.enabled) &&
+    getDiscordExecApprovalApproversForTests({ cfg }).length > 0,
+  resolveNativeDeliveryMode: ({ cfg }) => cfg.channels?.discord?.execApprovals?.target ?? "dm",
+});
+
+const discordCommandTestPlugin: ChannelPlugin = {
+  ...discordPlugin,
+  auth: discordNativeApprovalAdapterForTests.auth,
+};
+
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn());
@@ -405,7 +452,7 @@ function setMinimalChannelPluginRegistryForTests(): void {
     createTestRegistry([
       {
         pluginId: "discord",
-        plugin: discordPlugin,
+        plugin: discordCommandTestPlugin,
         source: "test",
       },
       {
