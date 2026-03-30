@@ -8,6 +8,9 @@ const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
 const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
+const listTasksForSessionKeyMock = vi.hoisted(() =>
+  vi.fn((_: string) => [] as Array<Record<string, unknown>>),
+);
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -189,6 +192,9 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
   vi.doMock("../auto-reply/status.js", () => ({
     buildStatusMessage: buildStatusMessageMock,
   }));
+  vi.doMock("../tasks/task-registry.js", () => ({
+    listTasksForSessionKey: (sessionKey: string) => listTasksForSessionKeyMock(sessionKey),
+  }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
 
@@ -200,6 +206,8 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
   loadCombinedSessionStoreForGatewayMock.mockClear();
+  listTasksForSessionKeyMock.mockClear();
+  listTasksForSessionKeyMock.mockReturnValue([]);
   loadSessionStoreMock.mockReturnValue(store);
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({
     storePath: "(multiple)",
@@ -373,6 +381,38 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:current");
+  });
+
+  it("includes background task context in session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForSessionKeyMock.mockReturnValue([
+      {
+        taskId: "task-1",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        task: "Summarize inbox backlog",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        progressSummary: "Indexing the latest threads",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-1", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 active");
+    expect(text).toContain("acp");
+    expect(text).toContain("Summarize inbox backlog");
+    expect(text).toContain("Indexing the latest threads");
   });
 
   it("resolves a literal current sessionId in session_status", async () => {
