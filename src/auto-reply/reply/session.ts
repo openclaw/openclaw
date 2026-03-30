@@ -406,9 +406,6 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
-    persistedAuthProfileOverride = entry.authProfileOverride;
-    persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-    persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
@@ -416,15 +413,17 @@ export async function initSessionState(params: {
     systemSent = false;
     abortedLastRun = false;
     // When a reset trigger (/new, /reset) starts a new session, carry over
-    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
-    // so the user doesn't have to re-enable them every time.
+    // some user-set behavior overrides so the user doesn't have to re-enable them.
+    // NOTE: thinkingLevel is NOT carried over — it resets to the default (off) on /new,
+    // matching the behavior of modelOverride. Users must re-enable thinking explicitly.
     if (resetTriggered && entry) {
-      persistedThinking = entry.thinkingLevel;
+      // persistedThinking intentionally not set — thinkingLevel resets to default on /new.
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
+      // Do NOT carry over modelOverride/providerOverride on /new or /reset.
+      // The new session should start on the configured default model.
+      // persistedModelOverride and persistedProviderOverride remain undefined.
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
@@ -605,7 +604,6 @@ export async function initSessionState(params: {
     sessionEntry.totalTokens = undefined;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
-    sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.

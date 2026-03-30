@@ -13,7 +13,7 @@ import {
 } from "./chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { loadSessions } from "./controllers/sessions.ts";
+import { loadSessions, patchSession } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -130,6 +130,21 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
+function resolveModelDisplayName(provider: string, modelId: string): string {
+  // Strip provider prefix if present in modelId
+  const shortId = modelId.replace(/^.*\//, "");
+  // Common friendly names
+  const friendlyNames: Record<string, string> = {
+    "claude-sonnet-4-5": "Sonnet 4.5",
+    "claude-haiku-4-5": "Haiku 4.5",
+    "claude-opus-4-5": "Opus 4.5",
+    "claude-opus-4-6": "Opus 4.6",
+    "claude-sonnet-4-0": "Sonnet 4.0",
+    "claude-haiku-4-0": "Haiku 4.0",
+  };
+  return friendlyNames[shortId] ?? shortId;
+}
+
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
@@ -193,6 +208,14 @@ export function renderChatControls(state: AppViewState) {
       ></path>
     </svg>
   `;
+
+  // Model switcher state
+  const activeSession = state.sessionsResult?.sessions?.find((s) => s.key === state.sessionKey);
+  const currentModel = activeSession?.model ?? state.sessionsResult?.defaults?.model ?? null;
+  const currentProvider = activeSession?.modelProvider ?? "anthropic";
+  const currentModelKey = currentModel ? `${currentProvider}/${currentModel}` : null;
+  const modelCatalog = state.chatModelCatalog ?? [];
+  // Refresh icon
   const refreshIcon = html`
     <svg
       width="18"
@@ -226,8 +249,71 @@ export function renderChatControls(state: AppViewState) {
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
+  const sessionOptions = state.sessionsResult?.sessions ?? [];
   return html`
     <div class="chat-controls">
+      <label class="field chat-controls__session">
+        <select
+          .value=${state.sessionKey}
+          ?disabled=${!state.connected}
+          @change=${(e: Event) => {
+            const next = (e.target as HTMLSelectElement).value;
+            state.sessionKey = next;
+            state.chatMessage = "";
+            state.chatStream = null;
+            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+            state.chatRunId = null;
+            (state as unknown as OpenClawApp).resetToolStream();
+            (state as unknown as OpenClawApp).resetChatScroll();
+            state.applySettings({
+              ...state.settings,
+              sessionKey: next,
+              lastActiveSessionKey: next,
+            });
+            void state.loadAssistantIdentity();
+            syncUrlWithSessionKey(
+              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+              next,
+              true,
+            );
+            void loadChatHistory(state as unknown as ChatState);
+          }}
+        >
+          ${repeat(
+            sessionOptions,
+            (entry) => entry.key,
+            (entry) =>
+              html`<option value=${entry.key} title=${entry.key}>
+                ${entry.displayName ?? entry.key}
+              </option>`,
+          )}
+        </select>
+      </label>
+      ${
+        modelCatalog.length > 0
+          ? html`
+          <label class="field chat-controls__model">
+            <select
+              .value=${currentModelKey ?? ""}
+              ?disabled=${!state.connected || state.chatModelCatalogLoading}
+              @change=${(e: Event) => {
+                const value = (e.target as HTMLSelectElement).value;
+                void patchSession(state, state.sessionKey, {
+                  model: value || null,
+                });
+              }}
+              title="Switch model"
+            >
+              ${modelCatalog.map((m) => {
+                const key = `${m.provider}/${m.id}`;
+                const display = resolveModelDisplayName(m.provider, m.id);
+                return html`<option value=${key} ?selected=${key === currentModelKey}>${display}</option>`;
+              })}
+            </select>
+          </label>
+        `
+          : html``
+      }
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}

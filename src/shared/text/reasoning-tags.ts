@@ -84,7 +84,11 @@ export function stripReasoningTagsFromText(
     lastIndex = idx + match[0].length;
   }
 
-  if (!inThinking || mode === "preserve") {
+  // In strict mode, suppress the tail of an unclosed block only when answer content was
+  // already captured before it — that preserves the safety boundary (no reasoning leak).
+  // When nothing was captured yet, the tail is almost certainly the actual answer
+  // (model forgot closing tag, or stream cut off mid-tag), so recover it.
+  if (!inThinking || mode === "preserve" || !result.trim()) {
     result += cleaned.slice(lastIndex);
   }
 

@@ -23,9 +23,10 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-// Keep named exports explicit here so the runtime barrel stays self-contained
-// and plugin-sdk can re-export this file directly without reaching into
-// extension internals.
+// Pre-export local symbols that overlap with line-runtime to prevent jiti CJS
+// double-defineProperty crash (isSenderAllowed redefine bug). These named exports
+// register in jiti's _exportNames guard so the star-re-export below skips them.
+// See: Matrix fix PR #50919; known upstream jiti CJS interop bug class.
 export {
   firstDefined,
   isSenderAllowed,
@@ -46,6 +47,7 @@ export {
   sendMessageLine,
 } from "./src/send.js";
 export { monitorLineProvider } from "./src/monitor.js";
+export * from "openclaw/plugin-sdk/line-runtime";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";

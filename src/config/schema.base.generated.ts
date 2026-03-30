@@ -11549,6 +11549,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         },
         additionalProperties: false,
       },
+      closingTurn: {
+        type: "object",
+        properties: {
+          enabled: {
+            default: false,
+            type: "boolean",
+          },
+          prompt: {
+            type: "string",
+          },
+          agentId: {
+            type: "string",
+          },
+          timeoutSeconds: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+          },
+        },
+        required: ["enabled"],
+        additionalProperties: false,
+      },
     },
     required: ["commands"],
     additionalProperties: false,

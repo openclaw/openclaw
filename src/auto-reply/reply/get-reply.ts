@@ -201,7 +201,7 @@ export async function getReplyFromConfig(
       cfg,
     });
   }
-  emitPreAgentMessageHooks({
+  await emitPreAgentMessageHooks({
     ctx: finalized,
     cfg,
     isFastTestEnv,

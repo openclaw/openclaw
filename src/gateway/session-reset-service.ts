@@ -50,6 +50,8 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     ...entry,
     model: undefined,
     modelProvider: undefined,
+    modelOverride: undefined,
+    providerOverride: undefined,
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
@@ -259,7 +261,14 @@ export async function performGatewaySessionReset(params: {
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry }
+  | {
+      ok: true;
+      key: string;
+      entry: SessionEntry;
+      archivedPaths: string[];
+      oldSessionId: string | undefined;
+      agentId: string | undefined;
+    }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const { cfg, target, storePath } = (() => {
@@ -325,7 +334,7 @@ export async function performGatewaySessionReset(params: {
       updatedAt: now,
       systemSent: false,
       abortedLastRun: false,
-      thinkingLevel: currentEntry?.thinkingLevel,
+      thinkingLevel: undefined, // reset to default (off) on /new — same as modelOverride
       fastMode: currentEntry?.fastMode,
       verboseLevel: currentEntry?.verboseLevel,
       reasoningLevel: currentEntry?.reasoningLevel,
@@ -386,7 +395,7 @@ export async function performGatewaySessionReset(params: {
     return nextEntry;
   });
 
-  archiveSessionTranscriptsForSession({
+  const archivedPaths = archiveSessionTranscriptsForSession({
     sessionId: oldSessionId,
     storePath,
     sessionFile: oldSessionFile,
@@ -413,5 +422,12 @@ export async function performGatewaySessionReset(params: {
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next };
+  return {
+    ok: true,
+    key: target.canonicalKey,
+    entry: next,
+    archivedPaths,
+    oldSessionId,
+    agentId: target.agentId,
+  };
 }
