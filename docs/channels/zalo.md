@@ -241,3 +241,11 @@ Multi-account options:
 - `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
 - `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path.
 - `channels.zalo.accounts.<id>.proxy`: per-account proxy URL.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

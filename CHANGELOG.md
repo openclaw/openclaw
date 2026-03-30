@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Memory/QMD: rebind collections when QMD reports a changed pattern but omits path metadata, so config pattern changes stop being silently ignored on restart. (#49897) Thanks @Madruru.
 - Memory/QMD: warn explicitly when `memory.backend=qmd` is configured but the `qmd` binary is missing, so doctor and runtime fallback no longer fail as a silent builtin downgrade. (#50439) Thanks @Jimmy-xuzimo and @vincentkoc.
 - Memory/QMD: pass a direct-session key on `openclaw memory search` so CLI QMD searches no longer get denied as `session=<none>` under direct-only scope defaults. (#43517) Thanks @waynecc-at and @vincentkoc.
+- Memory/QMD: keep `memory_search` session-hit paths roundtrip-safe when exported session markdown lives under the workspace `qmd/` directory, so `memory_get` can read the exact returned path instead of failing on the generic `qmd/sessions/...` alias. (#43519) Thanks @holgergruenhagen and @vincentkoc.
 - Agents/memory flush: keep daily memory flush files append-only during embedded attempts so compaction writes do not overwrite earlier notes. (#53725) Thanks @HPluseven.
 - Web UI/markdown: stop bare auto-links from swallowing adjacent CJK text while preserving valid mixed-script path and query characters in rendered links. (#48410) Thanks @jnuyao.
 - BlueBubbles/iMessage: coalesce URL-only inbound messages with their link-preview balloon again so sharing a bare link no longer drops the URL from agent context. Thanks @vincentkoc.
@@ -99,6 +100,8 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: keep late compaction-retry rejections handled after the aggregate timeout path wins without swallowing real pre-timeout wait failures, so timed-out retries no longer surface an unhandled rejection on later unsubscribe. (#57451) Thanks @mpz4life and @vincentkoc.
 - Matrix/delivery recovery: treat Synapse `User not in room` replay failures as permanent during startup recovery so poisoned queued messages move to `failed/` instead of crash-looping Matrix after restart. (#57426) thanks @dlardo.
 - Plugins/facades: guard bundled plugin facade loads with a cache-first sentinel so circular re-entry stops crashing `xai`, `sglang`, and `vllm` during gateway plugin startup. (#57508) Thanks @openperf.
+- Agents/MCP: dispose bundled MCP runtimes after one-shot `openclaw agent --local` runs finish, while preserving bundled MCP state across in-run retries so local JSON runs exit cleanly without restarting stateful MCP tools mid-run.
+- Gateway/OpenAI HTTP: restore default operator scopes for bearer-authenticated requests that omit `x-openclaw-scopes`, so headless `/v1/chat/completions` and session-history callers work again after the recent method-scope hardening. (#57596) Thanks @openperf.
 
 ## 2026.3.28
 
@@ -314,6 +317,7 @@ Docs: https://docs.openclaw.ai
 - Runtime/install: lower the supported Node 22 floor to `22.14+` while continuing to recommend Node 24, so npm installs and self-updates do not strand Node 22.14 users on older releases.
 - CLI/update: preflight the target npm package `engines.node` before `openclaw update` runs a global package install, so outdated Node runtimes fail with a clear upgrade message instead of attempting an unsupported latest release.
 - Tests/security audit: isolate audit-test home and personal skill resolution so local `~/.agents/skills` installs no longer make maintainer prep runs fail nondeterministically. (#54473) thanks @huntharo
+- Memory/QMD: preserve explicit custom collection names for shared paths outside the agent workspace so `memory_search` stops appending `-<agentId>` to externally managed QMD collections. (#52539) Thanks @lobsrice and @vincentkoc.
 
 ## 2026.3.24-beta.1
 
@@ -695,6 +699,7 @@ Docs: https://docs.openclaw.ai
 - Z.AI/onboarding: add `glm-5-turbo` to the default Z.AI provider catalog so onboarding-generated configs expose the new model alongside the existing GLM defaults. (#46670) Thanks @tomsun28.
 - Zalo Personal/group gating: stop reapplying `dmPolicy.allowFrom` as a sender gate for already-allowlisted groups when `groupAllowFrom` is unset, so any member of an allowed group can trigger replies while DMs stay restricted. (#46663) Fixes #40146. Thanks @Takhoffman.
 - Zalo/plugin runtime: export `resolveClientIp` from `openclaw/plugin-sdk/zalo` so installed builds no longer crash on startup when the webhook monitor loads from the packaged extension instead of the monorepo source tree. (#46549) Thanks @No898.
+- Onboarding/custom providers: usage of pi-ai's specialized "azure-openai-responses" implementation for onboarded Azure OpenAI endpoints. (#50851) Thanks @kunalk16.
 - Docker/live tests: mount external CLI auth homes into writable container copies, derive Codex OAuth expiry from JWT `exp`, refresh synced CLI creds instead of trusting stale cached expiry, and make gateway live probes wait on transcript output so `pnpm test:docker:all` stays green in Linux.
 - Gateway/watch mode: restart on bundled-plugin package and manifest metadata changes, rebuild `dist` for extension source and `tsdown.config.ts` changes, and still ignore extension docs. (#47571) Thanks @gumadeiras.
 - Gateway/watch mode: recreate bundled plugin runtime metadata after clean or stale `dist` states, so `pnpm gateway:watch` no longer fails on missing bundled-plugin manifests after a rebuild. Thanks @gumadeiras.

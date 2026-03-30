@@ -292,7 +292,8 @@ openclaw cron add \
 
 ## Related
 
-- [Heartbeat](/gateway/heartbeat) - full heartbeat configuration
-- [Cron jobs](/automation/cron-jobs) - full cron CLI and API reference
-- [Background Tasks](/automation/tasks) - task ledger, audit, and lifecycle
-- [System](/cli/system) - system events + heartbeat controls
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Heartbeat](/gateway/heartbeat) — full heartbeat configuration
+- [Cron jobs](/automation/cron-jobs) — full cron CLI and API reference
+- [Background Tasks](/automation/tasks) — task ledger, audit, and lifecycle
+- [System](/cli/system) — system events + heartbeat controls
