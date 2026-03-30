@@ -112,6 +112,7 @@ Docs: https://docs.openclaw.ai
 - Diffs: fall back to plain text when `lang` hints are invalid during diff render and viewer hydration, so bad or stale language values no longer break the diff viewer. (#57902) Thanks @gumadeiras.
 - Doctor/plugins: skip false Matrix legacy-helper warnings when no migration plans exist, and keep bundled `enabledByDefault` plugins in the gateway startup set. (#57931) Thanks @dinakars777.
 - Matrix/CLI send: start one-off Matrix send clients before outbound delivery so `openclaw message send --channel matrix` restores E2EE in encrypted rooms instead of sending plain events. (#57936) Thanks @gumadeiras.
+- Matrix/direct rooms: stop trusting remote `is_direct`, honor explicit local `is_direct: false` for discovered DM candidates, and avoid extra member-state lookups for shared rooms so DM routing and repair stay aligned. (#57124) Thanks @w-sss.
 
 ## 2026.3.28
 
@@ -314,6 +315,7 @@ Docs: https://docs.openclaw.ai
 - Security/path resolution: prefer non-user-writable absolute helper binaries for OpenClaw CLI, ffmpeg, and OpenSSL resolution so PATH hijacks cannot replace trusted helpers with attacker-controlled executables.
 - Security/gateway command scopes: require `operator.admin` before Telegram target writeback and Talk Voice `/voice set` config writes persist through gateway message flows.
 - Security/OpenShell mirror: exclude workspace `hooks/` from mirror sync so untrusted sandbox files cannot become trusted host hooks on gateway startup.
+- Exec approvals/channels: unify Discord and Telegram exec approval runtime handling, move approval buttons onto the shared interactive reply model, and fix Telegram approval buttons and typed `/approve` commands so configured approvers can resolve requests reliably again. (#57516) Thanks @scoootscooob.
 
 ## 2026.3.24-beta.2
 
