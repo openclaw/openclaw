@@ -3,6 +3,11 @@ import { appendCdpPath } from "./cdp.js";
 import { closeChromeMcpTab, focusChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
+import {
+  formatLocalBrowserBridgeRelayAttachRequiredError,
+  formatLocalBrowserBridgeRelayStaleTargetError,
+  isLocalBrowserBridgeRelayProfile,
+} from "./local-browser-bridge-relay-attach-ux.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
@@ -32,17 +37,26 @@ export function createProfileSelectionOps({
 }: SelectionDeps): SelectionOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
+  const usesLocalBrowserBridgeRelay = isLocalBrowserBridgeRelayProfile(profile);
 
   const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
     const profileState = getProfileState();
     const tabs1 = await listTabs();
     if (tabs1.length === 0) {
+      if (usesLocalBrowserBridgeRelay) {
+        throw new BrowserTabNotFoundError(
+          formatLocalBrowserBridgeRelayAttachRequiredError(profile.name),
+        );
+      }
       await openTab("about:blank");
     }
 
     const tabs = await listTabs();
-    const candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+    const candidates =
+      usesLocalBrowserBridgeRelay || !capabilities.supportsPerTabWs
+        ? tabs
+        : tabs.filter((t) => Boolean(t.wsUrl));
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
@@ -66,12 +80,18 @@ export function createProfileSelectionOps({
       return page ?? candidates.at(0) ?? null;
     };
 
-    const chosen = targetId ? resolveById(targetId) : pickDefault();
+    let chosen = targetId ? resolveById(targetId) : pickDefault();
+    if (!chosen && usesLocalBrowserBridgeRelay && candidates.length === 1) {
+      chosen = candidates[0] ?? null;
+    }
 
     if (chosen === "AMBIGUOUS") {
       throw new BrowserTargetAmbiguousError();
     }
     if (!chosen) {
+      if (usesLocalBrowserBridgeRelay && targetId?.trim()) {
+        throw new BrowserTabNotFoundError(formatLocalBrowserBridgeRelayStaleTargetError());
+      }
       throw new BrowserTabNotFoundError();
     }
     profileState.lastTargetId = chosen.targetId;

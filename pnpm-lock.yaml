@@ -270,7 +270,11 @@ importers:
 
   extensions/brave: {}
 
-  extensions/browser: {}
+  extensions/browser:
+    dependencies:
+      local-browser-bridge:
+        specifier: file:/Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge
+        version: file:../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge
 
   extensions/byteplus: {}
 
@@ -5006,6 +5010,10 @@ packages:
 
   lit@3.3.2:
     resolution: {integrity: sha512-NF9zbsP79l4ao2SNrH3NkfmFgN/hBYSQo90saIVI1o5GpjAdCPVstVzO1MrLOakHoEhYkrtRjPK6Ob521aoYWQ==}
+
+  local-browser-bridge@file:../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge:
+    resolution: {directory: ../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge, type: directory}
+    hasBin: true
 
   lodash.camelcase@4.3.0:
     resolution: {integrity: sha512-TwuEnCnxbc3rAvhf/LbG7tJUDzhqXyFnv3dtzLOPgCG/hODL7WFnsbwktkD7yUV0RrreP/l1PALq/YSg6VvjlA==}
@@ -11660,6 +11668,8 @@ snapshots:
       '@lit/reactive-element': 2.1.2
       lit-element: 4.2.2
       lit-html: 3.3.2
+
+  local-browser-bridge@file:../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge: {}
 
   lodash.camelcase@4.3.0: {}
 

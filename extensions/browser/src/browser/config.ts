@@ -49,7 +49,33 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "existing-session";
   attachOnly: boolean;
+  relayAttachUx?: {
+    provider: "local-browser-bridge";
+    mode: "relay";
+    sharedTabScope: "current-shared-tab";
+  };
 };
+
+function resolveRelayAttachUx(raw: unknown): ResolvedBrowserProfile["relayAttachUx"] {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const value = raw as Record<string, unknown>;
+  if (
+    value.provider !== "local-browser-bridge" ||
+    value.mode !== "relay" ||
+    value.sharedTabScope !== "current-shared-tab"
+  ) {
+    return undefined;
+  }
+
+  return {
+    provider: "local-browser-bridge",
+    mode: "relay",
+    sharedTabScope: "current-shared-tab",
+  };
+}
 
 function normalizeHexColor(raw: string | undefined) {
   const value = (raw ?? "").trim();
@@ -321,6 +347,9 @@ export function resolveProfile(
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
+  const relayAttachUx = resolveRelayAttachUx(
+    (profile as typeof profile & { relayAttachUx?: unknown }).relayAttachUx,
+  );
 
   if (driver === "existing-session") {
     // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
@@ -334,6 +363,7 @@ export function resolveProfile(
       color: profile.color,
       driver,
       attachOnly: true,
+      relayAttachUx,
     };
   }
 
@@ -357,6 +387,7 @@ export function resolveProfile(
     color: profile.color,
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    relayAttachUx,
   };
 }
 

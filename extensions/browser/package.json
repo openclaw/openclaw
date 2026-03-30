@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw browser tool plugin",
   "type": "module",
+  "dependencies": {
+    "local-browser-bridge": "file:/Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
