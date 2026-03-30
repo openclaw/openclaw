@@ -8,6 +8,10 @@ const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
+const getDaemonStatusSummaryMock = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() => vi.fn());
+
+vi.stubGlobal("fetch", fetchMock);
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -29,6 +33,10 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
+vi.mock("./status.daemon.js", () => ({
+  getDaemonStatusSummary: () => getDaemonStatusSummaryMock(),
+}));
+
 let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
 
 const runtime = {
@@ -43,23 +51,35 @@ function resetRuntime() {
   runtime.exit.mockClear();
 }
 
-function mockSnapshot(token: unknown = "abc") {
+function mockSnapshot(token: unknown = "abc", gateway: Record<string, unknown> = {}) {
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
     raw: "{}",
     parsed: {},
     valid: true,
-    config: { gateway: { auth: { token } } },
+    config: { gateway: { auth: { token }, ...gateway } },
     issues: [],
     legacyIssues: [],
   });
   resolveGatewayPortMock.mockReturnValue(18789);
-  resolveControlUiLinksMock.mockReturnValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
-  });
+  resolveControlUiLinksMock.mockImplementation(
+    ({ bind }: { bind?: string; port: number; customBindHost?: string; basePath?: string }) => ({
+      httpUrl: bind === "custom" ? "http://10.0.0.5:18789/" : "http://127.0.0.1:18789/",
+      wsUrl: bind === "custom" ? "ws://10.0.0.5:18789" : "ws://127.0.0.1:18789",
+    }),
+  );
   resolveSecretRefValuesMock.mockReset();
+  fetchMock.mockResolvedValue({ ok: true, status: 200 });
+  getDaemonStatusSummaryMock.mockResolvedValue({
+    label: "LaunchAgent",
+    installed: true,
+    loaded: true,
+    managedByOpenClaw: true,
+    externallyManaged: false,
+    loadedText: "loaded",
+    runtimeShort: "running",
+  });
 }
 
 describe("dashboardCommand", () => {
@@ -67,6 +87,7 @@ describe("dashboardCommand", () => {
     vi.resetModules();
     ({ dashboardCommand } = await import("./dashboard.js"));
     resetRuntime();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     readConfigFileSnapshotMock.mockClear();
     resolveGatewayPortMock.mockClear();
     resolveControlUiLinksMock.mockClear();
@@ -74,6 +95,8 @@ describe("dashboardCommand", () => {
     openUrlMock.mockClear();
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
+    getDaemonStatusSummaryMock.mockClear();
+    fetchMock.mockClear();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
@@ -120,11 +143,34 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
     expect(openUrlMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
     );
+  });
+
+  it("uses the resolved dashboard host for the preflight health probe", async () => {
+    mockSnapshot("abc123", { bind: "custom", customBindHost: "10.0.0.5" });
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime);
+
+    expect(resolveControlUiLinksMock).toHaveBeenNthCalledWith(1, {
+      port: 18789,
+      bind: "custom",
+      customBindHost: "10.0.0.5",
+      basePath: undefined,
+    });
+    expect(resolveControlUiLinksMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://10.0.0.5:18789/healthz",
+      expect.objectContaining({ method: "HEAD", redirect: "manual" }),
+    );
+    expect(openUrlMock).toHaveBeenCalledWith("http://10.0.0.5:18789/#token=abc123");
   });
 
   it("prints non-tokenized URL with guidance when token SecretRef is unresolved", async () => {
@@ -194,5 +240,75 @@ describe("dashboardCommand", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
     );
+  });
+
+  it("does not copy or open the dashboard when the local gateway is unreachable", async () => {
+    mockSnapshot("abc123");
+    fetchMock.mockRejectedValue(new Error("connect failed: ECONNREFUSED 127.0.0.1:18789"));
+    getDaemonStatusSummaryMock.mockResolvedValue({
+      label: "LaunchAgent",
+      installed: false,
+      loaded: false,
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtimeShort: null,
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/healthz",
+      expect.objectContaining({ method: "HEAD", redirect: "manual" }),
+    );
+    expect(copyToClipboardMock).not.toHaveBeenCalled();
+    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway is not reachable at http://127.0.0.1:18789/healthz (connect failed: ECONNREFUSED 127.0.0.1:18789).",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway mode is unset"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service is not installed"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Fix reachability first"));
+  });
+
+  it("avoids the mode-unset hint when the config file is missing", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      exists: false,
+      raw: "",
+      parsed: null,
+      valid: false,
+      config: {},
+      issues: [],
+      legacyIssues: [],
+    });
+    resolveGatewayPortMock.mockReturnValue(18789);
+    resolveControlUiLinksMock.mockImplementation(
+      ({ bind }: { bind?: string; port: number; customBindHost?: string; basePath?: string }) => ({
+        httpUrl: "http://127.0.0.1:18789/",
+        wsUrl: bind === "loopback" ? "ws://127.0.0.1:18789" : "ws://10.0.0.5:18789",
+      }),
+    );
+    fetchMock.mockRejectedValue(new Error("connect failed: ECONNREFUSED 127.0.0.1:18789"));
+    getDaemonStatusSummaryMock.mockResolvedValue({
+      label: "LaunchAgent",
+      installed: false,
+      loaded: false,
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtimeShort: null,
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/healthz",
+      expect.objectContaining({ method: "HEAD", redirect: "manual" }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Missing config"));
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Gateway mode is unset"));
   });
 });

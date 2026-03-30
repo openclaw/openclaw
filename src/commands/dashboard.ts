@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readGatewayTokenEnv } from "../gateway/credentials.js";
@@ -11,10 +12,80 @@ import {
   openUrl,
   resolveControlUiLinks,
 } from "./onboard-helpers.js";
+import { getDaemonStatusSummary } from "./status.daemon.js";
 
 type DashboardOptions = {
   noOpen?: boolean;
 };
+
+async function probeDashboardHttpReachability(
+  url: string,
+  timeoutMs: number,
+): Promise<{ reachable: boolean; error?: string }> {
+  if (typeof fetch !== "function") {
+    return { reachable: false, error: "fetch unavailable" };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await fetch(url, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    return { reachable: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { reachable: false, error: message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function shouldBlockOnUnreachableGateway(params: {
+  cfg: OpenClawConfig;
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  probeHttpUrl: string;
+  runtime: RuntimeEnv;
+}): Promise<boolean> {
+  if (params.cfg.gateway?.mode === "remote") {
+    return false;
+  }
+
+  const probe = await probeDashboardHttpReachability(params.probeHttpUrl, 1_500);
+  if (probe.reachable) {
+    return false;
+  }
+
+  const detail = probe.error ? ` (${probe.error})` : "";
+  params.runtime.error(`Gateway is not reachable at ${params.probeHttpUrl}${detail}.`);
+
+  if (!params.snapshot.exists) {
+    params.runtime.log(`Missing config: run ${formatCliCommand("openclaw setup")}.`);
+  } else if (!params.cfg.gateway?.mode) {
+    params.runtime.log(
+      `Gateway mode is unset; local gateway start is blocked. Run ${formatCliCommand("openclaw config set gateway.mode local")}.`,
+    );
+  }
+
+  const daemon = await getDaemonStatusSummary().catch(() => null);
+  if (daemon?.installed === false) {
+    params.runtime.log(
+      `Gateway service is not installed. Run ${formatCliCommand("openclaw daemon install")}.`,
+    );
+  } else if (daemon?.installed && !daemon.loaded) {
+    params.runtime.log(
+      `Gateway service is installed but not loaded. Run ${formatCliCommand("openclaw daemon start")}.`,
+    );
+  } else if (daemon?.installed) {
+    params.runtime.log(
+      `Gateway service appears installed. Try ${formatCliCommand("openclaw daemon restart")} if the dashboard still stays down.`,
+    );
+  }
+
+  params.runtime.log(`Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);
+  return true;
+}
 
 async function resolveDashboardToken(
   cfg: OpenClawConfig,
@@ -86,6 +157,20 @@ export async function dashboardCommand(
     runtime.log(
       "Set OPENCLAW_GATEWAY_TOKEN in this shell or resolve your secret provider, then rerun `openclaw dashboard`.",
     );
+  }
+
+  if (!options.noOpen) {
+    const probeHttpUrl = new URL("/healthz", links.httpUrl).toString();
+    if (
+      await shouldBlockOnUnreachableGateway({
+        cfg,
+        snapshot,
+        probeHttpUrl,
+        runtime,
+      })
+    ) {
+      return;
+    }
   }
 
   const copied = await copyToClipboard(dashboardUrl).catch(() => false);
