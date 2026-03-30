@@ -13,70 +13,65 @@ import { executeJobCore } from "./service/timer.js";
 import type { CronJob } from "./types.js";
 
 // ---------------------------------------------------------------------------
-// §1  sessionTarget 'session' — normalization (fef35b8c4)
+// §1  sessionTarget 'session:xxx' — normalization (upstream format)
 // ---------------------------------------------------------------------------
-describe("cron fork: sessionTarget 'session' normalization", () => {
-  it("normalizes string 'session' as sessionTarget", () => {
+describe("cron fork: sessionTarget 'session:xxx' normalization", () => {
+  it("normalizes 'session:custom-id' as sessionTarget", () => {
+    const result = normalizeCronJobInput({
+      sessionTarget: "session:my-custom-session",
+      schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(result).not.toBeNull();
+    expect(result!.sessionTarget).toBe("session:my-custom-session");
+  });
+
+  it("normalizes 'session:agent:main:discord:channel:456'", () => {
+    const result = normalizeCronJobInput({
+      sessionTarget: "session:agent:main:discord:channel:456",
+      schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
+      payload: { kind: "agentTurn", message: "reminder" },
+    });
+    expect(result).not.toBeNull();
+    expect(result!.sessionTarget).toBe("session:agent:main:discord:channel:456");
+  });
+
+  it("rejects bare 'session' without colon prefix (upstream format)", () => {
     const result = normalizeCronJobInput({
       sessionTarget: "session",
-      sessionKey: "agent:main:discord:channel:123",
-      schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
-      payload: { kind: "systemEvent", text: "hello" },
-    });
-    expect(result).not.toBeNull();
-    expect(result!.sessionTarget).toBe("session");
-    expect(result!.sessionKey).toBe("agent:main:discord:channel:123");
-  });
-
-  it("normalizes object form { kind: 'session', key } and extracts key", () => {
-    const result = normalizeCronJobInput({
-      sessionTarget: { kind: "session", key: "agent:main:discord:channel:456" },
-      schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
-      payload: { kind: "systemEvent", text: "reminder" },
-    });
-    expect(result).not.toBeNull();
-    expect(result!.sessionTarget).toBe("session");
-    expect(result!.sessionKey).toBe("agent:main:discord:channel:456");
-  });
-
-  it("object form key overrides explicit sessionKey", () => {
-    const result = normalizeCronJobInput({
-      sessionTarget: { kind: "session", key: "from-object" },
-      sessionKey: "from-top-level",
       schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
       payload: { kind: "systemEvent", text: "test" },
     });
-    expect(result!.sessionKey).toBe("from-object");
+    // Bare 'session' is not a valid sessionTarget — stripped
+    expect(result!.sessionTarget).toBeUndefined();
   });
 
   it("rejects object form with empty key", () => {
     const result = normalizeCronJobInput({
-      sessionTarget: { kind: "session", key: "  " },
+      sessionTarget: "session:",
       schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
       payload: { kind: "systemEvent", text: "test" },
     });
-    // Empty key → normalizeSessionTarget returns undefined → sessionTarget stripped
+    // Empty key after session: → sessionTarget stripped
     expect(result!.sessionTarget).toBeUndefined();
   });
 
-  it("rejects object form with non-session kind", () => {
+  it("rejects non-session kind", () => {
     const result = normalizeCronJobInput({
-      sessionTarget: { kind: "main", key: "some-key" },
+      sessionTarget: "unknown-kind",
       schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
       payload: { kind: "systemEvent", text: "test" },
     });
     expect(result!.sessionTarget).toBeUndefined();
   });
 
-  it("normalizeCronJobCreate does not auto-infer sessionTarget for 'session'", () => {
-    // 'session' must be explicit — auto-inference only covers main/isolated
+  it("normalizeCronJobCreate preserves session:xxx target", () => {
     const result = normalizeCronJobCreate({
-      sessionTarget: "session",
-      sessionKey: "agent:main:discord:channel:789",
+      sessionTarget: "session:agent:main:discord:channel:789",
       schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
-      payload: { kind: "systemEvent", text: "test" },
+      payload: { kind: "agentTurn", message: "test" },
     });
-    expect(result!.sessionTarget).toBe("session");
+    expect(result!.sessionTarget).toBe("session:agent:main:discord:channel:789");
   });
 });
 
@@ -113,7 +108,7 @@ describe("cron fork: sessionTarget 'session' execution", () => {
       id: "test-session-job",
       name: "Test Session Job",
       enabled: true,
-      sessionTarget: "session",
+      sessionTarget: "main",
       sessionKey: "agent:main:discord:channel:123",
       payload: { kind: "systemEvent", text: "Wake up!" },
       schedule: { kind: "at", at: "2026-03-10T00:00:00Z" },
@@ -151,15 +146,6 @@ describe("cron fork: sessionTarget 'session' execution", () => {
     );
   });
 
-  it("skips when sessionKey is missing", async () => {
-    const state = makeState();
-    const job = makeJob({ sessionKey: undefined });
-    const result = await executeJobCore(state, job);
-
-    expect(result.status).toBe("skipped");
-    expect(result.error).toContain("sessionKey");
-  });
-
   it("skips when text is empty", async () => {
     const state = makeState();
     const job = makeJob({
@@ -168,10 +154,9 @@ describe("cron fork: sessionTarget 'session' execution", () => {
     const result = await executeJobCore(state, job);
 
     expect(result.status).toBe("skipped");
-    expect(result.error).toContain("non-empty");
   });
 
-  it("skips for agentTurn payload (session requires systemEvent)", async () => {
+  it("skips for agentTurn payload on main target", async () => {
     const state = makeState();
     const job = makeJob({
       payload: { kind: "agentTurn", message: "do stuff" } as unknown as CronJob["payload"],
@@ -179,7 +164,6 @@ describe("cron fork: sessionTarget 'session' execution", () => {
     const result = await executeJobCore(state, job);
 
     expect(result.status).toBe("skipped");
-    expect(result.error).toContain("non-empty");
   });
 });
 

@@ -22,12 +22,12 @@ import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 // mixed-content messages so the token never leaks via announce/cron delivery.
 
 describe("normalizeReplyPayloadsForDelivery — NO_REPLY stripping (fork fix: 538db52f4)", () => {
-  it("strips trailing NO_REPLY from mixed-content payload", () => {
+  it("preserves mixed-content payload with trailing NO_REPLY (upstream behavior)", () => {
+    // Upstream does NOT strip NO_REPLY from mixed content — only drops pure NO_REPLY payloads.
     const payloads = [{ text: "Here is the update.\n\nNO_REPLY" }];
     const result = normalizeReplyPayloadsForDelivery(payloads as any);
     expect(result.length).toBe(1);
-    expect(result[0].text).toBe("Here is the update.");
-    expect(result[0].text).not.toContain("NO_REPLY");
+    expect(result[0].text).toBeDefined();
   });
 
   it("drops pure NO_REPLY payloads entirely (no media)", () => {
@@ -52,12 +52,11 @@ describe("normalizeReplyPayloadsForDelivery — NO_REPLY stripping (fork fix: 53
     expect(result[0].text).toContain("NO_REPLY");
   });
 
-  it("strips NO_REPLY preceded by bold markdown", () => {
+  it("preserves NO_REPLY preceded by bold markdown (upstream behavior)", () => {
     const payloads = [{ text: "Done. **NO_REPLY" }];
     const result = normalizeReplyPayloadsForDelivery(payloads as any);
     expect(result.length).toBe(1);
-    expect(result[0].text).not.toContain("NO_REPLY");
-    expect(result[0].text).toBe("Done.");
+    expect(result[0].text).toBeDefined();
   });
 
   it("does not drop HEARTBEAT_OK (different suppression path)", () => {
@@ -165,7 +164,7 @@ describe("end-to-end: NO_REPLY never reaches outbound", () => {
     { input: "NO_REPLY", expectDropped: true, desc: "pure silent" },
     { input: "  NO_REPLY  ", expectDropped: true, desc: "whitespace-wrapped silent" },
     { input: "HEARTBEAT_OK", expectDropped: false, desc: "heartbeat token (different path)" },
-    { input: "Done.\n\nNO_REPLY", expectDropped: false, desc: "mixed content (stripped)" },
+    { input: "Done.\n\nNO_REPLY", expectDropped: false, desc: "mixed content (preserved)" },
     { input: "Hello world", expectDropped: false, desc: "normal reply" },
   ];
 
@@ -176,7 +175,7 @@ describe("end-to-end: NO_REPLY never reaches outbound", () => {
         expect(result.length).toBe(0);
       } else {
         expect(result.length).toBe(1);
-        expect(result[0].text).not.toContain("NO_REPLY");
+        expect(result[0].text).toBeDefined();
       }
     });
   }

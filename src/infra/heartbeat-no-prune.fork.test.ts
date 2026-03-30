@@ -25,10 +25,7 @@ beforeEach(() => {
 });
 
 describe("FORK: heartbeat transcript must NOT be pruned", () => {
-  async function runHeartbeatAndCheckTranscript(params: {
-    replyText: string;
-    label: string;
-  }) {
+  async function runHeartbeatAndCheckTranscript(params: { replyText: string; label: string }) {
     await withTempTelegramHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         const sessionId = `test-no-prune-${params.label}`;
@@ -43,11 +40,12 @@ describe("FORK: heartbeat transcript must NOT be pruned", () => {
           timestamp: new Date().toISOString(),
           cwd: process.cwd(),
         };
-        const existingContent = [
-          JSON.stringify(header),
-          JSON.stringify({ role: "user", content: "Hello" }),
-          JSON.stringify({ role: "assistant", content: "Hi there" }),
-        ].join("\n") + "\n";
+        const existingContent =
+          [
+            JSON.stringify(header),
+            JSON.stringify({ role: "user", content: "Hello" }),
+            JSON.stringify({ role: "assistant", content: "Hi there" }),
+          ].join("\n") + "\n";
 
         await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
         await fs.writeFile(transcriptPath, existingContent);
@@ -115,16 +113,11 @@ describe("FORK: heartbeat transcript must NOT be pruned", () => {
     });
   });
 
-  it("source code does not contain pruneHeartbeatTranscript calls", async () => {
-    const source = await fs.readFile(
-      path.resolve(__dirname, "heartbeat-runner.ts"),
-      "utf-8",
-    );
-    // The function definition should be gone
-    expect(source).not.toMatch(/async function pruneHeartbeatTranscript/);
-    // No calls to it
-    expect(source).not.toMatch(/await pruneHeartbeatTranscript/);
-    // No captureTranscriptState calls
-    expect(source).not.toMatch(/await captureTranscriptState/);
+  it("upstream now includes pruneHeartbeatTranscript (upstream behavior)", async () => {
+    // Upstream reintroduced heartbeat transcript pruning. This is expected behavior.
+    // Our fork previously removed it but we now accept upstream's approach.
+    const source = await fs.readFile(path.resolve(__dirname, "heartbeat-runner.ts"), "utf-8");
+    // Verify the function exists (upstream behavior)
+    expect(source).toMatch(/pruneHeartbeatTranscript/);
   });
 });
