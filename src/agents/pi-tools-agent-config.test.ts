@@ -121,12 +121,12 @@ describe("Agent-specific tool filtering", () => {
   }
 
   function createExecHostDefaultsConfig(
-    agents: Array<{ id: string; execHost?: "gateway" | "sandbox" }>,
+    agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
   ): OpenClawConfig {
     return {
       tools: {
         exec: {
-          host: "sandbox",
+          host: "auto",
           security: "full",
           ask: "off",
         },
@@ -658,21 +658,28 @@ describe("Agent-specific tool filtering", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
-  it("fails closed when the implicit exec host resolves to sandbox without a runtime", async () => {
+  it("routes implicit auto exec to gateway without a sandbox runtime", async () => {
     const tools = createOpenClawCodingTools({
-      config: {},
+      config: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+      },
       sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-implicit-sandbox",
-      agentDir: "/tmp/agent-main-implicit-sandbox",
+      workspaceDir: "/tmp/test-main-implicit-gateway",
+      agentDir: "/tmp/agent-main-implicit-gateway",
     });
     const execTool = tools.find((tool) => tool.name === "exec");
     expect(execTool).toBeDefined();
 
-    await expect(
-      execTool!.execute("call-implicit-sandbox-default", {
-        command: "echo done",
-      }),
-    ).rejects.toThrow("sandbox runtime is unavailable");
+    const result = await execTool!.execute("call-implicit-auto-default", {
+      command: "echo done",
+    });
+    const resultDetails = result?.details as { status?: string } | undefined;
+    expect(resultDetails?.status).toBe("completed");
   });
 
   it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
@@ -689,7 +696,7 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow("sandbox runtime is unavailable");
+    ).rejects.toThrow("requires a sandbox runtime");
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -727,19 +734,19 @@ describe("Agent-specific tool filtering", () => {
     });
     const helperExecTool = helperTools.find((tool) => tool.name === "exec");
     expect(helperExecTool).toBeDefined();
-    await expect(
-      helperExecTool!.execute("call-helper-default", {
-        command: "echo done",
-        yieldMs: 1000,
-      }),
-    ).rejects.toThrow("sandbox runtime is unavailable");
+    const helperResult = await helperExecTool!.execute("call-helper-default", {
+      command: "echo done",
+      yieldMs: 1000,
+    });
+    const helperDetails = helperResult?.details as { status?: string } | undefined;
+    expect(helperDetails?.status).toBe("completed");
     await expect(
       helperExecTool!.execute("call-helper", {
         command: "echo done",
         host: "sandbox",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow("sandbox runtime is unavailable");
+    ).rejects.toThrow("requires a sandbox runtime");
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {

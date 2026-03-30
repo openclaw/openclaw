@@ -31,15 +31,17 @@ export function createCanonicalFixtureSkill(params: {
   source: string;
   disableModelInvocation?: boolean;
 }): Skill {
-  // Keep skill fixtures on the upstream canonical provenance shape.
   return {
     name: params.name,
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
+    source: params.source,
     sourceInfo: createSyntheticSourceInfo(params.filePath, {
       source: params.source,
       baseDir: params.baseDir,
+      scope: "project",
+      origin: "top-level",
     }),
     disableModelInvocation: params.disableModelInvocation ?? false,
   };

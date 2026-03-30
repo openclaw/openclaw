@@ -1,14 +1,7 @@
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
-import {
-  isDiscordExecApprovalApprover,
-  isDiscordExecApprovalClientEnabled,
-} from "../../plugin-sdk/discord-surface.js";
-import {
-  isTelegramExecApprovalAuthorizedSender,
-  isTelegramExecApprovalApprover,
-} from "../../plugin-sdk/telegram-runtime.js";
+import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -130,68 +123,19 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
   const isPluginId = parsed.id.startsWith("plugin:");
-  let discordExecApprovalDeniedReply: { shouldContinue: false; reply: { text: string } } | null =
-    null;
-  let isTelegramExplicitApprover = false;
-
-  if (params.command.channel === "telegram") {
-    const telegramApproverContext = {
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-      senderId: params.command.senderId,
-    };
-    isTelegramExplicitApprover = isTelegramExecApprovalApprover(telegramApproverContext);
-
-    if (!isPluginId && !isTelegramExecApprovalAuthorizedSender(telegramApproverContext)) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
-      };
-    }
-
-    if (isPluginId && !isTelegramExplicitApprover) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },
-      };
-    }
-  }
-
-  if (params.command.channel === "discord" && !isPluginId) {
-    const discordApproverContext = {
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-      senderId: params.command.senderId,
-    };
-    if (!isDiscordExecApprovalClientEnabled(discordApproverContext)) {
-      discordExecApprovalDeniedReply = {
-        shouldContinue: false,
-        reply: { text: "❌ Discord exec approvals are not enabled for this bot account." },
-      };
-    }
-    if (!discordExecApprovalDeniedReply && !isDiscordExecApprovalApprover(discordApproverContext)) {
-      discordExecApprovalDeniedReply = {
-        shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve exec requests on Discord." },
-      };
-    }
-  }
-
-  // Keep plugin-ID routing independent from exec approval client enablement so
-  // forwarded plugin approvals remain resolvable, but still require explicit
-  // Discord approver membership for security parity.
-  if (
-    params.command.channel === "discord" &&
-    isPluginId &&
-    !isDiscordExecApprovalApprover({
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-      senderId: params.command.senderId,
-    })
-  ) {
+  const approvalAuthorization = resolveApprovalCommandAuthorization({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    accountId: params.ctx.AccountId,
+    senderId: params.command.senderId,
+    kind: isPluginId ? "plugin" : "exec",
+  });
+  if (!approvalAuthorization.authorized) {
     return {
       shouldContinue: false,
-      reply: { text: "❌ You are not authorized to approve plugin requests on Discord." },
+      reply: {
+        text: approvalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
+      },
     };
   }
 
@@ -227,30 +171,18 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       };
     }
   } else {
-    if (discordExecApprovalDeniedReply) {
-      // Preserve the legacy unprefixed plugin fallback on Discord even when
-      // exec approvals are unavailable to this sender.
-      try {
-        await callApprovalMethod("plugin.approval.resolve");
-      } catch (pluginErr) {
-        if (isApprovalNotFoundError(pluginErr)) {
-          return discordExecApprovalDeniedReply;
-        }
-        return {
-          shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
-        };
-      }
-      return {
-        shouldContinue: false,
-        reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
-      };
-    }
     try {
       await callApprovalMethod("exec.approval.resolve");
     } catch (err) {
       if (isApprovalNotFoundError(err)) {
-        if (params.command.channel === "telegram" && !isTelegramExplicitApprover) {
+        const pluginFallbackAuthorization = resolveApprovalCommandAuthorization({
+          cfg: params.cfg,
+          channel: params.command.channel,
+          accountId: params.ctx.AccountId,
+          senderId: params.command.senderId,
+          kind: "plugin",
+        });
+        if (!pluginFallbackAuthorization.authorized) {
           return {
             shouldContinue: false,
             reply: { text: `❌ Failed to submit approval: ${String(err)}` },
