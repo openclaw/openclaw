@@ -1321,6 +1321,43 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("removes zero Google thinkingBudget (Gemini rejects 0)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: 0,
+          },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "atproxy", "gemini-3.1-pro-high", undefined, "high");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "atproxy",
+      id: "gemini-3.1-pro-high",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    const thinkingConfig = (
+      payloads[0]?.config as { thinkingConfig?: Record<string, unknown> } | undefined
+    )?.thinkingConfig;
+    expect(thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
+  });
+
   it("keeps valid Google thinkingBudget unchanged", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

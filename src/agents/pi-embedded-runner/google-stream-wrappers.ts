@@ -47,12 +47,13 @@ export function sanitizeGoogleThinkingPayload(params: {
   }
   const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
   const thinkingBudget = thinkingConfigObj.thinkingBudget;
-  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
+  if (typeof thinkingBudget !== "number" || thinkingBudget > 0) {
     return;
   }
 
-  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
-  // is invalid for Google-compatible backends and can lead to malformed handling.
+  // pi-ai can emit thinkingBudget=-1 or 0 for some Gemini model IDs; a negative
+  // or zero budget is invalid for Google-compatible backends (Gemini rejects 0
+  // with 400: "The model does not support setting thinking_budget to 0").
   delete thinkingConfigObj.thinkingBudget;
 
   if (
