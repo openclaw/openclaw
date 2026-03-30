@@ -1095,4 +1095,110 @@ describe("system-event-triggered heartbeat session routing", () => {
 
     expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
   });
+
+  it("skip-restore preserves pre-existing event when migrated event shares same contextKey+text", async () => {
+    const tmpDir = await createCaseDir("hb-skip-stable-id");
+    const storePath = path.join(tmpDir, "sessions.json");
+
+    const agentId = "main";
+    const heartbeatSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "group",
+      peerId: "-100heartbeat",
+    });
+    const dmSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "direct",
+      peerId: "111222333",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "telegram",
+            to: "-100heartbeat",
+            session: heartbeatSessionKey,
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveAgentMainSessionKey({ cfg, agentId })]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [dmSessionKey]: {
+          sessionId: "sid-dm",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "111222333",
+        },
+      }),
+    );
+
+    // Create an empty HEARTBEAT.md so heartbeat is skipped → triggers skip-restore
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "   \n");
+
+    // Pre-populate the heartbeat session with an event that has the SAME
+    // contextKey+text as the event that will be migrated from the DM session.
+    const sharedText = "exec finished (identity-test, code 0) :: build ok";
+    const sharedContextKey = "exec:identity-test";
+    enqueueSystemEvent(sharedText, {
+      sessionKey: heartbeatSessionKey,
+      contextKey: sharedContextKey,
+    });
+
+    // Enqueue the same contextKey+text into the DM session — this will be migrated
+    enqueueSystemEvent(sharedText, {
+      sessionKey: dmSessionKey,
+      contextKey: sharedContextKey,
+    });
+
+    expect(peekSystemEventEntries(heartbeatSessionKey)).toHaveLength(1);
+    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(1);
+
+    const sendTelegram = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; chatId: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", chatId: "-100heartbeat" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "exec:identity-test:exit",
+      sessionKey: dmSessionKey,
+      deps: createHeartbeatDeps(sendTelegram),
+    });
+
+    expect(res.status).toBe("skipped");
+    expect(res).toHaveProperty("reason", "empty-heartbeat-file");
+
+    // The pre-existing heartbeat event must be PRESERVED (not consumed by
+    // the removal pass), and the migrated event must be restored to the DM.
+    const heartbeatEntries = peekSystemEventEntries(heartbeatSessionKey);
+    expect(heartbeatEntries).toHaveLength(1);
+    expect(heartbeatEntries[0].text).toBe(sharedText);
+
+    // The migrated event must be restored to the originating DM session
+    const dmEntries = peekSystemEventEntries(dmSessionKey);
+    expect(dmEntries).toHaveLength(1);
+    expect(dmEntries[0].text).toBe(sharedText);
+  });
 });

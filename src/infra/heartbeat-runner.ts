@@ -488,15 +488,27 @@ async function resolveHeartbeatPreflight(params: {
     // Drain destination events first so we can rebuild the queue with
     // pre-existing events followed by migrated events.  skipDedup prevents
     // the consecutive-duplicate guard from dropping a migrated event whose
-    // text happens to match the destination queue's tail.
+    // text happens to match the destination queue's tail.  Migrated events
+    // are tagged with __migrated so skip-restore can identify them by stable
+    // identity instead of key+text matching.
     preExistingHeartbeatEvents = drainSystemEventEntries(session.sessionKey);
-    for (const event of [...preExistingHeartbeatEvents, ...migratedEvents]) {
+    for (const event of preExistingHeartbeatEvents) {
       enqueueSystemEvent(event.text, {
         sessionKey: session.sessionKey,
         contextKey: event.contextKey,
         deliveryContext: event.deliveryContext,
         trusted: event.trusted,
         skipDedup: true,
+      });
+    }
+    for (const event of migratedEvents) {
+      enqueueSystemEvent(event.text, {
+        sessionKey: session.sessionKey,
+        contextKey: event.contextKey,
+        deliveryContext: event.deliveryContext,
+        trusted: event.trusted,
+        skipDedup: true,
+        __migrated: true,
       });
     }
   }
@@ -542,21 +554,12 @@ async function resolveHeartbeatPreflight(params: {
       if (migratedEvents.length > 0 && originatingSessionKey) {
         const currentDestEvents = drainSystemEventEntries(session.sessionKey);
 
-        // Build a removal multiset from migrated events so we can identify
-        // and remove exactly those entries from the destination queue.
-        const removalCounts = new Map<string, number>();
-        for (const event of migratedEvents) {
-          const key = `${event.contextKey ?? ""}\0${event.text}`;
-          removalCounts.set(key, (removalCounts.get(key) ?? 0) + 1);
-        }
-
         // Re-enqueue events that are NOT migrated (pre-existing + concurrent).
+        // Migrated events are identified by the __migrated marker set during
+        // enqueue, so pre-existing events with identical key+text are never
+        // accidentally removed.
         for (const event of currentDestEvents) {
-          const key = `${event.contextKey ?? ""}\0${event.text}`;
-          const remaining = removalCounts.get(key) ?? 0;
-          if (remaining > 0) {
-            removalCounts.set(key, remaining - 1);
-          } else {
+          if (!event.__migrated) {
             enqueueSystemEvent(event.text, {
               sessionKey: session.sessionKey,
               contextKey: event.contextKey,
