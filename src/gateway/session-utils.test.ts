@@ -2580,6 +2580,52 @@ describe("prewarmSessionUsageCache", () => {
     // No error means usageCacheMaxEntries was accepted
   });
 
+  test.runIf(process.platform === "win32")(
+    "retries transient Windows read failures when loading stores for prewarm",
+    async () => {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const store: Record<string, SessionEntry> = {
+        retry: {
+          sessionId: "prewarm-retry-store",
+          updatedAt: Date.now(),
+          totalTokens: 0,
+          totalTokensFresh: false,
+        } as SessionEntry,
+      };
+      writeStore(storePath, store);
+      writeTranscript(tmpDir, "prewarm-retry-store", 250);
+
+      const originalReadFile = fs.promises.readFile.bind(fs.promises);
+      let failedReads = 0;
+      const readFileSpy = vi
+        .spyOn(fs.promises, "readFile")
+        .mockImplementation(async (...args: Parameters<typeof fs.promises.readFile>) => {
+          const target = args[0];
+          if (target === storePath && failedReads < 2) {
+            failedReads += 1;
+            throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+          }
+          return originalReadFile(...args);
+        });
+
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const cfg = {
+        session: { store: storePath },
+        gateway: { sessionsList: { prewarmUsageCache: true } },
+      } as OpenClawConfig;
+
+      await prewarmSessionUsageCache({ cfg, log });
+
+      expect(failedReads).toBe(2);
+      const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(infoMessages.some((m: string) => m.includes("usage=1") && m.includes("title=1"))).toBe(
+        true,
+      );
+
+      readFileSpy.mockRestore();
+    },
+  );
+
   test("caps usage prewarm to the most recently updated cache-sized subset", async () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const now = Date.now();

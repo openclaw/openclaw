@@ -18,6 +18,11 @@ type SessionTitleFields = {
   lastMessagePreview: string | null;
 };
 
+type FileStatLike = {
+  mtimeMs: number;
+  size: number;
+};
+
 type SessionTitleFieldsCacheEntry = SessionTitleFields & {
   mtimeMs: number;
   size: number;
@@ -34,7 +39,10 @@ function readSessionTitleFieldsCacheKey(
   return `${filePath}\t${includeInterSession}`;
 }
 
-function getCachedSessionTitleFields(cacheKey: string, stat: fs.Stats): SessionTitleFields | null {
+function getCachedSessionTitleFields(
+  cacheKey: string,
+  stat: FileStatLike,
+): SessionTitleFields | null {
   const cached = sessionTitleFieldsCache.get(cacheKey);
   if (!cached) {
     return null;
@@ -52,7 +60,11 @@ function getCachedSessionTitleFields(cacheKey: string, stat: fs.Stats): SessionT
   };
 }
 
-function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: SessionTitleFields) {
+function setCachedSessionTitleFields(
+  cacheKey: string,
+  stat: FileStatLike,
+  value: SessionTitleFields,
+) {
   sessionTitleFieldsCache.set(cacheKey, {
     ...value,
     mtimeMs: stat.mtimeMs,
@@ -191,14 +203,26 @@ export function readSessionTitleFieldsFromTranscript(
   }
 
   const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
+  let pathStat: fs.Stats;
+  try {
+    pathStat = fs.statSync(filePath);
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+  const cached = getCachedSessionTitleFields(cacheKey, pathStat);
+  if (cached) {
+    return cached;
+  }
+  if (pathStat.size === 0) {
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    setCachedSessionTitleFields(cacheKey, pathStat, empty);
+    return empty;
+  }
+
   let fd: number | null = null;
   try {
     fd = fs.openSync(filePath, "r");
     const stat = fs.fstatSync(fd);
-    const cached = getCachedSessionTitleFields(cacheKey, stat);
-    if (cached) {
-      return cached;
-    }
     if (stat.size === 0) {
       const empty = { firstUserMessage: null, lastMessagePreview: null };
       setCachedSessionTitleFields(cacheKey, stat, empty);
@@ -255,14 +279,26 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   }
 
   const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
+  let pathStat: fs.Stats;
+  try {
+    pathStat = await fs.promises.stat(filePath);
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+  const cached = getCachedSessionTitleFields(cacheKey, pathStat);
+  if (cached) {
+    return cached;
+  }
+  if (pathStat.size === 0) {
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    setCachedSessionTitleFields(cacheKey, pathStat, empty);
+    return empty;
+  }
+
   let fileHandle: fs.promises.FileHandle | null = null;
   try {
     fileHandle = await fs.promises.open(filePath, "r");
     const stat = await fileHandle.stat();
-    const cached = getCachedSessionTitleFields(cacheKey, stat);
-    if (cached) {
-      return cached;
-    }
     if (stat.size === 0) {
       const empty = { firstUserMessage: null, lastMessagePreview: null };
       setCachedSessionTitleFields(cacheKey, stat, empty);

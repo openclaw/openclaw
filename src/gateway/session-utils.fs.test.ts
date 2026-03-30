@@ -432,15 +432,20 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
     const sessionId = "test-cache-1";
     writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId));
 
+    const openSpy = vi.spyOn(fs, "openSync");
     const readSpy = vi.spyOn(fs, "readSync");
 
     const first = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    const opensAfterFirst = openSpy.mock.calls.length;
     const readsAfterFirst = readSpy.mock.calls.length;
+    expect(opensAfterFirst).toBeGreaterThan(0);
     expect(readsAfterFirst).toBeGreaterThan(0);
 
     const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
     expect(second).toEqual(first);
+    expect(openSpy.mock.calls.length).toBe(opensAfterFirst);
     expect(readSpy.mock.calls.length).toBe(readsAfterFirst);
+    openSpy.mockRestore();
     readSpy.mockRestore();
   });
 
@@ -502,6 +507,27 @@ describe("readSessionTitleFieldsFromTranscriptAsync", () => {
 
     openSyncSpy.mockRestore();
     readSyncSpy.mockRestore();
+  });
+
+  test("returns cached values without opening the transcript when unchanged", async () => {
+    const sessionId = "title-async-cache-hit";
+    writeTranscript(
+      tmpDir,
+      sessionId,
+      buildBasicSessionTranscript(sessionId, "Hello world", "Hi there"),
+    );
+
+    const openSpy = vi.spyOn(fs.promises, "open");
+
+    const first = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+    const opensAfterFirst = openSpy.mock.calls.length;
+    expect(opensAfterFirst).toBeGreaterThan(0);
+
+    const second = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+    expect(second).toEqual(first);
+    expect(openSpy.mock.calls.length).toBe(opensAfterFirst);
+
+    openSpy.mockRestore();
   });
 });
 

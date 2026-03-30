@@ -1021,20 +1021,38 @@ function isSessionStoreRecord(value: unknown): value is Record<string, SessionEn
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+const PREWARM_SESSION_STORE_RETRY_DELAY_MS = 50;
+
+async function waitForPrewarmSessionStoreRetry(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
 async function loadSessionStoreForPrewarm(
   storePath: string,
 ): Promise<Record<string, SessionEntry>> {
-  try {
-    const raw = await fs.promises.readFile(storePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (!isSessionStoreRecord(parsed)) {
+  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
+    try {
+      const raw = await fs.promises.readFile(storePath, "utf-8");
+      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
+        await waitForPrewarmSessionStoreRetry(PREWARM_SESSION_STORE_RETRY_DELAY_MS);
+        continue;
+      }
+      const parsed = JSON.parse(raw);
+      if (!isSessionStoreRecord(parsed)) {
+        return {};
+      }
+      applySessionStoreMigrations(parsed);
+      return structuredClone(parsed);
+    } catch {
+      if (attempt < maxReadAttempts - 1) {
+        await waitForPrewarmSessionStoreRetry(PREWARM_SESSION_STORE_RETRY_DELAY_MS);
+        continue;
+      }
       return {};
     }
-    applySessionStoreMigrations(parsed);
-    return structuredClone(parsed);
-  } catch {
-    return {};
   }
+  return {};
 }
 
 async function loadCombinedSessionStoreForGatewayAsync(cfg: OpenClawConfig): Promise<{
