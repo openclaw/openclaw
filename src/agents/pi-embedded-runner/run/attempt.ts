@@ -1066,8 +1066,6 @@ export async function runEmbeddedAttempt(
 
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
-      let idleTimeoutTrigger: ((error: Error) => void) | undefined;
-
       // Wrap stream with idle timeout detection
       const idleTimeoutMs = resolveLlmIdleTimeoutMs(params.config);
       if (idleTimeoutMs > 0) {
