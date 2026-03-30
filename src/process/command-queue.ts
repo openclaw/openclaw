@@ -255,6 +255,18 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
 }
 
 /**
+ * Test-only hard reset that discards all queue state, including preserved
+ * queued work from previous generations. Use this when a suite needs an
+ * isolated baseline across shared-worker runs.
+ */
+export function resetCommandQueueStateForTest(): void {
+  const queueState = getQueueState();
+  queueState.gatewayDraining = false;
+  queueState.lanes.clear();
+  queueState.nextTaskId = 1;
+}
+
+/**
  * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
  * restarts where interrupted tasks' finally blocks may not run, leaving
  * stale active task IDs that permanently block new work from draining.

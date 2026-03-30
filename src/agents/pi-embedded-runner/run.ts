@@ -28,6 +28,7 @@ import {
   hasDifferentLiveSessionModelSelection,
   LiveSessionModelSwitchError,
   resolveLiveSessionModelSelection,
+  shouldTrackPersistedLiveSessionModelSelection,
   consumeLiveSessionModelSwitch,
 } from "../live-model-switch.js";
 import {
@@ -242,6 +243,10 @@ export async function runEmbeddedPiAgent(
           defaultProvider: provider,
           defaultModel: modelId,
         });
+      const shouldTrackPersistedLiveSelection = shouldTrackPersistedLiveSessionModelSelection(
+        resolveCurrentLiveSelection(),
+        resolvePersistedLiveSelection(),
+      );
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -449,7 +454,9 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = resolvePersistedLiveSelection();
+          const nextSelection = shouldTrackPersistedLiveSelection
+            ? resolvePersistedLiveSelection()
+            : null;
           if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
             log.info(
               `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
@@ -536,6 +543,7 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            silentExpected: params.silentExpected,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
@@ -604,9 +612,10 @@ export async function runEmbeddedPiAgent(
           }
           const failedOrAbortedAttempt =
             aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection = failedOrAbortedAttempt
-            ? resolvePersistedLiveSelection()
-            : null;
+          const persistedSelection =
+            failedOrAbortedAttempt && shouldTrackPersistedLiveSelection
+              ? resolvePersistedLiveSelection()
+              : null;
           if (
             failedOrAbortedAttempt &&
             canRestartForLiveSwitch &&

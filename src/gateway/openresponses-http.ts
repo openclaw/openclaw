@@ -255,7 +255,16 @@ function resolveResponsesLimits(
 }
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  return (body.tools ?? []) as ClientToolDefinition[];
+  // Normalize from Responses API flat format to the internal wrapped format.
+  return (body.tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  }));
 }
 
 function applyToolChoice(params: {
@@ -452,6 +461,7 @@ export async function handleOpenResponsesHttpRequest(
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
+    requiredOperatorMethod: "chat.send",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,

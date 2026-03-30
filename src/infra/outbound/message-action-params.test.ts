@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAutoThreadId } from "../../plugin-sdk/slack.js";
-import { resolveTelegramAutoThreadId } from "../../plugin-sdk/telegram.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -69,31 +68,6 @@ describe("message action threading helpers", () => {
       resolveSlackAutoThreadId({
         to: "C123",
         toolContext: createToolContext({ currentThreadTs: undefined }),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("resolves Telegram auto-thread ids for matching chats across target formats", () => {
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "telegram:group:-100123:topic:77",
-        toolContext: createToolContext({
-          currentChannelId: "tg:group:-100123",
-        }),
-      }),
-    ).toBe("thread-1");
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "-100999:77",
-        toolContext: createToolContext({
-          currentChannelId: "-100123",
-        }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "-100123",
-        toolContext: createToolContext({ currentChannelId: undefined }),
       }),
     ).toBeUndefined();
   });

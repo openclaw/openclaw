@@ -197,3 +197,25 @@ export function describeAccountSnapshot<
     ...params.extra,
   };
 }
+
+export function describeWebhookAccountSnapshot<
+  TAccount extends {
+    accountId?: string | null;
+    enabled?: boolean | null;
+    name?: string | null | undefined;
+  },
+>(params: {
+  account: TAccount;
+  configured?: boolean | undefined;
+  mode?: string | undefined;
+  extra?: Record<string, unknown> | undefined;
+}): ChannelAccountSnapshot {
+  return describeAccountSnapshot({
+    account: params.account,
+    configured: params.configured,
+    extra: {
+      mode: params.mode ?? "webhook",
+      ...params.extra,
+    },
+  });
+}

@@ -20,7 +20,7 @@ Zalo ships as a plugin and is not bundled with the core install.
 ## Quick setup (beginner)
 
 1. Install the Zalo plugin:
-   - From a source checkout: `openclaw plugins install ./extensions/zalo`
+   - From a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
    - From npm (if published): `openclaw plugins install @openclaw/zalo`
    - Or pick **Zalo** in setup and confirm the install prompt
 2. Set the token:

@@ -1880,6 +1880,33 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("priority");
   });
 
+  it("injects configured OpenAI service_tier into Codex Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as unknown as Model<"openai-codex-responses">,
+    });
+    expect(payload.service_tier).toBe("priority");
+  });
+
   it("preserves caller-provided service_tier values", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
@@ -1911,7 +1938,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("default");
   });
 
-  it("injects fast-mode payload defaults for direct OpenAI Responses", () => {
+  it("maps fast mode to priority service_tier for direct OpenAI Responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
@@ -1938,8 +1965,8 @@ describe("applyExtraParamsToAgent", () => {
         store: false,
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "low" });
-    expect(payload.text).toEqual({ verbosity: "low" });
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("text");
     expect(payload.service_tier).toBe("priority");
   });
 
@@ -2095,7 +2122,180 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
-  it("does not inject Anthropic fast mode service_tier for OAuth auth", () => {
+  it("injects configured Anthropic service_tier into direct Anthropic payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("injects configured Anthropic service_tier into OAuth-authenticated Anthropic payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("does not warn for valid Anthropic serviceTier values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "anthropic",
+        applyModelId: "claude-sonnet-4-5",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-5": {
+                  params: {
+                    serviceTier: "standard_only",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-5",
+          baseUrl: "https://api.anthropic.com",
+        } as unknown as Model<"anthropic-messages">,
+        payload: {},
+      });
+
+      expect(payload.service_tier).toBe("standard_only");
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("accepts snake_case Anthropic service_tier params", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: {
+        service_tier: "standard_only",
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("lets explicit Anthropic service_tier override fast mode defaults", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  fastMode: true,
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("lets explicit Anthropic service_tier override OAuth fast mode defaults", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  fastMode: true,
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("injects Anthropic fast mode service_tier for OAuth auth", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -2111,7 +2311,26 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload.service_tier).toBe("auto");
+  });
+
+  it("injects Anthropic standard_only service_tier for OAuth auth when fastMode is false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
   });
 
   it("does not inject Anthropic fast mode service_tier for proxied base URLs", () => {
@@ -2130,7 +2349,25 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("service_tier");
   });
 
-  it("applies fast-mode defaults for openai-codex responses without service_tier", () => {
+  it("does not inject explicit Anthropic service_tier for proxied base URLs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: {
+        serviceTier: "standard_only",
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://proxy.example.com/anthropic",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("maps fast mode to priority service_tier for openai-codex responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai-codex",
       applyModelId: "gpt-5.4",
@@ -2145,9 +2382,9 @@ describe("applyExtraParamsToAgent", () => {
         store: false,
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "low" });
-    expect(payload.text).toEqual({ verbosity: "low" });
-    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("text");
+    expect(payload.service_tier).toBe("priority");
   });
 
   it("does not inject service_tier for non-openai providers", () => {
@@ -2259,7 +2496,42 @@ describe("applyExtraParamsToAgent", () => {
       });
 
       expect(payload).not.toHaveProperty("service_tier");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith("ignoring invalid OpenAI service tier param: invalid");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for valid OpenAI serviceTier values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "openai",
+        applyModelId: "gpt-5.4",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.4": {
+                  params: {
+                    serviceTier: "priority",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        } as unknown as Model<"openai-responses">,
+      });
+
+      expect(payload.service_tier).toBe("priority");
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }
