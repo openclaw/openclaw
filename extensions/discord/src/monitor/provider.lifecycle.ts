@@ -445,10 +445,6 @@ export async function runDiscordGatewayLifecycle(params: {
     reconnectStallWatchdog.stop();
     clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
-    if (teardownErrorSink) {
-      gatewayEmitter?.removeListener("error", teardownErrorSink);
-      teardownErrorSink = undefined;
-    }
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
       await params.voiceManager.destroy();
@@ -456,6 +452,12 @@ export async function runDiscordGatewayLifecycle(params: {
     }
     if (params.execApprovalsHandler) {
       await params.execApprovalsHandler.stop();
+    }
+    // Remove teardown error sink last — the awaits above yield the event loop
+    // and deferred socket close events from Carbon can still fire during them.
+    if (teardownErrorSink) {
+      gatewayEmitter?.removeListener("error", teardownErrorSink);
+      teardownErrorSink = undefined;
     }
     params.threadBindings.stop();
   }
