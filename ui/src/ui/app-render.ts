@@ -1500,6 +1500,62 @@ export function renderApp(state: AppViewState) {
                 void loadChatHistory(state);
                 void state.loadAssistantIdentity();
               },
+              onTruncateHistory: (seq: number, onFail: () => void): boolean => {
+                if (!state.client || !state.connected) {
+                  return false;
+                }
+                const truncatingKey = state.sessionKey;
+                const truncatingRunId = state.chatRunId;
+                void state.client
+                  .request<{ truncated: boolean }>("sessions.truncate", { key: truncatingKey, seq })
+                  .then(async (result) => {
+                    if (!result.truncated) {
+                      onFail();
+                    }
+                    if (state.sessionKey !== truncatingKey) {
+                      return;
+                    }
+                    if (state.chatRunId !== null && state.chatRunId !== truncatingRunId) {
+                      // A new run started while truncation was in flight.
+                      // Only reload when the backend actually truncated; a no-op (result.truncated
+                      // === false) means no backend mutation occurred and calling loadChatHistory
+                      // would clobber the in-flight streaming state of the newer run.
+                      if (result.truncated) {
+                        try {
+                          await loadChatHistory(state);
+                        } catch {
+                          // history reload failed; backend is still truncated, do not call onFail
+                        }
+                      }
+                      return;
+                    }
+                    if (result.truncated) {
+                      state.chatMessages = [];
+                      state.chatStream = null;
+                      state.chatRunId = null;
+                    }
+                    try {
+                      await loadChatHistory(state);
+                    } catch (histErr: unknown) {
+                      // Reload failed but the backend truncate already succeeded; do not restore
+                      // the optimistic delete via onFail — that would cause client/server divergence.
+                      state.lastError = String(histErr);
+                    }
+                  })
+                  .catch((err: unknown) => {
+                    // Only reached when the sessions.truncate RPC itself fails (network / server error).
+                    // Safe to restore the optimistic delete because no backend mutation occurred.
+                    onFail();
+                    if (state.sessionKey !== truncatingKey) {
+                      return;
+                    }
+                    if (state.chatRunId !== null && state.chatRunId !== truncatingRunId) {
+                      return;
+                    }
+                    state.lastError = String(err);
+                  });
+                return true;
+              },
               onNavigateToAgent: () => {
                 state.agentsSelectedId = resolvedAgentId;
                 state.setTab("agents" as import("./navigation.ts").Tab);

@@ -96,6 +96,9 @@ export type ChatProps = {
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
+  /** Called when the user deletes a message group; receives the 1-based seq of the first message in that group.
+   * @param onFail Called if the RPC was not applied (error or truncated: false); caller should restore any optimistic hide. */
+  onTruncateHistory?: (seq: number, onFail: () => void) => boolean;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
     defaultId?: string;
@@ -1025,10 +1028,36 @@ export function renderChat(props: ChatProps) {
                 basePath: props.basePath,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
-                onDelete: () => {
-                  deleted.delete(item.key);
-                  requestUpdate();
-                },
+                // Disable deletion while search is active: in search mode groups can merge
+                // non-adjacent transcript messages, so the group's head seq would silently
+                // drop hidden intermediate history the user never intended to remove.
+                onDelete:
+                  vs.searchOpen && vs.searchQuery.trim()
+                    ? undefined
+                    : () => {
+                        const firstMsg = item.messages[0]?.message as
+                          | Record<string, unknown>
+                          | undefined;
+                        const meta = firstMsg?.__openclaw as Record<string, unknown> | undefined;
+                        const seq = typeof meta?.seq === "number" ? meta.seq : null;
+                        if (seq === null || !props.onTruncateHistory) {
+                          // seq metadata is absent (e.g. message arrived via runtime events
+                          // before a history reload). Skip deletion; the user can retry
+                          // after the chat reloads and seq metadata becomes available.
+                          return;
+                        }
+                        // Only apply optimistic UI update if the RPC was actually initiated;
+                        // if disconnected, onTruncateHistory returns false and we leave state unchanged.
+                        if (
+                          props.onTruncateHistory(seq, () => {
+                            deleted.restore(item.key);
+                            requestUpdate();
+                          })
+                        ) {
+                          deleted.delete(item.key);
+                          requestUpdate();
+                        }
+                      },
               });
             }
             return nothing;
