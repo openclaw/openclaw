@@ -85,6 +85,10 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["account_id"]).toBe("work");
     expect(payload["sender_principal"]).toBe("alice");
     expect(payload["channel"]).toBe("telegram");
+    expect(prompt).toContain("sender_principal is present, it is the canonical trusted identity");
+    expect(prompt).toContain(
+      "Do not ask the user to disambiguate who they are when sender_principal is present",
+    );
   });
 
   it("keeps task-scoped chat ids out of the system prompt for cache stability", () => {
