@@ -21,10 +21,24 @@ describe("markdownTableToSlackTableBlock", () => {
     expect(block.rows).toHaveLength(101);
     expect(block.rows[0]).toHaveLength(20);
 
-    // Last row should be the truncation indicator
+    // Last row should be the truncation indicator (both rows and columns)
     const lastRow = block.rows[block.rows.length - 1];
-    expect(lastRow?.[0]?.text).toBe("+20 more rows");
+    expect(lastRow?.[0]?.text).toBe("+20 more rows, +5 more columns");
     expect(lastRow?.[1]?.text).toBe("");
+  });
+
+  it("shows column truncation indicator when columns exceed limit", () => {
+    const table = {
+      headers: Array.from({ length: 25 }, (_, i) => `H${i}`),
+      rows: [Array.from({ length: 25 }, (_, i) => `V${i}`)],
+    };
+
+    const block = markdownTableToSlackTableBlock(table);
+
+    // 1 header + 1 data + 1 indicator = 3
+    expect(block.rows).toHaveLength(3);
+    const lastRow = block.rows[block.rows.length - 1];
+    expect(lastRow?.[0]?.text).toBe("+5 more columns");
   });
 
   it("does not add truncation indicator when rows fit within limit", () => {
