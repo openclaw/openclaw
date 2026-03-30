@@ -1,0 +1,65 @@
+{
+  "lastCheck": "2026-03-30T08:09:00.000Z",
+  "openPRs": [
+    {
+      "number": 57445,
+      "title": "fix(memory): include reset and deleted session files in indexer",
+      "lastCommentAt": "2026-03-30T04:31:24Z",
+      "status": "implemented_better_solution"
+    },
+    {
+      "number": 56671,
+      "title": "fix(config): deduplicate clobbered config snapshots in-process",
+      "lastCommentAt": "2026-03-29T11:06:07Z",
+      "status": "responded_to_maintainer"
+    },
+    {
+      "number": 56669,
+      "title": "fix(tools): preserve Optional annotation when merging anyOf variants",
+      "lastCommentAt": "2026-03-30T04:32:40Z",
+      "status": "added_regression_tests"
+    },
+    {
+      "number": 56664,
+      "title": "fix(discord): handle reconnect-exhausted gracefully",
+      "lastCommentAt": "2026-03-29T13:34:59Z",
+      "status": "addressed_maintainer_feedback"
+    },
+    {
+      "number": 56660,
+      "title": "fix(compaction): use model override in overflow and timeout recovery paths",
+      "lastCommentAt": "2026-03-29T00:22:46Z",
+      "status": "fixed_auth_profile_issue"
+    },
+    {
+      "number": 56362,
+      "title": "fix(discord): ensure resetTriggers rotate sessionId and clear history",
+      "lastCommentAt": "2026-03-30T06:29:20Z",
+      "status": "addressed_codex_feedback"
+    },
+    {
+      "number": 56360,
+      "title": "fix(subagents): inherit originating channel for completion announce delivery",
+      "lastCommentAt": "2026-03-28T13:13:31Z",
+      "status": "reviewed_by_maintainer"
+    },
+    {
+      "number": 56358,
+      "title": "fix(plugins): deduplicate tool registration on config hot-reload",
+      "lastCommentAt": "2026-03-29T08:52:45Z",
+      "status": "fixed_over_eager_guard"
+    },
+    {
+      "number": 56357,
+      "title": "fix(control-ui): restore header logo and favicon display",
+      "lastCommentAt": "2026-03-30T06:29:21Z",
+      "status": "addressed_codex_csp_feedback"
+    },
+    {
+      "number": 56356,
+      "title": "fix(heartbeat): prevent subagent announcements from re-triggering heartbeat cascade",
+      "lastCommentAt": "2026-03-29T00:22:35Z",
+      "status": "fixed_p1_handler_registration_issue"
+    }
+  ]
+}

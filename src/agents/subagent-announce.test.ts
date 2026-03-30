@@ -270,8 +270,8 @@ describe("subagent announce seam flow", () => {
       },
     }));
 
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
-    const didAnnounce = await runSubagentAnnounceFlow({
+    const { runSubagentAnnounceFlow: reloadedFlow } = await import("./subagent-announce.js");
+    const didAnnounce = await reloadedFlow({
       childSessionKey: "agent:main:subagent:tg",
       childRunId: "run-tg-group-completion",
       requesterSessionKey: "agent:main:main",
