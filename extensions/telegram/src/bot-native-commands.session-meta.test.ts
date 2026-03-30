@@ -119,22 +119,16 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
   };
 });
-vi.mock("../../../src/config/sessions.js", () => ({
-  recordSessionMetaFromInbound: sessionMocks.recordSessionMetaFromInbound,
-  resolveStorePath: sessionMocks.resolveStorePath,
-}));
+vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+  return {
+    ...actual,
+    recordSessionMetaFromInbound: sessionMocks.recordSessionMetaFromInbound,
+    resolveStorePath: sessionMocks.resolveStorePath,
+  };
+});
 vi.mock("../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn(async () => []),
-}));
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  getSessionBindingService: () => ({
-    bind: vi.fn(),
-    getCapabilities: vi.fn(),
-    listBySession: vi.fn(),
-    resolveByConversation: (ref: unknown) => sessionBindingMocks.resolveByConversation(ref),
-    touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
-    unbind: vi.fn(),
-  }),
 }));
 vi.mock("../../../src/plugins/commands.js", () => ({
   getPluginCommandSpecs: vi.fn(() => []),
