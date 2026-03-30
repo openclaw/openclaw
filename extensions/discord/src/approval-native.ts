@@ -40,6 +40,7 @@ function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
       turnSourceChannel: request.request.turnSourceChannel ?? undefined,
       turnSourceTo: request.request.turnSourceTo ?? undefined,
       turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
+      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
     },
     createdAtMs: request.createdAtMs,
     expiresAtMs: request.expiresAtMs,
@@ -72,6 +73,7 @@ function resolveRequestSessionTarget(params: {
     turnSourceChannel: execLikeRequest.request.turnSourceChannel ?? undefined,
     turnSourceTo: execLikeRequest.request.turnSourceTo ?? undefined,
     turnSourceAccountId: execLikeRequest.request.turnSourceAccountId ?? undefined,
+    turnSourceThreadId: execLikeRequest.request.turnSourceThreadId ?? undefined,
   });
 }
 
@@ -83,31 +85,50 @@ function resolveDiscordOriginTarget(params: {
   const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
   const turnSourceTo = normalizeDiscordOriginChannelId(params.request.request.turnSourceTo);
   const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || "";
-  if (turnSourceChannel === "discord" && turnSourceTo) {
-    if (
-      params.accountId &&
-      turnSourceAccountId &&
-      normalizeAccountId(turnSourceAccountId) !== normalizeAccountId(params.accountId)
-    ) {
-      return null;
-    }
-    return { to: turnSourceTo };
+  const turnSourceTarget =
+    turnSourceChannel === "discord" && turnSourceTo
+      ? {
+          to: turnSourceTo,
+          accountId: turnSourceAccountId || undefined,
+        }
+      : null;
+  if (
+    turnSourceTarget?.accountId &&
+    params.accountId &&
+    normalizeAccountId(turnSourceTarget.accountId) !== normalizeAccountId(params.accountId)
+  ) {
+    return null;
   }
 
   const sessionTarget = resolveRequestSessionTarget(params);
-  if (!sessionTarget || sessionTarget.channel !== "discord") {
-    const channelId = extractDiscordChannelId(params.request.request.sessionKey?.trim() || null);
-    return channelId ? { to: channelId } : null;
-  }
   if (
-    params.accountId &&
+    sessionTarget?.channel === "discord" &&
     sessionTarget.accountId &&
+    params.accountId &&
     normalizeAccountId(sessionTarget.accountId) !== normalizeAccountId(params.accountId)
   ) {
     return null;
   }
-  const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
-  return targetTo ? { to: targetTo } : null;
+  if (
+    turnSourceTarget &&
+    sessionTarget?.channel === "discord" &&
+    turnSourceTarget.to !== normalizeDiscordOriginChannelId(sessionTarget.to)
+  ) {
+    return null;
+  }
+
+  if (turnSourceTarget) {
+    return { to: turnSourceTarget.to };
+  }
+  if (sessionTarget?.channel === "discord") {
+    const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
+    return targetTo ? { to: targetTo } : null;
+  }
+  const legacyChannelId = extractDiscordChannelId(params.request.request.sessionKey?.trim() || null);
+  if (legacyChannelId) {
+    return { to: legacyChannelId };
+  }
+  return null;
 }
 
 function resolveDiscordApproverDmTargets(params: {

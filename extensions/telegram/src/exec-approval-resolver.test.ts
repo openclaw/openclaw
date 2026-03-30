@@ -56,6 +56,7 @@ describe("resolveTelegramExecApproval", () => {
       approvalId: "legacy-plugin-123",
       decision: "allow-always",
       senderId: "9",
+      allowPluginFallback: true,
     });
 
     expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(1, "exec.approval.resolve", {
@@ -72,34 +73,25 @@ describe("resolveTelegramExecApproval", () => {
     );
   });
 
-  it("falls back to plugin.approval.resolve for structured approval-not-found errors", async () => {
-    const err = new Error("invalid request") as Error & {
-      gatewayCode?: string;
-      details?: { reason?: string };
-    };
-    err.gatewayCode = "INVALID_REQUEST";
-    err.details = { reason: "APPROVAL_NOT_FOUND" };
-    gatewayRuntimeHoisted.requestSpy.mockRejectedValueOnce(err).mockResolvedValueOnce(undefined);
+  it("does not fall back to plugin.approval.resolve without explicit permission", async () => {
+    gatewayRuntimeHoisted.requestSpy.mockRejectedValueOnce(
+      new Error("unknown or expired approval id"),
+    );
     const { resolveTelegramExecApproval } = await import("./exec-approval-resolver.js");
 
-    await resolveTelegramExecApproval({
-      cfg: {} as never,
-      approvalId: "legacy-plugin-123",
-      decision: "deny",
-      senderId: "9",
-    });
+    await expect(
+      resolveTelegramExecApproval({
+        cfg: {} as never,
+        approvalId: "legacy-plugin-123",
+        decision: "allow-always",
+        senderId: "9",
+      }),
+    ).rejects.toThrow("unknown or expired approval id");
 
-    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(1, "exec.approval.resolve", {
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenCalledTimes(1);
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "legacy-plugin-123",
-      decision: "deny",
+      decision: "allow-always",
     });
-    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(
-      2,
-      "plugin.approval.resolve",
-      {
-        id: "legacy-plugin-123",
-        decision: "deny",
-      },
-    );
   });
 });

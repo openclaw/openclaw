@@ -247,7 +247,9 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       if (isApprovalNotFoundError(err)) {
         return {
           shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+          reply: {
+            text: pluginApprovalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
+          },
         };
       }
       return {

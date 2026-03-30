@@ -9,32 +9,16 @@ export type ResolveTelegramExecApprovalParams = {
   senderId?: string | null;
   allowPluginFallback?: boolean;
   gatewayUrl?: string;
+  allowPluginFallback?: boolean;
 };
+
+function isApprovalNotFoundError(err: unknown): boolean {
+  return /unknown or expired approval id/i.test(String(err));
+}
 
 export async function resolveTelegramExecApproval(
   params: ResolveTelegramExecApprovalParams,
 ): Promise<void> {
-  const isApprovalNotFoundError = (err: unknown): boolean => {
-    if (!(err instanceof Error)) {
-      return false;
-    }
-    const gatewayCode = (err as { gatewayCode?: unknown }).gatewayCode;
-    if (gatewayCode === "APPROVAL_NOT_FOUND") {
-      return true;
-    }
-    const details = (err as { details?: unknown }).details;
-    if (
-      gatewayCode === "INVALID_REQUEST" &&
-      details &&
-      typeof details === "object" &&
-      !Array.isArray(details) &&
-      (details as { reason?: unknown }).reason === "APPROVAL_NOT_FOUND"
-    ) {
-      return true;
-    }
-    return /unknown or expired approval id/i.test(err.message);
-  };
-
   let readySettled = false;
   let resolveReady!: () => void;
   let rejectReady!: (err: unknown) => void;
