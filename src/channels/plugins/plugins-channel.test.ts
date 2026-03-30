@@ -19,7 +19,7 @@ describe("imessage target normalization", () => {
   it("drops service prefixes for chat targets", () => {
     expect(normalizeIMessageMessagingTarget("sms:chat_id:123")).toBe("chat_id:123");
     expect(normalizeIMessageMessagingTarget("imessage:CHAT_GUID:abc")).toBe("chat_guid:abc");
-    expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chat_identifier:foo");
+    expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chatidentifier:foo");
   });
 });
 

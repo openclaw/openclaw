@@ -373,6 +373,8 @@ function collectExtensionFiles(extensionId: string): string[] {
       normalizedFullPath.includes(".spec.") ||
       normalizedFullPath.includes(".fixture.") ||
       normalizedFullPath.includes(".snap") ||
+      normalizedFullPath.includes("test-support") ||
+      entryName === "test-support.ts" ||
       entryName === "runtime-api.ts",
   });
   extensionFilesCache.set(extensionId, files);
