@@ -172,20 +172,6 @@ export async function handleToolsInvokeHttpRequest(
   if (!ok) {
     return true;
   }
-  const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
-  const hasWriteScope =
-    requestedScopes.includes(TOOLS_INVOKE_REQUIRED_SCOPE) ||
-    requestedScopes.includes(OPERATOR_ADMIN_SCOPE);
-  if (!hasWriteScope) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${TOOLS_INVOKE_REQUIRED_SCOPE}`,
-      },
-    });
-    return true;
-  }
 
   const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
   const scopeAuth = authorizeOperatorScopesForMethod("agent", requestedScopes);
