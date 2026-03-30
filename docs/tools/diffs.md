@@ -281,6 +281,8 @@ Viewer assets:
 - `/plugins/diffs/assets/viewer.js`
 - `/plugins/diffs/assets/viewer-runtime.js`
 
+The viewer document resolves those assets relative to the viewer URL, so an optional `baseUrl` path prefix is preserved for both asset requests too.
+
 URL construction behavior:
 
 - If `baseUrl` is provided, it is used after strict validation.

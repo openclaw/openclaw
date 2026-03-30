@@ -132,6 +132,9 @@ export async function promptRemoteGatewayConfig(
             ].join("\n"),
             "Direct remote",
           );
+        } else {
+          // Clear the discovered endpoint so the manual prompt falls back to a safe default.
+          suggestedUrl = DEFAULT_GATEWAY_URL;
         }
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
