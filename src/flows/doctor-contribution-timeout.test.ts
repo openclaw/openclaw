@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runDoctorContributionWithTimeout } from "./doctor-health-contributions.js";
+import { runDoctorContributionWithTimeout } from "./doctor-contribution-timeout.js";
 
 const noteMock = vi.fn();
 
@@ -26,15 +26,12 @@ describe("runDoctorContributionWithTimeout", () => {
       runDoctorContributionWithTimeout(
         {
           id: "doctor:test-timeout",
-          kind: "core",
-          surface: "health",
-          option: { value: "doctor:test-timeout", label: "Test contribution" },
-          source: "doctor",
+          option: { label: "Test contribution" },
           run: async () => {
             await new Promise(() => {});
           },
         },
-        {} as never,
+        {},
       ),
     ).resolves.toBeUndefined();
 
@@ -51,15 +48,12 @@ describe("runDoctorContributionWithTimeout", () => {
       runDoctorContributionWithTimeout(
         {
           id: "doctor:test-error",
-          kind: "core",
-          surface: "health",
-          option: { value: "doctor:test-error", label: "Test contribution" },
-          source: "doctor",
+          option: { label: "Test contribution" },
           run: async () => {
             throw new Error("boom");
           },
         },
-        {} as never,
+        {},
       ),
     ).rejects.toThrow("boom");
 

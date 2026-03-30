@@ -115,6 +115,8 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_DOCTOR_TIMEOUT_MS", "10");
+    const originalDoctorChild = process.env.OPENCLAW_DOCTOR_CHILD;
+    delete process.env.OPENCLAW_DOCTOR_CHILD;
     const originalArgv = process.argv;
     process.argv = [process.execPath, "dist/index.js", "doctor", "--non-interactive"];
     const child = new EventEmitter() as EventEmitter & {
@@ -148,6 +150,11 @@ describe("registerMaintenanceCommands doctor action", () => {
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
     } finally {
+      if (originalDoctorChild === undefined) {
+        delete process.env.OPENCLAW_DOCTOR_CHILD;
+      } else {
+        process.env.OPENCLAW_DOCTOR_CHILD = originalDoctorChild;
+      }
       process.argv = originalArgv;
     }
   });
