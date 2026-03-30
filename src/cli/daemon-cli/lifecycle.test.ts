@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayRestartReadinessGate } from "../../gateway/restart-recovery.js";
 import { captureEnv } from "../../test-utils/env.js";
 
 type RestartHealthSnapshot = {
@@ -48,6 +49,14 @@ const probeGateway = vi.fn<
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
+const evaluateGatewayRestartReadinessGate = vi.fn<() => GatewayRestartReadinessGate>(() => ({
+  blocked: false,
+  threshold: 0,
+  summary: "",
+  activeSessions: [],
+  activeCronRuns: [],
+  totalActive: 0,
+}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -75,6 +84,10 @@ vi.mock("../../config/commands.js", () => ({
   isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
 }));
 
+vi.mock("../../gateway/restart-recovery.js", () => ({
+  evaluateGatewayRestartReadinessGate: () => evaluateGatewayRestartReadinessGate(),
+}));
+
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
 }));
@@ -97,7 +110,7 @@ vi.mock("./lifecycle-core.js", () => ({
 }));
 
 describe("runDaemonRestart health checks", () => {
-  let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
+  let runDaemonRestart: (opts?: { json?: boolean; force?: boolean }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -140,6 +153,14 @@ describe("runDaemonRestart health checks", () => {
     terminateStaleGatewayPids.mockReset();
     renderGatewayPortHealthDiagnostics.mockReset();
     renderRestartDiagnostics.mockReset();
+    evaluateGatewayRestartReadinessGate.mockReset().mockReturnValue({
+      blocked: false,
+      threshold: 0,
+      summary: "",
+      activeSessions: [],
+      activeCronRuns: [],
+      totalActive: 0,
+    });
     resolveGatewayPort.mockReset();
     findVerifiedGatewayListenerPidsOnPortSync.mockReset();
     signalVerifiedGatewayPidSync.mockReset();
@@ -277,6 +298,23 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("blocks restart without force when readiness gate reports active work", async () => {
+    evaluateGatewayRestartReadinessGate.mockReturnValue({
+      blocked: true,
+      threshold: 0,
+      summary:
+        "1 active item(s) would be interrupted by gateway restart.\nRe-run with --force to proceed.",
+      activeSessions: [{ key: "agent:main:main", status: "running", activeSubagents: [] }],
+      activeCronRuns: [],
+      totalActive: 1,
+    });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(false);
+    expect(runServiceRestart).not.toHaveBeenCalled();
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {

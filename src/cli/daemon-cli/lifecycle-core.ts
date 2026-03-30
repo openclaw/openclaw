@@ -9,6 +9,10 @@ import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
+import {
+  clearGatewayRestartIntent,
+  writeGatewayRestartIntent,
+} from "../../gateway/restart-recovery.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
@@ -429,6 +433,7 @@ export async function runServiceRestart(params: {
   try {
     let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {
+      await writeGatewayRestartIntent({ reason: "gateway service restart" });
       restartResult = await params.service.restart({ env: process.env, stdout });
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
@@ -464,6 +469,7 @@ export async function runServiceRestart(params: {
     }
     return true;
   } catch (err) {
+    await clearGatewayRestartIntent().catch(() => undefined);
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
     return false;

@@ -763,6 +763,17 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        restart: z
+          .object({
+            sessionRecovery: z.boolean().optional(),
+            cronRetryOnInterrupt: z.boolean().optional(),
+            readinessGate: z.boolean().optional(),
+            readinessGateThreshold: z.number().int().min(0).optional(),
+            drainQueueMessages: z.boolean().optional(),
+            manifestPath: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
         tls: z
           .object({
             enabled: z.boolean().optional(),

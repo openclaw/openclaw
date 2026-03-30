@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayRestartIntent, RestartManifest } from "../../gateway/restart-recovery.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
 }));
+const consumeGatewayRestartReason = vi.fn<() => string | undefined>(() => undefined);
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
@@ -29,6 +31,16 @@ const abortEmbeddedPiRun = vi.fn(
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
+const writeGatewayRestartManifest = vi.fn<
+  (params: {
+    cfg?: unknown;
+    reason?: string;
+    triggeredBy?: string;
+  }) => Promise<RestartManifest | null>
+>(async () => null);
+const consumeGatewayRestartIntent = vi.fn<
+  (env?: NodeJS.ProcessEnv) => Promise<GatewayRestartIntent | null>
+>(async () => null);
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
   info: vi.fn(),
@@ -41,11 +53,18 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../infra/restart.js", () => ({
+  consumeGatewayRestartReason: () => consumeGatewayRestartReason(),
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
+}));
+
+vi.mock("../../gateway/restart-recovery.js", () => ({
+  consumeGatewayRestartIntent: (env?: NodeJS.ProcessEnv) => consumeGatewayRestartIntent(env),
+  writeGatewayRestartManifest: (params: { cfg?: unknown; reason?: string; triggeredBy?: string }) =>
+    writeGatewayRestartManifest(params),
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
@@ -188,6 +207,7 @@ async function createSignaledLoopHarness(exitCallOrder?: string[]) {
 describe("runGatewayLoop", () => {
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
+    consumeGatewayRestartIntent.mockResolvedValue(null);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, runtime, exited } = await createSignaledLoopHarness();
@@ -206,6 +226,7 @@ describe("runGatewayLoop", () => {
 
   it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
+    consumeGatewayRestartIntent.mockResolvedValue(null);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
@@ -259,6 +280,7 @@ describe("runGatewayLoop", () => {
       await startedFirst;
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
+      consumeGatewayRestartReason.mockReturnValueOnce("manual-restart");
       expect(start).toHaveBeenCalledTimes(1);
       await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -277,6 +299,9 @@ describe("runGatewayLoop", () => {
       expect(closeFirst).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,
+      });
+      expect(writeGatewayRestartManifest).toHaveBeenCalledWith({
+        reason: "manual-restart",
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
@@ -305,6 +330,7 @@ describe("runGatewayLoop", () => {
 
   it("routes external SIGUSR1 through the restart scheduler before draining", async () => {
     vi.clearAllMocks();
+    consumeGatewayRestartIntent.mockResolvedValue(null);
     consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
     isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(true);
 
@@ -327,6 +353,7 @@ describe("runGatewayLoop", () => {
 
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
+    consumeGatewayRestartIntent.mockResolvedValue(null);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const lockRelease = vi.fn(async () => {});
@@ -358,6 +385,7 @@ describe("runGatewayLoop", () => {
 
   it("forwards lockPort to initial and restart lock acquisitions", async () => {
     vi.clearAllMocks();
+    consumeGatewayRestartIntent.mockResolvedValue(null);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const closeFirst = vi.fn(async () => {});
@@ -396,6 +424,7 @@ describe("runGatewayLoop", () => {
 
   it("exits when lock reacquire fails during in-process restart fallback", async () => {
     vi.clearAllMocks();
+    consumeGatewayRestartIntent.mockResolvedValue(null);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const lockRelease = vi.fn(async () => {});
@@ -419,6 +448,32 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.error).toHaveBeenCalledWith(
         expect.stringContaining("failed to reacquire gateway lock for in-process restart"),
       );
+    });
+  });
+
+  it("treats SIGTERM with restart intent as a drained service restart", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntent.mockResolvedValueOnce({
+      version: 1,
+      reason: "gateway service restart",
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+      expect(writeGatewayRestartManifest).toHaveBeenCalledWith({
+        reason: "gateway service restart",
+      });
     });
   });
 });

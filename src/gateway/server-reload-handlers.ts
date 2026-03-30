@@ -12,6 +12,7 @@ import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
   emitGatewayRestart,
+  primeGatewayRestartReason,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
@@ -208,6 +209,7 @@ export function createGatewayReloadHandlers(params: {
       params.logReload.warn(
         `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
       );
+      primeGatewayRestartReason(`config-change: ${reasons}`);
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
@@ -235,6 +237,7 @@ export function createGatewayReloadHandlers(params: {
     } else {
       // No active operations or pending replies, restart immediately
       params.logReload.warn(`config change requires gateway restart (${reasons})`);
+      primeGatewayRestartReason(`config-change: ${reasons}`);
       const emitted = emitGatewayRestart();
       if (!emitted) {
         params.logReload.info("gateway restart already scheduled; skipping duplicate signal");

@@ -3,10 +3,15 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+import {
+  consumeGatewayRestartIntent,
+  writeGatewayRestartManifest,
+} from "../../gateway/restart-recovery.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
+  consumeGatewayRestartReason,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
@@ -24,7 +29,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
-type GatewayRunSignalAction = "stop" | "restart";
+type GatewayRunSignalAction = "stop" | "restart" | "service-restart";
 
 export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
@@ -106,7 +111,7 @@ export async function runGatewayLoop(params: {
       return;
     }
     shuttingDown = true;
-    const isRestart = action === "restart";
+    const isRestart = action !== "stop";
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     // Allow extra time for draining active turns on restart.
@@ -124,6 +129,13 @@ export async function runGatewayLoop(params: {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
+          try {
+            await writeGatewayRestartManifest({
+              reason: signal,
+            });
+          } catch (err) {
+            gatewayLog.warn(`failed to write restart manifest: ${String(err)}`);
+          }
           // Reject new enqueues immediately during the drain window so
           // sessions get an explicit restart error instead of silent task loss.
           markGatewayDraining();
@@ -168,7 +180,7 @@ export async function runGatewayLoop(params: {
       } finally {
         clearTimeout(forceExitTimer);
         server = null;
-        if (isRestart) {
+        if (action === "restart") {
           await handleRestartAfterServerClose();
         } else {
           await handleStopAfterServerClose();
@@ -179,7 +191,13 @@ export async function runGatewayLoop(params: {
 
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
-    request("stop", "SIGTERM");
+    void consumeGatewayRestartIntent()
+      .then((intent) => {
+        request(intent ? "service-restart" : "stop", intent?.reason ?? "SIGTERM");
+      })
+      .catch(() => {
+        request("stop", "SIGTERM");
+      });
   };
   const onSigint = () => {
     gatewayLog.info("signal SIGINT received");
@@ -205,7 +223,7 @@ export async function runGatewayLoop(params: {
       return;
     }
     markGatewaySigusr1RestartHandled();
-    request("restart", "SIGUSR1");
+    request("restart", consumeGatewayRestartReason() ?? "SIGUSR1");
   };
 
   process.on("SIGTERM", onSigterm);

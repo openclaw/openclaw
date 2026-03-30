@@ -91,6 +91,7 @@ import {
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
+import { clearGatewayRestartIntent, recoverGatewayRestartManifest } from "./restart-recovery.js";
 import { createChannelManager } from "./server-channels.js";
 import {
   createAgentEventHandler,
@@ -381,6 +382,7 @@ export async function startGatewayServer(
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
+  await clearGatewayRestartIntent().catch(() => undefined);
   logAcceptedEnvOption({
     key: "OPENCLAW_RAW_STREAM",
     description: "raw stream logging enabled",
@@ -1365,6 +1367,12 @@ export async function startGatewayServer(
         logHooks,
         logChannels,
       }));
+      void recoverGatewayRestartManifest({
+        cfg: gatewayPluginConfigAtStart,
+        cron,
+      }).catch((err) => {
+        log.warn(`gateway restart recovery failed: ${String(err)}`);
+      });
     }
 
     // Run gateway_start plugin hook (fire-and-forget)

@@ -220,6 +220,21 @@ export type GatewayReloadConfig = {
   deferralTimeoutMs?: number;
 };
 
+export type GatewayRestartConfig = {
+  /** Enables interrupted-session recovery after gateway restart. Default: true. */
+  sessionRecovery?: boolean;
+  /** Re-queues interrupted cron runs once after restart. Default: true. */
+  cronRetryOnInterrupt?: boolean;
+  /** Requires an explicit force override before restart when active work exists. Default: true. */
+  readinessGate?: boolean;
+  /** Minimum active work count that triggers the readiness gate. Default: 0. */
+  readinessGateThreshold?: number;
+  /** Queues inbound messages received during drain for post-restart replay. Default: true. */
+  drainQueueMessages?: boolean;
+  /** Restart manifest path relative to the OpenClaw state dir. Default: restart-manifest.json. */
+  manifestPath?: string;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -415,6 +430,7 @@ export type GatewayConfig = {
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
+  restart?: GatewayRestartConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   push?: GatewayPushConfig;

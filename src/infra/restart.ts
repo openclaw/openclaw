@@ -40,6 +40,7 @@ let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let activeRestartReason: string | undefined;
 
 function hasUnconsumedRestartSignal(): boolean {
   return emittedRestartToken > consumedRestartToken;
@@ -182,6 +183,17 @@ export function markGatewaySigusr1RestartHandled(): void {
   if (hasUnconsumedRestartSignal()) {
     consumedRestartToken = emittedRestartToken;
   }
+}
+
+export function primeGatewayRestartReason(reason?: string): void {
+  activeRestartReason =
+    typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 200) : undefined;
+}
+
+export function consumeGatewayRestartReason(): string | undefined {
+  const reason = activeRestartReason;
+  activeRestartReason = undefined;
+  return reason;
 }
 
 export type RestartDeferralHooks = {
@@ -471,7 +483,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     () => {
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
+      const scheduledReason = pendingRestartReason;
       pendingRestartReason = undefined;
+      primeGatewayRestartReason(scheduledReason);
       const pendingCheck = preRestartCheck;
       if (!pendingCheck) {
         emitGatewayRestart();
@@ -508,5 +522,6 @@ export const __testing = {
     consumedRestartToken = 0;
     lastRestartEmittedAt = 0;
     clearPendingScheduledRestart();
+    activeRestartReason = undefined;
   },
 };

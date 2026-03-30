@@ -11,6 +11,7 @@ import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { queueDrainRestartMessage } from "../../gateway/restart-recovery.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -38,6 +39,7 @@ import {
   toPluginConversationBinding,
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -834,6 +836,12 @@ export async function dispatchReplyFromConfig(params: {
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
+    if (err instanceof GatewayDrainingError) {
+      await queueDrainRestartMessage({
+        cfg,
+        ctx,
+      }).catch(() => false);
+    }
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;

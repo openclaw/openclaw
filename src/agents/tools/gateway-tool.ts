@@ -5,6 +5,7 @@ import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js"
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { evaluateGatewayRestartReadinessGate } from "../../gateway/restart-recovery.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -116,6 +117,7 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
+  force: Type.Optional(Type.Boolean()),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
@@ -165,8 +167,20 @@ export function createGatewayTool(opts?: {
           typeof params.reason === "string" && params.reason.trim()
             ? params.reason.trim().slice(0, 200)
             : undefined;
+        const force = params.force === true;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const readiness = evaluateGatewayRestartReadinessGate(opts?.config);
+        if (readiness.blocked && !force) {
+          return jsonResult({
+            ok: false,
+            status: "blocked",
+            requiresForce: true,
+            summary: readiness.summary,
+            activeSessions: readiness.activeSessions,
+            activeCronRuns: readiness.activeCronRuns,
+          });
+        }
         // Extract channel + threadId for routing after restart
         // Supports both :thread: (most channels) and :topic: (Telegram)
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);

@@ -113,6 +113,20 @@ export const FIELD_HELP: Record<string, string> = {
     'Remote connection transport: "direct" uses configured URL connectivity, while "ssh" tunnels through SSH. Use SSH when you need encrypted tunnel semantics without exposing remote ports.',
   "gateway.reload":
     "Live config-reload policy for how edits are applied and when full restarts are triggered. Keep hybrid behavior for safest operational updates unless debugging reload internals.",
+  "gateway.restart":
+    "Gateway restart recovery controls for manifest capture, drain-time inbound queuing, and post-restart wakeup behavior. Keep the defaults unless you intentionally want restart behavior to be more destructive.",
+  "gateway.restart.sessionRecovery":
+    "Injects a recovery system event into interrupted sessions after restart so they can finish queued work instead of silently stalling.",
+  "gateway.restart.cronRetryOnInterrupt":
+    "Re-queues cron jobs that were actively running when the gateway restarted. Keep enabled unless an interrupted job must never be retried automatically.",
+  "gateway.restart.readinessGate":
+    "Requires an explicit force override before direct restart actions when active sessions or cron runs would be interrupted. Keep enabled for safer operator and agent restarts.",
+  "gateway.restart.readinessGateThreshold":
+    "Minimum number of active sessions plus running cron jobs required before the restart readiness gate blocks a direct restart. Default: 0.",
+  "gateway.restart.drainQueueMessages":
+    "Queues inbound messages received during restart drain so they can be replayed into the affected session after startup instead of being dropped.",
+  "gateway.restart.manifestPath":
+    "Path to the restart manifest file relative to the OpenClaw state dir. Change this only when you need custom state layout or mounted-volume recovery handling.",
   "gateway.tls":
     "TLS certificate and key settings for terminating HTTPS directly in the gateway process. Use explicit certificates in production and avoid plaintext exposure on untrusted networks.",
   "gateway.tls.enabled":
