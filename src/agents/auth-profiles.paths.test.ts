@@ -26,14 +26,23 @@ describe("resolveOAuthRefreshLockPath", () => {
 
     expect(path.dirname(dotSegmentPath)).toBe(refreshLockDir);
     expect(path.dirname(currentDirPath)).toBe(refreshLockDir);
-    expect(path.basename(dotSegmentPath)).toBe("utf8-2e2e");
-    expect(path.basename(currentDirPath)).toBe("utf8-2e");
+    expect(path.basename(dotSegmentPath)).toMatch(/^sha256-[0-9a-f]{64}$/);
+    expect(path.basename(currentDirPath)).toMatch(/^sha256-[0-9a-f]{64}$/);
+    expect(path.basename(dotSegmentPath)).not.toBe(path.basename(currentDirPath));
   });
 
-  it("encodes full utf8 bytes so distinct profile ids stay distinct", () => {
+  it("hashes profile ids so distinct values stay distinct", () => {
     expect(resolveOAuthRefreshLockPath("openai-codex:work/test")).not.toBe(
       resolveOAuthRefreshLockPath("openai-codex_work:test"),
     );
     expect(resolveOAuthRefreshLockPath("«c")).not.toBe(resolveOAuthRefreshLockPath("઼"));
+  });
+
+  it("keeps lock filenames short for long profile ids", () => {
+    const longProfileId = `openai-codex:${"x".repeat(512)}`;
+    const basename = path.basename(resolveOAuthRefreshLockPath(longProfileId));
+
+    expect(basename).toMatch(/^sha256-[0-9a-f]{64}$/);
+    expect(Buffer.byteLength(basename, "utf8")).toBeLessThan(255);
   });
 });

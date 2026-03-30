@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
@@ -34,9 +35,8 @@ export function ensureAuthStoreFile(pathname: string) {
 }
 
 export function resolveOAuthRefreshLockPath(profileId: string): string {
-  // Encode the full UTF-8 byte sequence so lock ids remain collision-free and
-  // never normalize into "."/".." path segments.
-  const encodedId = Buffer.from(profileId, "utf8").toString("hex");
-  const safeId = `utf8-${encodedId || "00"}`;
+  // Hash the full UTF-8 byte sequence so lock ids stay namespace-safe while
+  // keeping the resulting filename length bounded for long profile ids.
+  const safeId = `sha256-${createHash("sha256").update(profileId, "utf8").digest("hex")}`;
   return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
 }
