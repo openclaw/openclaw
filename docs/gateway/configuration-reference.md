@@ -1616,6 +1616,9 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 
 <Accordion title="Session field details">
 
+- **`scope`**: base session grouping strategy for group-chat contexts.
+  - `per-sender` (default): each sender gets an isolated session within a channel context.
+  - `global`: all participants in a channel context share a single session (use only when shared context is intended).
 - **`dmScope`**: how DMs are grouped.
   - `main`: all DMs share the main session.
   - `per-peer`: isolate by sender id across channels.
@@ -1628,6 +1631,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - If parent `totalTokens` is above this value, OpenClaw starts a fresh thread session instead of inheriting parent transcript history.
   - Set `0` to disable this guard and always allow parent forking.
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
+- **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`–`5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
@@ -2648,6 +2652,50 @@ Convenience flags: `--dev` (uses `~/.openclaw-dev` + port `19001`), `--profile <
 
 See [Multiple Gateways](/gateway/multiple-gateways).
 
+### `gateway.tls`
+
+```json5
+{
+  gateway: {
+    tls: {
+      enabled: false,
+      autoGenerate: false,
+      certPath: "/etc/openclaw/tls/server.crt",
+      keyPath: "/etc/openclaw/tls/server.key",
+      caPath: "/etc/openclaw/tls/ca-bundle.crt",
+    },
+  },
+}
+```
+
+- `enabled`: enables TLS termination at the gateway listener (HTTPS/WSS) (default: `false`).
+- `autoGenerate`: auto-generates a local self-signed cert/key pair when explicit files are not configured; for local/dev use only.
+- `certPath`: filesystem path to the TLS certificate file.
+- `keyPath`: filesystem path to the TLS private key file; keep permission-restricted.
+- `caPath`: optional CA bundle path for client verification or custom trust chains.
+
+### `gateway.reload`
+
+```json5
+{
+  gateway: {
+    reload: {
+      mode: "hybrid",       // off | restart | hot | hybrid
+      debounceMs: 500,
+      deferralTimeoutMs: 300000,
+    },
+  },
+}
+```
+
+- `mode`: controls how config edits are applied at runtime.
+  - `"off"`: ignore live edits; changes require an explicit restart.
+  - `"restart"`: always restart the gateway process on config change.
+  - `"hot"`: apply changes in-process without restarting.
+  - `"hybrid"` (default): try hot reload first; fall back to restart if required.
+- `debounceMs`: debounce window in ms before config changes are applied (non-negative integer).
+- `deferralTimeoutMs`: maximum time in ms to wait for in-flight operations before forcing a restart (default: `300000` = 5 minutes).
+
 ---
 
 ## Hooks
@@ -2930,6 +2978,26 @@ Notes:
 - See [OAuth](/concepts/oauth).
 - Secrets runtime behavior and `audit/configure/apply` tooling: [Secrets Management](/gateway/secrets).
 
+### `auth.cooldowns`
+
+```json5
+{
+  auth: {
+    cooldowns: {
+      billingBackoffHours: 5,
+      billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
+      billingMaxHours: 24,
+      failureWindowHours: 24,
+    },
+  },
+}
+```
+
+- `billingBackoffHours`: base backoff in hours when a profile fails due to billing/insufficient credits (default: `5`).
+- `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
+- `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
+- `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
+
 ---
 
 ## Logging
@@ -2950,6 +3018,128 @@ Notes:
 - Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
+- `maxFileBytes`: maximum log file size in bytes before writes are suppressed (positive integer; default: `524288000` = 500 MB). Use external log rotation for production deployments.
+
+---
+
+## Diagnostics
+
+```json5
+{
+  diagnostics: {
+    enabled: true,
+    flags: ["telegram.*"],
+    stuckSessionWarnMs: 30000,
+
+    otel: {
+      enabled: false,
+      endpoint: "https://otel-collector.example.com:4318",
+      protocol: "http/protobuf", // http/protobuf | grpc
+      headers: { "x-tenant-id": "my-org" },
+      serviceName: "openclaw-gateway",
+      traces: true,
+      metrics: true,
+      logs: false,
+      sampleRate: 1.0,
+      flushIntervalMs: 5000,
+    },
+
+    cacheTrace: {
+      enabled: false,
+      includeMessages: true,
+      includePrompt: true,
+      includeSystem: true,
+    },
+  },
+}
+```
+
+- `enabled`: master toggle for instrumentation output (default: `true`).
+- `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
+- `stuckSessionWarnMs`: age threshold in ms for emitting stuck-session warnings while a session remains in processing state.
+- `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`).
+- `otel.endpoint`: collector URL for OTel export.
+- `otel.protocol`: `"http/protobuf"` (default) or `"grpc"`.
+- `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
+- `otel.serviceName`: service name for resource attributes.
+- `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
+- `otel.sampleRate`: trace sampling rate `0`–`1`.
+- `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
+- `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
+- `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`: control what is included in cache trace output (all default: `true`).
+
+---
+
+## Update
+
+```json5
+{
+  update: {
+    channel: "stable", // stable | beta | dev
+    checkOnStart: true,
+
+    auto: {
+      enabled: false,
+      stableDelayHours: 6,
+      stableJitterHours: 12,
+      betaCheckIntervalHours: 1,
+    },
+  },
+}
+```
+
+- `channel`: release channel for npm/git installs — `"stable"`, `"beta"`, or `"dev"`.
+- `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
+- `auto.enabled`: enable background auto-update for package installs (default: `false`).
+- `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
+- `auto.stableJitterHours`: extra stable-channel rollout spread window in hours (default: `12`; max: `168`).
+- `auto.betaCheckIntervalHours`: how often beta-channel checks run in hours (default: `1`; max: `24`).
+
+---
+
+## ACP
+
+```json5
+{
+  acp: {
+    enabled: false,
+    dispatch: { enabled: true },
+    backend: "acpx",
+    defaultAgent: "main",
+    allowedAgents: ["main", "ops"],
+    maxConcurrentSessions: 10,
+
+    stream: {
+      coalesceIdleMs: 50,
+      maxChunkChars: 1000,
+      repeatSuppression: true,
+      deliveryMode: "live", // live | final_only
+      hiddenBoundarySeparator: "paragraph", // none | space | newline | paragraph
+      maxOutputChars: 50000,
+      maxSessionUpdateChars: 500,
+    },
+
+    runtime: {
+      ttlMinutes: 30,
+    },
+  },
+}
+```
+
+- `enabled`: global ACP feature gate (default: `false`).
+- `dispatch.enabled`: independent gate for ACP session turn dispatch (default: `true`). Set `false` to keep ACP commands available while blocking execution.
+- `backend`: default ACP runtime backend id (must match a registered ACP runtime plugin).
+- `defaultAgent`: fallback ACP target agent id when spawns do not specify an explicit target.
+- `allowedAgents`: allowlist of agent ids permitted for ACP runtime sessions; empty means no additional restriction.
+- `maxConcurrentSessions`: maximum concurrently active ACP sessions.
+- `stream.coalesceIdleMs`: idle flush window in ms for streamed text.
+- `stream.maxChunkChars`: maximum chunk size before splitting streamed block projection.
+- `stream.repeatSuppression`: suppress repeated status/tool lines per turn (default: `true`).
+- `stream.deliveryMode`: `"live"` streams incrementally; `"final_only"` buffers until turn terminal events.
+- `stream.hiddenBoundarySeparator`: separator before visible text after hidden tool events (default: `"paragraph"`).
+- `stream.maxOutputChars`: maximum assistant output characters projected per ACP turn.
+- `stream.maxSessionUpdateChars`: maximum characters for projected ACP status/update lines.
+- `runtime.ttlMinutes`: idle TTL in minutes for ACP session workers before eligible cleanup.
 
 ---
 
@@ -3066,6 +3256,48 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
+
+### `cron.retry`
+
+```json5
+{
+  cron: {
+    retry: {
+      maxAttempts: 3,
+      backoffMs: [30000, 60000, 300000],
+      retryOn: ["rate_limit", "overloaded", "network", "timeout", "server_error"],
+    },
+  },
+}
+```
+
+- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`–`10`).
+- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1–10 entries).
+- `retryOn`: error types that trigger retries — `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
+
+Applies only to one-shot cron jobs. Recurring jobs use separate failure handling.
+
+### `cron.failureAlert`
+
+```json5
+{
+  cron: {
+    failureAlert: {
+      enabled: false,
+      after: 3,
+      cooldownMs: 3600000,
+      mode: "announce",
+      accountId: "main",
+    },
+  },
+}
+```
+
+- `enabled`: enable failure alerts for cron jobs (default: `false`).
+- `after`: consecutive failures before an alert fires (positive integer, min: `1`).
+- `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
+- `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
+- `accountId`: optional account or channel id to scope alert delivery.
 
 See [Cron Jobs](/automation/cron-jobs).
 
