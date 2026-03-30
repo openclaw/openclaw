@@ -8,6 +8,7 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
@@ -1072,6 +1073,27 @@ export function resolveSessionModelRef(
     }
   }
   return { provider, model };
+}
+
+export async function resolveGatewayModelSupportsImages(params: {
+  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  provider?: string;
+  model?: string;
+}): Promise<boolean> {
+  if (!params.model) {
+    return true;
+  }
+
+  try {
+    const catalog = await params.loadGatewayModelCatalog();
+    const modelEntry = catalog.find(
+      (entry) =>
+        entry.id === params.model && (!params.provider || entry.provider === params.provider),
+    );
+    return modelEntry ? (modelEntry.input?.includes("image") ?? false) : true;
+  } catch {
+    return true;
+  }
 }
 
 export function resolveSessionModelIdentityRef(

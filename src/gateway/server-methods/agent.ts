@@ -58,6 +58,7 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -348,50 +349,26 @@ export const agentHandlers: GatewayRequestHandlers = {
     let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
-      // Determine whether the selected model supports image input so that large-
-      // attachment offload markers are only injected when the model can resolve
-      // them. We probe the catalog using the session key if available.
-      // Defaults to true when the catalog or session is unavailable (backwards-
-      // compatible: unknown models are treated as vision-capable).
-      let supportsImages = true;
-      try {
-        const requestedSessionKeyRaw =
-          typeof request.sessionKey === "string" && request.sessionKey.trim()
-            ? request.sessionKey.trim()
-            : undefined;
+      const requestedSessionKeyRaw =
+        typeof request.sessionKey === "string" && request.sessionKey.trim()
+          ? request.sessionKey.trim()
+          : undefined;
 
-        let baseProvider: string | undefined;
-        let baseModel: string | undefined;
-        if (requestedSessionKeyRaw) {
-          const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
-          const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
-          baseProvider = modelRef.provider;
-          baseModel = modelRef.model;
-        }
-        const effectiveProvider = providerOverride || baseProvider;
-        const effectiveModel = modelOverride || baseModel;
-        if (effectiveModel) {
-          const catalog = await context.loadGatewayModelCatalog();
-          const catalogModels: unknown[] = Array.isArray(catalog)
-            ? catalog
-            : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
-              ? (catalog as { models: unknown[] }).models
-              : [];
-          const modelEntry = catalogModels.find(
-            (m): m is { id?: unknown; provider?: unknown; input?: unknown[] } =>
-              m !== null &&
-              typeof m === "object" &&
-              (m as Record<string, unknown>).id === effectiveModel &&
-              (!effectiveProvider || (m as Record<string, unknown>).provider === effectiveProvider),
-          );
-          if (modelEntry != null) {
-            supportsImages =
-              Array.isArray(modelEntry.input) && modelEntry.input.includes("image");
-          }
-        }
-      } catch {
-        // Session/catalog unavailable — default to true.
+      let baseProvider: string | undefined;
+      let baseModel: string | undefined;
+      if (requestedSessionKeyRaw) {
+        const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
+        const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
+        baseProvider = modelRef.provider;
+        baseModel = modelRef.model;
       }
+      const effectiveProvider = providerOverride || baseProvider;
+      const effectiveModel = modelOverride || baseModel;
+      const supportsImages = await resolveGatewayModelSupportsImages({
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        provider: effectiveProvider,
+        model: effectiveModel,
+      });
 
       try {
         const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {

@@ -64,6 +64,7 @@ import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
+  resolveGatewayModelSupportsImages,
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -1431,7 +1432,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
     let parsedOffloadedRefs: OffloadedRef[] = [];
-    
+
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -1489,37 +1490,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-if (normalizedAttachments.length > 0) {
-      // Determine whether the selected model supports image input so that large-
-      // attachment offload markers are only injected when the model can resolve
-      // them. Defaults to true when the catalog is unavailable (backwards-
-      // compatible: unknown models are treated as vision-capable).
-      let supportsImages = true;
-      try {
-        const catalog = await context.loadGatewayModelCatalog();
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-        const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
-        // The catalog shape is opaque here; probe defensively.
-        // Both flat-array and { models: [...] } shapes are handled.
-        const catalogModels: unknown[] = Array.isArray(catalog)
-          ? catalog
-          : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
-            ? (catalog as { models: unknown[] }).models
-            : [];
-        const modelEntry = catalogModels.find(
-          (m): m is { id?: unknown; provider?: unknown; input?: unknown[] } =>
-            m !== null &&
-            typeof m === "object" &&
-            (m as Record<string, unknown>).id === modelRef.model &&
-            (m as Record<string, unknown>).provider === modelRef.provider,
-        );
-        if (modelEntry != null) {
-          supportsImages =
-            Array.isArray(modelEntry.input) && modelEntry.input.includes("image");
-        }
-      } catch {
-        // Catalog unavailable — default to true (allow image attachment offload).
-      }
+    if (normalizedAttachments.length > 0) {
+      const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+      const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const supportsImages = await resolveGatewayModelSupportsImages({
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        provider: modelRef.provider,
+        model: modelRef.model,
+      });
 
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
