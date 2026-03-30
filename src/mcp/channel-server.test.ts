@@ -1,17 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { testState } from "../gateway/test-helpers.mocks.js";
-import {
-  createGatewaySuiteHarness,
-  installGatewayTestHooks,
-  writeSessionStore,
-} from "../gateway/test-helpers.server.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 
 const ClaudeChannelNotificationSchema = z.object({
@@ -29,87 +19,6 @@ const ClaudePermissionNotificationSchema = z.object({
     behavior: z.enum(["allow", "deny"]),
   }),
 });
-
-const cleanupDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
-
-async function createSessionStoreFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-channel-"));
-  cleanupDirs.push(dir);
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  return storePath;
-}
-
-async function seedSession(params: {
-  storePath: string;
-  sessionKey: string;
-  sessionId: string;
-  route: {
-    channel: string;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  entryOverrides?: Record<string, unknown>;
-  transcriptMessages: Array<{ id: string; message: Record<string, unknown> }>;
-}) {
-  const transcriptPath = path.join(path.dirname(params.storePath), `${params.sessionId}.jsonl`);
-  await writeSessionStore({
-    entries: {
-      [params.sessionKey.split(":").at(-1) ?? "main"]: {
-        sessionId: params.sessionId,
-        sessionFile: transcriptPath,
-        updatedAt: Date.now(),
-        lastChannel: params.route.channel,
-        lastTo: params.route.to,
-        lastAccountId: params.route.accountId,
-        lastThreadId: params.route.threadId,
-        ...params.entryOverrides,
-      },
-    },
-    storePath: params.storePath,
-  });
-  await fs.writeFile(
-    transcriptPath,
-    [
-      JSON.stringify({ type: "session", version: 1, id: params.sessionId }),
-      ...params.transcriptMessages.map((entry) => JSON.stringify(entry)),
-    ].join("\n"),
-    "utf-8",
-  );
-  return transcriptPath;
-}
-
-async function connectMcp(params: {
-  gatewayUrl: string;
-  gatewayToken: string;
-  claudeChannelMode?: "auto" | "on" | "off";
-}) {
-  const serverHarness = await createOpenClawChannelMcpServer({
-    gatewayUrl: params.gatewayUrl,
-    gatewayToken: params.gatewayToken,
-    claudeChannelMode: params.claudeChannelMode ?? "auto",
-  });
-  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await serverHarness.server.connect(serverTransport);
-  await client.connect(clientTransport);
-  await serverHarness.start();
-  return {
-    client,
-    bridge: serverHarness.bridge,
-    close: async () => {
-      await client.close();
-      await serverHarness.close();
-    },
-  };
-}
 
 async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | "on" | "off" }) {
   const serverHarness = await createOpenClawChannelMcpServer({
@@ -133,8 +42,6 @@ async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | 
 describe("openclaw channel mcp server", () => {
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
-      installGatewayTestHooks();
-
       test("lists conversations and reads messages", async () => {
         const sessionKey = "agent:main:main";
         const gatewayRequest = vi.fn(async (method: string) => {
@@ -182,7 +89,7 @@ describe("openclaw channel mcp server", () => {
           }
           throw new Error(`unexpected gateway method ${method}`);
         });
-        let mcp: Awaited<ReturnType<typeof connectMcp>> | null = null;
+        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null = null;
         try {
           mcp = await connectMcpWithoutGateway({
             claudeChannelMode: "off",
@@ -265,21 +172,8 @@ describe("openclaw channel mcp server", () => {
       });
 
       test("emits Claude channel and permission notifications", async () => {
-        const storePath = await createSessionStoreFile();
         const sessionKey = "agent:main:main";
-        await seedSession({
-          storePath,
-          sessionKey,
-          sessionId: "sess-claude",
-          route: {
-            channel: "imessage",
-            to: "+15551234567",
-          },
-          transcriptMessages: [],
-        });
-
-        const harness = await createGatewaySuiteHarness();
-        let mcp: Awaited<ReturnType<typeof connectMcp>> | null = null;
+        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null = null;
         try {
           const channelNotifications: Array<{ content: string; meta: Record<string, string> }> = [];
           const permissionNotifications: Array<{
@@ -287,9 +181,7 @@ describe("openclaw channel mcp server", () => {
             behavior: "allow" | "deny";
           }> = [];
 
-          mcp = await connectMcp({
-            gatewayUrl: `ws://127.0.0.1:${harness.port}`,
-            gatewayToken: "test-gateway-token-1234567890",
+          mcp = await connectMcpWithoutGateway({
             claudeChannelMode: "on",
           });
           mcp.client.setNotificationHandler(ClaudeChannelNotificationSchema, ({ params }) => {
@@ -299,9 +191,14 @@ describe("openclaw channel mcp server", () => {
             permissionNotifications.push(params);
           });
 
-          emitSessionTranscriptUpdate({
-            sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+          await (
+            mcp.bridge as unknown as {
+              handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+            }
+          ).handleSessionMessageEvent({
             sessionKey,
+            lastChannel: "imessage",
+            lastTo: "+15551234567",
             messageId: "msg-user-1",
             message: {
               role: "user",
@@ -333,9 +230,14 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          emitSessionTranscriptUpdate({
-            sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+          await (
+            mcp.bridge as unknown as {
+              handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+            }
+          ).handleSessionMessageEvent({
             sessionKey,
+            lastChannel: "imessage",
+            lastTo: "+15551234567",
             messageId: "msg-user-2",
             message: {
               role: "user",
@@ -352,9 +254,14 @@ describe("openclaw channel mcp server", () => {
             behavior: "allow",
           });
 
-          emitSessionTranscriptUpdate({
-            sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+          await (
+            mcp.bridge as unknown as {
+              handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+            }
+          ).handleSessionMessageEvent({
             sessionKey,
+            lastChannel: "imessage",
+            lastTo: "+15551234567",
             messageId: "msg-user-3",
             message: {
               role: "user",
@@ -375,7 +282,6 @@ describe("openclaw channel mcp server", () => {
           });
         } finally {
           await mcp?.close();
-          await harness.close();
         }
       });
     });
