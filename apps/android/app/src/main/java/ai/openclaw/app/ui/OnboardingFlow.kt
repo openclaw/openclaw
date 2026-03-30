@@ -228,7 +228,13 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var manualTls by rememberSaveable { mutableStateOf(false) }
   var gatewayError by rememberSaveable { mutableStateOf<String?>(null) }
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
-  val canFinishOnboarding = isConnected || (gatewayInputMode == GatewayInputMode.SetupCode && isNodeConnected)
+  val canRecoverBootstrapRetry =
+    gatewayInputMode == GatewayInputMode.SetupCode &&
+      attemptedConnect &&
+      statusText.contains("bootstrap token invalid or expired", ignoreCase = true) &&
+      viewModel.hasStoredNodeDeviceToken()
+  val canFinishOnboarding =
+    isConnected || (gatewayInputMode == GatewayInputMode.SetupCode && (isNodeConnected || canRecoverBootstrapRetry))
 
   val lifecycleOwner = LocalLifecycleOwner.current
   val qrScannerOptions =
