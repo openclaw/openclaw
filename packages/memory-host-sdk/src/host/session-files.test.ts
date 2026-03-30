@@ -2,19 +2,55 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionEntry } from "./session-files.js";
+import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js";
+
+let tmpDir: string;
+let originalStateDir: string | undefined;
+
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
+  originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = tmpDir;
+});
+
+afterEach(async () => {
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
+  await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+describe("listSessionFilesForAgent", () => {
+  it("includes reset and deleted transcripts in session file listing", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    await fs.mkdir(path.join(sessionsDir, "archive"), { recursive: true });
+
+    const included = [
+      "active.jsonl",
+      "active.jsonl.reset.2026-02-16T22-26-33.000Z",
+      "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    ];
+    const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
+
+    for (const fileName of [...included, ...excluded]) {
+      await fs.writeFile(path.join(sessionsDir, fileName), "");
+    }
+    await fs.writeFile(
+      path.join(sessionsDir, "archive", "nested.jsonl.deleted.2026-02-16T22-29-33.000Z"),
+      "",
+    );
+
+    const files = await listSessionFilesForAgent("main");
+
+    expect(files.map((filePath) => path.basename(filePath)).toSorted()).toEqual(
+      included.toSorted(),
+    );
+  });
+});
 
 describe("buildSessionEntry", () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
   it("returns lineMap tracking original JSONL line numbers", async () => {
     // Simulate a real session JSONL file with metadata records interspersed
     // Lines 1-3: non-message metadata records
