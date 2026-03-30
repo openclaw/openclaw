@@ -3796,6 +3796,60 @@ description: test skill
         },
       },
       {
+        name: "flags open dmPolicy when tools.elevated is enabled",
+        cfg: {
+          tools: { elevated: { enabled: true, allowFrom: { telegram: ["123"] } } },
+          channels: { telegram: { dmPolicy: "open" } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "security.exposure.open_dms_with_elevated",
+                severity: "critical",
+              }),
+            ]),
+          );
+        },
+      },
+      {
+        name: "flags open dmPolicy when runtime/filesystem tools are exposed without guards",
+        cfg: {
+          channels: { telegram: { dmPolicy: "open" } },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "security.exposure.open_dms_with_runtime_or_fs",
+                severity: "critical",
+              }),
+            ]),
+          );
+        },
+      },
+      {
+        name: "does not flag runtime/filesystem exposure for open dmPolicy when sandbox mode is all",
+        cfg: {
+          channels: { telegram: { dmPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "all" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(
+            res.findings.some((f) => f.checkId === "security.exposure.open_dms_with_runtime_or_fs"),
+          ).toBe(false);
+        },
+      },
+      {
         name: "does not warn for multi-user heuristic when no shared-user signals are configured",
         cfg: {
           channels: {
