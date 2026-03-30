@@ -13,12 +13,28 @@ import {
 } from "./host-env-security.js";
 import { OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
 
-function getSystemGitPath() {
+function findSystemCommandPath(command: string) {
   if (process.platform === "win32") {
     return null;
   }
-  const gitPath = "/usr/bin/git";
-  return fs.existsSync(gitPath) ? gitPath : null;
+  for (const dir of (process.env.PATH ?? "/usr/bin:/bin").split(path.delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    const candidate = path.join(dir, command);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function getSystemGitPath() {
+  return findSystemCommandPath("git");
+}
+
+function getSystemMakePath() {
+  return findSystemCommandPath("make");
 }
 
 function clearMarker(marker: string) {
@@ -96,6 +112,18 @@ async function initGitRepoWithCommits(gitPath: string, repoDir: string, commitCo
   }
 }
 
+async function runMakeCommand(makePath: string, cwd: string, env: NodeJS.ProcessEnv) {
+  await new Promise<void>((resolve) => {
+    const child = spawn(makePath, ["all"], {
+      cwd,
+      env,
+      stdio: "ignore",
+    });
+    child.once("error", () => resolve());
+    child.once("close", () => resolve());
+  });
+}
+
 describe("isDangerousHostEnvVarName", () => {
   it("matches dangerous keys and prefixes case-insensitively", () => {
     expect(isDangerousHostEnvVarName("BASH_ENV")).toBe(true);
@@ -111,6 +139,14 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("git_sequence_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_TEMPLATE_DIR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_template_dir")).toBe(true);
+    expect(isDangerousHostEnvVarName("CC")).toBe(true);
+    expect(isDangerousHostEnvVarName("cxx")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
+    expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
+    expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cmake_cxx_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
@@ -184,6 +220,11 @@ describe("sanitizeHostExecEnv", () => {
         ZDOTDIR: "/tmp/evil-zdotdir",
         BASH_ENV: "/tmp/pwn.sh",
         BROWSER: "/tmp/browser",
+        CC: "/tmp/evil-cc",
+        CXX: "/tmp/evil-cxx",
+        CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
+        CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
+        CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
         GIT_EDITOR: "/tmp/git-editor",
         GIT_EXEC_PATH: "/tmp/git-exec-path",
@@ -207,6 +248,11 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.BASH_ENV).toBeUndefined();
     expect(env.BROWSER).toBeUndefined();
     expect(env.GIT_EDITOR).toBeUndefined();
+    expect(env.CC).toBeUndefined();
+    expect(env.CXX).toBeUndefined();
+    expect(env.CARGO_BUILD_RUSTC).toBeUndefined();
+    expect(env.CMAKE_C_COMPILER).toBeUndefined();
+    expect(env.CMAKE_CXX_COMPILER).toBeUndefined();
     expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
     expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
     expect(env.AWS_CONFIG_FILE).toBeUndefined();
@@ -331,17 +377,26 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       },
       overrides: {
         PATH: "/tmp/evil",
+        CXX: "/tmp/evil-cxx",
+        CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CLASSPATH: "/tmp/evil-classpath",
         SAFE_KEY: "ok",
         "BAD-KEY": "bad",
       },
     });
 
-    expect(result.rejectedOverrideBlockedKeys).toEqual(["CLASSPATH", "PATH"]);
+    expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "CLASSPATH",
+      "CMAKE_C_COMPILER",
+      "CXX",
+      "PATH",
+    ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env.SAFE_KEY).toBe("ok");
     expect(result.env.PATH).toBe("/usr/bin:/bin");
     expect(result.env.CLASSPATH).toBeUndefined();
+    expect(result.env.CXX).toBeUndefined();
+    expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
@@ -694,5 +749,62 @@ describe("git env exploit regression", () => {
     await runGitLsRemote(gitPath, target, safeEnv);
 
     expect(fs.existsSync(marker)).toBe(false);
+  });
+});
+
+describe("compiler override exploit regression", () => {
+  it("blocks CC overrides so make cannot execute a substituted compiler", async () => {
+    const makePath = getSystemMakePath();
+    if (!makePath) {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-compiler-override-${process.pid}-${Date.now()}-`),
+    );
+    const exploitPath = path.join(tempDir, "evil-cc");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-compiler-override-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      // `CC` is a representative proof for the whole class because all compiler override keys
+      // flow through the same host env sanitization boundary; unit tests cover the sibling keys.
+      clearMarker(marker);
+      fs.writeFileSync(
+        path.join(tempDir, "Makefile"),
+        "all:\n\t@$(CC) --version >/dev/null 2>&1 || true\n",
+        "utf8",
+      );
+      fs.writeFileSync(exploitPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
+      fs.chmodSync(exploitPath, 0o755);
+
+      const baseEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+      };
+
+      await runMakeCommand(makePath, tempDir, {
+        ...baseEnv,
+        CC: exploitPath,
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv,
+        overrides: {
+          CC: exploitPath,
+        },
+      });
+
+      await runMakeCommand(makePath, tempDir, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
   });
 });
