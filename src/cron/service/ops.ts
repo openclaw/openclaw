@@ -1,6 +1,6 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
-import { createTaskRecord, updateTaskRecordById } from "../../tasks/task-registry.js";
+import { createTaskRecord, markTaskTerminalById } from "../../tasks/task-registry.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -424,7 +424,8 @@ function tryUpdateManualTaskRecord(
     return;
   }
   try {
-    updateTaskRecordById(params.taskId, {
+    markTaskTerminalById({
+      taskId: params.taskId,
       status:
         params.coreResult.status === "ok" || params.coreResult.status === "skipped"
           ? "succeeded"

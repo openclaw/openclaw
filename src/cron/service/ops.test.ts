@@ -210,7 +210,7 @@ describe("cron service ops seam coverage", () => {
     });
 
     const updateTaskRecordSpy = vi
-      .spyOn(taskRegistry, "updateTaskRecordById")
+      .spyOn(taskRegistry, "markTaskTerminalById")
       .mockImplementation(() => {
         throw new Error("disk full");
       });
