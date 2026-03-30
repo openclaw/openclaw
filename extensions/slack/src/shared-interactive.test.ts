@@ -82,4 +82,29 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(selectBlock.elements?.[0]?.action_id).toBe("openclaw:reply_select:1");
     expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("codex:approve:thread-1");
   });
+
+  it("maps supported button styles to Slack Block Kit styles", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Approve", value: "approve", style: "primary" },
+            { label: "Deny", value: "deny", style: "danger" },
+            { label: "Confirm", value: "confirm", style: "success" },
+            { label: "Skip", value: "skip", style: "secondary" },
+          ],
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ style?: string }>;
+    };
+
+    expect(buttonBlock.elements?.[0]?.style).toBe("primary");
+    expect(buttonBlock.elements?.[1]?.style).toBe("danger");
+    expect(buttonBlock.elements?.[2]?.style).toBe("primary");
+    expect(buttonBlock.elements?.[3]).not.toHaveProperty("style");
+  });
 });
