@@ -2,7 +2,18 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { resolveUserPath } from "../../../../src/utils.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
+
+/** Mirrors `resolvePath` in `backend-config.ts` so expectations match POSIX vs Windows. */
+function resolveQmdPathForTest(raw: string, cfg: OpenClawConfig, agentId: string): string {
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("~") || path.isAbsolute(trimmed)) {
+    return path.normalize(resolveUserPath(trimmed));
+  }
+  return path.normalize(path.resolve(workspaceDir, trimmed));
+}
 
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
@@ -181,7 +192,10 @@ describe("memorySearch.extraPaths integration", () => {
     );
     expect(customCollections.length).toBeGreaterThanOrEqual(2);
     expect(customCollections.map((collection) => collection.path)).toEqual(
-      expect.arrayContaining(["/home/user/docs", "/home/user/vault"]),
+      expect.arrayContaining([
+        resolveQmdPathForTest("/home/user/docs", cfg, "test-agent"),
+        resolveQmdPathForTest("/home/user/vault", cfg, "test-agent"),
+      ]),
     );
   });
 
@@ -211,8 +225,8 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
     const paths = customCollections.map((collection) => collection.path);
-    expect(paths).toContain("/agent/specific/path");
-    expect(paths).toContain("/default/path");
+    expect(paths).toContain(resolveQmdPathForTest("/agent/specific/path", cfg, "my-agent"));
+    expect(paths).toContain(resolveQmdPathForTest("/default/path", cfg, "my-agent"));
   });
 
   it("falls back to defaults when agent has no overrides", () => {
@@ -241,7 +255,7 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
     const paths = customCollections.map((collection) => collection.path);
-    expect(paths).toContain("/default/path");
+    expect(paths).toContain(resolveQmdPathForTest("/default/path", cfg, "my-agent"));
   });
 
   it("deduplicates merged memorySearch.extraPaths for QMD collections", () => {
@@ -270,9 +284,10 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
     const paths = customCollections.map((collection) => collection.path);
+    const sharedResolved = resolveQmdPathForTest("/shared/path", cfg, "my-agent");
 
-    expect(paths.filter((collectionPath) => collectionPath === "/shared/path")).toHaveLength(1);
-    expect(paths).toContain("/agent-only");
+    expect(paths.filter((collectionPath) => collectionPath === sharedResolved)).toHaveLength(1);
+    expect(paths).toContain(resolveQmdPathForTest("/agent-only", cfg, "my-agent"));
   });
 
   it("matches per-agent memorySearch.extraPaths using normalized agent ids", () => {
@@ -298,7 +313,9 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
 
-    expect(customCollections.map((collection) => collection.path)).toContain("/agent/mixed-case");
+    expect(customCollections.map((collection) => collection.path)).toContain(
+      resolveQmdPathForTest("/agent/mixed-case", cfg, "my-agent"),
+    );
   });
 
   it("deduplicates identical roots shared by memory.qmd.paths and memorySearch.extraPaths", () => {
@@ -323,9 +340,9 @@ describe("memorySearch.extraPaths integration", () => {
     const customCollections = (result.qmd?.collections ?? []).filter(
       (collection) => collection.kind === "custom",
     );
+    const docsPath = resolveQmdPathForTest("./docs", cfg, "main");
     const docsCollections = customCollections.filter(
-      (collection) =>
-        collection.path === "/workspace/root/docs" && collection.pattern === "**/*.md",
+      (collection) => collection.path === docsPath && collection.pattern === "**/*.md",
     );
 
     expect(docsCollections).toHaveLength(1);

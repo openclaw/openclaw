@@ -39,6 +39,7 @@ describe("cleanupSessionStateForTest", () => {
   beforeEach(async () => {
     acquireSessionWriteLockMock.mockClear();
     await loadFreshCleanupModules();
+    await cleanupSessionStateForTest();
   });
 
   afterEach(async () => {

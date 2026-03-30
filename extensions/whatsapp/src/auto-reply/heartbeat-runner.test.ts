@@ -34,12 +34,28 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   return {
     ...actual,
     getReplyFromConfig: vi.fn(async () => undefined),
+    // `importOriginal` may omit this binding for the jiti plugin-sdk alias; keep in sync with `src/auto-reply/tokens.ts`.
+    HEARTBEAT_TOKEN: "HEARTBEAT_OK",
   };
 });
 
 vi.mock("../../../../src/channels/plugins/whatsapp-heartbeat.js", () => ({
   resolveWhatsAppHeartbeatRecipients: () => [],
 }));
+
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
+    loadSessionStore: () => state.store,
+    resolveSessionKey: () => "k",
+    resolveStorePath: () => "/tmp/store.json",
+    updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
+      updater(state.store);
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
@@ -80,28 +96,6 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
   return {
     ...actual,
     redactIdentifier,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    getReplyFromConfig: vi.fn(async () => undefined),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
-    loadSessionStore: () => state.store,
-    resolveSessionKey: () => "k",
-    resolveStorePath: () => "/tmp/store.json",
-    updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
-      updater(state.store);
-    },
   };
 });
 
