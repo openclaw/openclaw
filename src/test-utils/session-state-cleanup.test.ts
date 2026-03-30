@@ -2,13 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
 import {
-  clearSessionStoreCacheForTest,
   getSessionStoreLockQueueSizeForTest,
   withSessionStoreLockForTest,
 } from "../config/sessions/store.js";
-import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 const acquireSessionWriteLockMock = vi.hoisted(() =>
@@ -34,17 +31,13 @@ function createDeferred<T>() {
 }
 
 describe("cleanupSessionStateForTest", () => {
-  beforeEach(() => {
-    clearSessionStoreCacheForTest();
-    resetFileLockStateForTest();
-    resetSessionWriteLockStateForTest();
+  beforeEach(async () => {
+    await cleanupSessionStateForTest();
     acquireSessionWriteLockMock.mockClear();
   });
 
-  afterEach(() => {
-    clearSessionStoreCacheForTest();
-    resetFileLockStateForTest();
-    resetSessionWriteLockStateForTest();
+  afterEach(async () => {
+    await cleanupSessionStateForTest();
     vi.restoreAllMocks();
   });
 
@@ -53,8 +46,9 @@ describe("cleanupSessionStateForTest", () => {
     const storePath = path.join(fixtureRoot, "openclaw-sessions.json");
     const started = createDeferred<void>();
     const release = createDeferred<void>();
+    let running: Promise<void> | undefined;
     try {
-      const running = withSessionStoreLockForTest(storePath, async () => {
+      running = withSessionStoreLockForTest(storePath, async () => {
         started.resolve();
         await release.promise;
       });
@@ -77,6 +71,8 @@ describe("cleanupSessionStateForTest", () => {
       expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
     } finally {
       release.resolve();
+      await running?.catch(() => undefined);
+      await cleanupSessionStateForTest();
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
