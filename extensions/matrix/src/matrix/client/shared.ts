@@ -18,6 +18,10 @@ type SharedMatrixClientState = {
 const sharedClientStates = new Map<string, SharedMatrixClientState>();
 const sharedClientPromises = new Map<string, Promise<SharedMatrixClientState>>();
 
+function serializeDispatcherPolicyKey(auth: MatrixAuth): string {
+  return JSON.stringify(auth.dispatcherPolicy ?? null);
+}
+
 function buildSharedClientKey(auth: MatrixAuth): string {
   return [
     auth.homeserver,
@@ -25,6 +29,7 @@ function buildSharedClientKey(auth: MatrixAuth): string {
     auth.accessToken,
     auth.encryption ? "e2ee" : "plain",
     auth.allowPrivateNetwork ? "private-net" : "strict-net",
+    serializeDispatcherPolicyKey(auth),
     auth.accountId,
   ].join("|");
 }
@@ -45,6 +50,7 @@ async function createSharedMatrixClient(params: {
     accountId: params.auth.accountId,
     allowPrivateNetwork: params.auth.allowPrivateNetwork,
     ssrfPolicy: params.auth.ssrfPolicy,
+    dispatcherPolicy: params.auth.dispatcherPolicy,
   });
   return {
     client,

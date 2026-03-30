@@ -17,6 +17,7 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import { resolveSkillSource } from "./skills/source.js";
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -503,7 +504,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const spec = findInstallSpec(entry, params.installId);
   const scanResult = await collectSkillInstallScanWarnings(entry);
   const warnings = scanResult.warnings;
-  const skillSource = entry.skill.sourceInfo?.source?.trim() || "unknown";
+  const skillSource = resolveSkillSource(entry.skill);
 
   // Run before_install so external scanners can augment findings or block installs.
   const hookRunner = getGlobalHookRunner();
@@ -551,7 +552,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       // Hook errors are non-fatal — built-in scanner results still apply.
     }
   }
-
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
   const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);

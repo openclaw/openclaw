@@ -2,7 +2,7 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -237,7 +237,10 @@ export async function runConfigureWizard(
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    let currentBaseHash = snapshot.hash;
+    const baseConfig: OpenClawConfig = snapshot.valid
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -321,7 +324,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(remoteConfig);
+      await replaceConfigFile({
+        nextConfig: remoteConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
       return;
@@ -350,7 +357,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(nextConfig);
+      await replaceConfigFile({
+        nextConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
     };
 

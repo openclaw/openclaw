@@ -237,20 +237,20 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                               |
-| ------------------------ | ------------------------- | --------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                 |
-| `api.name`               | `string`                  | Display name                                              |
-| `api.version`            | `string?`                 | Plugin version (optional)                                 |
-| `api.description`        | `string?`                 | Plugin description (optional)                             |
-| `api.source`             | `string`                  | Plugin source path                                        |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                          |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                   |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)          |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, or `"setup-runtime"`            |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                      |
+| Field                    | Type                      | Description                                                      |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                        |
+| `api.name`               | `string`                  | Display name                                                     |
+| `api.version`            | `string?`                 | Plugin version (optional)                                        |
+| `api.description`        | `string?`                 | Plugin description (optional)                                    |
+| `api.source`             | `string`                  | Plugin source path                                               |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                 |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                          |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                             |
 
 ## Internal module convention
 
@@ -268,6 +268,13 @@ my-plugin/
   Never import your own plugin through `openclaw/plugin-sdk/<your-plugin>`
   from production code. Route internal imports through `./api.ts` or
   `./runtime-api.ts`. The SDK path is the external contract only.
+</Warning>
+
+<Warning>
+  Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
+  imports. If a helper is truly shared, promote it to a neutral SDK subpath
+  such as `openclaw/plugin-sdk/speech`, `.../provider-model-shared`, or another
+  capability-oriented surface instead of coupling two plugins together.
 </Warning>
 
 ## Related

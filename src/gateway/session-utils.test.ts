@@ -6,7 +6,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.js";
-import { clearConfigCache, writeConfigFile } from "../config/config.js";
+import { resetConfigRuntimeState, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -22,6 +22,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
   pruneLegacyStoreKeys,
+  resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -306,7 +307,7 @@ describe("gateway session utils", () => {
   });
 
   test("loadSessionEntry reads discovered stores from non-round-tripping agent dirs", async () => {
-    clearConfigCache();
+    resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-", async ({ stateDir }) => {
         const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
@@ -326,7 +327,7 @@ describe("gateway session utils", () => {
           },
           agents: { list: [{ id: "main", default: true }] },
         });
-        clearConfigCache();
+        resetConfigRuntimeState();
 
         const loaded = loadSessionEntry("agent:retired-agent:main");
 
@@ -334,12 +335,12 @@ describe("gateway session utils", () => {
         expect(loaded.entry?.sessionId).toBe("sess-retired");
       });
     } finally {
-      clearConfigCache();
+      resetConfigRuntimeState();
     }
   });
 
   test("loadSessionEntry prefers the freshest duplicate row for a logical key", async () => {
-    clearConfigCache();
+    resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-freshest-", async ({ stateDir }) => {
         const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
@@ -364,19 +365,19 @@ describe("gateway session utils", () => {
           },
           agents: { list: [{ id: "main", default: true }] },
         });
-        clearConfigCache();
+        resetConfigRuntimeState();
 
         const loaded = loadSessionEntry("agent:main:main");
 
         expect(loaded.entry?.sessionId).toBe("sess-fresh");
       });
     } finally {
-      clearConfigCache();
+      resetConfigRuntimeState();
     }
   });
 
   test("loadSessionEntry prefers the freshest duplicate row across discovered stores", async () => {
-    clearConfigCache();
+    resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
         const canonicalSessionsDir = path.join(stateDir, "agents", "main", "sessions");
@@ -415,14 +416,14 @@ describe("gateway session utils", () => {
           },
           agents: { list: [{ id: "main", default: true }] },
         });
-        clearConfigCache();
+        resetConfigRuntimeState();
 
         const loaded = loadSessionEntry("agent:main:main");
 
         expect(loaded.entry?.sessionId).toBe("sess-canonical-fresh");
       });
     } finally {
-      clearConfigCache();
+      resetConfigRuntimeState();
     }
   });
 
@@ -2355,6 +2356,30 @@ describe("listSessionsFromStore subagent metadata", () => {
     );
     expect(timeout?.status).toBe("timeout");
     expect(timeout?.runtimeMs).toBe(0);
+  });
+
+  test("fails closed when model lookup misses", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "other", input: ["text", "image"] },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("fails closed when model catalog load throws", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => {
+          throw new Error("catalog unavailable");
+        },
+      }),
+    ).resolves.toBe(false);
   });
 });
 

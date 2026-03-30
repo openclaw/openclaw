@@ -266,9 +266,20 @@ chmod 700 "$CONFIG_DIR" "$WORKSPACE_DIR"
 ensure_private_existing_dir_owned_by_user "config directory" "$CONFIG_DIR"
 ensure_private_existing_dir_owned_by_user "workspace directory" "$WORKSPACE_DIR"
 
+resolve_config_gateway_bind() {
+  local config_dir="$1"
+  if ! command -v openclaw >/dev/null 2>&1; then
+    return 0
+  fi
+  OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+    openclaw config get gateway.bind 2>/dev/null || true
+}
+
 # For published container ports, the gateway must listen on the container
-# interface. Keep host access local-only by default via 127.0.0.1 publish.
-GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+# interface, so the Podman launcher defaults to lan. Respect an explicit
+# OPENCLAW_GATEWAY_BIND first, then gateway.bind in local config.
+CONFIG_GATEWAY_BIND="$(resolve_config_gateway_bind "$CONFIG_DIR")"
+GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-lan}}"
 
 upsert_env_var() {
   local file="$1"
