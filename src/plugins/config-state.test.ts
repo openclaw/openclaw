@@ -171,6 +171,13 @@ describe("resolveEffectiveEnableState", () => {
       },
       { enabled: false, reason: "disabled in config" },
     ],
+    [
+      {
+        enabled: true,
+        allow: ["lossless-claw"],
+      },
+      { enabled: true },
+    ],
   ] as const)("resolves bundled telegram state for %o", (config, expected) => {
     expect(resolveBundledTelegramState(config)).toEqual(expected);
   });
