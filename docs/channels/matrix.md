@@ -581,7 +581,9 @@ Current behavior:
 
 - `channels.matrix.historyLimit` controls how many recent room messages are included as `InboundHistory` when a Matrix room message triggers the agent.
 - It falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- Matrix room history is room-only. DMs keep using normal session history.
 - Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
+- The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
 - Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.
 
 ## DM and room policy example
