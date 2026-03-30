@@ -420,3 +420,11 @@ Prefer `chat_guid` for stable routing:
 - For status/health info: `openclaw status --all` or `openclaw status --deep`.
 
 For general channel workflow reference, see [Channels](/channels) and the [Plugins](/tools/plugin) guide.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

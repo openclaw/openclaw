@@ -179,3 +179,11 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 
 - Remove any old external `zca` process assumptions.
 - The channel now runs fully in OpenClaw without external CLI binaries.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening
