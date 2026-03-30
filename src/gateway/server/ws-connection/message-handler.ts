@@ -551,8 +551,15 @@ export function attachGatewayWsMessageHandler(params: {
           // Shared token/password auth can bypass pairing for trusted operators.
           // Device-less clients only keep self-declared scopes on the explicit
           // allow path, including trusted token-authenticated backend operators.
+          // When authOk is true via token/password, the client has proven identity
+          // through a shared secret — preserve their scopes even if sharedAuthOk
+          // is false (e.g. Tailscale-authenticated clients where the shared probe
+          // uses allowTailscale=false). Fixes #51396, #57331, #46997, #48229.
+          const hasProvenSharedIdentity =
+            authOk && (authMethod === "token" || authMethod === "password");
           if (
             !device &&
+            !hasProvenSharedIdentity &&
             shouldClearUnboundScopesForMissingDeviceIdentity({
               decision,
               controlUiAuthPolicy,
