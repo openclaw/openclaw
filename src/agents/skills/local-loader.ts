@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createSyntheticSourceInfo, type Skill } from "@mariozechner/pi-coding-agent";
+import { type Skill } from "@mariozechner/pi-coding-agent";
 import { openVerifiedFileSync } from "../../infra/safe-open-sync.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 
@@ -74,12 +74,6 @@ function loadSingleSkillDirectory(params: {
     filePath,
     baseDir,
     source: params.source,
-    sourceInfo: createSyntheticSourceInfo(filePath, {
-      source: params.source,
-      baseDir,
-      scope: "project",
-      origin: "top-level",
-    }),
     disableModelInvocation: invocation.disableModelInvocation,
   };
 }
