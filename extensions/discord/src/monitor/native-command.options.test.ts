@@ -43,10 +43,20 @@ function createNativeCommand(
   if (!command) {
     throw new Error(`missing native command: ${name}`);
   }
-  const cfg = (opts?.cfg ?? {}) as ReturnType<typeof loadConfig>;
-  const discordConfig = (opts?.discordConfig ?? cfg.channels?.discord ?? {}) as NonNullable<
+  const baseCfg = (opts?.cfg ?? {}) as ReturnType<typeof loadConfig>;
+  const discordConfig = (opts?.discordConfig ?? baseCfg.channels?.discord ?? {}) as NonNullable<
     OpenClawConfig["channels"]
   >["discord"];
+  const cfg =
+    opts?.discordConfig === undefined
+      ? baseCfg
+      : ({
+          ...baseCfg,
+          channels: {
+            ...baseCfg.channels,
+            discord: discordConfig,
+          },
+        } as ReturnType<typeof loadConfig>);
   return createDiscordNativeCommand({
     command,
     cfg,
@@ -200,19 +210,23 @@ describe("createDiscordNativeCommand option wiring", () => {
   });
 
   it("returns no autocomplete choices for group DMs outside dm.groupChannels", async () => {
+    const discordConfig = {
+      dm: {
+        enabled: true,
+        policy: "open",
+        groupEnabled: true,
+        groupChannels: ["allowed-group"],
+      },
+    } satisfies NonNullable<OpenClawConfig["channels"]>["discord"];
     const command = createNativeCommand("think", {
       cfg: {
-        channels: {
-          discord: {
-            dm: {
-              enabled: true,
-              policy: "open",
-              groupEnabled: true,
-              groupChannels: ["allowed-group"],
-            },
+        commands: {
+          allowFrom: {
+            discord: ["user:allowed-user"],
           },
         },
       } as ReturnType<typeof loadConfig>,
+      discordConfig,
     });
     const level = requireOption(command, "level");
     const autocomplete = readAutocomplete(level);
