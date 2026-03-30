@@ -206,6 +206,34 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
+  it("detects mistral model hints through proxy providers like openrouter", () => {
+    // Direct mistral provider
+    expect(resolveTranscriptToolCallIdMode("mistral", "mistral-small-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("mistral", "mixtral-8x7b")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("mistral", "codestral-latest")).toBe("strict9");
+
+    // Proxy providers routing to mistral models
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistral-small-2603")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistral/mistral-large")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/mistral-large-2407")).toBe(
+      "strict9",
+    );
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/mixtral-8x22b")).toBe(
+      "strict9",
+    );
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/codestral-latest")).toBe(
+      "strict9",
+    );
+
+    // Non-mistral models through openrouter should not be strict9
+    expect(resolveTranscriptToolCallIdMode("openrouter", "openai/gpt-4o")).toBe(undefined);
+    expect(resolveTranscriptToolCallIdMode("openrouter", "anthropic/claude-3.5-sonnet")).toBe(
+      undefined,
+    );
+    expect(resolveTranscriptToolCallIdMode("openrouter", "google/gemini-2.5-pro")).toBe(undefined);
+  });
+
   it("treats kimi aliases as OpenAI-style anthropic tool payload providers", () => {
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(true);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
