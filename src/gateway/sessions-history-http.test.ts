@@ -426,17 +426,20 @@ describe("session history HTTP endpoints", () => {
         },
       });
 
-      // Requests without x-openclaw-scopes header now receive default
-      // CLI_DEFAULT_OPERATOR_SCOPES (which include operator.read), so they
-      // are authorised.  The explicit-header test above still proves that a
-      // caller who *declares* only operator.approvals is correctly rejected.
       const httpHistoryWithoutScopes = await fetch(
         `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
         {
           headers: AUTH_HEADER,
         },
       );
-      expect(httpHistoryWithoutScopes.status).toBe(200);
+      expect(httpHistoryWithoutScopes.status).toBe(403);
+      await expect(httpHistoryWithoutScopes.json()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: "missing scope: operator.read",
+        },
+      });
     } finally {
       ws.close();
       await harness.close();

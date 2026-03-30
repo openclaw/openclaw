@@ -69,14 +69,13 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
         }),
       });
 
-      expect(missingHeaderRes.status).toBe(200);
+      expect(missingHeaderRes.status).toBe(403);
       const missingHeaderBody = (await missingHeaderRes.json()) as {
-        object?: string;
-        choices?: Array<{ message?: { content?: string } }>;
+        error?: { type?: string; message?: string };
       };
-      expect(missingHeaderBody.object).toBe("chat.completion");
-      expect(missingHeaderBody.choices?.[0]?.message?.content).toBe("hello");
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(missingHeaderBody.error?.type).toBe("forbidden");
+      expect(missingHeaderBody.error?.message).toBe("missing scope: operator.write");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
     } finally {
       started.ws.close();
       await started.server.close();

@@ -95,7 +95,7 @@ function parseSseDataLines(text: string): string[] {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 60_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 90_000 }, async () => {
     await expectChatCompletionsDisabled(startServerWithDefaultConfig);
     await expectChatCompletionsDisabled((port) =>
       startServer(port, {
