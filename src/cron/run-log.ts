@@ -125,6 +125,28 @@ async function drainPendingWrite(filePath: string): Promise<void> {
   }
 }
 
+/**
+ * Enqueue a prune operation through the write serialization queue so it
+ * cannot race with a concurrent appendCronRunLog on the same file.
+ * Best-effort: errors are swallowed so reads remain resilient.
+ */
+async function serializedPruneIfNeeded(
+  filePath: string,
+  opts: { maxBytes: number; keepLines: number },
+): Promise<void> {
+  const resolved = path.resolve(filePath);
+  const prev = writesByPath.get(resolved) ?? Promise.resolve();
+  const next = prev.catch(() => undefined).then(() => pruneIfNeeded(resolved, opts));
+  writesByPath.set(resolved, next);
+  try {
+    await next;
+  } finally {
+    if (writesByPath.get(resolved) === next) {
+      writesByPath.delete(resolved);
+    }
+  }
+}
+
 async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLines: number }) {
   const stat = await fs.stat(filePath).catch(() => null);
   if (!stat || stat.size <= opts.maxBytes) {
@@ -371,7 +393,7 @@ export async function readCronRunLogEntriesPage(
   // Defensive prune before reading: if async prune in appendCronRunLog failed
   // silently (e.g. disk pressure), the file may have grown beyond the expected
   // max size. Pruning here prevents OOM when loading the file into memory.
-  await pruneIfNeeded(resolved, {
+  await serializedPruneIfNeeded(resolved, {
     maxBytes: opts?.pruneOptions?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
     keepLines: opts?.pruneOptions?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
   }).catch(() => undefined);
@@ -432,7 +454,7 @@ export async function readCronRunLogEntriesPageAll(
   // Defensive prune on each file before reading to prevent OOM from unbounded growth
   await Promise.all(
     jsonlFiles.map((f) =>
-      pruneIfNeeded(f, {
+      serializedPruneIfNeeded(f, {
         maxBytes: opts?.pruneOptions?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
         keepLines: opts?.pruneOptions?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
       }).catch(() => undefined),
