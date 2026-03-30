@@ -40,17 +40,15 @@ enum WideAreaGatewayDiscovery {
             timeoutSeconds - Date().timeIntervalSince(startedAt)
         }
 
-        guard collectTailnetIPv4s(
-            statusJson: context.tailscaleStatus()).nonEmpty != nil else { return [] }
-        guard let ptrLines = loadWideAreaPtrRecords(
+        guard let statusJson = context.tailscaleStatus(),
+              !collectTailnetIPv4s(statusJson: statusJson).isEmpty,
+              let discovery = loadWideAreaPtrRecords(
             remaining: remaining,
             dig: context.dig)
-        else {
-            return []
-        }
+        else { return [] }
 
-        guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return [] }
-        let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let domainTrimmed = discovery.domainTrimmed
+        let ptrLines = discovery.ptrLines
         let nameserver = self.tailscaleDNSResolver
 
         var beacons: [WideAreaGatewayBeacon] = []
@@ -142,7 +140,8 @@ enum WideAreaGatewayDiscovery {
 
     private static func loadWideAreaPtrRecords(
         remaining: () -> TimeInterval,
-        dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> [Substring]?
+        dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?)
+        -> (domainTrimmed: String, ptrLines: [Substring])?
     {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return nil }
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
@@ -158,7 +157,7 @@ enum WideAreaGatewayDiscovery {
             return nil
         }
 
-        return ptrLines
+        return (domainTrimmed, ptrLines)
     }
 
     private static func runDig(args: [String], timeout: TimeInterval) -> String? {

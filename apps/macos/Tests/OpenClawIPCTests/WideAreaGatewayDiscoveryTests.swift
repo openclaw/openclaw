@@ -9,8 +9,8 @@ private final class NameserverQueryLog: @unchecked Sendable {
 
     func record(_ nameserver: String) {
         self.lock.lock()
+        defer { self.lock.unlock() }
         self.nameservers.append(nameserver)
-        self.lock.unlock()
     }
 
     func count(matching nameserver: String) -> Int {
@@ -20,6 +20,7 @@ private final class NameserverQueryLog: @unchecked Sendable {
     }
 }
 
+@Suite(.serialized)
 struct WideAreaGatewayDiscoveryTests {
     @Test func `discovers beacon from tailnet dns sd fallback`() {
         let originalWideAreaDomain = getenv("OPENCLAW_WIDE_AREA_DOMAIN").map { String(cString: $0) }
