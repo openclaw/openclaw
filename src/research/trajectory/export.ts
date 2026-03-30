@@ -146,38 +146,45 @@ export function researchEventKindTieRank(kind: string): number {
 }
 
 function parseResearchEvents(lines: unknown[]): ResearchEventV1[] {
-  const out: ResearchEventV1[] = [];
-  for (const line of lines) {
+  const out: Array<{ event: ResearchEventV1; lineIdx: number }> = [];
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+    const line = lines[lineIdx];
     const parsed = ResearchEventV1Schema.safeParse(line);
     if (!parsed.success) {
       continue;
     }
-    out.push(redactEvent(parsed.data));
+    out.push({ event: redactEvent(parsed.data), lineIdx });
   }
   out.sort((a, b) => {
-    if (a.ts !== b.ts) {
-      return a.ts - b.ts;
+    const evA = a.event;
+    const evB = b.event;
+    if (evA.ts !== evB.ts) {
+      return evA.ts - evB.ts;
     }
-    const ra = researchEventKindTieRank(a.kind);
-    const rb = researchEventKindTieRank(b.kind);
+    const ra = researchEventKindTieRank(evA.kind);
+    const rb = researchEventKindTieRank(evB.kind);
     if (ra !== rb) {
       return ra - rb;
     }
     const aId =
-      typeof a.payload === "object" && a.payload
-        ? (a.payload as { toolCallId?: string }).toolCallId
+      typeof evA.payload === "object" && evA.payload
+        ? (evA.payload as { toolCallId?: string }).toolCallId
         : "";
     const bId =
-      typeof b.payload === "object" && b.payload
-        ? (b.payload as { toolCallId?: string }).toolCallId
+      typeof evB.payload === "object" && evB.payload
+        ? (evB.payload as { toolCallId?: string }).toolCallId
         : "";
     const idCmp = String(aId ?? "").localeCompare(String(bId ?? ""));
     if (idCmp !== 0) {
       return idCmp;
     }
-    return a.kind.localeCompare(b.kind);
+    const kindCmp = evA.kind.localeCompare(evB.kind);
+    if (kindCmp !== 0) {
+      return kindCmp;
+    }
+    return a.lineIdx - b.lineIdx;
   });
-  return out;
+  return out.map((row) => row.event);
 }
 
 /**

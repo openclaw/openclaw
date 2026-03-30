@@ -87,6 +87,45 @@ function parseExpiresAtMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+type ExecApprovalResolutionTelemetryParams = {
+  approvalId: string;
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  agentRunId?: string;
+};
+
+/** Same payload shape as the `exec.approval.waitDecision` success path in `waitForExecApprovalDecision`. */
+async function emitExecApprovalResolutionTelemetry(
+  params: ExecApprovalResolutionTelemetryParams,
+  decisionValue: string | null,
+): Promise<void> {
+  try {
+    const cfg = loadConfig();
+    await emitStandaloneResearchEvent({
+      cfg,
+      runId: params.agentRunId ?? params.approvalId,
+      sessionId: params.sessionId ?? params.approvalId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId ?? "default",
+      event: {
+        kind:
+          decisionValue && decisionValue.startsWith("allow") ? "approval.allow" : "approval.deny",
+        payload: {
+          approvalId: params.approvalId,
+          ...(params.agentRunId ? { agentRunId: params.agentRunId } : {}),
+          decision: decisionValue ?? undefined,
+          ...(decisionValue && decisionValue.startsWith("allow")
+            ? {}
+            : { reason: "approval wait resolved deny" }),
+        },
+      },
+    });
+  } catch {
+    // Best-effort telemetry only.
+  }
+}
+
 export type ExecApprovalRegistration = {
   id: string;
   expiresAtMs: number;
@@ -158,29 +197,16 @@ export async function waitForExecApprovalDecision(params: {
       },
     );
     const value = parseDecision(decisionResult).value;
-    try {
-      const cfg = loadConfig();
-      await emitStandaloneResearchEvent({
-        cfg,
-        runId: params.agentRunId ?? params.id,
-        sessionId: params.sessionId ?? params.id,
+    await emitExecApprovalResolutionTelemetry(
+      {
+        approvalId: params.id,
         sessionKey: params.sessionKey,
-        agentId: params.agentId ?? "default",
-        event: {
-          kind: value && value.startsWith("allow") ? "approval.allow" : "approval.deny",
-          payload: {
-            approvalId: params.id,
-            ...(params.agentRunId ? { agentRunId: params.agentRunId } : {}),
-            decision: value ?? undefined,
-            ...(value && value.startsWith("allow")
-              ? {}
-              : { reason: "approval wait resolved deny" }),
-          },
-        },
-      });
-    } catch {
-      // Best-effort telemetry only.
-    }
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        agentRunId: params.agentRunId,
+      },
+      value,
+    );
     return value;
   } catch (err) {
     // Timeout/cleanup path: treat missing/expired as no decision so askFallback applies.
@@ -237,6 +263,16 @@ export async function requestExecApprovalDecision(
 ): Promise<string | null> {
   const registration = await registerExecApprovalRequest(params);
   if (Object.hasOwn(registration, "finalDecision")) {
+    await emitExecApprovalResolutionTelemetry(
+      {
+        approvalId: registration.id,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        agentRunId: params.agentRunId,
+      },
+      registration.finalDecision ?? null,
+    );
     return registration.finalDecision ?? null;
   }
   return await waitForExecApprovalDecision({
