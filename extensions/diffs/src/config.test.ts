@@ -403,11 +403,13 @@ describe("renderDiffDocument", () => {
       },
     );
 
-    expect(rendered.title).toBe("Text diff");
-    expect(rendered.html).toContain("diff.txt");
-    expect(rendered.html).not.toContain("not-a-real-language");
+    const html = rendered.html ?? "";
 
-    const payloads = [...rendered.html.matchAll(/data-openclaw-diff-payload>(.*?)<\/script>/g)].map(
+    expect(rendered.title).toBe("Text diff");
+    expect(html).toContain("diff.txt");
+    expect(html).not.toContain("not-a-real-language");
+
+    const payloads = [...html.matchAll(/data-openclaw-diff-payload>(.*?)<\/script>/g)].map(
       (match) => parseViewerPayloadJson(match[1] ?? ""),
     );
     expect(payloads).toHaveLength(1);
