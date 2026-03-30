@@ -94,7 +94,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
       }
       const attachments = extractAttachmentsFromMessage(message);
       return {
-        ...summarizeResult("attachments", attachments.length, attachments),
+        content: [{ type: "text", text: JSON.stringify({ attachments, message }) }],
         structuredContent: { attachments, message },
       };
     },
@@ -114,7 +114,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
         limit ?? 20,
       );
       return {
-        ...summarizeResult("events", events.length, events),
+        content: [{ type: "text", text: JSON.stringify({ events, next_cursor: nextCursor }) }],
         structuredContent: { events, next_cursor: nextCursor },
       };
     },

@@ -137,6 +137,12 @@ export function resolveMessageId(entry: Record<string, unknown>): string | undef
   );
 }
 
+/**
+ * Build a `content` array for an MCP tool result.
+ * When `data` is provided the full payload is JSON-serialized into `content`
+ * so that standard MCP clients (Cursor, Claude.ai) receive actionable data.
+ * `count` is kept as a fallback for callers that don't pass `data`.
+ */
 export function summarizeResult(
   label: string,
   count: number,
