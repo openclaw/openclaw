@@ -40,4 +40,22 @@ describe("inspectMatrixDirectRoomEvidence", () => {
     expect(getUserId).toHaveBeenCalledTimes(1);
     expect(result.strict).toBe(true);
   });
+
+  it("records only the local member-state direct flag", async () => {
+    const client = createClient({
+      getRoomStateEvent: vi.fn(async (_roomId: string, _eventType: string, stateKey: string) =>
+        stateKey === "@bot:example.org" ? { is_direct: false } : { is_direct: true },
+      ),
+    });
+
+    const result = await inspectMatrixDirectRoomEvidence({
+      client,
+      roomId: "!dm:example.org",
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.strict).toBe(true);
+    expect(result.memberStateFlag).toBe(false);
+    expect(result.viaMemberState).toBe(false);
+  });
 });

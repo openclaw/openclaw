@@ -37,7 +37,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   let hasSeededDmCache = false;
   let cachedSelfUserId: string | null = null;
   const joinedMembersCache = new Map<string, { members: string[]; ts: number }>();
-  const directMemberFlagCache = new Map<string, { isDirect: boolean; ts: number }>();
+  const directMemberFlagCache = new Map<string, { isDirect: boolean | null; ts: number }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -82,10 +82,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   const resolveDirectMemberFlag = async (
     roomId: string,
     userId?: string | null,
-  ): Promise<boolean> => {
+  ): Promise<boolean | null> => {
     const normalizedUserId = userId?.trim();
     if (!normalizedUserId) {
-      return false;
+      return null;
     }
     const cacheKey = `${roomId}\n${normalizedUserId}`;
     const cached = directMemberFlagCache.get(cacheKey);
@@ -134,12 +134,14 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       }
 
       if (strictDirectMembership) {
-        const directViaState =
-          (await resolveDirectMemberFlag(roomId, senderId)) ||
-          (await resolveDirectMemberFlag(roomId, selfUserId));
-        if (directViaState) {
+        const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
+        if (directViaSelf === true) {
           log(`matrix: dm detected via member state room=${roomId}`);
           return true;
+        }
+        if (directViaSelf === false) {
+          log(`matrix: dm rejected via member state room=${roomId}`);
+          return false;
         }
 
         if (!hasSeededDmCache) {

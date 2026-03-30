@@ -5,11 +5,34 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const installPluginFromPathMock = vi.fn();
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit }) => {
+    // Keep unit tests focused on guarded call sites, not AbortSignal timer behavior.
+    const { signal: _signal, ...init } = params.init ?? {};
+    const response = await fetch(params.url, init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {
+        await response.body?.cancel().catch(() => undefined);
+      },
+    };
+  }),
+);
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
 }));
+
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: { url: string; init?: RequestInit }) =>
+      fetchWithSsrFGuardMock(params),
+  };
+});
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -144,6 +167,7 @@ function expectLocalMarketplaceInstallResult(params: {
 
 describe("marketplace plugins", () => {
   afterEach(() => {
+    fetchWithSsrFGuardMock.mockClear();
     installPluginFromPathMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     vi.unstubAllGlobals();
@@ -292,6 +316,10 @@ describe("marketplace plugins", () => {
       expect(result).toEqual({
         ok: false,
         error: "failed to download https://example.com/frontend-design.tgz: empty response body",
+      });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+        url: "https://example.com/frontend-design.tgz",
+        auditContext: "marketplace-plugin-download",
       });
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });

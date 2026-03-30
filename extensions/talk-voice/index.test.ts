@@ -233,6 +233,14 @@ describe("talk-voice plugin", () => {
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("rejects /voice set from non-webchat gateway callers missing operator.admin", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram", ["operator.write"]);
+    const result = await run();
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("allows /voice set from gateway client with operator.admin scope", async () => {
     const { runtime, run } = createElevenlabsVoiceSetHarness("webchat", ["operator.admin"]);
     const result = await run();

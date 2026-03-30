@@ -273,6 +273,10 @@ const systemEventsHoisted = vi.hoisted(() => ({
 }));
 export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
+const execApprovalHoisted = vi.hoisted(() => ({
+  resolveExecApprovalSpy: vi.fn(async () => undefined),
+}));
+export const resolveExecApprovalSpy = execApprovalHoisted.resolveExecApprovalSpy;
 
 vi.doMock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
@@ -415,6 +419,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
+  resolveExecApproval: resolveExecApprovalSpy as NonNullable<
+    TelegramBotDeps["resolveExecApproval"]
+  >,
 };
 
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
@@ -508,6 +515,8 @@ beforeEach(() => {
     await opts?.onReplyStart?.();
     return undefined;
   });
+  resolveExecApprovalSpy.mockReset();
+  resolveExecApprovalSpy.mockResolvedValue(undefined);
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
     async (params: DispatchReplyHarnessParams) =>
