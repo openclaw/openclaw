@@ -52,13 +52,29 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
-
 /**
  * The regex used to detect /approve slash commands.
  * Case-insensitive, supports optional @mention suffix.
- * Anchored to the start of a *segment* (after splitting on shell separators).
+ * Anchored to the start of a *segment* (after splitting on shell separators
+ * and stripping shell prefixes).
  */
-const APPROVE_COMMAND_RE = /^\s*\/approve(?:@[^\s]*)?(\s|$)/i;
+const APPROVE_COMMAND_RE = /^\s*\/approve(?:@[^\s]*)?(?:\s|$)/i;
+
+/**
+ * Strip known shell prefixes from a command segment so that constructs
+ * like `( /approve ...)`, `FOO=1 /approve ...`, or `then /approve ...`
+ * are normalised before the regex test.
+ */
+function stripShellPrefixes(segment: string): string {
+  let s = segment;
+  // Remove leading subshell parens: ( or ((
+  s = s.replace(/^\s*\(+\s*/, "");
+  // Remove env-var assignments: FOO=bar FOO="bar" etc.
+  s = s.replace(/^(\s*\w+=\S*\s*)+/, "");
+  // Remove shell keywords: then, do, else, elif, {, !
+  s = s.replace(/^\s*(?:then|do|else|elif|!|\{)\s+/, "");
+  return s;
+}
 
 /**
  * Split a single shell line into command segments separated by
@@ -76,15 +92,29 @@ function splitShellSegments(line: string): string[] {
  * Supports: <<EOF  <<'EOF'  <<"EOF"  <<-EOF  <<-'EOF-1'  <<"EOF_2"
  * Uses [\w-]+ to cover delimiters with hyphens (e.g. END-OF-DATA).
  *
- * To avoid false positives on quoted text like `echo " <<EOF"`, we first
- * strip content inside single and double quotes before testing for `<<`.
+ * To avoid false positives on quoted text like `echo " <<EOF"`, we verify
+ * that `<<` is not inside a quoted string by counting unmatched quotes
+ * before the match position. Comment lines (`# <<EOF`) are skipped entirely.
  */
 function detectHeredocDelimiter(line: string): string | null {
-  // Remove quoted strings so that `echo " <<EOF"` does not match,
-  // but preserve quotes that are part of heredoc syntax (e.g. <<'EOF').
-  const stripped = line.replace(/(?<!<<-?\s*)(['"])(?:(?!\1).)*\1/g, "");
-  const m = stripped.match(/(?:^|\s)<<-?\s*['"]?([\w-]+)['"]?/);
-  return m ? m[1] : null;
+  // Skip comment lines — `# <<EOF` is not a real heredoc opener.
+  if (/^\s*#/.test(line)) {
+    return null;
+  }
+  // Match the heredoc pattern, then verify `<<` is not inside a quoted string
+  // by counting unmatched quotes before the match position.
+  const m = line.match(/(?:^|\s)(<<-?\s*['"]?([\w-]+)['"]?)/);
+  if (!m) return null;
+  const matchIndex = (m.index ?? 0) + (/^\s/.test(m[0]) ? 1 : 0);
+  const before = line.substring(0, matchIndex);
+  let inSingle = false;
+  let inDouble = false;
+  for (const ch of before) {
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    if (ch === '"' && !inSingle) inDouble = !inDouble;
+  }
+  if (inSingle || inDouble) return null;
+  return m[2];
 }
 
 /**
@@ -118,7 +148,7 @@ export function containsApproveCommand(command: string): boolean {
     }
     // Test every segment of the line (split on shell operators).
     for (const segment of splitShellSegments(line)) {
-      if (APPROVE_COMMAND_RE.test(segment)) {
+      if (APPROVE_COMMAND_RE.test(stripShellPrefixes(segment))) {
         return true;
       }
     }

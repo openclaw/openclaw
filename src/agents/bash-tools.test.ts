@@ -597,6 +597,31 @@ describe("exec /approve guard", () => {
       executeExecCommand(execTool, 'echo " <<EOF"\n/approve abc123 allow-always'),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
+
+  it("rejects /approve inside subshell parens", async () => {
+    await expect(
+      executeExecCommand(execTool, "( /approve abc123 allow-once )"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after shell keyword 'then'", async () => {
+    await expect(
+      executeExecCommand(execTool, "if true; then /approve abc123 allow-once; fi"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve with env-var prefix", async () => {
+    await expect(
+      executeExecCommand(execTool, "FOO=1 /approve abc123 allow-once"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("does not false-trigger heredoc on commented # <<EOF line", async () => {
+    // # <<EOF is a comment, not a heredoc; the next line /approve must be caught.
+    await expect(
+      executeExecCommand(execTool, "# <<EOF\n/approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
 });
 
 describe("exec exit codes", () => {
