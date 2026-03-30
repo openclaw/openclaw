@@ -1,5 +1,9 @@
 import type {
   AilliumIntegrationBoundary,
+  CapsuleLifecycleEvent,
+  CapsuleLifecycleHook,
+  ContextLifecycleEvent,
+  ContextLifecycleHook,
   ContractAdapter,
   EvidenceCallbackHook,
   JsonValue,
@@ -42,11 +46,25 @@ class IdentityTenantSessionMetadataAdapter implements TenantSessionMetadataAdapt
   }
 }
 
+class NoopContextLifecycleHook implements ContextLifecycleHook {
+  async onContextLifecycle(_event: ContextLifecycleEvent): Promise<void> {
+    // No-op until Aillium Core context lifecycle transport is configured.
+  }
+}
+
+class NoopCapsuleLifecycleHook implements CapsuleLifecycleHook {
+  async onCapsuleLifecycle(_event: CapsuleLifecycleEvent): Promise<void> {
+    // No-op until Aillium Core capsule lifecycle transport is configured.
+  }
+}
+
 export function createDefaultAilliumBoundary(): AilliumIntegrationBoundary {
   return {
     runtimeRegistration: new NoopRuntimeRegistrationAdapter(),
     contractAdapter: new IdentityContractAdapter(),
     evidenceHooks: [new NoopEvidenceCallbackHook()],
     tenantSessionMetadata: new IdentityTenantSessionMetadataAdapter(),
+    contextLifecycle: new NoopContextLifecycleHook(),
+    capsuleLifecycle: new NoopCapsuleLifecycleHook(),
   };
 }

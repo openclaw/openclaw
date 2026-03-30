@@ -1,5 +1,9 @@
 export type {
   AilliumIntegrationBoundary,
+  CapsuleLifecycleEvent,
+  CapsuleLifecycleHook,
+  ContextLifecycleEvent,
+  ContextLifecycleHook,
   ContractAdapter,
   EvidenceCallbackHook,
   JsonPrimitive,
@@ -12,3 +16,5 @@ export type {
 } from "./contracts.js";
 
 export { createDefaultAilliumBoundary } from "./defaults.js";
+export { createLiveAilliumBoundary } from "./live-boundary.js";
+export type { AilliumCoreConnectionConfig } from "./live-boundary.js";
