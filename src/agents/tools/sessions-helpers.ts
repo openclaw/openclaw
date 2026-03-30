@@ -37,6 +37,7 @@ import {
   stripModelSpecialTokens,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
+import { stripLeakedCjkChars } from "../strip-cjk-leakage.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
@@ -44,6 +45,7 @@ export type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
@@ -52,8 +54,14 @@ export type SessionListRow = {
   key: string;
   kind: SessionKind;
   channel: string;
+  origin?: {
+    provider?: string;
+    accountId?: string;
+  };
+  spawnedBy?: string;
   label?: string;
   displayName?: string;
+  parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
   sessionId?: string;
@@ -67,7 +75,11 @@ export type SessionListRow = {
   runtimeMs?: number;
   childSessions?: string[];
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
+  reasoningLevel?: string;
+  elevatedLevel?: string;
+  responseUsage?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   sendPolicy?: string;
@@ -169,8 +181,10 @@ export function sanitizeTextContent(text: string): string {
   if (!text) {
     return text;
   }
-  return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+  return stripLeakedCjkChars(
+    stripThinkingTagsFromText(
+      stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+    ),
   );
 }
 

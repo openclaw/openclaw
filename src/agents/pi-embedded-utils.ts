@@ -3,6 +3,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import { stripLeakedCjkChars } from "./strip-cjk-leakage.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
@@ -237,8 +238,10 @@ export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
-        stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+        stripLeakedCjkChars(
+          stripThinkingTagsFromText(
+            stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
