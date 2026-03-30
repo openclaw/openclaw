@@ -135,9 +135,9 @@ export function renderAgentOverview(params: {
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
               ${isDefault
-                ? html` <option value="">Not set</option> `
+                ? html` <option value="" ?selected=${!effectivePrimary}>Not set</option> `
                 : html`
-                    <option value="">
+                    <option value="" ?selected=${!entryPrimary}>
                       ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
                     </option>
                   `}

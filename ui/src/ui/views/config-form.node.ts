@@ -637,14 +637,26 @@ function renderTextInput(params: {
     revealSensitive: params.revealSensitive ?? false,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
   });
-  const placeholder = sensitiveState.isRedacted
-    ? REDACTED_PLACEHOLDER
+  // If the stored value is a structured object (e.g. a SecretRef like
+  // { source: "env", provider: "default", id: "MY_TOKEN" }), rendering it
+  // as a plain text input would produce String(value) = "[object Object]"
+  // when the field is revealed. That corrupt string would then be written
+  // back into form state and sent to config.set, failing Zod validation.
+  // Treat structured values as permanently read-only in the text input and
+  // direct the user to Raw mode where they can edit the JSON directly.
+  const isStructuredValue =
+    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
+  const effectiveRedacted = sensitiveState.isRedacted || isStructuredValue;
+  const structuredPlaceholder = isStructuredValue
+    ? "Structured value (SecretRef) — use Raw mode to edit"
+    : null;
+  const placeholder = effectiveRedacted
+    ? (structuredPlaceholder ?? REDACTED_PLACEHOLDER)
     : (hint?.placeholder ??
       // oxlint-disable typescript/no-base-to-string
       (schema.default !== undefined ? `Default: ${String(schema.default)}` : ""));
-  const displayValue = sensitiveState.isRedacted ? "" : (value ?? "");
-  const effectiveInputType =
-    sensitiveState.isSensitive && !sensitiveState.isRedacted ? "text" : inputType;
+  const displayValue = effectiveRedacted ? "" : (value ?? "");
+  const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
 
   return html`
     <div class="cfg-field">
@@ -653,18 +665,18 @@ function renderTextInput(params: {
       <div class="cfg-input-wrap">
         <input
           type=${effectiveInputType}
-          class="cfg-input${sensitiveState.isRedacted ? " cfg-input--redacted" : ""}"
+          class="cfg-input${effectiveRedacted ? " cfg-input--redacted" : ""}"
           placeholder=${placeholder}
           .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
-          ?readonly=${sensitiveState.isRedacted}
+          ?readonly=${effectiveRedacted}
           @click=${() => {
-            if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
+            if (sensitiveState.isRedacted && !isStructuredValue && params.onToggleSensitivePath) {
               params.onToggleSensitivePath(path);
             }
           }}
           @input=${(e: Event) => {
-            if (sensitiveState.isRedacted) {
+            if (effectiveRedacted) {
               return;
             }
             const raw = (e.target as HTMLInputElement).value;
@@ -680,26 +692,28 @@ function renderTextInput(params: {
             onPatch(path, raw);
           }}
           @change=${(e: Event) => {
-            if (inputType === "number" || sensitiveState.isRedacted) {
+            if (inputType === "number" || effectiveRedacted) {
               return;
             }
             const raw = (e.target as HTMLInputElement).value;
             onPatch(path, raw.trim());
           }}
         />
-        ${renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        })}
+        ${!isStructuredValue
+          ? renderSensitiveToggleButton({
+              path,
+              state: sensitiveState,
+              disabled,
+              onToggleSensitivePath: params.onToggleSensitivePath,
+            })
+          : nothing}
         ${schema.default !== undefined
           ? html`
               <button
                 type="button"
                 class="cfg-input__reset"
                 title="Reset to default"
-                ?disabled=${disabled || sensitiveState.isRedacted}
+                ?disabled=${disabled || effectiveRedacted}
                 @click=${() => onPatch(path, schema.default)}
               >
                 ↺

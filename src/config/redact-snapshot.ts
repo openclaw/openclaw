@@ -658,6 +658,17 @@ function restoreRedactedValuesWithLookup(
           (hints[candidate]?.sensitive === true || isUserInfoUrlPath(path))
         ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
+        } else if (
+          typeof value === "object" &&
+          value !== null &&
+          hints[candidate]?.sensitive === true &&
+          isSecretRefShape(value as Record<string, unknown>) &&
+          (value as Record<string, unknown>).id === REDACTED_SENTINEL
+        ) {
+          // SecretRef objects at a sensitive-hinted path have only their `id`
+          // field redacted (not the whole object). Restore the original value
+          // wholesale so the sentinel id never reaches Zod validation.
+          result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
           result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
         }
