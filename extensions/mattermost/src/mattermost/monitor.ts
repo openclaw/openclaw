@@ -528,7 +528,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
           typing: {
-            start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
+            start: () => sendTypingIndicator(opts.channelId, threadContext.messageThreadId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -692,7 +692,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       Surface: "mattermost" as const,
       MessageSid: `interaction:${params.postId}:${Date.now()}`,
       ReplyToId: params.effectiveReplyToId,
-      MessageThreadId: params.messageThreadId ?? params.effectiveReplyToId,
+      MessageThreadId: params.messageThreadId,
       Timestamp: Date.now(),
       WasMentioned: true,
       CommandAuthorized: params.commandAuthorized,
@@ -722,7 +722,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
       typing: shouldDeliverReplies
         ? {
-            start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
+            start: () => sendTypingIndicator(params.channelId, params.messageThreadId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -1453,7 +1453,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       channel: "mattermost",
       accountId: account.accountId,
       typing: {
-        start: () => sendTypingIndicator(channelId, effectiveReplyToId),
+        start: () => sendTypingIndicator(channelId, messageThreadId),
         onStartError: (err) => {
           logTypingFailure({
             log: (message) => logger.debug?.(message),
