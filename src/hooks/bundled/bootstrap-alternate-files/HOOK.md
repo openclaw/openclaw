@@ -62,7 +62,7 @@ general boundary weakening.
   - If a source file is unreadable (missing, permission error, cloud storage unavailable),
     the existing workspace entry is left unchanged and a warning is logged.
 
-## Behaviour
+## Behavior
 
 - Replaces slots **in-place**: position in the injected context is preserved.
 - Replaces both present and missing workspace entries.

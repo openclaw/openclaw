@@ -186,6 +186,28 @@ describe("bootstrap-alternate-files hook", () => {
     expect(context.bootstrapFiles[0]?.missing).toBe(true);
   });
 
+  it("warns when configured alternate has no matching slot in bootstrapFiles", async () => {
+    // MEMORY.md is only conditionally added to bootstrapFiles when a local file exists.
+    // If a user configures an alternate for MEMORY.md but there is no local memory file,
+    // the slot is absent from bootstrapFiles and the alternate should warn.
+    const sourceFile = path.join(tmpDir, "MEMORY-unmatched.md");
+    await fs.writeFile(sourceFile, "# Shared Memory", "utf-8");
+
+    // bootstrapFiles does NOT contain MEMORY.md (simulates no local memory file)
+    const context = makeContext(
+      [makeBootstrapFile("AGENTS.md"), makeBootstrapFile("SOUL.md")],
+      createAlternateConfig({ "MEMORY.md": sourceFile }),
+    );
+
+    // Should not throw; the two present slots are unchanged
+    await expect(
+      handler(createHookEvent("agent", "bootstrap", "agent:main:main", context)),
+    ).resolves.toBeUndefined();
+
+    expect(context.bootstrapFiles).toHaveLength(2);
+    expect(context.bootstrapFiles.map((f) => f.name)).toEqual(["AGENTS.md", "SOUL.md"]);
+  });
+
   it("expands tilde in source paths", async () => {
     // Write a file in tmpDir and create a tilde path that points to it.
     // We can't easily test with a real home dir, so verify the file IS found

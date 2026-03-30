@@ -115,6 +115,17 @@ const bootstrapAlternateFilesHook: HookHandler = async (event) => {
   }
 
   context.bootstrapFiles = updated;
+
+  // Warn for any configured alternate that found no matching slot.
+  // This most commonly happens with MEMORY.md, which is only conditionally
+  // added to bootstrapFiles when a local memory file actually exists.
+  for (const slotName of alternates.keys()) {
+    if (!updated.some((f) => f.name === slotName)) {
+      log.warn(
+        `configured alternate for "${slotName}" has no matching slot in bootstrap files — the slot was not loaded (no local file exists for this bootstrap name)`,
+      );
+    }
+  }
 };
 
 export default bootstrapAlternateFilesHook;
