@@ -480,6 +480,7 @@ async function resolveHeartbeatPreflight(params: {
         sessionKey: originatingSessionKey,
         contextKey: event.contextKey,
         deliveryContext: event.deliveryContext,
+        trusted: event.trusted,
         skipDedup: true,
       });
     }
@@ -494,6 +495,7 @@ async function resolveHeartbeatPreflight(params: {
         sessionKey: session.sessionKey,
         contextKey: event.contextKey,
         deliveryContext: event.deliveryContext,
+        trusted: event.trusted,
         skipDedup: true,
       });
     }
@@ -559,6 +561,7 @@ async function resolveHeartbeatPreflight(params: {
               sessionKey: session.sessionKey,
               contextKey: event.contextKey,
               deliveryContext: event.deliveryContext,
+              trusted: event.trusted,
               skipDedup: true,
             });
           }
@@ -570,6 +573,7 @@ async function resolveHeartbeatPreflight(params: {
             sessionKey: originatingSessionKey,
             contextKey: event.contextKey,
             deliveryContext: event.deliveryContext,
+            trusted: event.trusted,
             skipDedup: true,
           });
         }

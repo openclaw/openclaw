@@ -988,4 +988,111 @@ describe("system-event-triggered heartbeat session routing", () => {
 
     replySpy.mockRestore();
   });
+
+  it("preserves trusted: false when migrating and restoring events", async () => {
+    const tmpDir = await createCaseDir("hb-trusted-flag");
+    const storePath = path.join(tmpDir, "sessions.json");
+
+    const agentId = "main";
+    const heartbeatSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "group",
+      peerId: "-100heartbeat",
+    });
+    const dmSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "direct",
+      peerId: "999888777",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "telegram",
+            to: "-100heartbeat",
+            session: heartbeatSessionKey,
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveAgentMainSessionKey({ cfg, agentId })]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [dmSessionKey]: {
+          sessionId: "sid-dm",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "999888777",
+        },
+      }),
+    );
+
+    // Create an empty HEARTBEAT.md so the heartbeat is skipped and events
+    // are restored back to the originating session.
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "   \n");
+
+    // Enqueue an untrusted event (e.g. node notification)
+    enqueueSystemEvent("Node notification: untrusted payload", {
+      sessionKey: dmSessionKey,
+      contextKey: "node:notify",
+      trusted: false,
+    });
+
+    // Enqueue a trusted event for comparison
+    enqueueSystemEvent("exec finished (trusted-test, code 0) :: done", {
+      sessionKey: dmSessionKey,
+      contextKey: "exec:trusted-test",
+      trusted: true,
+    });
+
+    const dmBefore = peekSystemEventEntries(dmSessionKey);
+    expect(dmBefore).toHaveLength(2);
+    expect(dmBefore[0].trusted).toBe(false);
+    expect(dmBefore[1].trusted).toBe(true);
+
+    const sendTelegram = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; chatId: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", chatId: "-100heartbeat" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "exec:trusted-test:exit",
+      sessionKey: dmSessionKey,
+      deps: createHeartbeatDeps(sendTelegram),
+    });
+
+    expect(res.status).toBe("skipped");
+    expect(res).toHaveProperty("reason", "empty-heartbeat-file");
+
+    // Events must be restored with their original trusted flags
+    const dmEntries = peekSystemEventEntries(dmSessionKey);
+    expect(dmEntries).toHaveLength(2);
+    expect(dmEntries[0].text).toContain("untrusted payload");
+    expect(dmEntries[0].trusted).toBe(false);
+    expect(dmEntries[1].text).toContain("done");
+    expect(dmEntries[1].trusted).toBe(true);
+
+    expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
+  });
 });
