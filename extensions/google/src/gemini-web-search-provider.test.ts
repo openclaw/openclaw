@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../../../test/helpers/extensions/env.js";
+import { withEnv } from "../../../test/helpers/plugins/env.js";
 import { __testing, createGeminiWebSearchProvider } from "./gemini-web-search-provider.js";
 
 const geminiApiKeyEnv = ["GEMINI_API", "KEY"].join("_");
