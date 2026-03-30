@@ -201,7 +201,10 @@ export async function createSessionVisibilityGuard(params: {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
     if (isCrossAgent) {
-      if (params.visibility !== "all") {
+      // For "send", a2a policy is the authorization gate — sending does not
+      // require visibility into the target session's history.  Visibility
+      // only governs read operations (list, history, status).  (#57447)
+      if (params.action !== "send" && params.visibility !== "all") {
         return {
           allowed: false,
           status: "forbidden",

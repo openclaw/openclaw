@@ -157,6 +157,46 @@ describe("createSessionVisibilityGuard", () => {
     });
   });
 
+  it("allows cross-agent send with tree visibility when a2a policy permits (#57447)", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main", "ops"],
+          },
+        },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:ops:main")).toEqual({ allowed: true });
+  });
+
+  it("blocks cross-agent history with tree visibility even when a2a policy permits", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main", "ops"],
+          },
+        },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:ops:main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error: expect.stringContaining("visibility"),
+    });
+  });
+
   it("enforces self visibility for same-agent sessions", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "history",
