@@ -39,6 +39,8 @@ export type ReadCronRunLogPageOptions = {
   deliveryStatuses?: CronDeliveryStatus[];
   query?: string;
   sortDir?: CronRunLogSortDir;
+  /** Optional runtime-configured prune limits. Falls back to DEFAULT_CRON_RUN_LOG_MAX_BYTES / DEFAULT_CRON_RUN_LOG_KEEP_LINES. */
+  pruneOptions?: { maxBytes?: number; keepLines?: number };
 };
 
 export type CronRunLogPageResult = {
@@ -370,9 +372,9 @@ export async function readCronRunLogEntriesPage(
   // silently (e.g. disk pressure), the file may have grown beyond the expected
   // max size. Pruning here prevents OOM when loading the file into memory.
   await pruneIfNeeded(resolved, {
-    maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
-    keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
-  });
+    maxBytes: opts?.pruneOptions?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+    keepLines: opts?.pruneOptions?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+  }).catch(() => undefined);
   const raw = await fs.readFile(resolved, "utf-8").catch(() => "");
   const statuses = normalizeRunStatuses(opts);
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
@@ -431,9 +433,9 @@ export async function readCronRunLogEntriesPageAll(
   await Promise.all(
     jsonlFiles.map((f) =>
       pruneIfNeeded(f, {
-        maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
-        keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
-      }),
+        maxBytes: opts.pruneOptions?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+        keepLines: opts.pruneOptions?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+      }).catch(() => undefined),
     ),
   );
   const chunks = await Promise.all(
