@@ -152,14 +152,14 @@ describe("IntegrationsPanel", () => {
     expect(screen.getByRole("heading", { name: "Integrations" })).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText("Search Ownership")).toBeInTheDocument();
+      expect(screen.getByText("Exa Search")).toBeInTheDocument();
     });
 
     expect(screen.getByText("Exa Search")).toBeInTheDocument();
     expect(screen.getByText("Apollo Enrichment")).toBeInTheDocument();
     expect(screen.getByText("ElevenLabs")).toBeInTheDocument();
-    expect(screen.getByText("Dench Exa")).toBeInTheDocument();
-    expect(screen.getByText("Plugin is installed but disabled")).toBeInTheDocument();
+    expect(screen.getAllByText("Enabled")).toHaveLength(2);
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
 
     await user.click(screen.getByLabelText("Toggle Apollo Enrichment"));
 
