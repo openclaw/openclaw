@@ -769,7 +769,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledWith(
       1234,
-      "❌ Failed to submit approval: Error: unknown or expired approval id",
+      "❌ Failed to submit approval. Please try again or contact an admin.",
       undefined,
     );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-legacy-plugin-fallback-blocked");
