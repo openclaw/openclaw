@@ -92,6 +92,16 @@ type ConnectFrame = {
   };
 };
 
+function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
+  vi.stubGlobal("window", {
+    location: { href: "http://127.0.0.1:18789/" },
+    localStorage: storage,
+    setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(() => handler(...args), timeout),
+    clearTimeout: (timeoutId: number | undefined) => globalThis.clearTimeout(timeoutId),
+  });
+}
+
 function getLatestWebSocket(): MockWebSocket {
   const ws = wsInstances.at(-1);
   if (!ws) {
@@ -182,15 +192,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     vi.stubGlobal("localStorage", storage);
-    const windowLike = Object.assign(globalThis, {
-      location: { href: "http://127.0.0.1:18789/" },
-      localStorage: storage,
-    });
-    vi.stubGlobal("window", windowLike);
-    Object.defineProperty(window, "localStorage", {
-      configurable: true,
-      value: storage,
-    });
+    stubWindowGlobals(storage);
     localStorage.clear();
     vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -433,6 +435,14 @@ describe("GatewayBrowserClient", () => {
 });
 
 describe("shouldRetryWithDeviceToken", () => {
+  beforeEach(() => {
+    stubWindowGlobals();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("allows a bounded retry for trusted loopback endpoints", () => {
     expect(
       shouldRetryWithDeviceToken({
