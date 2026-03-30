@@ -23,8 +23,13 @@ const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
   "openclaw.fallbackGatewayContextState",
 );
 
+const FALLBACK_GATEWAY_CLIENT_STATE_KEY: unique symbol = Symbol.for(
+  "openclaw.fallbackGatewayClientState",
+);
+
 type FallbackGatewayContextState = {
   context: GatewayRequestContext | undefined;
+  client: GatewayRequestOptions["client"] | undefined;
 };
 
 const fallbackGatewayContextState = (() => {
@@ -35,7 +40,7 @@ const fallbackGatewayContextState = (() => {
   if (existing) {
     return existing;
   }
-  const created: FallbackGatewayContextState = { context: undefined };
+  const created: FallbackGatewayContextState = { context: undefined, client: undefined };
   globalState[FALLBACK_GATEWAY_CONTEXT_STATE_KEY] = created;
   return created;
 })();
@@ -43,6 +48,29 @@ const fallbackGatewayContextState = (() => {
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
   // TODO: This startup snapshot can become stale if runtime config/context changes.
   fallbackGatewayContextState.context = ctx;
+  // Also store a limited-scope fallback client for plugin subagent dispatch.
+  // This client only has basic scopes and should not be used for privileged operations.
+  fallbackGatewayContextState.client = createFallbackOperatorClient();
+}
+
+function createFallbackOperatorClient(): GatewayRequestOptions["client"] {
+  return {
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        version: "internal",
+        platform: "node",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      role: "operator",
+      // Use minimal scopes for fallback - no admin by default.
+      // This prevents privilege escalation when plugins call privileged methods
+      // without an explicit request scope (GHSA-h4jx-hjr3-fhgc).
+      scopes: ["operator.read", "operator.write"],
+    },
+  };
 }
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────
@@ -77,6 +105,10 @@ async function dispatchGatewayMethod<T>(
     );
   }
 
+  // Use the request-scoped client if available, otherwise use the limited fallback client.
+  // Never use a synthetic admin client - this prevents privilege escalation (GHSA-h4jx-hjr3-fhgc).
+  const client = scope?.client ?? fallbackGatewayContextState.client ?? createFallbackOperatorClient();
+
   let result: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
   await handleGatewayRequest({
     req: {
@@ -85,7 +117,7 @@ async function dispatchGatewayMethod<T>(
       method,
       params,
     },
-    client: scope?.client ?? createSyntheticOperatorClient(),
+    client,
     isWebchatConnect,
     respond: (ok, payload, error) => {
       if (!result) {
