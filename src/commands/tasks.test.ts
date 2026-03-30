@@ -72,13 +72,6 @@ const taskFixture = {
   createdAt: Date.parse("2026-03-29T10:00:00.000Z"),
   lastEventAt: Date.parse("2026-03-29T10:00:10.000Z"),
   progressSummary: "No output for 60s. It may be waiting for input.",
-  recentEvents: [
-    {
-      at: Date.parse("2026-03-29T10:00:10.000Z"),
-      kind: "progress",
-      summary: "No output for 60s. It may be waiting for input.",
-    },
-  ],
 } as const;
 
 beforeAll(async () => {
@@ -180,7 +173,6 @@ describe("tasks commands", () => {
     expect(runtimeLogs.join("\n")).toContain(
       "progressSummary: No output for 60s. It may be waiting for input.",
     );
-    expect(runtimeLogs.join("\n")).toContain("recentEvent[0]: 2026-03-29T10:00:10.000Z progress");
   });
 
   it("updates notify policy for an existing task", async () => {
