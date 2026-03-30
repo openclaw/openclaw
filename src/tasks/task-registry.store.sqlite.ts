@@ -186,7 +186,6 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       FROM task_runs
       ORDER BY created_at ASC, task_id ASC
     `),
-<<<<<<< HEAD
     selectAllDeliveryStates: db.prepare(`
       SELECT
         task_id,
