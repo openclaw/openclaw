@@ -551,17 +551,22 @@ export function attachGatewayWsMessageHandler(params: {
           // Shared token/password auth can bypass pairing for trusted operators.
           // Device-less clients only keep self-declared scopes on the explicit
           // allow path, including trusted token-authenticated backend operators.
-          // When authOk is true via token/password, the client has proven identity
-          // through a shared secret — preserve their scopes even if sharedAuthOk
-          // is false (e.g. Tailscale-authenticated clients where the shared probe
-          // uses allowTailscale=false). We deliberately check authOk (primary auth)
-          // rather than sharedAuthOk (secondary probe) because the probe can
-          // diverge for Tailscale-routed clients. Fixes #51396, #57331, #46997, #48229.
-          const hasDirectTokenAuth =
-            authOk && (authMethod === "token" || authMethod === "password");
+          // Operators can skip device identity per role policy (roleCanSkipDeviceIdentity).
+          // When authOk is true via token/password but sharedAuthOk is false (e.g.
+          // Tailscale-routed clients where the shared probe uses allowTailscale=false),
+          // the decision falls through to reject-device-required and scopes are cleared.
+          // This guard preserves scopes for operator-role clients that have proven
+          // identity via a valid shared secret — consistent with the localhost behavior
+          // where token-authenticated operators keep their scopes without device identity.
+          // Non-operator roles (node, etc.) are unaffected — they still require device
+          // identity for scope binding. Fixes #51396, #57331, #46997, #48229.
+          const operatorWithDirectTokenAuth =
+            role === "operator" &&
+            authOk &&
+            (authMethod === "token" || authMethod === "password");
           if (
             !device &&
-            !hasDirectTokenAuth &&
+            !operatorWithDirectTokenAuth &&
             shouldClearUnboundScopesForMissingDeviceIdentity({
               decision,
               controlUiAuthPolicy,

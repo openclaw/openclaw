@@ -370,10 +370,10 @@ describe("ws connect policy", () => {
     ).toBe(true);
   });
 
-  it("documents hasDirectTokenAuth guard necessity for token+allow scope preservation", () => {
-    // The hasDirectTokenAuth guard in message-handler.ts short-circuits
-    // clearUnboundScopes() when authOk=true and authMethod is token/password.
-    // This test documents that shouldClearUnboundScopesForMissingDeviceIdentity
+  test("documents operatorWithDirectTokenAuth guard necessity for token+allow scope preservation", () => {
+    // The operatorWithDirectTokenAuth guard in message-handler.ts short-circuits
+    // clearUnboundScopes() when role=operator, authOk=true, and authMethod is
+    // token/password. This test documents that shouldClearUnboundScopesForMissingDeviceIdentity
     // alone returns true for this case — confirming the guard is necessary.
     const nonControlUi = resolveControlUiAuthPolicy({
       isControlUi: false,
@@ -381,7 +381,7 @@ describe("ws connect policy", () => {
       deviceRaw: null,
     });
 
-    // Without the hasDirectTokenAuth guard, this combination would clear scopes:
+    // Without the operatorWithDirectTokenAuth guard, this combination would clear scopes:
     // decision=allow, no device, token auth, non-control-ui, no insecure auth
     expect(
       shouldClearUnboundScopesForMissingDeviceIdentity({
@@ -393,7 +393,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
 
-    // With hasDirectTokenAuth=true in the caller, scopes are preserved.
-    // Regression path: non-device operator, token auth, decision allow → scopes stay.
+    // With operatorWithDirectTokenAuth=true (role=operator, authOk, token) in the
+    // caller, scopes are preserved. Regression path: non-device operator, token
+    // auth, sharedAuthOk=false → scopes stay for operator role only.
   });
 });
