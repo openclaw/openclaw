@@ -230,4 +230,29 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
     expect(history).toHaveLength(1);
     expect(history[0]?.body).toBe("new msg in room1");
   });
+
+  it("preserves newer watermarks when an older snapshot finishes after room recreation", () => {
+    const tracker = createRoomHistoryTrackerForTests(200, 1);
+    const room1 = "!room1:test";
+    const room2 = "!room2:test";
+
+    tracker.recordPending(room1, entry("old msg in room1"));
+    const staleSnapshot = tracker.recordTrigger(room1, entry("old trigger in room1"));
+
+    tracker.recordPending(room2, entry("msg in room2")); // evicts room1
+
+    tracker.recordPending(room1, entry("new msg in room1"));
+    const freshSnapshot = tracker.recordTrigger(room1, entry("new trigger in room1"));
+    tracker.consumeHistory(AGENT, room1, freshSnapshot);
+
+    // Late completion from the old generation must be ignored and must not clear the
+    // watermark already written by the newer trigger.
+    tracker.consumeHistory(AGENT, room1, staleSnapshot);
+
+    tracker.recordPending(room1, entry("fresh msg after consume"));
+
+    const history = tracker.getPendingHistory(AGENT, room1, 100);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.body).toBe("fresh msg after consume");
+  });
 });

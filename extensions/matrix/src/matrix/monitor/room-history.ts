@@ -250,8 +250,7 @@ function createRoomHistoryTrackerInternal(
       }
       if (queue.generation !== snapshot.queueGeneration) {
         // The room was evicted and recreated before this trigger completed. Reject the stale
-        // snapshot so it cannot advance the watermark for the new queue generation.
-        agentWatermarks.delete(key);
+        // snapshot so it cannot advance or erase state for the new queue generation.
         return;
       }
       // Monotone write: never regress an already-advanced watermark.
