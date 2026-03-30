@@ -18,7 +18,11 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
-import { getPairedNode, updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
+import {
+  getPairedNode,
+  requestNodePairing,
+  updatePairedNodeMetadata,
+} from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -960,12 +964,32 @@ export function attachGatewayWsMessageHandler(params: {
         if (role === "node") {
           const cfg = loadConfig();
           const nodeId = connectParams.device?.id ?? connectParams.client.id;
-          const pairedNode = await getPairedNode(nodeId);
+          const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
+          let pairedNode = await getPairedNode(nodeId);
+          if (!pairedNode) {
+            const pending = await requestNodePairing({
+              nodeId,
+              displayName: connectParams.client.displayName,
+              platform: connectParams.client.platform,
+              version: connectParams.client.version,
+              deviceFamily: connectParams.client.deviceFamily,
+              modelIdentifier: connectParams.client.modelIdentifier,
+              caps: connectParams.caps,
+              commands: declared,
+              remoteIp: reportedClientIp,
+            });
+            if (pending.status === "pending" && pending.created) {
+              const requestContext = buildRequestContext();
+              requestContext.broadcast("node.pair.requested", pending.request, {
+                dropIfSlow: true,
+              });
+            }
+            pairedNode = await getPairedNode(nodeId);
+          }
           const allowlist = resolveNodeCommandAllowlist(cfg, {
             platform: connectParams.client.platform,
             deviceFamily: connectParams.client.deviceFamily,
           });
-          const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
           const pairedCommands = new Set(pairedNode?.commands ?? []);
           const filtered = declared
             .map((cmd) => cmd.trim())

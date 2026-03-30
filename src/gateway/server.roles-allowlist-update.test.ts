@@ -242,6 +242,7 @@ describe("gateway update.run", () => {
 
 describe("gateway node command allowlist", () => {
   test("enforces command allowlists across node clients", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const waitForConnectedCount = async (count: number) => {
       await expect
         .poll(async () => {
@@ -270,11 +271,22 @@ describe("gateway node command allowlist", () => {
     let allowedClient: GatewayClient | undefined;
 
     try {
+      const systemDeviceIdentity = loadOrCreateDeviceIdentity(
+        path.join(os.tmpdir(), `openclaw-node-system-run-${Date.now()}-${Math.random()}.json`),
+      );
+      const emptyDeviceIdentity = loadOrCreateDeviceIdentity(
+        path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.json`),
+      );
+      const allowedDeviceIdentity = loadOrCreateDeviceIdentity(
+        path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.json`),
+      );
+
       systemClient = await connectNodeClientWithPairing({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
         displayName: "node-system-run",
+        deviceIdentity: systemDeviceIdentity,
       });
       const systemNodeId = await getConnectedNodeId();
       const disallowedRes = await rpcReq(ws, "node.invoke", {
@@ -285,7 +297,7 @@ describe("gateway node command allowlist", () => {
       });
       expect(disallowedRes.ok).toBe(false);
       expect(disallowedRes.error?.message).toContain("node command not allowed");
-      systemClient.stop();
+      await systemClient.stopAndWait();
       await waitForConnectedCount(0);
 
       emptyClient = await connectNodeClientWithPairing({
@@ -293,6 +305,7 @@ describe("gateway node command allowlist", () => {
         commands: [],
         instanceId: "node-empty",
         displayName: "node-empty",
+        deviceIdentity: emptyDeviceIdentity,
       });
       const emptyNodeId = await getConnectedNodeId();
       const missingRes = await rpcReq(ws, "node.invoke", {
@@ -303,7 +316,7 @@ describe("gateway node command allowlist", () => {
       });
       expect(missingRes.ok).toBe(false);
       expect(missingRes.error?.message).toContain("node command not allowed");
-      emptyClient.stop();
+      await emptyClient.stopAndWait();
       await waitForConnectedCount(0);
 
       let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
@@ -316,6 +329,7 @@ describe("gateway node command allowlist", () => {
         commands: ["canvas.snapshot"],
         instanceId: "node-allowed",
         displayName: "node-allowed",
+        deviceIdentity: allowedDeviceIdentity,
         onEvent: (evt) => {
           if (evt.event === "node.invoke.request") {
             const payload = evt.payload as { id?: string; nodeId?: string };
@@ -361,9 +375,9 @@ describe("gateway node command allowlist", () => {
       const invokeNullRes = await invokeNullResP;
       expect(invokeNullRes.ok).toBe(true);
     } finally {
-      systemClient?.stop();
-      emptyClient?.stop();
-      allowedClient?.stop();
+      await systemClient?.stopAndWait();
+      await emptyClient?.stopAndWait();
+      await allowedClient?.stopAndWait();
     }
   });
 
@@ -405,6 +419,19 @@ describe("gateway node command allowlist", () => {
       const nodeId = node?.nodeId ?? "";
       expect(nodeId).toBeTruthy();
 
+      const pairingList = await rpcReq<{
+        pending?: Array<{ nodeId?: string; commands?: string[] }>;
+      }>(ws, "node.pair.list", {});
+      expect(pairingList.ok).toBe(true);
+      expect(pairingList.payload?.pending ?? []).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            nodeId,
+            commands: ["canvas.snapshot", "system.run"],
+          }),
+        ]),
+      );
+
       const canvasRes = await rpcReq(ws, "node.invoke", {
         nodeId,
         command: "canvas.snapshot",
@@ -423,7 +450,7 @@ describe("gateway node command allowlist", () => {
       expect(systemRunRes.ok).toBe(false);
       expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
     } finally {
-      nodeClient?.stop();
+      await nodeClient?.stopAndWait();
     }
   });
 
