@@ -131,9 +131,9 @@ export class TelegramPollingSession {
           continue;
         }
 
-        if (heartbeat === "fatal-auth-failure") {
+        if (heartbeat === "fatal-api-failure") {
           this.opts.log(
-            `[telegram] Heartbeat probe hit a fatal auth error; releasing heartbeat suspension so the normal fatal path can surface the error.`,
+            `[telegram] Heartbeat probe hit a fatal API error; releasing heartbeat suspension so the normal fatal path can surface the error.`,
           );
           heartbeatConsecutiveFailures = 0;
           if (heartbeatSuspended) {
@@ -590,7 +590,7 @@ export class TelegramPollingSession {
   async #probeHeartbeatOnce(params?: {
     stopSignal?: AbortSignal;
     rebuildTransportIfDirty?: boolean;
-  }): Promise<"ok" | "network-failure" | "fatal-auth-failure"> {
+  }): Promise<"ok" | "network-failure" | "fatal-api-failure"> {
     const apiBase = this.opts.apiBase ?? resolveTelegramApiBase(undefined);
     const url = `${apiBase}/bot${this.opts.token}/getMe`;
     const transport = params?.rebuildTransportIfDirty
@@ -611,10 +611,13 @@ export class TelegramPollingSession {
       });
       const status = response.status;
       await response.body?.cancel().catch(() => {});
-      if (status === 401 || status === 403) {
-        return "fatal-auth-failure";
+      if (response.ok) {
+        return "ok";
       }
-      return response.ok ? "ok" : "network-failure";
+      if (status >= 400 && status < 500) {
+        return "fatal-api-failure";
+      }
+      return "network-failure";
     } catch {
       return "network-failure";
     } finally {
