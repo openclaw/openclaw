@@ -5,6 +5,8 @@ import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 const statusCommand = vi.fn();
 const healthCommand = vi.fn();
 const sessionsCommand = vi.fn();
+const sessionsRemoveCommand = vi.fn();
+const sessionsClearCommand = vi.fn();
 const sessionsCleanupCommand = vi.fn();
 const tasksListCommand = vi.fn();
 const tasksAuditCommand = vi.fn();
@@ -26,6 +28,11 @@ vi.mock("../../commands/health.js", () => ({
 
 vi.mock("../../commands/sessions.js", () => ({
   sessionsCommand,
+}));
+
+vi.mock("../../commands/sessions-delete.js", () => ({
+  sessionsRemoveCommand,
+  sessionsClearCommand,
 }));
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
@@ -69,6 +76,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     statusCommand.mockResolvedValue(undefined);
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
+    sessionsRemoveCommand.mockResolvedValue(undefined);
+    sessionsClearCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
     tasksAuditCommand.mockResolvedValue(undefined);
@@ -206,6 +215,53 @@ describe("registerStatusHealthSessionsCommands", () => {
         enforce: true,
         fixMissing: true,
         activeKey: "agent:main:main",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions rm subcommand with forwarded options", async () => {
+    await runCli([
+      "sessions",
+      "rm",
+      "agent:main:main",
+      "--store",
+      "/tmp/sessions.json",
+      "--dry-run",
+      "--json",
+    ]);
+
+    expect(sessionsRemoveCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "agent:main:main",
+        store: "/tmp/sessions.json",
+        dryRun: true,
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("forwards parent-level all-agents to sessions rm", async () => {
+    await runCli(["sessions", "--all-agents", "rm", "agent:main:main"]);
+
+    expect(sessionsRemoveCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "agent:main:main",
+        allAgents: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs sessions clear subcommand with forwarded options", async () => {
+    await runCli(["sessions", "clear", "--older-than", "60", "--dry-run", "--json"]);
+
+    expect(sessionsClearCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        olderThan: "60",
+        dryRun: true,
         json: true,
       }),
       runtime,
