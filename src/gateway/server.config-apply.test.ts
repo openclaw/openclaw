@@ -47,6 +47,45 @@ const sendConfigApply = async (ws: WebSocket, id: string, raw: unknown) => {
 };
 
 describe("gateway config.apply", () => {
+  it("rejects config.apply when SecretRef resolution fails", async () => {
+    const ws = await openClient();
+    try {
+      const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
+      delete process.env[missingEnvVar];
+      const getId = "req-secretref-get";
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: getId,
+          method: "config.get",
+          params: {},
+        }),
+      );
+      const current = await onceMessage<{
+        ok: boolean;
+        payload?: { config?: Record<string, unknown> };
+      }>(ws, (o) => {
+        const msg = o as { type?: string; id?: string };
+        return msg.type === "res" && msg.id === getId;
+      });
+      expect(current.ok).toBe(true);
+      const nextConfig = structuredClone(current.payload?.config ?? {});
+      const channels = (nextConfig.channels ??= {}) as Record<string, unknown>;
+      const telegram = (channels.telegram ??= {}) as Record<string, unknown>;
+      telegram.botToken = { source: "env", provider: "default", id: missingEnvVar };
+      const telegramAccounts = (telegram.accounts ??= {}) as Record<string, unknown>;
+      const defaultTelegramAccount = (telegramAccounts.default ??= {}) as Record<string, unknown>;
+      defaultTelegramAccount.enabled = true;
+
+      const id = "req-secretref-apply";
+      const res = await sendConfigApply(ws, id, JSON.stringify(nextConfig, null, 2));
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+    } finally {
+      ws.close();
+    }
+  });
+
   it("rejects invalid raw config", async () => {
     const ws = await openClient();
     try {
