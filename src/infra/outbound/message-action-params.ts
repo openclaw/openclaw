@@ -304,7 +304,7 @@ export async function hydrateAttachmentParamsForAction(params: {
   const hasBufferInSend =
     params.action === "send" &&
     typeof params.args["buffer"] === "string" &&
-    (params.args["buffer"] as string).length > 0;
+    params.args["buffer"].trim().length > 0;
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
