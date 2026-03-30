@@ -8,18 +8,20 @@ export function resolveApprovalCommandAuthorization(params: {
   accountId?: string | null;
   senderId?: string | null;
   kind: "exec" | "plugin";
-}): { authorized: boolean; reason?: string } {
+}): { authorized: boolean; reason?: string; explicit: boolean } {
   const channel = normalizeMessageChannel(params.channel);
   if (!channel) {
-    return { authorized: true };
+    return { authorized: true, explicit: false };
   }
-  return (
-    getChannelPlugin(channel)?.auth?.authorizeActorAction?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      action: "approve",
-      approvalKind: params.kind,
-    }) ?? { authorized: true }
-  );
+  const result = getChannelPlugin(channel)?.auth?.authorizeActorAction?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    action: "approve",
+    approvalKind: params.kind,
+  });
+  if (!result) {
+    return { authorized: true, explicit: false };
+  }
+  return { ...result, explicit: true };
 }

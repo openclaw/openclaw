@@ -49,6 +49,7 @@ import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
 } from "./directory-config.js";
+import { buildTelegramExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalApprover,
@@ -595,6 +596,12 @@ export const telegramPlugin = createChatChannelPlugin({
     auth: telegramNativeApprovalAdapter.auth,
     approvals: {
       delivery: telegramNativeApprovalAdapter.delivery,
+      render: {
+        exec: {
+          buildPendingPayload: ({ request, nowMs }) =>
+            buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+        },
+      },
     },
     directory: createChannelDirectoryAdapter({
       listPeers: async (params) => listTelegramDirectoryPeersFromConfig(params),

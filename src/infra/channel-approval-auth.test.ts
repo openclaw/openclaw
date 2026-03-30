@@ -21,7 +21,7 @@ describe("resolveApprovalCommandAuthorization", () => {
         senderId: "U123",
         kind: "exec",
       }),
-    ).toEqual({ authorized: true });
+    ).toEqual({ authorized: true, explicit: false });
   });
 
   it("delegates to the channel approval override when present", () => {
@@ -47,7 +47,7 @@ describe("resolveApprovalCommandAuthorization", () => {
         senderId: "123",
         kind: "exec",
       }),
-    ).toEqual({ authorized: true });
+    ).toEqual({ authorized: true, explicit: true });
 
     expect(
       resolveApprovalCommandAuthorization({
@@ -57,6 +57,6 @@ describe("resolveApprovalCommandAuthorization", () => {
         senderId: "123",
         kind: "plugin",
       }),
-    ).toEqual({ authorized: false, reason: "plugin denied" });
+    ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
   });
 });

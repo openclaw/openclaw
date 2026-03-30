@@ -21,6 +21,7 @@ const {
   listSkillCommandsForAgents,
   onSpy,
   replySpy,
+  resolveExecApprovalSpy,
   sendMessageSpy,
   setMyCommandsSpy,
   telegramBotDepsForTest,
@@ -366,6 +367,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {
@@ -417,6 +419,23 @@ describe("createTelegramBot", () => {
     expect(chatId).toBe(1234);
     expect(messageId).toBe(21);
     expect(replyMarkup).toEqual({ reply_markup: { inline_keyboard: [] } });
+    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          telegram: expect.objectContaining({
+            execApprovals: expect.objectContaining({
+              enabled: true,
+              approvers: ["9"],
+              target: "dm",
+            }),
+          }),
+        }),
+      }),
+      approvalId: "138e9b8c",
+      decision: "allow-once",
+      senderId: "9",
+    });
+    expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-style");
   });
@@ -466,10 +485,72 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-capability-free");
   });
 
+  it("resolves plugin approval callbacks through the shared approval resolver", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-plugin-approve",
+        data: "/approve plugin:138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 24,
+          text: "Plugin approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          telegram: expect.objectContaining({
+            execApprovals: expect.objectContaining({
+              enabled: true,
+              approvers: ["9"],
+              target: "dm",
+            }),
+          }),
+        }),
+      }),
+      approvalId: "plugin:138e9b8c",
+      decision: "allow-once",
+      senderId: "9",
+    });
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
+  });
+
   it("blocks approval callbacks from telegram users who are not exec approvers", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {
@@ -508,7 +589,68 @@ describe("createTelegramBot", () => {
 
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-blocked");
+  });
+
+  it("allows exec approval callbacks from target-only Telegram recipients", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "9" }],
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-target",
+        data: "/approve 138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 23,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        approvals: expect.objectContaining({
+          exec: expect.objectContaining({
+            enabled: true,
+            mode: "targets",
+          }),
+        }),
+      }),
+      approvalId: "138e9b8c",
+      decision: "allow-once",
+      senderId: "9",
+    });
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
   });
 
   it("keeps plugin approval callback buttons for target-only recipients", async () => {
