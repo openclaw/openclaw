@@ -21,7 +21,7 @@ export const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
 ]);
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
-  value === "off" || value === "bullets" || value === "code" || value === "block";
+  value === "off" || value === "bullets" || value === "code";
 
 function resolveMarkdownModeFromSection(
   section: MarkdownConfigSection | undefined,
@@ -59,8 +59,7 @@ export function resolveMarkdownTableMode(params: {
     | MarkdownConfigSection
     | undefined;
   const resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
-  if (resolved === "block" && channel !== "slack") {
-    return "code";
-  }
-  return resolved;
+  // "block" mode is parsed and validated by the shared markdown layer, but
+  // this seam-only PR does not activate any channel send path for it yet.
+  return resolved === "block" ? "code" : resolved;
 }

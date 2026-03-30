@@ -14,14 +14,19 @@ describe("DEFAULT_TABLE_MODES", () => {
     expect(DEFAULT_TABLE_MODES.get("whatsapp")).toBe("bullets");
   });
 
-  it("slack has no special default", () => {
+  it("slack has no special default in this seam-only slice", () => {
     expect(DEFAULT_TABLE_MODES.get("slack")).toBeUndefined();
   });
 });
 
 describe("resolveMarkdownTableMode", () => {
-  it("defaults to code for slack in this seam-only slice", () => {
+  it("defaults to code for slack", () => {
     expect(resolveMarkdownTableMode({ channel: "slack" })).toBe("code");
+  });
+
+  it("coerces explicit block mode to code for slack", () => {
+    const cfg = { channels: { slack: { markdown: { tables: "block" as const } } } };
+    expect(resolveMarkdownTableMode({ cfg, channel: "slack" })).toBe("code");
   });
 
   it("coerces explicit block mode to code for non-slack channels", () => {
