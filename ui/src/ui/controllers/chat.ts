@@ -184,9 +184,12 @@ export async function sendChatMessage(
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      const isImage = att.mimeType.startsWith("image/");
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: isImage ? "image" : "file",
+        ...(isImage
+          ? { source: { type: "base64", media_type: att.mimeType, data: att.dataUrl } }
+          : { fileName: att.fileName, mimeType: att.mimeType }),
       });
     }
   }
@@ -216,9 +219,10 @@ export async function sendChatMessage(
             return null;
           }
           return {
-            type: "image",
+            type: att.mimeType.startsWith("image/") ? "image" : "file",
             mimeType: parsed.mimeType,
             content: parsed.content,
+            ...(att.fileName ? { fileName: att.fileName } : {}),
           };
         })
         .filter((a): a is NonNullable<typeof a> => a !== null)

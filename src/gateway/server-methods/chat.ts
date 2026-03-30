@@ -35,7 +35,11 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  type ChatAttachment,
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -341,6 +345,41 @@ async function persistChatSendImages(params: {
     } catch (err) {
       params.logGateway.warn(
         `chat.send: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
+      );
+    }
+  }
+  return saved;
+}
+
+/**
+ * Persist non-image attachments (audio, documents, etc.) from chat.send to the
+ * media store so they are available on the local filesystem for the media
+ * understanding pipeline.  Images are handled separately by persistChatSendImages.
+ */
+async function persistChatSendNonImageAttachments(params: {
+  attachments: ChatAttachment[];
+  client: GatewayRequestHandlerOptions["client"];
+  logGateway: GatewayRequestContext["logGateway"];
+}): Promise<SavedMedia[]> {
+  if (params.attachments.length === 0 || isAcpBridgeClient(params.client)) {
+    return [];
+  }
+  const saved: SavedMedia[] = [];
+  for (const att of params.attachments) {
+    if (!att.content || typeof att.content !== "string") {
+      continue;
+    }
+    const mime = att.mimeType ?? "application/octet-stream";
+    // Skip images — they are already persisted by persistChatSendImages
+    if (mime.startsWith("image/")) {
+      continue;
+    }
+    try {
+      saved.push(await saveMediaBuffer(Buffer.from(att.content, "base64"), mime, "inbound"));
+    } catch (err) {
+      const label = att.fileName ?? att.type ?? "attachment";
+      params.logGateway.warn(
+        `chat.send: failed to persist inbound attachment ${label} (${mime}): ${formatForLog(err)}`,
       );
     }
   }
@@ -1483,6 +1522,24 @@ export const chatHandlers: GatewayRequestHandlers = {
         logGateway: context.logGateway,
       });
 
+      // Persist non-image attachments (audio, documents, etc.) alongside images
+      // so that the media understanding pipeline can process them, just like
+      // channel-based media (Telegram, Discord, etc.).
+      const persistedNonImageAttachmentsPromise = persistChatSendNonImageAttachments({
+        attachments: normalizedAttachments,
+        client,
+        logGateway: context.logGateway,
+      });
+
+      // Resolve all persisted media before constructing the context so that
+      // hasInboundMedia(ctx) returns true and applyMediaUnderstanding fires for
+      // text-only models.
+      const [persistedImages, persistedNonImages] = await Promise.all([
+        persistedImagesPromise,
+        persistedNonImageAttachmentsPromise,
+      ]);
+      const allPersistedMedia = [...persistedImages, ...persistedNonImages];
+
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
@@ -1534,6 +1591,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        // Bridge persisted media into the context so that the media understanding
+        // pipeline (hasInboundMedia → applyMediaUnderstanding) fires for webchat
+        // attachments, matching the behaviour of channel-based media (Telegram,
+        // Discord, etc.).  Without these fields, text-only models silently drop
+        // inbound images/files because the understanding step is skipped.
+        ...resolveChatSendTranscriptMediaFields(allPersistedMedia),
       };
 
       const agentId = resolveSessionAgentId({
@@ -1567,7 +1630,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!transcriptPath) {
             return;
           }
-          const persistedImages = await persistedImagesPromise;
+          const persistedImages = allPersistedMedia;
           emitSessionTranscriptUpdate({
             sessionFile: transcriptPath,
             sessionKey,
@@ -1604,7 +1667,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           transcriptPath,
           sessionKey,
           message: parsedMessage,
-          savedImages: await persistedImagesPromise,
+          savedImages: allPersistedMedia,
         });
       };
       const dispatcher = createReplyDispatcher({

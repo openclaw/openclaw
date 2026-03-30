@@ -23,10 +23,17 @@ type ImageBlock = {
   alt?: string;
 };
 
-function extractImages(message: unknown): ImageBlock[] {
+type FileBlock = {
+  fileName?: string;
+  mimeType: string;
+};
+
+type MediaBlock = { kind: "image"; block: ImageBlock } | { kind: "file"; block: FileBlock };
+
+function extractMedia(message: unknown): MediaBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
-  const images: ImageBlock[] = [];
+  const media: MediaBlock[] = [];
 
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -43,21 +50,29 @@ function extractImages(message: unknown): ImageBlock[] {
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
+          media.push({ kind: "image", block: { url } });
         } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
+          media.push({ kind: "image", block: { url: b.url } });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
+          media.push({ kind: "image", block: { url: imageUrl.url } });
         }
+      } else if (b.type === "file") {
+        media.push({
+          kind: "file",
+          block: {
+            fileName: typeof b.fileName === "string" ? b.fileName : undefined,
+            mimeType: typeof b.mimeType === "string" ? b.mimeType : "application/octet-stream",
+          },
+        });
       }
     }
   }
 
-  return images;
+  return media;
 }
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
@@ -522,8 +537,8 @@ function isAvatarUrl(value: string): boolean {
   );
 }
 
-function renderMessageImages(images: ImageBlock[]) {
-  if (images.length === 0) {
+function renderMessageMedia(media: MediaBlock[]) {
+  if (media.length === 0) {
     return nothing;
   }
 
@@ -532,16 +547,39 @@ function renderMessageImages(images: ImageBlock[]) {
   };
 
   return html`
-    <div class="chat-message-images">
-      ${images.map(
-        (img) => html`
-          <img
-            src=${img.url}
-            alt=${img.alt ?? "Attached image"}
-            class="chat-message-image"
-            @click=${() => openImage(img.url)}
-          />
-        `,
+    <div class="chat-message-media">
+      ${media.map((item) =>
+        item.kind === "image"
+          ? html`
+              <img
+                src=${item.block.url}
+                alt="Attached image"
+                class="chat-message-image"
+                @click=${() => openImage(item.block.url)}
+              />
+            `
+          : html`
+              <div class="chat-message-file">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="chat-message-file__icon"
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <polyline points="10 9 9 9 8 9" />
+                </svg>
+                ${item.block.fileName
+                  ? html`<span class="chat-message-file__name">${item.block.fileName}</span>`
+                  : html`<span class="chat-message-file__type">${item.block.mimeType}</span>`}
+              </div>
+            `,
       )}
     </div>
   `;
@@ -653,8 +691,8 @@ function renderGroupedMessage(
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message) : [];
   const hasToolCards = toolCards.length > 0;
-  const images = extractImages(message);
-  const hasImages = images.length > 0;
+  const media = extractMedia(message);
+  const hasMedia = media.length > 0;
 
   const extractedText = extractTextCached(message);
   const extractedThinking =
@@ -678,7 +716,7 @@ function renderGroupedMessage(
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (!markdown && !visibleToolCards && !hasImages) {
+  if (!markdown && !visibleToolCards && !hasMedia) {
     return nothing;
   }
 
@@ -714,7 +752,7 @@ function renderGroupedMessage(
                     : nothing}
               </summary>
               <div class="chat-tool-msg-body">
-                ${renderMessageImages(images)}
+                ${renderMessageMedia(media)}
                 ${reasoningMarkdown
                   ? html`<div class="chat-thinking">
                       ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
@@ -738,7 +776,7 @@ function renderGroupedMessage(
             </details>
           `
         : html`
-            ${renderMessageImages(images)}
+            ${renderMessageMedia(media)}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
                   ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}

@@ -1,5 +1,10 @@
-export const CHAT_ATTACHMENT_ACCEPT = "image/*";
+export const CHAT_ATTACHMENT_ACCEPT = "*/*";
+
+const UNSUPPORTED_MIME_PREFIXES = ["video/"];
 
 export function isSupportedChatAttachmentMimeType(mimeType: string | null | undefined): boolean {
-  return typeof mimeType === "string" && mimeType.startsWith("image/");
+  if (typeof mimeType !== "string") {
+    return false;
+  }
+  return !UNSUPPORTED_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
 }
