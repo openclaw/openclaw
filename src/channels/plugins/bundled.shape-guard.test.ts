@@ -4,6 +4,7 @@ afterEach(() => {
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../config/io.js");
+  vi.doUnmock("../../plugins/config-state.js");
   vi.resetModules();
 });
 
@@ -58,6 +59,17 @@ function mockDiscoveryWithChannels(channelIds: string[]) {
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     return { ...actual, default: { ...actual, closeSync: () => {} } };
   });
+  // Provide a minimal normalizePluginsConfig that trims and returns allow list.
+  vi.doMock("../../plugins/config-state.js", () => ({
+    normalizePluginsConfig: (plugins?: { allow?: string[] }) => ({
+      enabled: true,
+      allow: (plugins?.allow ?? []).map((s: string) => s.trim()).filter(Boolean),
+      deny: [],
+      loadPaths: [],
+      slots: { memory: "memory-core" },
+      entries: {},
+    }),
+  }));
 }
 
 describe("bundled channel entry shape guards", () => {

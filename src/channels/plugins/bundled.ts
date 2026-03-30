@@ -3,6 +3,7 @@ import { createJiti } from "jiti";
 import { loadConfig } from "../../config/io.js";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -212,9 +213,9 @@ let cachedBundledChannelState: BundledChannelState | null = null;
 function resolveEnabledChannelIds(): ReadonlySet<string> | undefined {
   try {
     const config = loadConfig();
-    const allow = config.plugins?.allow;
-    if (Array.isArray(allow) && allow.length > 0) {
-      return new Set(allow);
+    const normalized = normalizePluginsConfig(config.plugins);
+    if (normalized.allow.length > 0) {
+      return new Set(normalized.allow);
     }
   } catch {
     // Config load failed for any reason (file missing, parse error, early bootstrap, etc.).
