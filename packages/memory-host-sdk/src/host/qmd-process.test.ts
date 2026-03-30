@@ -137,4 +137,18 @@ describe("checkQmdBinaryAvailability", () => {
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
     ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
   });
+
+  it("does not treat close-before-spawn as a successful availability probe", async () => {
+    const child = createMockChild();
+    const err = Object.assign(new Error("spawn qmd ENOENT"), { code: "ENOENT" });
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("close"));
+      queueMicrotask(() => child.emit("error", err));
+      return child;
+    });
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
+    ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
+  });
 });

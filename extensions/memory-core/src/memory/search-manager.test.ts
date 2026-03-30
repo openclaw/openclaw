@@ -215,6 +215,19 @@ describe("getMemorySearchManager caching", () => {
     expect(searchResults).toHaveLength(1);
   });
 
+  it("returns a cached qmd manager without probing the binary again", async () => {
+    const agentId = "cached-qmd";
+    const cfg = createQmdCfg(agentId);
+
+    const first = await getMemorySearchManager({ cfg, agentId });
+    const second = await getMemorySearchManager({ cfg, agentId });
+
+    requireManager(first);
+    requireManager(second);
+    expect(first.manager).toBe(second.manager);
+    expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(1);
+  });
+
   it("does not cache qmd managers for status-only requests", async () => {
     const agentId = "status-agent";
     const cfg = createQmdCfg(agentId);

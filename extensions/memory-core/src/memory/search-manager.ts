@@ -48,6 +48,23 @@ export async function getMemorySearchManager(params: {
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
+    const statusOnly = params.purpose === "status";
+    const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+    const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
+    const cached = QMD_MANAGER_CACHE.get(cacheKey);
+    if (cached) {
+      return { manager: cached };
+    }
+    if (statusOnly) {
+      const fullCached = QMD_MANAGER_CACHE.get(`${baseCacheKey}:full`);
+      if (fullCached) {
+        // Status callers often close the manager they receive. Wrap the live
+        // full manager with a no-op close so health/status probes do not tear
+        // down the active QMD manager for the process.
+        return { manager: new BorrowedMemoryManager(fullCached) };
+      }
+    }
+
     const qmdBinary = await checkQmdBinaryAvailability({
       command: resolved.qmd.command,
       env: process.env,
@@ -57,22 +74,6 @@ export async function getMemorySearchManager(params: {
         `qmd binary unavailable (${resolved.qmd.command}); falling back to builtin: ${qmdBinary.error ?? "unknown error"}`,
       );
     } else {
-      const statusOnly = params.purpose === "status";
-      const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
-      const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
-      const cached = QMD_MANAGER_CACHE.get(cacheKey);
-      if (cached) {
-        return { manager: cached };
-      }
-      if (statusOnly) {
-        const fullCached = QMD_MANAGER_CACHE.get(`${baseCacheKey}:full`);
-        if (fullCached) {
-          // Status callers often close the manager they receive. Wrap the live
-          // full manager with a no-op close so health/status probes do not tear
-          // down the active QMD manager for the process.
-          return { manager: new BorrowedMemoryManager(fullCached) };
-        }
-      }
       try {
         const { QmdMemoryManager } = await import("./qmd-manager.js");
         const primary = await QmdMemoryManager.create({

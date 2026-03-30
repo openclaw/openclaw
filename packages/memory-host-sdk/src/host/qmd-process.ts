@@ -53,6 +53,7 @@ export async function checkQmdBinaryAvailability(params: {
 
   return await new Promise((resolve) => {
     let settled = false;
+    let didSpawn = false;
     const finish = (result: QmdBinaryAvailability) => {
       if (settled) {
         return;
@@ -83,10 +84,14 @@ export async function checkQmdBinaryAvailability(params: {
       finish({ available: false, error: formatQmdAvailabilityError(err) });
     });
     child.once("spawn", () => {
+      didSpawn = true;
       child.kill();
       finish({ available: true });
     });
     child.once("close", () => {
+      if (!didSpawn) {
+        return;
+      }
       finish({ available: true });
     });
   });
