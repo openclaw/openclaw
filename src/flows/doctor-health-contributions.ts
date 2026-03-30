@@ -118,18 +118,29 @@ function resolveDoctorContributionTimeoutMs(id: string): number {
   }
 }
 
-async function runDoctorContributionWithTimeout(
+class DoctorContributionTimeoutError extends Error {
+  constructor(
+    readonly contributionId: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Doctor step timed out after ${timeoutMs}ms.`);
+    this.name = "DoctorContributionTimeoutError";
+  }
+}
+
+export async function runDoctorContributionWithTimeout(
   contribution: DoctorHealthContribution,
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
   const timeoutMs = resolveDoctorContributionTimeoutMs(contribution.id);
   debugDoctor(`contribution:start:${contribution.id}`);
+  let timer: NodeJS.Timeout | undefined;
 
   await Promise.race([
     contribution.run(ctx),
     new Promise((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Doctor step timed out after ${timeoutMs}ms.`));
+      timer = setTimeout(() => {
+        reject(new DoctorContributionTimeoutError(contribution.id, timeoutMs));
       }, timeoutMs);
       timer.unref?.();
     }),
@@ -138,18 +149,23 @@ async function runDoctorContributionWithTimeout(
       debugDoctor(`contribution:done:${contribution.id}`);
     })
     .catch((error) => {
-    if (!(error instanceof Error) || !error.message.includes("timed out")) {
-      throw error;
-    }
-    debugDoctor(`contribution:timeout:${contribution.id}`);
-    note(
-      [
-        `${contribution.option.label} timed out after ${Math.ceil(timeoutMs / 1000)}s.`,
-        `Continue with the remaining doctor checks, then rerun ${formatCliCommand("openclaw doctor --non-interactive")} for a bounded retry.`,
-        `If this keeps happening, inspect ${formatCliCommand("openclaw gateway status --json")} and the gateway logs before retrying.`,
-      ].join("\n"),
-      "Doctor timeout",
-    );
+      if (!(error instanceof DoctorContributionTimeoutError)) {
+        throw error;
+      }
+      debugDoctor(`contribution:timeout:${contribution.id}`);
+      note(
+        [
+          `${contribution.option.label} timed out after ${Math.ceil(timeoutMs / 1000)}s.`,
+          `Continue with the remaining doctor checks, then rerun ${formatCliCommand("openclaw doctor --non-interactive")} for a bounded retry.`,
+          `If this keeps happening, inspect ${formatCliCommand("openclaw gateway status --json")} and the gateway logs before retrying.`,
+        ].join("\n"),
+        "Doctor timeout",
+      );
+    })
+    .finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
     });
 }
 

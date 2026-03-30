@@ -9,7 +9,7 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
-import { runRuntimeMetadataPostBuild, runRuntimePostBuild } from "./runtime-postbuild.mjs";
+import { runRuntimeNoBuildPostBuild, runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
@@ -294,7 +294,7 @@ const syncRuntimeArtifacts = (deps, fullSync = false) => {
     if (fullSync) {
       runRuntimePostBuild({ cwd: deps.cwd });
     } else {
-      runRuntimeMetadataPostBuild({ cwd: deps.cwd });
+      runRuntimeNoBuildPostBuild({ cwd: deps.cwd });
     }
   } catch (error) {
     logRunner(

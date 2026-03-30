@@ -22,6 +22,10 @@ const EXTENSION_PACKAGE = bundledPluginFile("demo", "package.json");
 const EXTENSION_README = bundledPluginFile("demo", "README.md");
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
+const DIST_EXTENSION_RUNTIME_DEPS_STAMP = bundledDistPluginFile(
+  "demo",
+  ".openclaw-runtime-deps-stamp.json",
+);
 
 const OLD_TIME = new Date("2026-03-13T10:00:00.000Z");
 const BUILD_TIME = new Date("2026-03-13T12:00:00.000Z");
@@ -451,6 +455,50 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
       await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
+    });
+  });
+
+  it("refreshes bundled runtime dependency staging on the no-build fast path", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [ROOT_TSDOWN]: "export default {};\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [EXTENSION_PACKAGE]: JSON.stringify(
+            {
+              name: "@openclaw/demo",
+              version: "0.0.0-test",
+              dependencies: {
+                zod: "^3.25.0",
+              },
+              openclaw: {
+                bundle: {
+                  stageRuntimeDependencies: true,
+                },
+              },
+            },
+            null,
+            2,
+          ),
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+        newPaths: [EXTENSION_PACKAGE],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${EXTENSION_PACKAGE}\n`,
+      });
+
+      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+      await expect(
+        fs.readFile(resolvePath(tmp, DIST_EXTENSION_RUNTIME_DEPS_STAMP), "utf-8"),
+      ).resolves.toContain('"fingerprint"');
     });
   });
 

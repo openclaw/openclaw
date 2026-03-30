@@ -35,11 +35,12 @@ export function createDoctorPrompter(params: {
 }): DoctorPrompter {
   const repairMode = resolveDoctorRepairMode(params.options);
   const confirmDefault = async (p: Parameters<typeof confirm>[0]) => {
+    if (repairMode.nonInteractive) {
+      // Non-interactive doctor intentionally stays read-only for prompt-backed repairs.
+      return false;
+    }
     if (shouldAutoApproveDoctorFix(repairMode)) {
       return true;
-    }
-    if (repairMode.nonInteractive) {
-      return false;
     }
     if (!repairMode.canPrompt) {
       return false;
@@ -57,11 +58,11 @@ export function createDoctorPrompter(params: {
     confirm: confirmDefault,
     confirmAutoFix: confirmDefault,
     confirmAggressiveAutoFix: async (p) => {
-      if (shouldAutoApproveDoctorFix(repairMode, { requiresForce: true })) {
-        return true;
-      }
       if (repairMode.nonInteractive) {
         return false;
+      }
+      if (shouldAutoApproveDoctorFix(repairMode, { requiresForce: true })) {
+        return true;
       }
       if (repairMode.shouldRepair && !repairMode.shouldForce) {
         return false;
@@ -78,11 +79,11 @@ export function createDoctorPrompter(params: {
       );
     },
     confirmRuntimeRepair: async (p) => {
-      if (shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })) {
-        return true;
-      }
       if (repairMode.nonInteractive) {
         return false;
+      }
+      if (shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })) {
+        return true;
       }
       if (!repairMode.canPrompt) {
         return false;

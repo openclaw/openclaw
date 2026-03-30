@@ -41,7 +41,7 @@ Apply aggressive repairs too (overwrites custom supervisor configs).
 openclaw doctor --non-interactive
 ```
 
-Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation.
+Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation. Even with `--repair` or `--force`, prompt-backed repairs stay read-only in non-interactive mode.
 Legacy state migrations run automatically when detected.
 
 ```bash

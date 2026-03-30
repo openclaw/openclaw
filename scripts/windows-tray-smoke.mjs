@@ -29,7 +29,7 @@ async function ensureTrayExeExists() {
 
 async function withFixtureCli(run) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tray-smoke-"));
-  const scriptPath = path.join(tempDir, "fake-openclaw.js");
+  const scriptPath = path.join(tempDir, "fake-openclaw.mjs");
   const cmdPath = path.join(tempDir, "openclaw-fixture.cmd");
   const callsPath = path.join(tempDir, "calls.log");
 
@@ -101,7 +101,7 @@ process.exit(1);
 
   await fs.writeFile(
     cmdPath,
-    `@echo off\r\nnode "%~dp0\\fake-openclaw.js" %*\r\n`,
+    `@echo off\r\nnode "%~dp0\\fake-openclaw.mjs" %*\r\n`,
     "utf8",
   );
 

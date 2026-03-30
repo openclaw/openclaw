@@ -76,6 +76,11 @@ export function runRuntimeMetadataPostBuild(params = {}) {
   writeOfficialChannelCatalog(params);
 }
 
+export function runRuntimeNoBuildPostBuild(params = {}) {
+  runRuntimeMetadataPostBuild(params);
+  stageBundledPluginRuntimeDeps(params);
+}
+
 export function runRuntimePostBuild(params = {}) {
   runRuntimeMetadataPostBuild(params);
   stageBundledPluginRuntimeDeps(params);
@@ -85,5 +90,5 @@ export function runRuntimePostBuild(params = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runRuntimePostBuild();
+  runRuntimePostBuild({ cwd: process.cwd() });
 }

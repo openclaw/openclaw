@@ -49,7 +49,7 @@ describe("createDoctorPrompter", () => {
     }
   });
 
-  it("auto-accepts repairs in non-interactive fix mode", async () => {
+  it("keeps prompt-backed repairs read-only in non-interactive fix mode", async () => {
     const prompter = createRepairPrompter();
 
     await expect(
@@ -57,19 +57,19 @@ describe("createDoctorPrompter", () => {
         message: "Apply general repair?",
         initialValue: false,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       prompter.confirmAutoFix({
         message: "Repair gateway service config?",
         initialValue: false,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       prompter.confirmRuntimeRepair({
         message: "Repair launch agent bootstrap?",
         initialValue: false,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
@@ -85,7 +85,7 @@ describe("createDoctorPrompter", () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
-  it("keeps skip-in-non-interactive prompts disabled during update-mode repairs", async () => {
+  it("keeps update-mode prompt-backed repairs read-only in non-interactive mode", async () => {
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
     const prompter = createRepairPrompter();
 
@@ -94,7 +94,7 @@ describe("createDoctorPrompter", () => {
         message: "Repair gateway service config?",
         initialValue: false,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       prompter.confirmRuntimeRepair({
         message: "Restart gateway service now?",
@@ -104,7 +104,7 @@ describe("createDoctorPrompter", () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
-  it("auto-accepts aggressive repairs only with --force in non-interactive fix mode", async () => {
+  it("keeps aggressive prompt-backed repairs read-only in non-interactive fix mode even with --force", async () => {
     const prompter = createRepairPrompter({ force: true });
 
     await expect(
@@ -112,7 +112,7 @@ describe("createDoctorPrompter", () => {
         message: "Overwrite gateway service config?",
         initialValue: false,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     expect(confirmMock).not.toHaveBeenCalled();
   });
 

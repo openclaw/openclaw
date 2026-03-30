@@ -366,6 +366,18 @@ internal static class GatewayCli
                 // Best effort only.
             }
 
+            try
+            {
+                await Task.WhenAny(
+                    Task.WhenAll(stdoutTask, stderrTask),
+                    Task.Delay(TimeSpan.FromSeconds(2), cancellationToken)
+                );
+            }
+            catch
+            {
+                // Best effort only.
+            }
+
             return (
                 false,
                 string.Empty,
