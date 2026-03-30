@@ -15,6 +15,7 @@ import {
   type ExecutableResolution,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { isInterpreterLikeAllowlistPattern } from "./exec-inline-eval.js";
 import {
   DEFAULT_SAFE_BINS,
   SAFE_BIN_PROFILES,
@@ -521,6 +522,9 @@ function collectAllowAlwaysPatterns(params: {
   if (!candidatePath) {
     return;
   }
+  if (isInterpreterLikeAllowlistPattern(candidatePath)) {
+    return;
+  }
   if (!trustPlan.shellWrapperExecutable) {
     params.out.add(candidatePath);
     return;
@@ -531,6 +535,9 @@ function collectAllowAlwaysPatterns(params: {
     env: params.env,
   });
   if (positionalArgvPath) {
+    if (isInterpreterLikeAllowlistPattern(positionalArgvPath)) {
+      return;
+    }
     params.out.add(positionalArgvPath);
     return;
   }

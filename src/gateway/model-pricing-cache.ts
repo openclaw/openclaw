@@ -8,6 +8,8 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -15,8 +17,6 @@ import {
   replaceGatewayModelPricingCache,
   type CachedModelPricing,
 } from "./model-pricing-cache-state.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 
 type OpenRouterPricingEntry = {
   id: string;

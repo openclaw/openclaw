@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
@@ -23,6 +22,7 @@ export async function buildTelegramMessageContextForTest(
 ): Promise<
   Awaited<ReturnType<typeof import("./bot-message-context.js").buildTelegramMessageContext>>
 > {
+  const { vi } = await import("vitest");
   const { buildTelegramMessageContext } = await import("./bot-message-context.js");
   return await buildTelegramMessageContext({
     primaryCtx: {

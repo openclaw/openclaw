@@ -6,7 +6,13 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { applyXaiModelCompat, normalizeXaiModelId } from "./api.js";
+import {
+  applyXaiModelCompat,
+  normalizeXaiModelId,
+  resolveXaiTransport,
+  resolveXaiModelCompatPatch,
+  shouldContributeXaiCompat,
+} from "./api.js";
 import { createCodeExecutionTool } from "./code-execution.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
@@ -132,6 +138,10 @@ export default defineSingleProviderPluginEntry({
       };
     },
     normalizeResolvedModel: ({ model }) => applyXaiModelCompat(model),
+    normalizeTransport: ({ provider, api, baseUrl }) =>
+      resolveXaiTransport({ provider, api, baseUrl }),
+    contributeResolvedModelCompat: ({ modelId, model }) =>
+      shouldContributeXaiCompat({ modelId, model }) ? resolveXaiModelCompatPatch() : undefined,
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),

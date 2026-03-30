@@ -1,13 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBlueBubblesMonitorTestRuntime,
-  EMPTY_DISPATCH_RESULT,
-  resetBlueBubblesMonitorTestState,
-  type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
+import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
+import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
 import {
@@ -27,9 +23,13 @@ import {
   resetBlueBubblesParticipantContactNameCacheForTest,
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
-import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
-import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import {
+  createBlueBubblesMonitorTestRuntime,
+  EMPTY_DISPATCH_RESULT,
+  resetBlueBubblesMonitorTestState,
+  type DispatchReplyParams,
+} from "./test-support/monitor-test-support.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -155,7 +155,10 @@ function installTimingAwareInboundDebouncer(core: PluginRuntime) {
   core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
     // oxlint-disable-next-line typescript/no-explicit-any
     type Item = any;
-    const buckets = new Map<string, { items: Item[]; timer: ReturnType<typeof setTimeout> | null }>();
+    const buckets = new Map<
+      string,
+      { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
+    >();
 
     const flush = async (key: string) => {
       const bucket = buckets.get(key);
@@ -842,6 +845,68 @@ describe("BlueBubbles webhook monitor", () => {
         const callArgs = getFirstDispatchCall();
         expect(callArgs.ctx.MediaPaths).toEqual(["/tmp/test-media.jpg"]);
         expect(callArgs.ctx.Body).toContain("hello");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("coalesces URL text with URL balloon webhook events by associatedMessageGuid", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount();
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const messageId = "url-msg-1";
+        const chatGuid = "iMessage;-;+15551234567";
+        const url = "https://github.com/bitfocus/companion/issues/4047";
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId,
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId: "url-balloon-1",
+            balloonBundleId: "com.apple.messages.URLBalloonProvider",
+            associatedMessageGuid: messageId,
+          }),
+          target,
+        });
+
+        expect(processMessage).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: url,
+            messageId,
+            balloonBundleId: undefined,
+          }),
+          target,
+        );
+        expect(target.runtime.error).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }

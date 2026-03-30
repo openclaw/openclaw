@@ -12,6 +12,7 @@ import {
   buildExecutionPlan,
   explainExecutionTarget,
 } from "../../scripts/test-planner/planner.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -146,10 +147,77 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
     expect(plan.executionBudget.unitSharedWorkers).toBe(2);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitIsolated).toBe(1);
     expect(plan.topLevelParallelLimit).toBe(4);
     expect(plan.deferredRunConcurrency).toBe(1);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("coalesces saturated high-memory local unit bursts into fewer shared batches", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        loadAverage: [18, 18, 18],
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(plan.runtimeCapabilities.memoryBand).toBe("high");
+    expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
+    expect(sharedUnitBatches).toHaveLength(3);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
+    expect(plan.executionBudget.unitFastBatchTargetMs).toBe(90_000);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("keeps full local unit runs phased when isolated and heavy lanes are present", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(sharedUnitBatches.length).toBeGreaterThanOrEqual(4);
+    expect(plan.serialPrefixUnits.some((unit) => unit.serialPhase === "unit-fast")).toBe(true);
+    expect(plan.topLevelParallelLimit).toBe(3);
     artifacts.cleanupTempArtifacts();
   });
 
@@ -195,7 +263,10 @@ describe("test planner", () => {
         surfaces: [],
         passthroughArgs: [
           "src/auto-reply/reply/followup-runner.test.ts",
-          "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          bundledPluginFile(
+            "discord",
+            "src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          ),
         ],
       },
       {
@@ -325,6 +396,41 @@ describe("test planner", () => {
     expect(defaultUnitWithSameId).not.toBe(targetedUnit);
     expect(plan.topLevelSingleShardAssignments.get(targetedUnit)).toBeUndefined();
     expect(plan.topLevelSingleShardAssignments.get(defaultUnitWithSameId)).toBeDefined();
+
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("assigns single include-file CI batches to one shard instead of over-sharding them", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_TEST_SHARDS: "4",
+      OPENCLAW_TEST_SHARD_INDEX: "1",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        mode: "ci",
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const singleFileBatch = plan.parallelUnits.find(
+      (unit) =>
+        unit.id.startsWith("unit-fast-") &&
+        unit.fixedShardIndex === undefined &&
+        Array.isArray(unit.includeFiles) &&
+        unit.includeFiles.length === 1,
+    );
+
+    expect(singleFileBatch).toBeTruthy();
+    expect(plan.topLevelSingleShardAssignments.get(singleFileBatch)).toBeTypeOf("number");
 
     artifacts.cleanupTempArtifacts();
   });
