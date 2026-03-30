@@ -25,10 +25,6 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
 
 const OPENAI_EMBEDDING3_SMALL_DIMENSIONS = [256, 512, 768, 1024, 1536] as const;
 const OPENAI_EMBEDDING3_LARGE_DIMENSIONS = [256, 512, 768, 1024, 1536, 2048, 3072] as const;
-const OPENAI_EMBEDDING3_DIMENSION_DEFAULTS: Record<string, number> = {
-  "text-embedding-3-small": 1536,
-  "text-embedding-3-large": 3072,
-};
 
 export function normalizeOpenAiModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
@@ -51,7 +47,9 @@ export function resolveOpenAiOutputDimensionality(
   }
 
   if (dimensionality === undefined) {
-    return OPENAI_EMBEDDING3_DIMENSION_DEFAULTS[model];
+    // Return undefined to omit dimensions field from request,
+    // letting OpenAI use its own default
+    return undefined;
   }
 
   const validDimensions =

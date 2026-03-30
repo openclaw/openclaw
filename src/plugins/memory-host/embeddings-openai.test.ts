@@ -58,12 +58,13 @@ describe("OpenAI Matryoshka dimensionality support", () => {
       expect(resolveOpenAiOutputDimensionality("text-embedding-ada-002", 512)).toBeUndefined();
     });
 
-    it("returns default dimension for text-embedding-3-small when not specified", () => {
-      expect(resolveOpenAiOutputDimensionality("text-embedding-3-small", undefined)).toBe(1536);
-    });
-
-    it("returns default dimension for text-embedding-3-large when not specified", () => {
-      expect(resolveOpenAiOutputDimensionality("text-embedding-3-large", undefined)).toBe(3072);
+    it("returns undefined when outputDimensionality is not specified", () => {
+      expect(
+        resolveOpenAiOutputDimensionality("text-embedding-3-small", undefined),
+      ).toBeUndefined();
+      expect(
+        resolveOpenAiOutputDimensionality("text-embedding-3-large", undefined),
+      ).toBeUndefined();
     });
 
     it("accepts valid dimension for text-embedding-3-small", () => {
