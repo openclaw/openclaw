@@ -572,4 +572,33 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(details?.truncation).not.toHaveProperty("content");
   });
+
+  it("replaces raw binary office reads with a structured fallback message", async () => {
+    const readResult: AgentToolResult<unknown> = {
+      content: [{ type: "text" as const, text: "PK\u0003\u0004raw-binary-garbage" }],
+    };
+    const baseRead: AgentTool = {
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({
+        path: Type.String(),
+      }),
+      execute: vi.fn(async () => readResult),
+    };
+
+    const wrapped = createOpenClawReadTool(
+      baseRead as unknown as Parameters<typeof createOpenClawReadTool>[0],
+      {
+        readBufferForToolPath: async () => Buffer.from("fake-docx-buffer"),
+      },
+    );
+
+    const result = await wrapped.execute("read-docx-1", { path: "demo.docx" });
+    const text = extractToolText(result);
+
+    expect(text).toContain("This file appears to be a binary document (.docx");
+    expect(text).toContain("The read tool is not suitable");
+    expect(text).toContain("Use a document parser or conversion tool");
+  });
 });

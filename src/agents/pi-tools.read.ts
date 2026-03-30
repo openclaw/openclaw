@@ -50,6 +50,7 @@ const MAX_ADAPTIVE_READ_PAGES = 8;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  readBufferForToolPath?: (toolPath: string) => Promise<Buffer>;
 };
 
 type ReadTruncationDetails = {
@@ -289,6 +290,56 @@ function rewriteReadImageHeader(text: string, mimeType: string): string {
     return `Read image file [${mimeType}]`;
   }
   return text;
+}
+
+const BINARY_DOCUMENT_FALLBACK_BY_MIME: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "application/msword": ".doc",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+};
+
+function buildBinaryDocumentReadFallback(filePath: string, mimeType: string): string {
+  const ext = BINARY_DOCUMENT_FALLBACK_BY_MIME[mimeType] ?? "binary document";
+  return [
+    `This file appears to be a binary document (${ext}, ${mimeType}).`,
+    "",
+    "The read tool is not suitable for extracting readable text from this format.",
+    "",
+    "Use a document parser or conversion tool to extract text before continuing.",
+    `File: ${filePath}`,
+  ].join("\n");
+}
+
+async function normalizeBinaryDocumentReadResult(
+  result: AgentToolResult<unknown>,
+  filePath: string,
+  options?: OpenClawReadToolOptions,
+): Promise<AgentToolResult<unknown>> {
+  const loadBuffer = options?.readBufferForToolPath;
+  if (!loadBuffer || !filePath || filePath === "<unknown>") {
+    return result;
+  }
+
+  const text = getToolResultText(result);
+  if (typeof text !== "string" || !text.trim()) {
+    return result;
+  }
+
+  try {
+    const buffer = await loadBuffer(filePath);
+    const mimeType = await detectMime({ buffer, filePath });
+    const normalizedMime = typeof mimeType === "string" ? mimeType.trim().toLowerCase() : undefined;
+    if (!normalizedMime || !(normalizedMime in BINARY_DOCUMENT_FALLBACK_BY_MIME)) {
+      return result;
+    }
+    return withToolResultText(result, buildBinaryDocumentReadFallback(filePath, normalizedMime));
+  } catch {
+    return result;
+  }
 }
 
 async function normalizeReadImageResult(
@@ -593,6 +644,8 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
+    readBufferForToolPath: (toolPath: string) =>
+      params.bridge.readFile({ filePath: toolPath, cwd: params.root }),
   });
 }
 
@@ -655,7 +708,12 @@ export function createOpenClawReadTool(
       });
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
-      const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
+      const normalizedImageResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
+      const normalizedResult = await normalizeBinaryDocumentReadResult(
+        normalizedImageResult,
+        filePath,
+        options,
+      );
       return sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,
