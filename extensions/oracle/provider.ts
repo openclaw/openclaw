@@ -1,4 +1,3 @@
-import { ConfigFileAuthenticationDetailsProvider } from "oci-common";
 import { GenerativeAiClient } from "oci-generativeai";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type {
@@ -14,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { logWarn } from "openclaw/plugin-sdk/text-runtime";
 import {
+  createOracleAuthenticationDetailsProvider,
   buildOracleRuntimeAuthToken,
   ORACLE_MISSING_CONFIG_FILE_ERROR,
   ORACLE_PROFILE_ID,
@@ -55,6 +55,42 @@ function trimToUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function normalizeOracleVendorToken(vendor: unknown): string | undefined {
+  const trimmed = trimToUndefined(vendor);
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || undefined;
+}
+
+function isOracleFriendlyModelName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value.trim());
+}
+
+function buildOracleOnDemandModelRef(model: OracleModelSummary): string | undefined {
+  const displayName = trimToUndefined(model.displayName);
+  if (!displayName || !isOracleFriendlyModelName(displayName)) {
+    return undefined;
+  }
+
+  const normalizedDisplayName = displayName.toLowerCase();
+  const vendorToken = normalizeOracleVendorToken(model.vendor);
+  if (!vendorToken) {
+    return normalizedDisplayName;
+  }
+  if (
+    normalizedDisplayName.startsWith(`${vendorToken}.`) ||
+    normalizedDisplayName.startsWith(`${vendorToken}-`)
+  ) {
+    return normalizedDisplayName;
+  }
+  return `${vendorToken}.${normalizedDisplayName}`;
+}
+
 function appendOracleModelVersion(name: string, version: string | undefined): string {
   const trimmedVersion = trimToUndefined(version);
   if (!trimmedVersion) {
@@ -66,7 +102,10 @@ function appendOracleModelVersion(name: string, version: string | undefined): st
 }
 
 export function buildOracleCatalogModelId(model: OracleModelSummary): string {
-  return trimToUndefined(model.id) ?? "";
+  // Oracle ON_DEMAND requests accept the model name as modelId. Prefer that
+  // stable, vendor-qualified ref when available so downstream family detection
+  // can recognize models even when OCI's raw ids are opaque ocid1 values.
+  return buildOracleOnDemandModelRef(model) ?? trimToUndefined(model.id) ?? "";
 }
 
 function buildOracleModelName(model: OracleModelSummary): string {
@@ -158,10 +197,10 @@ function buildStoredOracleAuthOverrides(params: { agentDir?: string; profileId?:
 }
 
 async function listOracleModels(configFile: string, profile: string, compartmentId: string) {
-  const authenticationDetailsProvider = new ConfigFileAuthenticationDetailsProvider(
+  const authenticationDetailsProvider = createOracleAuthenticationDetailsProvider({
     configFile,
     profile,
-  );
+  });
   const client = new GenerativeAiClient({ authenticationDetailsProvider });
   try {
     const models: OracleModelSummary[] = [];

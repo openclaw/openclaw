@@ -52,7 +52,7 @@ export default definePluginEntry({
         openAiCompatTurnValidation: false,
       },
       prepareRuntimeAuth: async (ctx) => await prepareOracleRuntimeAuth(ctx),
-      wrapStreamFn: () => createOracleStreamFn(),
+      createStreamFn: (ctx) => createOracleStreamFn({ agentDir: ctx.agentDir }),
       buildMissingAuthMessage: () => buildOracleMissingAuthMessage(),
       isModernModelRef: () => true,
     });

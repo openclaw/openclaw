@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -9,9 +10,14 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { ConfigFileAuthenticationDetailsProvider } from "oci-common";
 import { GenerativeAiInferenceClient } from "oci-generativeaiinference";
-import { parseOracleRuntimeAuthToken, type OracleResolvedAuth } from "./oci-auth.js";
+import {
+  createOracleAuthenticationDetailsProvider,
+  parseOracleRuntimeAuthToken,
+  resolveOracleAuth,
+  resolveStoredOracleAuth,
+  type OracleResolvedAuth,
+} from "./oci-auth.js";
 
 type OracleMessageRole = "SYSTEM" | "USER" | "ASSISTANT" | "TOOL";
 
@@ -893,27 +899,64 @@ export function convertOracleChatResultToAssistantMessage(
 }
 
 function createDefaultOracleInferenceClient(auth: OracleResolvedAuth): OracleInferenceClient {
-  const authenticationDetailsProvider = new ConfigFileAuthenticationDetailsProvider(
-    auth.configFile,
-    auth.profile,
-  );
+  const authenticationDetailsProvider = createOracleAuthenticationDetailsProvider({
+    configFile: auth.configFile,
+    profile: auth.profile,
+  });
   return new GenerativeAiInferenceClient({ authenticationDetailsProvider });
 }
 
+function resolveOracleStreamAuth(params: {
+  agentDir?: string;
+  options:
+    | {
+        apiKey?: string;
+      }
+    | null
+    | undefined;
+}): OracleResolvedAuth {
+  const runtimeApiKey =
+    typeof params.options?.apiKey === "string" ? params.options.apiKey.trim() : "";
+  const storedAuth = resolveStoredOracleAuth({ agentDir: params.agentDir });
+  if (!runtimeApiKey) {
+    if (storedAuth) {
+      return storedAuth;
+    }
+    return resolveOracleAuth({ env: process.env });
+  }
+
+  try {
+    return parseOracleRuntimeAuthToken(runtimeApiKey);
+  } catch {
+    // Simple-completion and older/custom call paths can still pass the source
+    // OCI config path instead of the runtime token. When we have the stored
+    // Oracle profile, prefer it so profile/compartment stay explicit.
+    if (storedAuth && storedAuth.configFile === path.resolve(runtimeApiKey)) {
+      return storedAuth;
+    }
+    return resolveOracleAuth({
+      env: process.env,
+      configFile: runtimeApiKey,
+    });
+  }
+}
+
 export function createOracleStreamFn(
-  createClient: CreateOracleClient = createDefaultOracleInferenceClient,
+  params?: CreateOracleClient | { agentDir?: string; createClient?: CreateOracleClient },
 ): StreamFn {
+  const createClient =
+    typeof params === "function"
+      ? params
+      : (params?.createClient ?? createDefaultOracleInferenceClient);
+  const agentDir = typeof params === "function" ? undefined : params?.agentDir;
+
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
 
     const run = async () => {
       let client: OracleInferenceClient | undefined;
       try {
-        if (typeof options?.apiKey !== "string" || options.apiKey.trim().length === 0) {
-          throw new Error("Oracle OCI runtime auth is missing.");
-        }
-
-        const auth = parseOracleRuntimeAuthToken(options.apiKey);
+        const auth = resolveOracleStreamAuth({ agentDir, options });
         client = createClient(auth);
         const tools = convertTools(context.tools);
         const providerOptions = (options ?? {}) as Record<string, unknown>;

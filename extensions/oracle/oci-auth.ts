@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ConfigFileAuthenticationDetailsProvider } from "oci-common";
+import { ConfigFileReader, Realm, Region, SimpleAuthenticationDetailsProvider } from "oci-common";
 import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/agent-runtime";
 import type {
   ProviderAuthContext,
@@ -84,6 +84,120 @@ function ensureReadableFile(filePath: string): string {
   return resolved;
 }
 
+function readOracleReferencedFile(filePath: string, label: string): string {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    throw new Error(`OCI ${label} file is not readable: ${filePath}`);
+  }
+}
+
+function resolveOracleConfigReferencePath(configFile: string, configuredPath: string): string {
+  const expanded = ConfigFileReader.expandUserHome(configuredPath);
+  if (path.isAbsolute(expanded)) {
+    return expanded;
+  }
+  return path.resolve(path.dirname(configFile), expanded);
+}
+
+function requireOracleConfigValue(value: string | null, key: string, configFile: string): string {
+  const trimmed = trimToUndefined(value);
+  if (!trimmed) {
+    throw new Error(`OCI profile is missing ${key} in ${configFile}`);
+  }
+  return trimmed;
+}
+
+function resolveOracleRegion(regionId: string): Region {
+  let region = Region.fromRegionId(regionId);
+  if (region) {
+    return region;
+  }
+
+  const fallbackSecondLevelDomain = trimToUndefined(process.env.OCI_DEFAULT_REALM);
+  if (fallbackSecondLevelDomain) {
+    const unknownRealm = Realm.register("unknown", fallbackSecondLevelDomain);
+    region = Region.register(regionId, unknownRealm);
+    return region;
+  }
+
+  return Region.register(regionId, Realm.OC1);
+}
+
+export function createOracleAuthenticationDetailsProvider(params: {
+  configFile: string;
+  profile?: string;
+}): SimpleAuthenticationDetailsProvider {
+  const resolvedConfigFile = ensureReadableFile(params.configFile);
+  const resolvedProfile = trimToUndefined(params.profile) ?? DEFAULT_PROFILE_NAME;
+  const config = ConfigFileReader.parseFileFromPath(resolvedConfigFile, resolvedProfile);
+
+  const authType = trimToUndefined(config.get("authentication_type"));
+  const tenancyId = requireOracleConfigValue(config.get("tenancy"), "tenancy", resolvedConfigFile);
+  const regionId = trimToUndefined(config.get("region")) ?? trimToUndefined(process.env.OCI_REGION);
+  if (!regionId) {
+    throw new Error(
+      `OCI profile "${resolvedProfile}" is missing region in ${resolvedConfigFile} and OCI_REGION is not set`,
+    );
+  }
+  const region = resolveOracleRegion(regionId);
+  const delegationTokenPath = trimToUndefined(config.get("delegation_token_file"));
+  const delegationToken = delegationTokenPath
+    ? readOracleReferencedFile(
+        resolveOracleConfigReferencePath(resolvedConfigFile, delegationTokenPath),
+        "delegation token",
+      ).replace(/\n/g, "")
+    : "";
+
+  if (authType) {
+    return new SimpleAuthenticationDetailsProvider(
+      tenancyId,
+      "",
+      "",
+      "",
+      "",
+      region,
+      authType,
+      delegationToken,
+    );
+  }
+
+  const fingerprint = requireOracleConfigValue(
+    config.get("fingerprint"),
+    "fingerprint",
+    resolvedConfigFile,
+  );
+  const keyFile = requireOracleConfigValue(config.get("key_file"), "key_file", resolvedConfigFile);
+  const privateKey = readOracleReferencedFile(
+    resolveOracleConfigReferencePath(resolvedConfigFile, keyFile),
+    "private key",
+  );
+  const passPhrase = config.get("pass_phrase");
+  const sessionTokenPath = trimToUndefined(config.get("security_token_file"));
+  const sessionToken = sessionTokenPath
+    ? readOracleReferencedFile(
+        resolveOracleConfigReferencePath(resolvedConfigFile, sessionTokenPath),
+        "security token",
+      )
+    : undefined;
+  const user = sessionToken
+    ? ""
+    : requireOracleConfigValue(config.get("user"), "user", resolvedConfigFile);
+
+  return new SimpleAuthenticationDetailsProvider(
+    tenancyId,
+    user,
+    fingerprint,
+    privateKey,
+    passPhrase,
+    region,
+    undefined,
+    undefined,
+    config.profileCredentials,
+    sessionToken,
+  );
+}
+
 function loadStoredOracleProfile(
   agentDir?: string,
   requestedProfileId?: string,
@@ -118,10 +232,10 @@ function validateOracleConfigFileInternal(
 ): OracleResolvedAuth {
   const resolvedConfigFile = ensureReadableFile(configFile);
   const resolvedProfile = trimToUndefined(profile) ?? DEFAULT_PROFILE_NAME;
-  const authProvider = new ConfigFileAuthenticationDetailsProvider(
-    resolvedConfigFile,
-    resolvedProfile,
-  );
+  const authProvider = createOracleAuthenticationDetailsProvider({
+    configFile: resolvedConfigFile,
+    profile: resolvedProfile,
+  });
   const tenancyId = trimToUndefined(authProvider.getTenantId());
   if (!tenancyId) {
     throw new Error(`OCI profile "${resolvedProfile}" is missing tenancy in ${resolvedConfigFile}`);
@@ -176,6 +290,22 @@ export function resolveOracleAuth(params: ResolveOracleAuthParams): OracleResolv
     ...validated,
     compartmentId,
   };
+}
+
+export function resolveStoredOracleAuth(params: {
+  agentDir?: string;
+  profileId?: string;
+}): OracleResolvedAuth | null {
+  const stored = loadStoredOracleProfile(params.agentDir, params.profileId);
+  if (!stored) {
+    return null;
+  }
+  return resolveOracleAuth({
+    configFile: stored.configFile,
+    profile: trimToUndefined(stored.metadata.profile),
+    compartmentId: trimToUndefined(stored.metadata.compartmentId),
+    allowStoredProfileFallback: false,
+  });
 }
 
 type OracleRuntimeAuthTokenPayload = {
