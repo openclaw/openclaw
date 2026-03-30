@@ -9,6 +9,7 @@ import {
   listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
 import { DEFAULT_LOCAL_MODEL } from "../plugin-sdk/memory-core-host-engine-embeddings.js";
+import { checkQmdBinaryAvailability } from "../plugin-sdk/memory-core-host-engine-qmd.js";
 import { hasConfiguredMemorySecretInput } from "../plugin-sdk/memory-core-host-secret.js";
 import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
 import { note } from "../terminal/note.js";
@@ -22,7 +23,9 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
 
 /**
  * Check whether memory search has a usable embedding provider.
- * Runs as part of `openclaw doctor` — config-only, no network calls.
+ * Runs as part of `openclaw doctor` — config-only checks where possible;
+ * may spawn a short-lived probe process when `memory.backend=qmd` to verify
+ * the configured `qmd` binary is available.
  */
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
@@ -52,6 +55,28 @@ export async function noteMemorySearchHealth(
     return;
   }
   if (backendConfig.backend === "qmd") {
+    const qmdCheck = await checkQmdBinaryAvailability({
+      command: backendConfig.qmd?.command ?? "qmd",
+      env: process.env,
+    });
+    if (!qmdCheck.available) {
+      note(
+        [
+          `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
+          qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
+          "",
+          "Fix (pick one):",
+          "- Install the supported QMD package: npm install -g @tobilu/qmd",
+          `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
+          `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Memory search",
+      );
+    }
     return;
   }
 
