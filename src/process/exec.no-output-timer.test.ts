@@ -77,4 +77,45 @@ describe("runCommandWithTimeout no-output timer", () => {
     expect(result.stdout).toBe("...");
     expect(fake.kill).not.toHaveBeenCalled();
   });
+
+  it("marks no-output timeout when the spawned child goes silent", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeSpawnedChild();
+    spawnMock.mockReturnValue(fake.child);
+
+    const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], {
+      timeoutMs: 1_000,
+      noOutputTimeoutMs: 80,
+    });
+
+    await vi.advanceTimersByTimeAsync(81);
+    expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
+
+    fake.child.emit("close", null, null);
+    const result = await runPromise;
+
+    expect(result.termination).toBe("no-output-timeout");
+    expect(result.noOutputTimedOut).toBe(true);
+    expect(result.code).not.toBe(0);
+  });
+
+  it("marks global timeout when overall timeout elapses", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeSpawnedChild();
+    spawnMock.mockReturnValue(fake.child);
+
+    const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], {
+      timeoutMs: 80,
+    });
+
+    await vi.advanceTimersByTimeAsync(81);
+    expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
+
+    fake.child.emit("close", null, null);
+    const result = await runPromise;
+
+    expect(result.termination).toBe("timeout");
+    expect(result.noOutputTimedOut).toBe(false);
+    expect(result.code).not.toBe(0);
+  });
 });
