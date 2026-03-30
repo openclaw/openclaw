@@ -4,6 +4,7 @@ export type RequiredParamGroup = {
   keys: readonly string[];
   allowEmpty?: boolean;
   label?: string;
+  validate?: (record: Record<string, unknown>) => boolean;
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
@@ -21,13 +22,24 @@ export const CLAUDE_PARAM_GROUPS = {
   edit: [
     { keys: ["path", "file_path", "filePath", "file"], label: "path alias" },
     {
-      keys: ["oldText", "old_string", "old_text", "oldString"],
-      label: "oldText alias",
-    },
-    {
-      keys: ["newText", "new_string", "new_text", "newString"],
-      label: "newText alias",
-      allowEmpty: true,
+      keys: ["edits", "oldText", "old_string", "old_text", "oldString"],
+      label: "edits or oldText/newText aliases",
+      validate: (record: Record<string, unknown>) => {
+        if (Array.isArray(record.edits)) {
+          return record.edits.length > 0;
+        }
+        const hasOldText =
+          typeof record.oldText === "string" ||
+          typeof record.old_string === "string" ||
+          typeof record.old_text === "string" ||
+          typeof record.oldString === "string";
+        const hasNewText =
+          typeof record.newText === "string" ||
+          typeof record.new_string === "string" ||
+          typeof record.new_text === "string" ||
+          typeof record.newString === "string";
+        return hasOldText && hasNewText;
+      },
     },
   ],
 } as const;
@@ -145,6 +157,25 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
+  if (Array.isArray(normalized.edits)) {
+    normalized.edits = normalized.edits.map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return entry;
+      }
+      const normalizedEntry = { ...(entry as Record<string, unknown>) };
+      normalizeClaudeParamAliases(normalizedEntry);
+      normalizeTextLikeParam(normalizedEntry, "oldText");
+      normalizeTextLikeParam(normalizedEntry, "newText");
+      return normalizedEntry;
+    });
+  }
+  if (
+    !("edits" in normalized) &&
+    typeof normalized.oldText === "string" &&
+    typeof normalized.newText === "string"
+  ) {
+    normalized.edits = [{ oldText: normalized.oldText, newText: normalized.newText }];
+  }
   return normalized;
 }
 
@@ -189,6 +220,9 @@ export function assertRequiredParams(
 
   const missingLabels: string[] = [];
   for (const group of groups) {
+    if (group.validate?.(record)) {
+      continue;
+    }
     const satisfied = group.keys.some((key) => {
       if (!(key in record)) {
         return false;
