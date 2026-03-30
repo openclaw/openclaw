@@ -310,6 +310,17 @@ function normalizeComparableText(value: string | undefined): string {
   return value?.trim() ?? "";
 }
 
+function compareTasksNewestFirst(
+  left: Pick<TaskRecord, "createdAt"> & { insertionIndex?: number },
+  right: Pick<TaskRecord, "createdAt"> & { insertionIndex?: number },
+): number {
+  const createdAtDiff = right.createdAt - left.createdAt;
+  if (createdAtDiff !== 0) {
+    return createdAtDiff;
+  }
+  return (right.insertionIndex ?? 0) - (left.insertionIndex ?? 0);
+}
+
 function findExistingTaskForCreate(params: {
   runtime: TaskRuntime;
   requesterSessionKey: string;
@@ -1228,8 +1239,9 @@ export async function cancelTaskById(params: {
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
   return [...tasks.values()]
-    .map((task) => cloneTaskRecord(task))
-    .toSorted((a, b) => b.createdAt - a.createdAt);
+    .map((task, insertionIndex) => ({ ...cloneTaskRecord(task), insertionIndex }))
+    .toSorted(compareTasksNewestFirst)
+    .map(({ insertionIndex: _, ...task }) => task);
 }
 
 export function getTaskRegistrySummary(): TaskRegistrySummary {
@@ -1272,10 +1284,19 @@ export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
     return [];
   }
   return [...ids]
-    .map((taskId) => tasks.get(taskId))
-    .filter((task): task is TaskRecord => Boolean(task))
-    .toSorted((left, right) => right.createdAt - left.createdAt)
-    .map((task) => cloneTaskRecord(task));
+    .map((taskId, insertionIndex) => {
+      const task = tasks.get(taskId);
+      return task ? { ...cloneTaskRecord(task), insertionIndex } : null;
+    })
+    .filter(
+      (
+        task,
+      ): task is TaskRecord & {
+        insertionIndex: number;
+      } => Boolean(task),
+    )
+    .toSorted(compareTasksNewestFirst)
+    .map(({ insertionIndex: _, ...task }) => task);
 }
 
 export function resolveTaskForLookupToken(token: string): TaskRecord | undefined {

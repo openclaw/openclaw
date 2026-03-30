@@ -54,12 +54,12 @@ openclaw tasks audit
 
 ## What creates a task
 
-| Source                 | Runtime type | When a task record is created                                              |
-| ---------------------- | ------------ | -------------------------------------------------------------------------- |
-| ACP background runs    | `acp`        | Spawning a child ACP session                                               |
-| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`                                   |
-| Isolated cron jobs     | `cron`       | Each execution of an isolated or custom-session cron job                   |
-| CLI operations         | `cli`        | Background CLI commands that run through the gateway                       |
+| Source                 | Runtime type | When a task record is created                            |
+| ---------------------- | ------------ | -------------------------------------------------------- |
+| ACP background runs    | `acp`        | Spawning a child ACP session                             |
+| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`                 |
+| Isolated cron jobs     | `cron`       | Each execution of an isolated or custom-session cron job |
+| CLI operations         | `cli`        | Background CLI commands that run through the gateway     |
 
 **What does not create tasks:**
 
@@ -82,15 +82,15 @@ stateDiagram-v2
     running --> lost : session gone > 5 min
 ```
 
-| Status      | What it means                                                                |
-| ----------- | ---------------------------------------------------------------------------- |
-| `queued`    | Created, waiting for the agent to start                                      |
-| `running`   | Agent turn is actively executing                                             |
-| `succeeded` | Completed successfully                                                       |
-| `failed`    | Completed with an error                                                      |
-| `timed_out` | Exceeded the configured timeout                                              |
-| `cancelled` | Stopped by the operator via `openclaw tasks cancel`                          |
-| `lost`      | Backing child session disappeared (detected after a 5-minute grace period)   |
+| Status      | What it means                                                              |
+| ----------- | -------------------------------------------------------------------------- |
+| `queued`    | Created, waiting for the agent to start                                    |
+| `running`   | Agent turn is actively executing                                           |
+| `succeeded` | Completed successfully                                                     |
+| `failed`    | Completed with an error                                                    |
+| `timed_out` | Exceeded the configured timeout                                            |
+| `cancelled` | Stopped by the operator via `openclaw tasks cancel`                        |
+| `lost`      | Backing child session disappeared (detected after a 5-minute grace period) |
 
 Transitions happen automatically — when the associated agent run ends, the task status updates to match.
 
@@ -162,14 +162,14 @@ openclaw tasks audit [--json]
 
 Surfaces operational issues. Findings also appear in `openclaw status` when issues are detected.
 
-| Finding                   | Severity | Trigger                                                       |
-| ------------------------- | -------- | ------------------------------------------------------------- |
-| `stale_queued`            | warn     | Queued for more than 10 minutes                               |
-| `stale_running`           | error    | Running for more than 30 minutes                              |
-| `lost`                    | error    | Backing session is gone                                       |
-| `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`             |
-| `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp                       |
-| `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started)         |
+| Finding                   | Severity | Trigger                                               |
+| ------------------------- | -------- | ----------------------------------------------------- |
+| `stale_queued`            | warn     | Queued for more than 10 minutes                       |
+| `stale_running`           | error    | Running for more than 30 minutes                      |
+| `lost`                    | error    | Backing session is gone                               |
+| `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`     |
+| `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
+| `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
 
 ## Status integration (task pressure)
 

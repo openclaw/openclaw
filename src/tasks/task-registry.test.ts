@@ -795,6 +795,8 @@ describe("task-registry", () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests({ persist: false });
+      const nowSpy = vi.spyOn(Date, "now");
+      nowSpy.mockReturnValue(1_700_000_000_000);
 
       const older = createTaskRecord({
         runtime: "acp",
@@ -810,6 +812,7 @@ describe("task-registry", () => {
         runId: "run-session-lookup-2",
         task: "Latest task",
       });
+      nowSpy.mockRestore();
 
       expect(findLatestTaskForSessionKey("agent:main:main")?.taskId).toBe(latest.taskId);
       expect(listTasksForSessionKey("agent:main:main").map((task) => task.taskId)).toEqual([
