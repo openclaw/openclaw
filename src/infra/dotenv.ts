@@ -8,10 +8,6 @@ import {
   normalizeEnvVarKey,
 } from "./host-env-security.js";
 
-// NOTE: OPENCLAW_CONFIG_PATH and OPENCLAW_STATE_DIR are intentionally NOT blocked
-// from workspace .env files. These are legitimate project-level configuration overrides
-// that enable per-project setups without requiring shell environment variables.
-// If someone can write to .env, they already control the project anyway.
 const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "ALL_PROXY",
   "HTTP_PROXY",
@@ -22,7 +18,13 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "OPENCLAW_HOME",
   "OPENCLAW_OAUTH_DIR",
   "OPENCLAW_PROFILE",
+  "OPENCLAW_STATE_DIR",
   "PI_CODING_AGENT_DIR",
+  // NOTE: OPENCLAW_CONFIG_PATH is intentionally NOT blocked from workspace .env.
+  // It's a legitimate project-level configuration override that enables users to
+  // specify their project's config file without requiring shell environment variables.
+  // OPENCLAW_STATE_DIR remains blocked to prevent a malicious .env from redirecting
+  // which global config is loaded or creating a shadow .env with blocked vars.
 ]);
 
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
