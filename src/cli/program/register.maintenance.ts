@@ -60,6 +60,20 @@ function formatDoctorTimeoutMessage(params: { timeoutMs: number; lastDebugLine?:
   );
 }
 
+function splitCompleteLines(buffer: string): { completeLines: string[]; remainder: string } {
+  const normalized = buffer.replaceAll("\r\n", "\n");
+  const segments = normalized.split("\n");
+  const remainder = buffer.endsWith("\n") || buffer.endsWith("\r\n") ? "" : (segments.pop() ?? "");
+  return {
+    completeLines: segments,
+    remainder,
+  };
+}
+
+function isDoctorDebugLine(line: string): boolean {
+  return /^\[(?:doctor:debug|doctor-debug)\]\s+/.test(line);
+}
+
 async function runDoctorWithTimeout(
   action: () => Promise<void>,
   options: { nonInteractive: boolean },
@@ -94,9 +108,30 @@ async function runDoctorWithTimeout(
   await new Promise<void>((resolve, reject) => {
     let stdoutTail = "";
     let stderrTail = "";
+    let stderrPassthroughBuffer = "";
+    const passThroughDoctorDebug = process.env.OPENCLAW_DEBUG_DOCTOR === "1";
     const appendTail = (current: string, chunk: string) => {
       const next = `${current}${chunk}`;
       return next.slice(-8_192);
+    };
+    const flushChildStderr = (forceRemainder = false) => {
+      const { completeLines, remainder } = splitCompleteLines(stderrPassthroughBuffer);
+      stderrPassthroughBuffer = remainder;
+      for (const line of completeLines) {
+        if (!passThroughDoctorDebug && isDoctorDebugLine(line)) {
+          continue;
+        }
+        process.stderr.write(`${line}\n`);
+      }
+      if (!forceRemainder || stderrPassthroughBuffer.length === 0) {
+        return;
+      }
+      if (!passThroughDoctorDebug && isDoctorDebugLine(stderrPassthroughBuffer)) {
+        stderrPassthroughBuffer = "";
+        return;
+      }
+      process.stderr.write(stderrPassthroughBuffer);
+      stderrPassthroughBuffer = "";
     };
     const child = spawn(process.execPath, [entryArg, ...process.argv.slice(2)], {
       cwd: process.cwd(),
@@ -112,7 +147,8 @@ async function runDoctorWithTimeout(
     child.stderr?.on("data", (chunk: Buffer | string) => {
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       stderrTail = appendTail(stderrTail, text);
-      process.stderr.write(text);
+      stderrPassthroughBuffer += text;
+      flushChildStderr();
     });
     let settled = false;
     const timer = setTimeout(() => {
@@ -135,6 +171,7 @@ async function runDoctorWithTimeout(
       }
       settled = true;
       clearTimeout(timer);
+      flushChildStderr(true);
       reject(error);
     });
 
@@ -144,6 +181,7 @@ async function runDoctorWithTimeout(
       }
       settled = true;
       clearTimeout(timer);
+      flushChildStderr(true);
       if (code === 0) {
         resolve();
         return;
