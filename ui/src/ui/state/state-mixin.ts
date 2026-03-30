@@ -7,7 +7,6 @@
 
 import { LitElement } from 'lit';
 import { consume } from '@lit/context';
-import type { OpenClawApp } from '../app.ts';
 
 // 导入状态类型和 context
 import type {
@@ -30,6 +29,9 @@ import {
   cronStateContext,
   usageStateContext,
 } from './index.ts';
+
+// 避免循环依赖，使用 any 类型
+type OpenClawAppLike = any;
 
 /**
  * 状态访问 Mixin
@@ -80,15 +82,15 @@ export function StateMixin<T extends Constructor<LitElement>>(superClass: T) {
 }
 
 /**
- * 获取最近的 OpenClawApp 实例
+ * 获取最近的 App 实例
  * 
  * 用于在需要调用方法时访问 app 实例
  */
-export function getApp(element: Element): OpenClawApp | null {
+export function getApp(element: Element): OpenClawAppLike | null {
   let current: Element | null = element;
   while (current) {
     if (current.tagName.toLowerCase() === 'openclaw-app') {
-      return current as OpenClawApp;
+      return current as OpenClawAppLike;
     }
     current = current.parentElement;
   }
