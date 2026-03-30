@@ -207,8 +207,6 @@ export class MatrixClient {
   constructor(
     homeserver: string,
     accessToken: string,
-    _storage?: unknown,
-    _cryptoStorage?: unknown,
     opts: {
       userId?: string;
       password?: string;
