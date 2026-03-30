@@ -73,6 +73,38 @@ describe("resolveTelegramExecApproval", () => {
     );
   });
 
+  it("falls back to plugin.approval.resolve for structured approval-not-found errors", async () => {
+    const err = new Error("approval not found");
+    (err as Error & { gatewayCode?: string; details?: { reason?: string } }).gatewayCode =
+      "INVALID_REQUEST";
+    (err as Error & { gatewayCode?: string; details?: { reason?: string } }).details = {
+      reason: "APPROVAL_NOT_FOUND",
+    };
+    gatewayRuntimeHoisted.requestSpy.mockRejectedValueOnce(err).mockResolvedValueOnce(undefined);
+    const { resolveTelegramExecApproval } = await import("./exec-approval-resolver.js");
+
+    await resolveTelegramExecApproval({
+      cfg: {} as never,
+      approvalId: "legacy-plugin-123",
+      decision: "allow-always",
+      senderId: "9",
+      allowPluginFallback: true,
+    });
+
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(1, "exec.approval.resolve", {
+      id: "legacy-plugin-123",
+      decision: "allow-always",
+    });
+    expect(gatewayRuntimeHoisted.requestSpy).toHaveBeenNthCalledWith(
+      2,
+      "plugin.approval.resolve",
+      {
+        id: "legacy-plugin-123",
+        decision: "allow-always",
+      },
+    );
+  });
+
   it("does not fall back to plugin.approval.resolve without explicit permission", async () => {
     gatewayRuntimeHoisted.requestSpy.mockRejectedValueOnce(
       new Error("unknown or expired approval id"),
