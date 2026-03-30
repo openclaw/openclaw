@@ -492,7 +492,9 @@ async function sendSubagentAnnounceDirectly(params: {
           threadId: effectiveDirectOrigin?.threadId,
         })
       : { deliver: false };
-    const normalizedSessionOnlyOriginChannel = normalizeMessageChannel(sessionOnlyOrigin?.channel);
+    const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
+      ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
+      : undefined;
     const sessionOnlyOriginChannel =
       normalizedSessionOnlyOriginChannel &&
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
