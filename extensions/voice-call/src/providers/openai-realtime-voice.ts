@@ -639,12 +639,15 @@ export class OpenAIRealtimeVoiceBridge {
       case "response.function_call_arguments.done": {
         const key = event.item_id ?? "unknown";
         const buf = this.toolCallBuffers.get(key);
-        if (buf && this.config.onToolCall) {
+        if (this.config.onToolCall) {
           let args: unknown;
-          // Prefer buffered deltas; fall back to the done-event's final
-          // arguments payload in case deltas were missing or incomplete.
+          // Prefer buffered deltas; fall back to the done-event's final arguments
+          // payload. When no prior delta arrived (buf is absent) the done event
+          // carries the complete payload, so we must handle that case too.
           const rawArgs =
-            buf.args || ((event as unknown as Record<string, unknown>).arguments as string) || "{}";
+            buf?.args ||
+            ((event as unknown as Record<string, unknown>).arguments as string) ||
+            "{}";
           try {
             args = JSON.parse(rawArgs);
           } catch {
@@ -652,8 +655,8 @@ export class OpenAIRealtimeVoiceBridge {
           }
           this.config.onToolCall({
             itemId: key,
-            callId: buf.callId || event.call_id || "",
-            name: buf.name || event.name || "",
+            callId: buf?.callId || event.call_id || "",
+            name: buf?.name || event.name || "",
             args,
           });
         }

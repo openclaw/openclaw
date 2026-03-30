@@ -181,6 +181,16 @@ export async function createVoiceCallRuntime(params: {
   // Wire realtime handler before the server starts so it's ready for upgrades
   let realtimeHandler: RealtimeCallHandler | undefined;
   if (config.realtime.enabled) {
+    // Realtime mode is only supported for Twilio (Media Streams WebSocket protocol).
+    // Fail fast here so operators see a clear error at startup rather than silent
+    // no-ops when calls arrive on Plivo/Telnyx with realtime unexpectedly disabled.
+    if (provider.name !== "twilio") {
+      throw new Error(
+        `[voice-call] realtime.enabled is not supported for provider "${provider.name}". ` +
+          `Only "twilio" supports the Media Streams WebSocket protocol required for realtime voice. ` +
+          `Set realtime.enabled to false or switch to the twilio provider.`,
+      );
+    }
     realtimeHandler = new RealtimeCallHandler(
       config.realtime,
       manager,
