@@ -1751,6 +1751,9 @@ export async function runEmbeddedAttempt(
         if (hookRunner?.hasHooks("agent_end")) {
           // Read from transcript to preserve provenance and other extension
           // fields that the in-memory AgentMessage[] may not carry.
+          // Capture duration before the async read so it reflects actual run
+          // time, not run time + transcript I/O.
+          const agentEndDurationMs = Date.now() - promptStartedAt;
           const transcriptReadForHook = readMessagesFromSessionTranscript(params.sessionFile);
           void transcriptReadForHook
             .then((transcriptMessages) => transcriptMessages ?? messagesSnapshot)
@@ -1760,7 +1763,7 @@ export async function runEmbeddedAttempt(
                   messages: hookMessages,
                   success: !aborted && !promptError,
                   error: promptError ? describeUnknownError(promptError) : undefined,
-                  durationMs: Date.now() - promptStartedAt,
+                  durationMs: agentEndDurationMs,
                 },
                 {
                   runId: params.runId,

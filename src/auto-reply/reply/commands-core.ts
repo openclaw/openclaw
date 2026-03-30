@@ -86,9 +86,14 @@ export async function emitResetCommandHooks(params: {
     // Fire-and-forget: read old session messages and run hook
     void (async () => {
       try {
-        const messages = (await readMessagesFromSessionTranscript(sessionFile)) ?? [];
+        const transcriptMessages = await readMessagesFromSessionTranscript(sessionFile);
+        const messages = transcriptMessages ?? [];
         if (!sessionFile) {
           logVerbose("before_reset: no session file available, firing hook with empty messages");
+        } else if (transcriptMessages === null) {
+          logVerbose(
+            `before_reset: could not read session file ${sessionFile}, firing hook with empty messages`,
+          );
         }
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
