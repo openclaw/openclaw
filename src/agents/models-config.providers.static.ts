@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  BUNDLED_PLUGIN_METADATA,
+  listBundledPluginMetadata,
   resolveBundledPluginPublicSurfacePath,
 } from "../plugins/bundled-plugin-metadata.js";
 
@@ -32,7 +32,7 @@ export function resolveBundledProviderCatalogEntries(params?: {
   }
 
   const entries: BundledProviderCatalogEntry[] = [];
-  for (const entry of BUNDLED_PLUGIN_METADATA) {
+  for (const entry of listBundledPluginMetadata({ rootDir })) {
     if (!entry.publicSurfaceArtifacts?.includes(PROVIDER_CATALOG_ARTIFACT_BASENAME)) {
       continue;
     }

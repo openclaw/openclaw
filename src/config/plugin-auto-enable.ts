@@ -2,11 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
-  getChatChannelMeta,
-  listChatChannels,
-  normalizeChatChannelId,
-} from "../channels/registry.js";
-import { BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS } from "../plugins/bundled-capability-metadata.js";
+  hasPotentialConfiguredChannels,
+  listPotentialConfiguredChannelIds,
+} from "../channels/config-presence.js";
+import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import {
+  BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+} from "../plugins/bundled-capability-metadata.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
@@ -137,6 +140,41 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   return false;
 }
 
+function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+  if (!isRecord(pluginConfig)) {
+    return false;
+  }
+  return isRecord(pluginConfig.webSearch);
+}
+
+function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  if (pluginId === "xai") {
+    const pluginConfig = cfg.plugins?.entries?.xai?.config;
+    return Boolean(
+      isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined) ||
+      (isRecord(pluginConfig) && isRecord(pluginConfig.codeExecution)),
+    );
+  }
+  return false;
+}
+
+function resolveProviderPluginsWithOwnedWebSearch(
+  registry: PluginManifestRegistry,
+): ReadonlySet<string> {
+  const pluginIds = new Set(
+    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+      (entry) => entry.providerIds.length > 0 && entry.webSearchProviderIds.length > 0,
+    ).map((entry) => entry.pluginId),
+  );
+  for (const plugin of registry.plugins) {
+    if (plugin.providers.length > 0 && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return pluginIds;
+}
+
 function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
   const map = new Map<string, string>();
   for (const record of registry.plugins) {
@@ -245,24 +283,20 @@ function resolvePluginIdForChannel(
   return channelToPluginId.get(channelId) ?? channelId;
 }
 
-function listKnownChannelPluginIds(): string[] {
-  return listChatChannels().map((meta) => meta.id);
+function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  return listPotentialConfiguredChannelIds(cfg, env).map(
+    (channelId) => normalizeChatChannelId(channelId) ?? channelId,
+  );
 }
 
-function collectCandidateChannelIds(cfg: OpenClawConfig): string[] {
-  const channelIds = new Set<string>(listKnownChannelPluginIds());
-  const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
-  if (!configuredChannels || typeof configuredChannels !== "object") {
-    return Array.from(channelIds);
+function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
   }
-  for (const key of Object.keys(configuredChannels)) {
-    if (key === "defaults" || key === "modelByChannel") {
-      continue;
-    }
-    const normalizedBuiltIn = normalizeChatChannelId(key);
-    channelIds.add(normalizedBuiltIn ?? key);
-  }
-  return Array.from(channelIds);
+  return Object.values(entries).some(
+    (entry) => isRecord(entry) && isRecord(entry.config) && isRecord(entry.config.webSearch),
+  );
 }
 
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
@@ -281,6 +315,90 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
   return false;
 }
 
+function configMayNeedPluginAutoEnable(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasPotentialConfiguredChannels(cfg, env)) {
+    return true;
+  }
+  if (resolveBrowserAutoEnableReason(cfg)) {
+    return true;
+  }
+  if (cfg.acp?.enabled === true || cfg.acp?.dispatch?.enabled === true) {
+    return true;
+  }
+  if (typeof cfg.acp?.backend === "string" && cfg.acp.backend.trim().length > 0) {
+    return true;
+  }
+  if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
+    return true;
+  }
+  if (cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {
+    return true;
+  }
+  if (collectModelRefs(cfg).length > 0) {
+    return true;
+  }
+  if (isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined)) {
+    return true;
+  }
+  if (isRecord(cfg.plugins?.entries?.xai?.config) || hasConfiguredWebSearchPluginEntry(cfg)) {
+    return true;
+  }
+  return false;
+}
+
+function listContainsBrowser(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((entry) => typeof entry === "string" && entry.trim().toLowerCase() === "browser")
+  );
+}
+
+function toolPolicyReferencesBrowser(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return listContainsBrowser(value.allow) || listContainsBrowser(value.alsoAllow);
+}
+
+function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
+  if (toolPolicyReferencesBrowser(cfg.tools)) {
+    return true;
+  }
+
+  const agentList = cfg.agents?.list;
+  if (!Array.isArray(agentList)) {
+    return false;
+  }
+
+  return agentList.some((entry) => isRecord(entry) && toolPolicyReferencesBrowser(entry.tools));
+}
+
+function hasExplicitBrowserPluginEntry(cfg: OpenClawConfig): boolean {
+  return Boolean(
+    cfg.plugins?.entries && Object.prototype.hasOwnProperty.call(cfg.plugins.entries, "browser"),
+  );
+}
+
+function resolveBrowserAutoEnableReason(cfg: OpenClawConfig): string | null {
+  if (cfg.browser?.enabled === false || cfg.plugins?.entries?.browser?.enabled === false) {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(cfg, "browser")) {
+    return "browser configured";
+  }
+
+  if (hasExplicitBrowserPluginEntry(cfg)) {
+    return "browser plugin configured";
+  }
+
+  if (hasBrowserToolReference(cfg)) {
+    return "browser tool referenced";
+  }
+
+  return null;
+}
+
 function resolveConfiguredPlugins(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -289,11 +407,16 @@ function resolveConfiguredPlugins(
   const changes: PluginEnableChange[] = [];
   // Build reverse map: channel ID → plugin ID from installed plugin manifests.
   const channelToPluginId = buildChannelToPluginIdMap(registry);
-  for (const channelId of collectCandidateChannelIds(cfg)) {
+  for (const channelId of collectCandidateChannelIds(cfg, env)) {
     const pluginId = resolvePluginIdForChannel(channelId, channelToPluginId);
     if (isChannelConfigured(cfg, channelId, env)) {
       changes.push({ pluginId, reason: `${channelId} configured` });
     }
+  }
+
+  const browserReason = resolveBrowserAutoEnableReason(cfg);
+  if (browserReason) {
+    changes.push({ pluginId: "browser", reason: browserReason });
   }
 
   for (const [providerId, pluginId] of Object.entries(
@@ -303,6 +426,22 @@ function resolveConfiguredPlugins(
       changes.push({
         pluginId,
         reason: `${providerId} auth configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
+    if (hasPluginOwnedWebSearchConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} web search configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
+    if (hasPluginOwnedToolConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} tool configured`,
       });
     }
   }
@@ -443,6 +582,9 @@ export function applyPluginAutoEnable(params: {
   manifestRegistry?: PluginManifestRegistry;
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;
+  if (!configMayNeedPluginAutoEnable(params.config, env)) {
+    return { config: params.config, changes: [] };
+  }
   const registry =
     params.manifestRegistry ??
     (configMayNeedPluginManifestRegistry(params.config)

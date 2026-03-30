@@ -1,9 +1,9 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import { setDefaultChannelPluginRegistryForTests } from "openclaw/plugin-sdk/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../../../src/commands/channel-test-helpers.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { clearPluginCommands, registerPluginCommand } from "../../../../src/plugins/commands.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,

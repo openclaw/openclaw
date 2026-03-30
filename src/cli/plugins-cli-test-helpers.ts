@@ -8,6 +8,9 @@ export const readConfigFileSnapshot = vi.fn();
 export const writeConfigFile = vi.fn<(config: OpenClawConfig) => Promise<void>>(
   async () => undefined,
 );
+export const replaceConfigFile = vi.fn(
+  async (params: { nextConfig: OpenClawConfig }) => await writeConfigFile(params.nextConfig),
+);
 export const resolveStateDir = vi.fn(() => "/tmp/openclaw-state");
 export const installPluginFromMarketplace = vi.fn();
 export const listMarketplacePlugins = vi.fn();
@@ -42,6 +45,7 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   readConfigFileSnapshot: (...args: unknown[]) => readConfigFileSnapshot(...args),
   writeConfigFile: (config: OpenClawConfig) => writeConfigFile(config),
+  replaceConfigFile: (params: { nextConfig: OpenClawConfig }) => replaceConfigFile(params),
 }));
 
 vi.mock("../config/paths.js", () => ({
@@ -142,6 +146,7 @@ export function resetPluginsCliTestState() {
   loadConfig.mockReset();
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset();
+  replaceConfigFile.mockReset();
   resolveStateDir.mockReset();
   installPluginFromMarketplace.mockReset();
   listMarketplacePlugins.mockReset();
@@ -164,20 +169,28 @@ export function resetPluginsCliTestState() {
   recordHookInstall.mockReset();
 
   loadConfig.mockReturnValue({} as OpenClawConfig);
-  readConfigFileSnapshot.mockResolvedValue({
-    path: "/tmp/openclaw-config.json5",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: {},
-    valid: true,
-    config: {} as OpenClawConfig,
-    hash: "mock",
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
+  readConfigFileSnapshot.mockImplementation(async () => {
+    const config = loadConfig();
+    return {
+      path: "/tmp/openclaw-config.json5",
+      exists: true,
+      raw: "{}",
+      parsed: config,
+      resolved: config,
+      sourceConfig: config,
+      runtimeConfig: config,
+      valid: true,
+      config,
+      hash: "mock",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
   });
   writeConfigFile.mockResolvedValue(undefined);
+  replaceConfigFile.mockImplementation(
+    async (params: { nextConfig: OpenClawConfig }) => await writeConfigFile(params.nextConfig),
+  );
   resolveStateDir.mockReturnValue("/tmp/openclaw-state");
   resolveMarketplaceInstallShortcut.mockResolvedValue(null);
   installPluginFromMarketplace.mockResolvedValue({

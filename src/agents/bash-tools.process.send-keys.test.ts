@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 async function startPtySession(command: string) {
-  const execTool = createExecTool({ security: "full", ask: "off" });
+  const execTool = createExecTool({ host: "gateway", security: "full", ask: "off" });
   const processTool = createProcessTool();
   const result = await execTool.execute("toolcall", {
     command,
