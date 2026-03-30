@@ -10,6 +10,12 @@ type OpenAITextVerbosity = "low" | "medium" | "high";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const OPENAI_REASONING_COMPAT_PROVIDERS = new Set([
+  "openai",
+  "openai-codex",
+  "azure-openai",
+  "azure-openai-responses",
+]);
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
@@ -188,6 +194,41 @@ function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unkno
   return !isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
+function shouldApplyOpenAIReasoningCompatibility(model: {
+  api?: unknown;
+  provider?: unknown;
+}): boolean {
+  if (typeof model.api !== "string" || typeof model.provider !== "string") {
+    return false;
+  }
+  if (
+    model.api !== "openai-completions" &&
+    model.api !== "openai-responses" &&
+    model.api !== "openai-codex-responses"
+  ) {
+    return false;
+  }
+  return OPENAI_REASONING_COMPAT_PROVIDERS.has(model.provider);
+}
+
+function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {
+  const reasoning = payloadObj.reasoning;
+  if (reasoning === "none") {
+    delete payloadObj.reasoning;
+    return;
+  }
+  if (!reasoning || typeof reasoning !== "object" || Array.isArray(reasoning)) {
+    return;
+  }
+
+  // GPT-5 models reject `reasoning.effort: "none"`. Treat the disabled effort
+  // as "reasoning omitted" instead of forwarding an unsupported value.
+  const reasoningObj = reasoning as Record<string, unknown>;
+  if (reasoningObj.effort === "none") {
+    delete payloadObj.reasoning;
+  }
+}
+
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
@@ -350,6 +391,20 @@ export function createOpenAIResponsesContextManagementWrapper(
         }
         return originalOnPayload?.(payload, model);
       },
+    });
+  };
+}
+
+export function createOpenAIReasoningCompatibilityWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldApplyOpenAIReasoningCompatibility(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      stripDisabledOpenAIReasoningPayload(payloadObj);
     });
   };
 }

@@ -459,7 +459,10 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.toolChoice !== undefined) {
         extraParams.tool_choice = streamOpts.toolChoice;
       }
-      if (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary) {
+      if (
+        streamOpts?.reasoningEffort !== "none" &&
+        (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary)
+      ) {
         const reasoning: { effort?: string; summary?: string } = {};
         if (streamOpts.reasoningEffort !== undefined) {
           reasoning.effort = streamOpts.reasoningEffort as string;

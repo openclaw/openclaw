@@ -1764,6 +1764,36 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("omits response.create reasoning when reasoningEffort is none", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
+    const opts = { reasoningEffort: "none" };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-none", "Short answer"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent).not.toHaveProperty("reasoning");
+  });
+
   it("applies onPayload mutations before sending response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-onpayload");
     const stream = streamFn(
@@ -1802,7 +1832,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.text).toEqual({ verbosity: "low" });
     expect(sent.service_tier).toBe("priority");
   });
-
   it("forwards topP and toolChoice to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");
     const opts = { topP: 0.9, toolChoice: "auto" };
