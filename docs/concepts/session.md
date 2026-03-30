@@ -168,8 +168,6 @@ For lock files with weak metadata (for example missing pid + invalid timestamp),
 
 ## Session maintenance
 
-## Session maintenance
-
 OpenClaw automatically bounds session storage over time. By default, it runs
 in `warn` mode (reports what would be cleaned). Set `session.maintenance.mode`
 to `"enforce"` for automatic cleanup:
