@@ -172,9 +172,6 @@ function execConfigOpenCommand(
 }
 
 function formatConfigOpenError(error: unknown): string {
-  if (typeof error === "string") {
-    return error;
-  }
   if (
     typeof error === "object" &&
     error &&
@@ -568,7 +565,7 @@ export const configHandlers: GatewayRequestHandlers = {
     } catch (error) {
       const err = error as ExecFileException;
       context?.logGateway?.warn(
-        `config.openFile failed path=${configPath}: ${formatConfigOpenError(err)}`,
+        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${formatConfigOpenError(err)}`,
       );
       respond(
         true,
