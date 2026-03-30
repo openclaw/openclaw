@@ -409,7 +409,7 @@ function checkTruncationGuards(
   // Block exec/bash calls with an empty or missing command.
   if (toolNameNorm === "exec" || toolNameNorm === "bash") {
     const record = isPlainObject(effectiveParams) ? effectiveParams : {};
-    const command = record.command;
+    const command = record.command ?? record.cmd;
     if (!command || typeof command !== "string" || !command.trim()) {
       const reason =
         `\u26D4 exec blocked \u2014 "command" parameter is required but was empty or missing.\n` +
