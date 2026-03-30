@@ -909,7 +909,7 @@ description: test skill
           allowlist: [{ pattern: "/usr/bin/python3" }],
         },
         ops: {
-          allowlist: [{ pattern: "/usr/local/bin/node" }],
+          allowlist: [{ pattern: "/usr/local/bin/awk" }],
         },
       },
     });
