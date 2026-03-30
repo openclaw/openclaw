@@ -11,10 +11,7 @@ import handler from "./handler.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createAlternateConfig(
-  files: Record<string, string>,
-  enabled = true,
-): OpenClawConfig {
+function createAlternateConfig(files: Record<string, string>, enabled = true): OpenClawConfig {
   return {
     hooks: {
       internal: {
@@ -36,7 +33,9 @@ function makeBootstrapFile(
   return {
     name: name as AgentBootstrapHookContext["bootstrapFiles"][number]["name"],
     path: opts.sourcePath ?? `/workspace/${name}`,
-    ...(opts.missing ? { missing: true } : { content: opts.content ?? `# ${name}`, missing: false }),
+    ...(opts.missing
+      ? { missing: true }
+      : { content: opts.content ?? `# ${name}`, missing: false }),
   };
 }
 
@@ -186,29 +185,26 @@ describe("bootstrap-alternate-files hook", () => {
     expect(context.bootstrapFiles[0]?.missing).toBe(true);
   });
 
-  it("expands tilde in source paths", async () => {
-    // Write a file in tmpDir and create a tilde path that points to it.
-    // We can't easily test with a real home dir, so verify the file IS found
-    // by providing an absolute path that happens to use home dir prefix.
-    const homeDir = os.homedir();
-    const relToHome = path.relative(homeDir, tmpDir);
-    // Only run this sub-test if tmpDir is inside home
-    if (relToHome.startsWith("..")) {
-      return;
-    }
-    const tildePath = path.join("~", relToHome, "SOUL-tilde.md");
-    const absFile = path.join(tmpDir, "SOUL-tilde.md");
-    await fs.writeFile(absFile, "# Tilde Soul", "utf-8");
+  it.skipIf(path.relative(os.homedir(), tmpDir).startsWith(".."))(
+    "expands tilde in source paths",
+    async () => {
+      // Write a file in tmpDir and create a tilde path that points to it.
+      const homeDir = os.homedir();
+      const relToHome = path.relative(homeDir, tmpDir);
+      const tildePath = path.join("~", relToHome, "SOUL-tilde.md");
+      const absFile = path.join(tmpDir, "SOUL-tilde.md");
+      await fs.writeFile(absFile, "# Tilde Soul", "utf-8");
 
-    const context = makeContext(
-      [makeBootstrapFile("SOUL.md", { missing: true })],
-      createAlternateConfig({ "SOUL.md": tildePath }),
-    );
+      const context = makeContext(
+        [makeBootstrapFile("SOUL.md", { missing: true })],
+        createAlternateConfig({ "SOUL.md": tildePath }),
+      );
 
-    await handler(createHookEvent("agent", "bootstrap", "agent:main:main", context));
+      await handler(createHookEvent("agent", "bootstrap", "agent:main:main", context));
 
-    expect(context.bootstrapFiles[0]?.content).toBe("# Tilde Soul");
-  });
+      expect(context.bootstrapFiles[0]?.content).toBe("# Tilde Soul");
+    },
+  );
 
   it("handles multiple replacements in a single pass", async () => {
     const soulFile = path.join(tmpDir, "SOUL-multi.md");

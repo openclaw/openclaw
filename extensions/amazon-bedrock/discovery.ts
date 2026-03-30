@@ -240,16 +240,19 @@ export async function resolveImplicitBedrockProvider(params: {
   config?: { models?: { bedrockDiscovery?: BedrockDiscoveryConfig } };
   env?: NodeJS.ProcessEnv;
   bearerToken?: string;
+  region?: string;
 }): Promise<ModelProviderConfig | null> {
   const baseEnv = params.env ?? process.env;
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
 
-  // If a bearer token is provided via plugin config and not already present, inject it.
-  // Set on process.env so the AWS SDK client picks it up, and also build an augmented
-  // env for credential detection below in case params.env is a separate object.
+  // If a bearer token is provided via plugin config, inject it into process.env so the
+  // AWS SDK client picks it up. We overwrite if the incoming token differs from the
+  // current env value so that a rotated/changed token takes effect without requiring a
+  // process restart. We only skip injection when they are identical (avoids redundant
+  // writes on repeated catalog refreshes).
   let env = baseEnv;
-  if (params.bearerToken && !baseEnv["AWS_BEARER_TOKEN_BEDROCK"]?.trim()) {
+  if (params.bearerToken && params.bearerToken !== baseEnv["AWS_BEARER_TOKEN_BEDROCK"]?.trim()) {
     process.env["AWS_BEARER_TOKEN_BEDROCK"] = params.bearerToken;
     if (baseEnv !== process.env) {
       env = { ...baseEnv, AWS_BEARER_TOKEN_BEDROCK: params.bearerToken };
@@ -264,7 +267,9 @@ export async function resolveImplicitBedrockProvider(params: {
     return null;
   }
 
-  const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  const region =
+    params.region?.trim() ||
+    (discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1");
   const models = await discoverBedrockModels({
     region,
     config: discoveryConfig,

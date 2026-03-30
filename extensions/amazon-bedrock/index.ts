@@ -30,10 +30,15 @@ export default definePluginEntry({
             | Record<string, unknown>
             | undefined;
           const bearerToken = normalizeSecretInputString(pluginConfig?.bearerToken) ?? undefined;
+          const region =
+            typeof pluginConfig?.region === "string"
+              ? pluginConfig.region.trim() || undefined
+              : undefined;
           const implicit = await resolveImplicitBedrockProvider({
             config: ctx.config,
             env: ctx.env,
             bearerToken,
+            region,
           });
           if (!implicit) {
             return null;
