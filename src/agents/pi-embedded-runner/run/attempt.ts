@@ -1538,6 +1538,9 @@ export async function runEmbeddedAttempt(
               if (llmInputResult?.block) {
                 const reason = llmInputResult.blockReason ?? "Blocked by llm_input plugin hook";
                 log.warn(`llm_input hook blocked LLM call: ${reason}`);
+                // Throw to skip the LLM call. The outer catch records this as
+                // promptError so callers see a clear blocked status and the
+                // attempt result includes the error context.
                 throw new Error(`LLM call blocked by plugin: ${reason}`);
               }
 
@@ -1548,6 +1551,8 @@ export async function runEmbeddedAttempt(
                 systemPromptText = llmInputResult.systemPrompt;
               }
             } catch (err) {
+              // Re-throw block errors so the outer catch records them as promptError
+              // and the LLM call is skipped. Only swallow non-block hook failures.
               if (err instanceof Error && err.message.startsWith("LLM call blocked by plugin:")) {
                 throw err;
               }

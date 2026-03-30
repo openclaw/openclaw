@@ -537,17 +537,15 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookLlmInputEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookLlmInputResult | undefined> {
-    return runModifyingHook<"llm_input", PluginHookLlmInputResult>(
-      "llm_input",
-      event,
-      ctx,
-      (acc, next) => ({
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>("llm_input", event, ctx, {
+      mergeResults: (acc, next) => ({
         block: next.block ?? acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
         prompt: next.prompt ?? acc?.prompt,
         systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
       }),
-    );
+      shouldStop: (result) => result.block === true,
+    });
   }
 
   /**
@@ -559,14 +557,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookLlmOutputResult | undefined> {
-    return runModifyingHook<"llm_output", PluginHookLlmOutputResult>(
-      "llm_output",
-      event,
-      ctx,
-      (acc, next) => ({
+    return runModifyingHook<"llm_output", PluginHookLlmOutputResult>("llm_output", event, ctx, {
+      mergeResults: (acc, next) => ({
         assistantTexts: next.assistantTexts ?? acc?.assistantTexts,
       }),
-    );
+    });
   }
 
   /**
