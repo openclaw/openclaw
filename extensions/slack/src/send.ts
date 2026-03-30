@@ -403,10 +403,11 @@ export async function sendMessageSlack(
 
   // For block-mode tables with attachments, handle fallback ourselves to avoid
   // injecting raw pipe-delimited markdown when tables consumed all content.
+  const nonEmptyChunks = chunks.filter((c) => c.trim().length > 0);
   const resolvedChunks =
     tableMode === "block" && tableAttachments?.length
-      ? chunks.length
-        ? chunks
+      ? nonEmptyChunks.length
+        ? nonEmptyChunks
         : [renderSlackTablesFallbackText(allTables).slice(0, chunkLimit)]
       : resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
