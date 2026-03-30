@@ -160,7 +160,7 @@ They must use `payload.kind = "systemEvent"`.
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
 
-Main-session cron jobs do **not** create background task records.
+Main-session cron jobs do **not** create [background task](/automation/tasks) records.
 
 #### Isolated jobs (dedicated cron sessions)
 
@@ -183,7 +183,7 @@ Key behaviors:
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
 
-These detached runs appear in `openclaw tasks` and inherit task audit and maintenance behavior.
+These detached runs create [background task](/automation/tasks) records visible in `openclaw tasks` and subject to task audit and maintenance.
 
 ### Payload shapes (what runs)
 
