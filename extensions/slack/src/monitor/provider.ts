@@ -404,7 +404,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           channel: params.channelId,
           ts: `reviewer-${Date.now()}`,
           thread_ts: params.threadTs,
-          user: "REVIEWER",
+          user: botUserId || "REVIEWER",
           text: params.text,
           type: "message",
           channel_type: "group",
