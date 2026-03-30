@@ -569,7 +569,7 @@ describe("gateway session utils", () => {
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]).toMatchObject({
       id: "main",
-      workspace: "/tmp/default-workspace",
+      workspace: path.resolve("/tmp/default-workspace"),
       model: {
         primary: "openai/gpt-5.4",
         fallbacks: ["openai-codex/gpt-5.2-codex"],
@@ -2674,8 +2674,8 @@ describe("prewarmSessionUsageCache", () => {
       infoMessages.some(
         (m: string) =>
           m.includes(`warming ${titleCacheMax + 2} session`) &&
-          m.includes(`usage=${titleCacheMax + 2}`) &&
-          m.includes(`title=${titleCacheMax}`),
+          m.includes(`(${titleCacheMax + 2} usage +`) &&
+          m.includes(`${titleCacheMax} title`),
       ),
     ).toBe(true);
   });
