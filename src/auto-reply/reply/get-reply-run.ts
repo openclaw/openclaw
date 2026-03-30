@@ -606,7 +606,7 @@ export async function runPreparedReply(
     },
   };
   let runQueueKey = queueKey;
-  let fastLaneSessionFileToCleanup: string | undefined;
+  let fastLaneFilesToCleanup: string[] = [];
   const shouldUseFastLane =
     isActive &&
     shouldFollowup &&
@@ -621,16 +621,21 @@ export async function runPreparedReply(
       undefined,
       resolveSessionFilePathOptions({ agentId, storePath }),
     );
+    fastLaneFilesToCleanup = Array.from(
+      new Set([
+        transientSessionFile,
+        resolveSessionTranscriptPath(transientSessionId, agentId),
+      ].filter((candidate): candidate is string => candidate.trim().length > 0)),
+    );
     const transientQueueKey = `fastlane:${transientSessionId}`;
     runQueueKey = transientQueueKey;
-    fastLaneSessionFileToCleanup = transientSessionFile;
     followupRun = {
       ...followupRun,
       run: {
         ...followupRun.run,
         sessionId: transientSessionId,
-        // Use isolated key/lane so fast-lane completion cannot drain parent queues.
-        sessionKey: transientQueueKey,
+        // Keep parent session key so system-event routing stays on the real lane.
+        sessionKey,
         sessionFile: transientSessionFile,
         extraSystemPrompt: [followupRun.run.extraSystemPrompt, FAST_LANE_SYSTEM_PROMPT]
           .filter(Boolean)
@@ -657,7 +662,7 @@ export async function runPreparedReply(
       typing,
       sessionEntry: shouldUseFastLane ? undefined : sessionEntry,
       sessionStore: shouldUseFastLane ? undefined : sessionStore,
-      sessionKey: shouldUseFastLane ? undefined : sessionKey,
+      sessionKey,
       storePath: shouldUseFastLane ? undefined : storePath,
       defaultModel,
       agentCfgContextTokens: agentCfg?.contextTokens,
@@ -671,11 +676,13 @@ export async function runPreparedReply(
       typingMode,
     });
   } finally {
-    if (fastLaneSessionFileToCleanup) {
-      try {
-        fs.unlinkSync(fastLaneSessionFileToCleanup);
-      } catch {
-        // Best-effort cleanup for transient fast-lane transcripts.
+    if (fastLaneFilesToCleanup.length > 0) {
+      for (const filePath of fastLaneFilesToCleanup) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          // Best-effort cleanup for transient fast-lane transcripts.
+        }
       }
     }
   }
