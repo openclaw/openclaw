@@ -3,10 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
+import { discordPlugin } from "../../../extensions/discord/index.js";
+import { slackPlugin } from "../../../extensions/slack/index.js";
+import { telegramPlugin } from "../../../extensions/telegram/index.js";
+import { whatsappPlugin } from "../../../extensions/whatsapp/index.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -113,8 +119,6 @@ const {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } = await import("../../agents/subagent-registry.js");
-const { setDefaultChannelPluginRegistryForTests } =
-  await import("../../commands/channel-test-helpers.js");
 const internalHooks = await import("../../hooks/internal-hooks.js");
 const { clearPluginCommands, registerPluginCommand } = await import("../../plugins/commands.js");
 const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
@@ -135,6 +139,33 @@ const { createTaskRecord, resetTaskRegistryForTests } =
 
 let testWorkspaceDir = os.tmpdir();
 
+function setMinimalChannelPluginRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: discordPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: slackPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "telegram",
+        plugin: telegramPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "whatsapp",
+        plugin: whatsappPlugin,
+        source: "test",
+      },
+    ]),
+  );
+}
+
 beforeAll(async () => {
   testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commands-"));
   await fs.writeFile(path.join(testWorkspaceDir, "AGENTS.md"), "# Agents\n", "utf-8");
@@ -153,7 +184,7 @@ beforeEach(() => {
   vi.useRealTimers();
   vi.clearAllTimers();
   resetTaskRegistryForTests();
-  setDefaultChannelPluginRegistryForTests();
+  setMinimalChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
@@ -517,7 +548,7 @@ describe("/approve command", () => {
     }
   });
 
-  it("preserves legacy unprefixed plugin approval fallback on Discord", async () => {
+  it("rejects legacy unprefixed plugin approval fallback on Discord before exec fallback", async () => {
     for (const testCase of [
       {
         name: "discord legacy plugin approval with exec approvals disabled",
@@ -540,14 +571,8 @@ describe("/approve command", () => {
 
       const result = await handleCommands(params);
       expect(result.shouldContinue, testCase.name).toBe(false);
-      expect(result.reply?.text, testCase.name).toContain("Approval allow-once submitted");
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(1);
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "plugin.approval.resolve",
-          params: { id: "legacy-plugin-123", decision: "allow-once" },
-        }),
-      );
+      expect(result.reply?.text, testCase.name).toContain("not authorized to approve");
+      expect(callGatewayMock, testCase.name).not.toHaveBeenCalled();
     }
   });
 
@@ -1832,7 +1857,7 @@ function buildPolicyParams(
 describe("handleCommands /allowlist", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalChannelPluginRegistryForTests();
   });
 
   it("lists config + store allowFrom entries", async () => {
