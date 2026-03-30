@@ -84,12 +84,8 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
 }
 
 function formatTaskListSummary(tasks: TaskRecord[]) {
-  const queued = tasks.filter((task) => task.status === "queued").length;
-  const running = tasks.filter((task) => task.status === "running").length;
-  const issues = tasks.filter(
-    (task) => task.status === "failed" || task.status === "timed_out" || task.status === "lost",
-  ).length;
-  return `${queued} queued · ${running} running · ${issues} issues`;
+  const summary = summarizeTaskRecords(tasks);
+  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
 }
 
 export async function tasksListCommand(
