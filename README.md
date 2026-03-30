@@ -22,7 +22,7 @@
 
 MABOS combines three architectural paradigms into a unified system:
 
-- **BDI Cognitive Architecture** (from OpenClaw-MABOS core) — 16 autonomous agents with beliefs, desires, intentions, 35 reasoning methods, TypeDB knowledge graphs, and SBVR ontologies
+- **BDI Cognitive Architecture** (from OpenClaw-MABOS core) — 16 autonomous agents with beliefs, desires, intentions, 35 reasoning methods, TypeDB knowledge graphs (runtime data storage) governed by SBVR ontology schemas (business vocabulary and rules)
 - **Corporate Governance** (inspired by [Paperclip](https://github.com/nicepkg/paperclip)) — atomic budget enforcement, RBAC, append-only audit trails, multi-company isolation
 - **Autonomous Agent Runtime** (inspired by [Hermes Agent](https://github.com/NousResearch/hermes-agent)) — multi-model routing with fallback chains, self-improving skill creation, session intelligence, execution sandboxes, security hardening
 
@@ -53,9 +53,9 @@ MABOS combines three architectural paradigms into a unified system:
 │  ┌─────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────┐ │
 │  │ BDI Cycle   │ │ 35 Reasoning │ │ TypeDB       │ │ SBVR        │ │
 │  │ 16 Agents   │ │ Methods      │ │ Knowledge    │ │ Ontology    │ │
-│  │ 10-file     │ │ (formal,     │ │ Graphs       │ │ Engine      │ │
-│  │ cognitive   │ │ probabilistic│ │ + TypeQL     │ │ + OWL/      │ │
-│  │ state       │ │ causal,      │ │ queries      │ │ JSON-LD     │ │
+│  │ 10-file     │ │ (formal,     │ │ Graphs       │ │ Schemas     │ │
+│  │ cognitive   │ │ probabilistic│ │ (data store  │ │ (vocabulary │ │
+│  │ state       │ │ causal,      │ │ + TypeQL)    │ │ + rules)    │ │
 │  │             │ │ social, meta)│ │              │ │             │ │
 │  └─────────────┘ └──────────────┘ └──────────────┘ └─────────────┘ │
 │  ┌──────────────────────────────────────────────────────────────┐   │
@@ -73,17 +73,17 @@ MABOS combines three architectural paradigms into a unified system:
 
 ### System Layers
 
-| Layer                 | Purpose                           | Key Components                                                                                     |
-| --------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| **Mission Control**   | Operator dashboard                | AI planning, task dispatch, knowledge capture, goal-driven kanban, decision approval               |
-| **Security**          | Threat protection (on by default) | 8-pattern injection scanner, SSRF URL validator, tool approval guards with arg redaction           |
-| **Governance**        | Corporate oversight               | Atomic budget ledger (reserve/settle/release), RBAC (4 roles), append-only audit log               |
-| **Model Router**      | LLM flexibility                   | 11 models across 4 providers, automatic fallback chains, MoA ensemble reasoning, prompt caching    |
-| **Session Intel**     | Organizational memory             | FTS5 full-text search across sessions, cross-session recall with grouping                          |
-| **Execution Sandbox** | Safe code execution               | Local + Docker + SSH backends, per-agent routing, container lifecycle management                   |
-| **Skill Loop**        | Self-improvement                  | Autonomous skill creation from successful sessions, file-based registry, marketplace, nudge system |
-| **MABOS Core**        | Cognitive engine                  | BDI cycle, 35 reasoning methods, TypeDB knowledge graphs, SBVR ontologies, 107 business tools      |
-| **Channels**          | Communication                     | 35+ messaging platforms with multi-agent routing                                                   |
+| Layer                 | Purpose                           | Key Components                                                                                                                |
+| --------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Mission Control**   | Operator dashboard                | AI planning, task dispatch, knowledge capture, goal-driven kanban, decision approval                                          |
+| **Security**          | Threat protection (on by default) | 8-pattern injection scanner, SSRF URL validator, tool approval guards with arg redaction                                      |
+| **Governance**        | Corporate oversight               | Atomic budget ledger (reserve/settle/release), RBAC (4 roles), append-only audit log                                          |
+| **Model Router**      | LLM flexibility                   | 11 models across 4 providers, automatic fallback chains, MoA ensemble reasoning, prompt caching                               |
+| **Session Intel**     | Organizational memory             | FTS5 full-text search across sessions, cross-session recall with grouping                                                     |
+| **Execution Sandbox** | Safe code execution               | Local + Docker + SSH backends, per-agent routing, container lifecycle management                                              |
+| **Skill Loop**        | Self-improvement                  | Autonomous skill creation from successful sessions, file-based registry, marketplace, nudge system                            |
+| **MABOS Core**        | Cognitive engine                  | BDI cycle, 35 reasoning methods, TypeDB knowledge graphs (data), SBVR ontology schemas (vocabulary/rules), 107 business tools |
+| **Channels**          | Communication                     | 35+ messaging platforms with multi-agent routing                                                                              |
 
 ### Agent Roster (16 C-Suite Roles)
 
