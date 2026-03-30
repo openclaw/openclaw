@@ -1,4 +1,4 @@
-import { execFile, type ExecFileException } from "node:child_process";
+import { execFile } from "node:child_process";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -156,12 +156,9 @@ export function resolveConfigOpenCommand(
   };
 }
 
-function execConfigOpenCommand(
-  command: ConfigOpenCommand,
-  execFileImpl: typeof execFile = execFile,
-): Promise<void> {
+function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFileImpl(command.command, command.args, (error) => {
+    execFile(command.command, command.args, (error) => {
       if (error) {
         reject(error);
         return;
@@ -563,9 +560,8 @@ export const configHandlers: GatewayRequestHandlers = {
       await execConfigOpenCommand(resolveConfigOpenCommand(configPath));
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
-      const err = error as ExecFileException;
       context?.logGateway?.warn(
-        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${formatConfigOpenError(err)}`,
+        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${formatConfigOpenError(error)}`,
       );
       respond(
         true,
