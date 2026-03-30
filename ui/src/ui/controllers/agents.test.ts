@@ -60,6 +60,8 @@ function createSaveState(): {
       configSaving: false,
       configApplying: false,
       updateRunning: false,
+      updateSkippedReason: null,
+      updateConfirmPending: false,
       configSnapshot: { hash: "hash-1" },
       configFormDirty: true,
       configFormMode: "form",

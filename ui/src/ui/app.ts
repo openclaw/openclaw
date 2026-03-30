@@ -208,6 +208,8 @@ export class OpenClawApp extends LitElement {
   @state() configSaving = false;
   @state() configApplying = false;
   @state() updateRunning = false;
+  @state() updateSkippedReason: import("./controllers/config.ts").UpdateSkippedReason = null;
+  @state() updateConfirmPending = false;
   @state() applySessionKey = this.settings.lastActiveSessionKey;
   @state() configSnapshot: ConfigSnapshot | null = null;
   @state() configSchema: unknown = null;

@@ -9,6 +9,36 @@ import {
   setPathValue,
 } from "./config/form-utils.ts";
 
+export type UpdateSkippedReason = "dirty" | "no-upstream" | "not-git-install" | null;
+
+const SKIPPED_REASON_MESSAGES: Record<string, { message: string; warning: string }> = {
+  dirty: {
+    message: "Repository has uncommitted changes.",
+    warning:
+      "Force update will discard all uncommitted changes (git checkout -- .). Make sure you have backed up any work in progress.",
+  },
+  "no-upstream": {
+    message: "No upstream branch configured.",
+    warning:
+      "Force update will fetch all remotes and reset to the latest release tag. Local commits not pushed to a remote will be lost.",
+  },
+  "not-git-install": {
+    message: "Not installed via git (no package manager detected).",
+    warning:
+      "Force update will attempt to reinstall globally via npm. This may affect your current installation.",
+  },
+};
+
+export function getSkippedReasonInfo(reason: string | null): {
+  message: string;
+  warning: string;
+} | null {
+  if (!reason) {
+    return null;
+  }
+  return SKIPPED_REASON_MESSAGES[reason] ?? null;
+}
+
 export type ConfigState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -21,6 +51,8 @@ export type ConfigState = {
   configSaving: boolean;
   configApplying: boolean;
   updateRunning: boolean;
+  updateSkippedReason: UpdateSkippedReason;
+  updateConfirmPending: boolean;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown;
   configSchemaVersion: string | null;
@@ -184,20 +216,35 @@ export async function applyConfig(state: ConfigState) {
   }
 }
 
-export async function runUpdate(state: ConfigState) {
+type UpdateRunResponse = {
+  ok?: boolean;
+  skipped?: boolean;
+  result?: { status?: string; reason?: string };
+};
+
+export async function runUpdate(state: ConfigState, force = false) {
   if (!state.client || !state.connected) {
     return;
   }
   state.updateRunning = true;
   state.lastError = null;
+  state.updateSkippedReason = null;
+  state.updateConfirmPending = false;
   try {
-    const res = await state.client.request<{
-      ok?: boolean;
-      result?: { status?: string; reason?: string };
-    }>("update.run", {
+    const res = await state.client.request<UpdateRunResponse>("update.run", {
       sessionKey: state.applySessionKey,
+      force,
     });
-    if (res && res.ok === false) {
+    if (res?.skipped) {
+      const reason = (res.result?.reason ?? "unknown") as UpdateSkippedReason;
+      const info = getSkippedReasonInfo(reason);
+      if (info) {
+        state.updateSkippedReason = reason;
+        state.updateConfirmPending = true;
+      } else {
+        state.lastError = `Update skipped: ${res.result?.reason ?? "unknown reason"}`;
+      }
+    } else if (res && res.ok === false) {
       const status = res.result?.status ?? "error";
       const reason = res.result?.reason ?? "Update failed.";
       state.lastError = `Update ${status}: ${reason}`;
@@ -207,6 +254,16 @@ export async function runUpdate(state: ConfigState) {
   } finally {
     state.updateRunning = false;
   }
+}
+
+export async function forceUpdate(state: ConfigState) {
+  state.updateConfirmPending = false;
+  await runUpdate(state, true);
+}
+
+export function dismissUpdateConfirm(state: ConfigState) {
+  state.updateSkippedReason = null;
+  state.updateConfirmPending = false;
 }
 
 export function updateConfigFormValue(

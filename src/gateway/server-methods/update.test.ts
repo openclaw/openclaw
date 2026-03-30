@@ -155,6 +155,81 @@ describe("update.run timeout normalization", () => {
   });
 });
 
+describe("update.run skipped response semantics", () => {
+  it("returns ok=false and skipped=true when update is skipped", async () => {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "skipped",
+      mode: "git",
+      reason: "dirty",
+      steps: [],
+      durationMs: 50,
+    });
+
+    let payload: { ok: boolean; skipped: boolean; restart: unknown } | undefined;
+
+    await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
+      payload = response as { ok: boolean; skipped: boolean; restart: unknown };
+    });
+
+    expect(payload?.ok).toBe(false);
+    expect(payload?.skipped).toBe(true);
+    expect(payload?.restart).toBeNull();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+  });
+
+  it("returns ok=true and skipped=false when update succeeds", async () => {
+    let payload: { ok: boolean; skipped: boolean } | undefined;
+
+    await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
+      payload = response as { ok: boolean; skipped: boolean };
+    });
+
+    expect(payload?.ok).toBe(true);
+    expect(payload?.skipped).toBe(false);
+  });
+
+  it("returns ok=false and skipped=false when update errors", async () => {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "git",
+      reason: "build-failed",
+      steps: [],
+      durationMs: 100,
+    });
+
+    let payload: { ok: boolean; skipped: boolean } | undefined;
+
+    await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
+      payload = response as { ok: boolean; skipped: boolean };
+    });
+
+    expect(payload?.ok).toBe(false);
+    expect(payload?.skipped).toBe(false);
+  });
+});
+
+describe("update.run force parameter", () => {
+  it("passes force=true to runGatewayUpdate when force param is set", async () => {
+    await invokeUpdateRun({ force: true });
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        force: true,
+      }),
+    );
+  });
+
+  it("passes force=false to runGatewayUpdate when force param is not set", async () => {
+    await invokeUpdateRun({});
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        force: false,
+      }),
+    );
+  });
+});
+
 describe("update.run restart scheduling", () => {
   it("schedules restart when update succeeds", async () => {
     let payload: { ok: boolean; restart: unknown } | undefined;

@@ -5,6 +5,9 @@ import {
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
   runUpdate,
+  forceUpdate,
+  dismissUpdateConfirm,
+  getSkippedReasonInfo,
   saveConfig,
   updateConfigFormValue,
   type ConfigState,
@@ -36,6 +39,8 @@ function createState(): ConfigState {
     connected: false,
     lastError: null,
     updateRunning: false,
+    updateSkippedReason: null,
+    updateConfirmPending: false,
   };
 }
 
@@ -385,6 +390,7 @@ describe("runUpdate", () => {
 
     expect(request).toHaveBeenCalledWith("update.run", {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
+      force: false,
     });
   });
 
@@ -401,5 +407,117 @@ describe("runUpdate", () => {
     await runUpdate(state);
 
     expect(state.lastError).toBe("Update error: network unavailable");
+  });
+});
+
+describe("runUpdate skipped handling", () => {
+  it("sets updateConfirmPending when server returns skipped with known reason", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      skipped: true,
+      result: { status: "skipped", reason: "dirty" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.updateConfirmPending).toBe(true);
+    expect(state.updateSkippedReason).toBe("dirty");
+    expect(state.lastError).toBeNull();
+  });
+
+  it("sets lastError when server returns skipped with unknown reason", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      skipped: true,
+      result: { status: "skipped", reason: "some-new-reason" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.updateConfirmPending).toBe(false);
+    expect(state.lastError).toContain("some-new-reason");
+  });
+
+  it("handles no-upstream skipped reason", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      skipped: true,
+      result: { status: "skipped", reason: "no-upstream" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.updateSkippedReason).toBe("no-upstream");
+    expect(state.updateConfirmPending).toBe(true);
+  });
+
+  it("handles not-git-install skipped reason", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      skipped: true,
+      result: { status: "skipped", reason: "not-git-install" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.updateSkippedReason).toBe("not-git-install");
+    expect(state.updateConfirmPending).toBe(true);
+  });
+});
+
+describe("forceUpdate", () => {
+  it("sends force=true and clears confirmPending", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.updateConfirmPending = true;
+    state.updateSkippedReason = "dirty";
+
+    await forceUpdate(state);
+
+    expect(request).toHaveBeenCalledWith("update.run", {
+      sessionKey: "main",
+      force: true,
+    });
+    expect(state.updateConfirmPending).toBe(false);
+  });
+});
+
+describe("dismissUpdateConfirm", () => {
+  it("clears skipped state", () => {
+    const state = createState();
+    state.updateSkippedReason = "dirty";
+    state.updateConfirmPending = true;
+
+    dismissUpdateConfirm(state);
+
+    expect(state.updateSkippedReason).toBeNull();
+    expect(state.updateConfirmPending).toBe(false);
+  });
+});
+
+describe("getSkippedReasonInfo", () => {
+  it("returns info for known reasons", () => {
+    expect(getSkippedReasonInfo("dirty")).not.toBeNull();
+    expect(getSkippedReasonInfo("no-upstream")).not.toBeNull();
+    expect(getSkippedReasonInfo("not-git-install")).not.toBeNull();
+  });
+
+  it("returns null for unknown reasons", () => {
+    expect(getSkippedReasonInfo("some-unknown")).toBeNull();
+    expect(getSkippedReasonInfo(null)).toBeNull();
   });
 });

@@ -28,6 +28,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
         ? Math.max(1000, Math.floor(timeoutMsRaw))
         : undefined;
+    const force = (params as { force?: boolean }).force === true;
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
@@ -44,6 +45,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         cwd: root,
         argv1: process.argv[1],
         channel: configChannel ?? undefined,
+        force,
       });
     } catch (err) {
       result = {
@@ -120,7 +122,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     respond(
       true,
       {
-        ok: result.status !== "error",
+        ok: result.status === "ok",
+        skipped: result.status === "skipped",
         result,
         restart,
         sentinel: {

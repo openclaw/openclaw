@@ -109,6 +109,8 @@ export type AppViewState = {
   configSaving: boolean;
   configApplying: boolean;
   updateRunning: boolean;
+  updateSkippedReason: import("./controllers/config.ts").UpdateSkippedReason;
+  updateConfirmPending: boolean;
   applySessionKey: string;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown;
