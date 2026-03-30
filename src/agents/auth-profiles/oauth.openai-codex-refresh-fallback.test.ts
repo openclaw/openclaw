@@ -406,6 +406,75 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
   });
 
+  it("refreshes inherited main-store oauth profiles without creating a local clone", async () => {
+    const profileId = "openai-codex:default";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-inherited", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-subagent-only",
+          },
+        },
+      },
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        accountId: "acct-shared",
+      }),
+      agentDir,
+    );
+
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        ({
+          type: "oauth",
+          provider: "openai-codex",
+          access: "main-refreshed-access",
+          refresh: "main-refreshed-refresh",
+          expires: freshExpiry,
+          accountId: "acct-shared",
+        }) as never,
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    expect(result?.apiKey).toBe("main-refreshed-access");
+
+    const mainStoreRaw = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(mainStoreRaw.profiles[profileId]).toMatchObject({
+      access: "main-refreshed-access",
+      refresh: "main-refreshed-refresh",
+      expires: freshExpiry,
+    });
+
+    const subStoreRaw = JSON.parse(
+      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(subStoreRaw.profiles[profileId]).toBeUndefined();
+    expect(subStoreRaw.profiles["anthropic:default"]).toMatchObject({
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-subagent-only",
+    });
+  });
+
   it("preserves a token re-auth that lands while refresh is in flight", async () => {
     const profileId = "openai-codex:default";
     const freshExpiry = Date.now() + 60 * 60 * 1000;

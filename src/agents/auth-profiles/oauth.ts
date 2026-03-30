@@ -290,6 +290,37 @@ type ResolveApiKeyForProfileParams = {
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 const READ_ONLY_AUTH_STORE_OPTIONS = { readOnly: true, allowKeychainPrompt: false } as const;
 
+function resolveOAuthRefreshWriteTarget(params: {
+  agentDir?: string;
+  profileId: string;
+  currentCred: OAuthCredential;
+}): { agentDir: string | undefined; expectedCurrent: OAuthCredential } {
+  const localStore = loadAuthProfileStoreForAgent(params.agentDir, READ_ONLY_AUTH_STORE_OPTIONS);
+  const localCred = localStore.profiles[params.profileId];
+  if (localCred?.type === "oauth" && areOAuthCredentialsEquivalent(localCred, params.currentCred)) {
+    return {
+      agentDir: params.agentDir,
+      expectedCurrent: localCred,
+    };
+  }
+
+  if (params.agentDir) {
+    const mainStore = loadAuthProfileStoreForAgent(undefined, READ_ONLY_AUTH_STORE_OPTIONS);
+    const mainCred = mainStore.profiles[params.profileId];
+    if (mainCred?.type === "oauth" && areOAuthCredentialsEquivalent(mainCred, params.currentCred)) {
+      return {
+        agentDir: undefined,
+        expectedCurrent: mainCred,
+      };
+    }
+  }
+
+  return {
+    agentDir: params.agentDir,
+    expectedCurrent: params.currentCred,
+  };
+}
+
 async function adoptNewerMainOAuthCredential(params: {
   store: AuthProfileStore;
   profileId: string;
@@ -466,16 +497,24 @@ async function doRefreshOAuthTokenWithLock(params: {
       return null;
     }
 
-    // Write refreshed token to the agent's own store (under its own file lock).
+    const refreshWriteTarget = resolveOAuthRefreshWriteTarget({
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      currentCred: cred,
+    });
+
+    // Persist the refreshed token back to whichever store currently owns this
+    // OAuth snapshot. Sub-agents can inherit shared profiles from main without
+    // having a local oauth entry to overwrite.
     const mergedCred: OAuthCredential = {
       ...cred,
       ...refreshResult.newCredentials,
       type: "oauth",
     };
     const localWrite = await writeCredentialToAgentStore({
-      agentDir: params.agentDir,
+      agentDir: refreshWriteTarget.agentDir,
       profileId: params.profileId,
-      expectedCurrent: cred,
+      expectedCurrent: refreshWriteTarget.expectedCurrent,
       newCred: mergedCred,
     });
     const effectiveCred = localWrite.current;
@@ -492,6 +531,7 @@ async function doRefreshOAuthTokenWithLock(params: {
       const mainStore = loadAuthProfileStoreForAgent(undefined, READ_ONLY_AUTH_STORE_OPTIONS);
       const mainCred = mainStore.profiles[params.profileId];
       if (
+        refreshWriteTarget.agentDir !== undefined &&
         (localWrite.status === "written" || localWrite.status === "kept_current") &&
         mainCred?.type === "oauth" &&
         canShareOAuthCredentialAcrossAgents(cred, mainCred)
