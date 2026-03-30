@@ -136,56 +136,79 @@ describe("openclaw channel mcp server", () => {
       installGatewayTestHooks();
 
       test("lists conversations and reads messages", async () => {
-        const storePath = await createSessionStoreFile();
         const sessionKey = "agent:main:main";
-        await seedSession({
-          storePath,
-          sessionKey,
-          sessionId: "sess-main",
-          route: {
-            channel: "telegram",
-            to: "-100123",
-            accountId: "acct-1",
-            threadId: 42,
-          },
-          transcriptMessages: [
-            {
-              id: "msg-1",
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "hello from transcript" }],
-                timestamp: Date.now(),
-              },
-            },
-            {
-              id: "msg-attachment",
-              message: {
-                role: "assistant",
-                content: [
-                  { type: "text", text: "attached image" },
-                  {
-                    type: "image",
-                    source: {
-                      type: "base64",
-                      media_type: "image/png",
-                      data: "abc",
-                    },
+        const gatewayRequest = vi.fn(async (method: string) => {
+          if (method === "sessions.list") {
+            return {
+              sessions: [
+                {
+                  key: sessionKey,
+                  channel: "telegram",
+                  deliveryContext: {
+                    to: "-100123",
+                    accountId: "acct-1",
+                    threadId: 42,
                   },
-                ],
-                timestamp: Date.now() + 1,
-              },
-            },
-          ],
+                },
+              ],
+            };
+          }
+          if (method === "chat.history") {
+            return {
+              messages: [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "hello from transcript" }],
+                },
+                {
+                  __openclaw: {
+                    id: "msg-attachment",
+                  },
+                  role: "assistant",
+                  content: [
+                    { type: "text", text: "attached image" },
+                    {
+                      type: "image",
+                      source: {
+                        type: "base64",
+                        media_type: "image/png",
+                        data: "abc",
+                      },
+                    },
+                  ],
+                },
+              ],
+            };
+          }
+          throw new Error(`unexpected gateway method ${method}`);
         });
-
-        const harness = await createGatewaySuiteHarness();
         let mcp: Awaited<ReturnType<typeof connectMcp>> | null = null;
         try {
-          mcp = await connectMcp({
-            gatewayUrl: `ws://127.0.0.1:${harness.port}`,
-            gatewayToken: "test-gateway-token-1234567890",
+          mcp = await connectMcpWithoutGateway({
+            claudeChannelMode: "off",
           });
           const connectedMcp = mcp;
+          (
+            connectedMcp.bridge as unknown as {
+              gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+              readySettled: boolean;
+              resolveReady: () => void;
+            }
+          ).gateway = {
+            request: gatewayRequest,
+            stopAndWait: async () => {},
+          };
+          (
+            connectedMcp.bridge as unknown as {
+              readySettled: boolean;
+              resolveReady: () => void;
+            }
+          ).readySettled = true;
+          (
+            connectedMcp.bridge as unknown as {
+              resolveReady: () => void;
+            }
+          ).resolveReady();
 
           const listed = (await connectedMcp.client.callTool({
             name: "conversations_list",
@@ -238,7 +261,6 @@ describe("openclaw channel mcp server", () => {
           );
         } finally {
           await mcp?.close();
-          await harness.close();
         }
       });
 
