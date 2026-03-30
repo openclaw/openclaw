@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as subsystemModule from "openclaw/plugin-sdk/logging-core";
+import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../../../test/helpers/plugins/env.js";
 import {
@@ -32,12 +32,12 @@ function resolveAccountWithEnv(
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(subsystemModule, "createSubsystemLogger").mockImplementation(() => {
+  vi.spyOn(runtimeEnvModule, "createSubsystemLogger").mockImplementation(() => {
     const logger = {
       warn: warnMock,
       child: () => logger,
     };
-    return logger as unknown as ReturnType<typeof subsystemModule.createSubsystemLogger>;
+    return logger as unknown as ReturnType<typeof runtimeEnvModule.createSubsystemLogger>;
   });
 });
 

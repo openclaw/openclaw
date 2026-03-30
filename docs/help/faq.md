@@ -287,6 +287,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     See what changed:
     [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
+    For install one-liners and the difference between beta and dev, see the accordion below.
+
   </Accordion>
 
   <Accordion title="How do I install the beta version and what is the difference between beta and dev?">
@@ -1307,7 +1309,7 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
-  <Accordion title="I'm in remote mode - where is the session store?">
+  <Accordion title="Remote mode: where is the session store?">
     Session state is owned by the **gateway host**. If you're in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
   </Accordion>
 </AccordionGroup>
@@ -1781,9 +1783,10 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Yes. Sessions expire after `session.idleMinutes` (default **60**). The **next**
-    message starts a fresh session id for that chat key. This does not delete
-    transcripts - it just starts a new session.
+    Sessions can expire after `session.idleMinutes`, but this is **disabled by default** (default **0**).
+    Set it to a positive value to enable idle expiry. When enabled, the **next**
+    message after the idle period starts a fresh session id for that chat key.
+    This does not delete transcripts - it just starts a new session.
 
     ```json5
     {
@@ -1886,7 +1889,7 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Why am I getting heartbeat messages every 30 minutes?">
-    Heartbeats run every **30m** by default. Tune or disable them:
+    Heartbeats run every **30m** by default (**1h** when using OAuth auth). Tune or disable them:
 
     ```json5
     {
@@ -2086,13 +2089,15 @@ for usage/billing and raise limits as needed.
 
     ```
     /model sonnet
-    /model haiku
     /model opus
     /model gpt
     /model gpt-mini
     /model gemini
     /model gemini-flash
+    /model gemini-flash-lite
     ```
+
+    These are the built-in aliases. Custom aliases can be added via `agents.defaults.models`.
 
     You can list available models with `/model`, `/model list`, or `/model status`.
 
@@ -2128,8 +2133,8 @@ for usage/billing and raise limits as needed.
   <Accordion title="Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding?">
     Yes. Set one as default and switch as needed:
 
-    - **Quick switch (per session):** `/model gpt-5.2` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
-    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.2`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
+    - **Quick switch (per session):** `/model gpt-5.4` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
+    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.4`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
@@ -2186,7 +2191,7 @@ for usage/billing and raise limits as needed.
           model: { primary: "minimax/MiniMax-M2.7" },
           models: {
             "minimax/MiniMax-M2.7": { alias: "minimax" },
-            "openai/gpt-5.2": { alias: "gpt" },
+            "openai/gpt-5.4": { alias: "gpt" },
           },
         },
       },
@@ -2953,23 +2958,18 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     ```json5
     {
-      agents: {
-        defaults: {
-          tools: {
-            message: {
-              crossContext: {
-                allowAcrossProviders: true,
-                marker: { enabled: true, prefix: "[from {channel}] " },
-              },
-            },
+      tools: {
+        message: {
+          crossContext: {
+            allowAcrossProviders: true,
+            marker: { enabled: true, prefix: "[from {channel}] " },
           },
         },
       },
     }
     ```
 
-    Restart the gateway after editing config. If you only want this for a single
-    agent, set it under `agents.list[].tools.message` instead.
+    Restart the gateway after editing config.
 
   </Accordion>
 
