@@ -31,7 +31,7 @@ function readAttachmentFileHint(args: Record<string, unknown>): string | undefin
   );
 }
 
-function resolveAttachmentMaxBytes(params: {
+export function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;

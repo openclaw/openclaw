@@ -42,6 +42,7 @@ import {
   parseComponentsParam,
   parseInteractiveParam,
   readBooleanParam,
+  resolveAttachmentMaxBytes,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
 import {
@@ -411,11 +412,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 
   if (hasHydratedBuffer && !dryRun) {
     const bufferBytes = Buffer.from(params.buffer as string, "base64");
+    const maxBytes = resolveAttachmentMaxBytes({ cfg, channel, accountId });
     const saved = await saveMediaBuffer(
       bufferBytes,
       typeof params.contentType === "string" ? params.contentType : undefined,
       "outbound",
-      undefined,
+      maxBytes,
       typeof params.filename === "string" ? params.filename : undefined,
     );
     params.media = saved.path;
