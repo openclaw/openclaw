@@ -9,7 +9,6 @@ import type {
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { safeParseJson } from "../utils.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 import {
@@ -271,14 +270,23 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
     if (part.type === "toolCall") {
       // Defensive parse: some Ollama models persist arguments as a JSON string
       // in session history; normalise to an object before replaying.
-      const args =
-        typeof part.arguments === "string"
-          ? (safeParseJson<Record<string, unknown>>(part.arguments) ??
-            (log.warn(
-              `Malformed tool call arguments in history: ${part.arguments.slice(0, 120)}`,
-            ),
-            {}))
-          : part.arguments;
+      // Use the unsafe-integer-preserving parser to avoid rounding 64-bit IDs.
+      const args = (() => {
+        if (typeof part.arguments !== "string") {
+          return part.arguments;
+        }
+        try {
+          return parseJsonPreservingUnsafeIntegers(part.arguments) as Record<
+            string,
+            unknown
+          >;
+        } catch {
+          log.warn(
+            `Malformed tool call arguments in history: ${part.arguments.slice(0, 120)}`,
+          );
+          return {};
+        }
+      })();
       result.push({ function: { name: part.name, arguments: args } });
     } else if (part.type === "tool_use") {
       result.push({ function: { name: part.name, arguments: part.input } });
@@ -379,14 +387,22 @@ export function buildAssistantMessage(
     for (const tc of toolCalls) {
       // Some Ollama models return arguments as a JSON string instead of an
       // object; parse it defensively so history replays don't get rejected.
-      const tcArgs =
-        typeof tc.function.arguments === "string"
-          ? (safeParseJson<Record<string, unknown>>(tc.function.arguments) ??
-            (log.warn(
-              `Malformed tool call arguments from Ollama: ${tc.function.arguments.slice(0, 120)}`,
-            ),
-            {}))
-          : tc.function.arguments;
+      // Use the unsafe-integer-preserving parser to avoid rounding 64-bit IDs.
+      const tcArgs = (() => {
+        if (typeof tc.function.arguments !== "string") {
+          return tc.function.arguments;
+        }
+        try {
+          return parseJsonPreservingUnsafeIntegers(
+            tc.function.arguments,
+          ) as Record<string, unknown>;
+        } catch {
+          log.warn(
+            `Malformed tool call arguments from Ollama: ${tc.function.arguments.slice(0, 120)}`,
+          );
+          return {};
+        }
+      })();
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
