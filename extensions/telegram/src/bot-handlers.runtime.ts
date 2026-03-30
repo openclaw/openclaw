@@ -1323,9 +1323,19 @@ export const registerTelegramHandlers = ({
       const runtimeCfg = telegramDeps.loadConfig();
       if (approvalCallback) {
         const isPluginApproval = approvalCallback.approvalId.startsWith("plugin:");
+        const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
         const authorizedApprovalSender = isPluginApproval
-          ? isTelegramExecApprovalApprover({ cfg: runtimeCfg, accountId, senderId })
-          : isTelegramExecApprovalAuthorizedSender({ cfg: runtimeCfg, accountId, senderId });
+          ? pluginApprovalAuthorizedSender
+          : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
         if (
           !authorizedApprovalSender
         ) {
@@ -1342,6 +1352,7 @@ export const registerTelegramHandlers = ({
             approvalId: approvalCallback.approvalId,
             decision: approvalCallback.decision,
             senderId,
+            allowPluginFallback: pluginApprovalAuthorizedSender,
           });
         } catch (resolveErr) {
           const errStr = String(resolveErr);

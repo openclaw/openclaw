@@ -7,6 +7,7 @@ export type ResolveTelegramExecApprovalParams = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
   senderId?: string | null;
+  allowPluginFallback?: boolean;
   gatewayUrl?: string;
 };
 
@@ -88,7 +89,7 @@ export async function resolveTelegramExecApproval(
       try {
         await requestApproval("exec.approval.resolve");
       } catch (err) {
-        if (!isApprovalNotFoundError(err)) {
+        if (!params.allowPluginFallback || !isApprovalNotFoundError(err)) {
           throw err;
         }
         await requestApproval("plugin.approval.resolve");
