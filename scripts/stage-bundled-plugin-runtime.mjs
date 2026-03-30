@@ -35,7 +35,17 @@ function ensureSymlink(targetValue, targetPath, type) {
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  try {
+    ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  } catch (error) {
+    // On Windows without Developer Mode, symlink creation can fail with EPERM or EACCES.
+    // Fall back to copying the file so the build completes successfully.
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      fs.copyFileSync(sourcePath, targetPath);
+      return;
+    }
+    throw error;
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
