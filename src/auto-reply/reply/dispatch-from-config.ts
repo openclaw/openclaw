@@ -665,6 +665,11 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            // replyMode "tool-only": suppress text-only auto-delivery (media still delivered)
+            const hasMedia = payload.mediaUrls?.length || payload.mediaUrl;
+            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only" && !hasMedia) {
+              return;
+            }
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
@@ -687,6 +692,10 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
+            // replyMode "tool-only": suppress all streaming block delivery
+            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only") {
+              return;
+            }
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -752,10 +761,11 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const isToolOnlyMode = (cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only";
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    for (const reply of replies) {
+    for (const reply of isToolOnlyMode ? [] : replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (reply.isReasoning === true) {

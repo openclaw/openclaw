@@ -193,6 +193,15 @@ export type AgentDefaultsConfig = {
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
+  /**
+   * Controls auto-delivery behavior for assistant text.
+   * - "auto": normal block/final delivery (default)
+   * - "tool-only": suppress auto-delivery of assistant text; only explicit
+   *   `message` tool sends are delivered. Useful for shared-session setups
+   *   (e.g. a single WhatsApp number serving multiple contacts) where
+   *   plain-text auto-replies could leak to the wrong recipient.
+   */
+  replyMode?: "auto" | "tool-only";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
   /**
