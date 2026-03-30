@@ -57,7 +57,7 @@ import {
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
@@ -364,15 +364,36 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
 function resolveTargetAcpAgentId(params: {
   requestedAgentId?: string;
   cfg: OpenClawConfig;
-}): { ok: true; agentId: string } | { ok: false; error: string } {
+}): { ok: true; agentId: string; profileCwd?: string } | { ok: false; error: string } {
   const requested = normalizeOptionalAgentId(params.requestedAgentId);
   if (requested) {
-    return { ok: true, agentId: requested };
+    // Check if the requested ID is an agent profile alias that maps to
+    // a different underlying ACP harness ID (e.g. "analyst" → "claude").
+    const profile = listAgentEntries(params.cfg).find((a) => normalizeAgentId(a.id) === requested);
+
+    let targetAgentId = requested;
+    let profileCwd: string | undefined;
+
+    if (profile?.runtime?.type === "acp" && profile.runtime.acp?.agent) {
+      targetAgentId = normalizeOptionalAgentId(profile.runtime.acp.agent) || requested;
+      profileCwd = profile.runtime.acp.cwd || profile.workspace;
+    } else if (profile?.workspace) {
+      profileCwd = profile.workspace;
+    }
+
+    return { ok: true, agentId: targetAgentId, profileCwd };
   }
 
   const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
   if (configuredDefault) {
-    return { ok: true, agentId: configuredDefault };
+    const defaultProfile = listAgentEntries(params.cfg).find(
+      (a) => normalizeAgentId(a.id) === configuredDefault,
+    );
+    const defaultProfileCwd =
+      defaultProfile?.runtime?.type === "acp"
+        ? defaultProfile.runtime.acp?.cwd || defaultProfile.workspace
+        : defaultProfile?.workspace;
+    return { ok: true, agentId: configuredDefault, profileCwd: defaultProfileCwd };
   }
 
   return {
@@ -1001,7 +1022,7 @@ export async function spawnAcpDirect(
     config: cfg,
     targetAgentId,
     requesterSessionKey: ctx.agentSessionKey,
-    explicitWorkspaceDir: params.cwd,
+    explicitWorkspaceDir: params.cwd || targetAgentResult.profileCwd,
   });
   let runtimeCwd: string | undefined;
   try {
