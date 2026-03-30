@@ -13,6 +13,7 @@ import {
   buildDefaultToolPolicyPipelineSteps,
 } from "../agents/tool-policy-pipeline.js";
 import {
+  applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
@@ -28,7 +29,10 @@ import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
+import {
+  authorizeGatewayBearerRequestOrReply,
+  resolveGatewayRequestedOperatorScopes,
+} from "./http-auth-helpers.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
@@ -36,6 +40,7 @@ import {
   sendMethodNotAllowed,
 } from "./http-common.js";
 import { getHeader } from "./http-utils.js";
+import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -165,6 +170,19 @@ export async function handleToolsInvokeHttpRequest(
     rateLimiter: opts.rateLimiter,
   });
   if (!ok) {
+    return true;
+  }
+
+  const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
+  const scopeAuth = authorizeOperatorScopesForMethod("agent", requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
     return true;
   }
 
@@ -305,7 +323,11 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
-  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+  const ownerFiltered = applyOwnerOnlyToolPolicy(
+    subagentFiltered,
+    requestedScopes.includes(ADMIN_SCOPE),
+  );
+  const gatewayFiltered = ownerFiltered.filter((t) => !gatewayDenySet.has(t.name));
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
