@@ -136,6 +136,55 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.admin"));
   });
 
+  it("keeps gateway-authenticated plugin routes on least-privilege runtime scopes", async () => {
+    loadOpenClawPlugins.mockReset();
+    handleGatewayRequest.mockReset();
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      const scopes = opts.client?.connect.scopes ?? [];
+      if (opts.req.method === "sessions.delete" && !scopes.includes("operator.admin")) {
+        opts.respond(false, undefined, {
+          code: "invalid_request",
+          message: "missing scope: operator.admin",
+        });
+        return;
+      }
+      opts.respond(true, {});
+    });
+
+    const subagent = await createSubagentRuntime();
+    const log = createPluginLog();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/secure-hook",
+            auth: "gateway",
+            handler: async (_req, _res) => {
+              await subagent.deleteSession({ sessionKey: "agent:main:subagent:child" });
+              return true;
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+
+    const { res, setHeader, end } = makeMockHttpResponse();
+    const handled = await handler({ url: "/secure-hook" } as IncomingMessage, res, undefined, {
+      gatewayAuthSatisfied: true,
+    });
+
+    expect(handled).toBe(true);
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(handleGatewayRequest.mock.calls[0]?.[0]?.client?.connect.scopes).toEqual([
+      "operator.write",
+    ]);
+    expect(res.statusCode).toBe(500);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+    expect(end).toHaveBeenCalledWith("Internal Server Error");
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.admin"));
+  });
+
   it("returns false when no routes are registered", async () => {
     const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({
