@@ -6,7 +6,7 @@ import {
   requiresExplicitMatrixDefaultAccount,
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
-} from "../plugin-sdk/matrix.js";
+} from "./matrix-config-helpers.js";
 
 describe("matrix account selection", () => {
   it("resolves configured account ids from non-canonical account keys", () => {
