@@ -3,6 +3,7 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import { loggingState } from "../logging/state.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
 import {
@@ -72,6 +73,7 @@ function buildColdStartStatusSummary(): Awaited<ReturnType<typeof getStatusSumma
     },
     channelSummary: [],
     queuedSystemEvents: [],
+    tasks: createEmptyTaskRegistrySummary(),
     sessions: {
       paths: [],
       count: 0,
