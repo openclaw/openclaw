@@ -204,10 +204,28 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
     tracker.recordPending(room2, entry("msg in room2"));
 
     // Late completion for the evicted room must not recreate a stale watermark.
-    tracker.consumeHistory(AGENT, room1, prepared.snapshotIdx, "$trigger");
+    tracker.consumeHistory(AGENT, room1, prepared, "$trigger");
 
     // Recreate room1 and add fresh content.
     tracker.recordPending(room1, entry("new msg in room1"));
+    const history = tracker.getPendingHistory(AGENT, room1, 100);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.body).toBe("new msg in room1");
+  });
+
+  it("rejects stale snapshots after the room queue is recreated", () => {
+    const tracker = createRoomHistoryTrackerForTests(200, 1);
+    const room1 = "!room1:test";
+    const room2 = "!room2:test";
+
+    tracker.recordPending(room1, entry("old msg in room1"));
+    const staleSnapshot = tracker.recordTrigger(room1, entry("trigger in room1"));
+
+    tracker.recordPending(room2, entry("msg in room2")); // evicts room1
+    tracker.recordPending(room1, entry("new msg in room1")); // recreates room1 with new generation
+
+    tracker.consumeHistory(AGENT, room1, staleSnapshot);
+
     const history = tracker.getPendingHistory(AGENT, room1, 100);
     expect(history).toHaveLength(1);
     expect(history[0]?.body).toBe("new msg in room1");

@@ -26,10 +26,14 @@ const MAX_PREPARED_TRIGGER_ENTRIES = 500;
 
 export type { HistoryEntry };
 
+export type HistorySnapshotToken = {
+  snapshotIdx: number;
+  queueGeneration: number;
+};
+
 export type PreparedTriggerResult = {
   history: HistoryEntry[];
-  snapshotIdx: number;
-};
+} & HistorySnapshotToken;
 
 export type RoomHistoryTracker = {
   /**
@@ -57,7 +61,7 @@ export type RoomHistoryTracker = {
   consumeHistory: (
     agentId: string,
     roomId: string,
-    snapshotIdx: number,
+    snapshot: HistorySnapshotToken,
     messageId?: string,
   ) => void;
 };
@@ -71,13 +75,14 @@ export type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
   /**
    * Test-only helper for manually appending a trigger entry and snapshot index.
    */
-  recordTrigger: (roomId: string, entry: HistoryEntry) => number;
+  recordTrigger: (roomId: string, entry: HistoryEntry) => HistorySnapshotToken;
 };
 
 type RoomQueue = {
   entries: HistoryEntry[];
   /** Absolute index of entries[0] — increases as old entries are trimmed. */
   baseIndex: number;
+  generation: number;
   preparedTriggers: Map<string, PreparedTriggerResult>;
 };
 
@@ -90,6 +95,7 @@ function createRoomHistoryTrackerInternal(
   const roomQueues = new Map<string, RoomQueue>();
   /** Maps `${agentId}:${roomId}` → absolute consumed-up-to index */
   const agentWatermarks = new Map<string, number>();
+  let nextQueueGeneration = 1;
 
   function clearRoomWatermarks(roomId: string): void {
     const roomSuffix = `:${roomId}`;
@@ -103,7 +109,12 @@ function createRoomHistoryTrackerInternal(
   function getOrCreateQueue(roomId: string): RoomQueue {
     let queue = roomQueues.get(roomId);
     if (!queue) {
-      queue = { entries: [], baseIndex: 0, preparedTriggers: new Map() };
+      queue = {
+        entries: [],
+        baseIndex: 0,
+        generation: nextQueueGeneration++,
+        preparedTriggers: new Map(),
+      };
       roomQueues.set(roomId, queue);
       // FIFO eviction to prevent unbounded growth across many rooms
       if (roomQueues.size > maxRoomQueues) {
@@ -117,14 +128,17 @@ function createRoomHistoryTrackerInternal(
     return queue;
   }
 
-  function appendToQueue(queue: RoomQueue, entry: HistoryEntry): number {
+  function appendToQueue(queue: RoomQueue, entry: HistoryEntry): HistorySnapshotToken {
     queue.entries.push(entry);
     if (queue.entries.length > maxQueueSize) {
       const overflow = queue.entries.length - maxQueueSize;
       queue.entries.splice(0, overflow);
       queue.baseIndex += overflow;
     }
-    return queue.baseIndex + queue.entries.length;
+    return {
+      snapshotIdx: queue.baseIndex + queue.entries.length,
+      queueGeneration: queue.generation,
+    };
   }
 
   function wmKey(agentId: string, roomId: string): string {
@@ -217,7 +231,7 @@ function createRoomHistoryTrackerInternal(
       }
       const prepared = {
         history: computePendingHistory(queue, agentId, roomId, limit),
-        snapshotIdx: appendToQueue(queue, entry),
+        ...appendToQueue(queue, entry),
       };
       if (retryKey) {
         return rememberPreparedTrigger(queue, retryKey, prepared);
@@ -225,7 +239,7 @@ function createRoomHistoryTrackerInternal(
       return prepared;
     },
 
-    consumeHistory(agentId, roomId, snapshotIdx, messageId) {
+    consumeHistory(agentId, roomId, snapshot, messageId) {
       const key = wmKey(agentId, roomId);
       const queue = roomQueues.get(roomId);
       if (!queue) {
@@ -234,10 +248,16 @@ function createRoomHistoryTrackerInternal(
         agentWatermarks.delete(key);
         return;
       }
+      if (queue.generation !== snapshot.queueGeneration) {
+        // The room was evicted and recreated before this trigger completed. Reject the stale
+        // snapshot so it cannot advance the watermark for the new queue generation.
+        agentWatermarks.delete(key);
+        return;
+      }
       // Monotone write: never regress an already-advanced watermark.
       // Guards against out-of-order completion when two triggers for the same
       // (agentId, roomId) are in-flight concurrently.
-      rememberWatermark(key, snapshotIdx);
+      rememberWatermark(key, snapshot.snapshotIdx);
       const retryKey = preparedTriggerKey(agentId, messageId);
       if (queue && retryKey) {
         queue.preparedTriggers.delete(retryKey);

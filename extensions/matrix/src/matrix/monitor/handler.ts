@@ -825,7 +825,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               })
             : undefined;
         const inboundHistory = preparedTrigger?.history;
-        const triggerSnapshotIdx = preparedTrigger?.snapshotIdx ?? -1;
+        const triggerSnapshot = preparedTrigger;
 
         return {
           route: _route,
@@ -843,7 +843,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           media,
           locationPayload,
           messageId: _messageId,
-          triggerSnapshotIdx,
+          triggerSnapshot,
           threadRootId: _threadRootId,
         };
       });
@@ -867,7 +867,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         media,
         locationPayload,
         messageId: _messageId,
-        triggerSnapshotIdx,
+        triggerSnapshot,
         threadRootId: _threadRootId,
       } = ingressResult;
 
@@ -1319,8 +1319,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Advance the per-agent watermark now that the reply succeeded (or no reply was needed).
       // Only advance to the snapshot position — messages added during async processing remain
       // visible for the next trigger.
-      if (isRoom && triggerSnapshotIdx >= 0) {
-        roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshotIdx, _messageId);
+      if (isRoom && triggerSnapshot) {
+        roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, _messageId);
       }
       if (!queuedFinal) {
         await commitInboundEventIfClaimed();
