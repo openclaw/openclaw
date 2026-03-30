@@ -67,6 +67,35 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(r2).toBe(files2);
     expect(mockLoad()).toHaveBeenCalledTimes(2);
   });
+
+  it("deduplicates by path, keeping first occurrence", async () => {
+    const filesWithDup = [
+      makeFile("AGENTS.md", "# Agent v1"),
+      makeFile("SOUL.md", "# Soul"),
+      makeFile("AGENTS.md", "# Agent v2"), // duplicate path
+    ];
+    mockLoad().mockResolvedValueOnce(filesWithDup);
+
+    const result = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-dedup",
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].content).toBe("# Agent v1"); // first occurrence kept
+    expect(result[1].content).toBe("# Soul");
+  });
+
+  it("handles empty files array", async () => {
+    mockLoad().mockResolvedValueOnce([]);
+
+    const result = await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-empty",
+    });
+
+    expect(result).toHaveLength(0);
+  });
 });
 
 describe("clearBootstrapSnapshot", () => {

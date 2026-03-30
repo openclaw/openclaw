@@ -12,8 +12,19 @@ export async function getOrLoadBootstrapFiles(params: {
   }
 
   const files = await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  cache.set(params.sessionKey, files);
-  return files;
+
+  // Deduplicate by path, keeping first occurrence
+  const seen = new Set<string>();
+  const deduped = files.filter((file) => {
+    if (seen.has(file.path)) {
+      return false;
+    }
+    seen.add(file.path);
+    return true;
+  });
+
+  cache.set(params.sessionKey, deduped);
+  return deduped;
 }
 
 export function clearBootstrapSnapshot(sessionKey: string): void {
