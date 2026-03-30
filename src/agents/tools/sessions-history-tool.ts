@@ -25,8 +25,77 @@ const SessionsHistoryToolSchema = Type.Object({
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+const SESSIONS_HISTORY_ACTIVITY_MAX_ITEMS = 5;
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
+
+export function extractRecentInterSessionActivity(
+  messages: Array<unknown>,
+  maxItems = SESSIONS_HISTORY_ACTIVITY_MAX_ITEMS,
+): Array<{
+  role: string;
+  text: string;
+  provenance: {
+    kind: string;
+    sourceSessionKey?: string;
+    sourceChannel?: string;
+    sourceTool?: string;
+  };
+}> {
+  const items: Array<{
+    role: string;
+    text: string;
+    provenance: {
+      kind: string;
+      sourceSessionKey?: string;
+      sourceChannel?: string;
+      sourceTool?: string;
+    };
+  }> = [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const entry = messages[i];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as {
+      role?: unknown;
+      content?: unknown;
+      text?: unknown;
+      provenance?: unknown;
+    };
+    const provenance =
+      record.provenance && typeof record.provenance === "object"
+        ? (record.provenance as Record<string, unknown>)
+        : undefined;
+    if (provenance?.kind !== "inter_session") {
+      continue;
+    }
+    const role = typeof record.role === "string" ? record.role : "unknown";
+    const rawText =
+      typeof record.content === "string"
+        ? record.content
+        : typeof record.text === "string"
+          ? record.text
+          : "";
+    const sanitized = truncateHistoryText(rawText || "");
+    items.push({
+      role,
+      text: sanitized.text,
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey:
+          typeof provenance.sourceSessionKey === "string" ? provenance.sourceSessionKey : undefined,
+        sourceChannel:
+          typeof provenance.sourceChannel === "string" ? provenance.sourceChannel : undefined,
+        sourceTool: typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
+      },
+    });
+    if (items.length >= maxItems) {
+      break;
+    }
+  }
+  return items;
+}
 
 function truncateHistoryText(text: string): {
   text: string;
@@ -243,6 +312,7 @@ export function createSessionsHistoryTool(opts?: {
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      const recentInterSessionActivity = extractRecentInterSessionActivity(selectedMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
@@ -259,6 +329,7 @@ export function createSessionsHistoryTool(opts?: {
       return jsonResult({
         sessionKey: displayKey,
         messages: hardened.items,
+        recentInterSessionActivity,
         truncated: droppedMessages || contentTruncated || hardened.hardCapped,
         droppedMessages: droppedMessages || hardened.hardCapped,
         contentTruncated,
