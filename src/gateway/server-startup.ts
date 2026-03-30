@@ -167,7 +167,7 @@ export async function startGatewaySidecars(params: {
     );
   }
 
-  if (params.cfg.hooks?.internal?.enabled) {
+  if (params.cfg.hooks?.internal?.enabled !== false) {
     setTimeout(() => {
       const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
         cfg: params.cfg,
