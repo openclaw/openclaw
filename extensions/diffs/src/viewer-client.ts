@@ -30,7 +30,7 @@ const viewerState: ViewerState = {
 };
 
 export async function filterSupportedHydrationLanguages(
-  languages: Iterable<SupportedLanguages>,
+  languages: Iterable<string>,
 ): Promise<SupportedLanguages[]> {
   const supported = new Set<SupportedLanguages>();
   for (const language of languages) {

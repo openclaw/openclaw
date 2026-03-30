@@ -10,14 +10,14 @@ describe("filterSupportedHydrationLanguages", () => {
   });
 
   it("drops invalid languages and falls back to text", async () => {
-    await expect(
-      filterSupportedHydrationLanguages(["not-a-real-language" as unknown as "text"]),
-    ).resolves.toEqual(["text"]);
+    await expect(filterSupportedHydrationLanguages(["not-a-real-language"])).resolves.toEqual([
+      "text",
+    ]);
   });
 
   it("keeps valid languages when invalid hints are mixed in", async () => {
     await expect(
-      filterSupportedHydrationLanguages(["typescript", "not-a-real-language" as unknown as "text"]),
+      filterSupportedHydrationLanguages(["typescript", "not-a-real-language"]),
     ).resolves.toEqual(["typescript"]);
   });
 });
