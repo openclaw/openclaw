@@ -105,6 +105,61 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-brand")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__logo")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
+    expect(app.querySelector(".sidebar-chat-section")).not.toBeNull();
+    expect(app.querySelector(".sidebar-chat-new")).not.toBeNull();
+  });
+
+  it("starts a new dashboard chat from Cmd/Ctrl+N", async () => {
+    const app = mountApp("/channels");
+    app.client = {
+      stop: () => {},
+      request: async (method: string, params?: Record<string, unknown>) => {
+        if (method === "sessions.create") {
+          expect(params).toMatchObject({ parentSessionKey: "main" });
+          return { key: "agent:main:dashboard:new-chat" };
+        }
+        if (method === "sessions.list") {
+          return {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:new-chat",
+                kind: "direct",
+                updatedAt: Date.now(),
+                derivedTitle: "Fresh task",
+              },
+            ],
+          };
+        }
+        if (method === "chat.history") {
+          return { messages: [], thinkingLevel: null };
+        }
+        if (method === "models.list") {
+          return { models: [] };
+        }
+        return {};
+      },
+    } as typeof app.client;
+    await app.updateComplete;
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "n",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("agent:main:dashboard:new-chat");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=agent%3Amain%3Adashboard%3Anew-chat");
   });
 
   it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {

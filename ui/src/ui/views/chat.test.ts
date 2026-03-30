@@ -4,7 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderChatSessionSelect } from "../app-render.helpers.ts";
+import { renderChatSessionSelect, resolveChatSidebarSessions } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
@@ -1191,5 +1191,63 @@ describe("chat view", () => {
     expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
     expect(labels).toContain("Deep Chat (alpha) / main · named-main");
     expect(labels).toContain("Coding (beta) / main");
+  });
+
+  it("builds a recent chat list from dashboard sessions for the active agent", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:main:dashboard:active";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 4,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:dashboard:older",
+          kind: "direct",
+          updatedAt: 100,
+          derivedTitle: "Older task",
+          lastMessagePreview: "Review the changelog",
+        },
+        {
+          key: "agent:main:dashboard:active",
+          kind: "direct",
+          updatedAt: 200,
+          label: "Current task",
+          lastMessagePreview: "Finish the implementation",
+        },
+        {
+          key: "agent:beta:dashboard:other-agent",
+          kind: "direct",
+          updatedAt: 300,
+          derivedTitle: "Other agent",
+        },
+        {
+          key: "agent:main:cron:job-1",
+          kind: "direct",
+          updatedAt: 400,
+          derivedTitle: "Cron run",
+        },
+      ],
+    };
+
+    const sessions = resolveChatSidebarSessions(state);
+
+    expect(sessions).toHaveLength(2);
+    expect(sessions.map((entry) => entry.key)).toEqual([
+      "agent:main:dashboard:active",
+      "agent:main:dashboard:older",
+    ]);
+    expect(sessions[0]).toMatchObject({
+      title: "Current task",
+      preview: "Finish the implementation",
+      active: true,
+    });
+    expect(sessions[1]).toMatchObject({
+      title: "Older task",
+      preview: "Review the changelog",
+      active: false,
+    });
   });
 });

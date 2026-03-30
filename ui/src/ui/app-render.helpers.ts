@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -13,7 +16,8 @@ import {
 } from "./chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { loadSessions } from "./controllers/sessions.ts";
+import { createSession, loadSessions } from "./controllers/sessions.ts";
+import { formatRelativeTimestamp } from "./format.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -517,13 +521,59 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
+export async function createDashboardChatSession(state: AppViewState): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const nextSessionKey = await createSession(state, {
+    agentId: resolveAgentIdFromSessionKey(state.sessionKey),
+    parentSessionKey: state.sessionKey,
+  });
+  if (!nextSessionKey) {
+    return null;
+  }
+  switchChatSession(state, nextSessionKey);
+  return nextSessionKey;
+}
+
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
+    includeDerivedTitles: true,
+    includeLastMessage: true,
   });
+}
+
+export function resolveChatSidebarSessions(state: AppViewState, limit = 8) {
+  const rows = state.sessionsResult?.sessions ?? [];
+  const currentAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const hideCron = state.sessionsHideCron ?? true;
+  return rows
+    .filter((row) => {
+      const parsed = parseAgentSessionKey(row.key);
+      if (parsed && parsed.agentId !== currentAgentId) {
+        return false;
+      }
+      if (row.kind === "global" || row.kind === "unknown") {
+        return false;
+      }
+      if (hideCron && isCronSessionKey(row.key)) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .slice(0, limit)
+    .map((row) => ({
+      key: row.key,
+      title: row.derivedTitle?.trim() || row.label?.trim() || row.displayName?.trim() || row.key,
+      preview: row.lastMessagePreview?.replace(/\s+/g, " ").trim() || "",
+      updatedLabel: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
+      active: row.key === state.sessionKey,
+    }));
 }
 
 function renderChatModelSelect(state: AppViewState) {

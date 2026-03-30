@@ -9,9 +9,11 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
+  createDashboardChatSession,
   renderChatControls,
   renderChatMobileToggle,
   renderChatSessionSelect,
+  resolveChatSidebarSessions,
   renderTab,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
@@ -294,6 +296,66 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   return identity?.avatarUrl;
 }
 
+function renderSidebarChatSection(state: AppViewState, navCollapsed: boolean) {
+  const sessions = resolveChatSidebarSessions(state, 8);
+  const creating = state.chatSending || Boolean(state.chatRunId);
+  return html`
+    <section class="sidebar-chat-section ${navCollapsed ? "sidebar-chat-section--collapsed" : ""}">
+      <button
+        type="button"
+        class="nav-item sidebar-chat-new"
+        ?disabled=${!state.connected || creating}
+        @click=${async () => {
+          const created = await createDashboardChatSession(state);
+          if (created) {
+            state.setTab("chat");
+          }
+        }}
+        title=${t("overview.quickActions.newSession")}
+        aria-label=${t("overview.quickActions.newSession")}
+      >
+        <span class="nav-item__icon" aria-hidden="true">${icons.plus}</span>
+        ${!navCollapsed
+          ? html`<span class="nav-item__text">${t("overview.quickActions.newSession")}</span>`
+          : nothing}
+      </button>
+      ${navCollapsed
+        ? nothing
+        : html`
+            <div class="sidebar-chat-list" aria-label=${t("overview.cards.recentSessions")}>
+              <div class="sidebar-chat-list__label">${t("overview.cards.recentSessions")}</div>
+              ${sessions.length === 0
+                ? html`<div class="sidebar-chat-list__empty">${t("usage.sessions.noRecent")}</div>`
+                : sessions.map(
+                    (session) => html`
+                      <button
+                        type="button"
+                        class="sidebar-chat-item ${session.active
+                          ? "sidebar-chat-item--active"
+                          : ""}"
+                        @click=${() => {
+                          switchChatSession(state, session.key);
+                          state.setTab("chat");
+                        }}
+                        title=${session.title}
+                        aria-current=${session.active ? "page" : "false"}
+                      >
+                        <div class="sidebar-chat-item__title">${session.title}</div>
+                        ${session.preview
+                          ? html`<div class="sidebar-chat-item__preview">${session.preview}</div>`
+                          : nothing}
+                        ${session.updatedLabel
+                          ? html`<div class="sidebar-chat-item__meta">${session.updatedLabel}</div>`
+                          : nothing}
+                      </button>
+                    `,
+                  )}
+            </div>
+          `}
+    </section>
+  `;
+}
+
 export function renderApp(state: AppViewState) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
@@ -500,44 +562,48 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>
             <div class="sidebar-shell__body">
-              <nav class="sidebar-nav">
-                ${TAB_GROUPS.map((group) => {
-                  const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
-                  const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
+              <div class="sidebar-nav">
+                ${renderSidebarChatSection(state, navCollapsed)}
+                <nav>
+                  ${TAB_GROUPS.map((group) => {
+                    const isGroupCollapsed =
+                      state.settings.navGroupsCollapsed[group.label] ?? false;
+                    const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+                    const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
-                  return html`
-                    <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
-                      ${!navCollapsed
-                        ? html`
-                            <button
-                              class="nav-section__label"
-                              @click=${() => {
-                                const next = { ...state.settings.navGroupsCollapsed };
-                                next[group.label] = !isGroupCollapsed;
-                                state.applySettings({
-                                  ...state.settings,
-                                  navGroupsCollapsed: next,
-                                });
-                              }}
-                              aria-expanded=${showItems}
-                            >
-                              <span class="nav-section__label-text"
-                                >${t(`nav.${group.label}`)}</span
+                    return html`
+                      <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
+                        ${!navCollapsed
+                          ? html`
+                              <button
+                                class="nav-section__label"
+                                @click=${() => {
+                                  const next = { ...state.settings.navGroupsCollapsed };
+                                  next[group.label] = !isGroupCollapsed;
+                                  state.applySettings({
+                                    ...state.settings,
+                                    navGroupsCollapsed: next,
+                                  });
+                                }}
+                                aria-expanded=${showItems}
                               >
-                              <span class="nav-section__chevron"> ${icons.chevronDown} </span>
-                            </button>
-                          `
-                        : nothing}
-                      <div class="nav-section__items">
-                        ${group.tabs.map((tab) =>
-                          renderTab(state, tab, { collapsed: navCollapsed }),
-                        )}
-                      </div>
-                    </section>
-                  `;
-                })}
-              </nav>
+                                <span class="nav-section__label-text"
+                                  >${t(`nav.${group.label}`)}</span
+                                >
+                                <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+                              </button>
+                            `
+                          : nothing}
+                        <div class="nav-section__items">
+                          ${group.tabs.map((tab) =>
+                            renderTab(state, tab, { collapsed: navCollapsed }),
+                          )}
+                        </div>
+                      </section>
+                    `;
+                  })}
+                </nav>
+              </div>
             </div>
             <div class="sidebar-shell__footer">
               <div class="sidebar-utility-group">

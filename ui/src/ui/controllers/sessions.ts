@@ -36,6 +36,8 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    includeDerivedTitles?: boolean;
+    includeLastMessage?: boolean;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -54,6 +56,8 @@ export async function loadSessions(
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
+      includeDerivedTitles: overrides?.includeDerivedTitles ?? true,
+      includeLastMessage: overrides?.includeLastMessage ?? true,
     };
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;
@@ -74,6 +78,31 @@ export async function loadSessions(
     }
   } finally {
     state.sessionsLoading = false;
+  }
+}
+
+export async function createSession(
+  state: SessionsState,
+  params?: {
+    agentId?: string;
+    label?: string;
+    parentSessionKey?: string;
+  },
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  try {
+    const res = await state.client.request<{ key?: string }>("sessions.create", {
+      ...(params?.agentId ? { agentId: params.agentId } : {}),
+      ...(params?.label ? { label: params.label } : {}),
+      ...(params?.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
+    });
+    await loadSessions(state);
+    return typeof res?.key === "string" && res.key.trim() ? res.key.trim() : null;
+  } catch (err) {
+    state.sessionsError = String(err);
+    return null;
   }
 }
 

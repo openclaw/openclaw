@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSessionsAndRefresh, subscribeSessions, type SessionsState } from "./sessions.ts";
+import {
+  createSession,
+  deleteSessionsAndRefresh,
+  loadSessions,
+  subscribeSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -11,9 +17,9 @@ if (!("window" in globalThis)) {
   });
 }
 
-function createState(request: RequestFn, overrides: Partial<SessionsState> = {}): SessionsState {
+function createState(request?: RequestFn, overrides: Partial<SessionsState> = {}): SessionsState {
   return {
-    client: { request } as unknown as SessionsState["client"],
+    client: request ? ({ request } as unknown as SessionsState["client"]) : null,
     connected: true,
     sessionsLoading: false,
     sessionsResult: null,
@@ -71,6 +77,8 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -118,5 +126,86 @@ describe("deleteSessionsAndRefresh", () => {
 
     expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("createSession", () => {
+  it("creates a dashboard chat session and refreshes sessions", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.create") {
+        expect(params).toEqual({
+          agentId: "main",
+          parentSessionKey: "main",
+        });
+        return { key: "agent:main:dashboard:session-1" };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key: "agent:main:dashboard:session-1", kind: "direct", updatedAt: null }],
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const state = createState(request);
+
+    const key = await createSession(state, {
+      agentId: "main",
+      parentSessionKey: "main",
+    });
+
+    expect(key).toBe("agent:main:dashboard:session-1");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
+      agentId: "main",
+      parentSessionKey: "main",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+  });
+
+  it("stores the error and returns null when create fails", async () => {
+    const state = createState();
+    state.client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "sessions.create") {
+          throw new Error("nope");
+        }
+        return {};
+      }),
+    } as unknown as NonNullable<SessionsState["client"]>;
+
+    const key = await createSession(state);
+
+    expect(key).toBeNull();
+    expect(state.sessionsError).toContain("nope");
+  });
+});
+
+describe("loadSessions", () => {
+  it("requests derived titles and last-message previews by default", async () => {
+    const request = vi.fn(async () => ({
+      ts: 0,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    }));
+    const state = createState(request);
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
   });
 });

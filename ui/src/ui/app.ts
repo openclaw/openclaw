@@ -29,6 +29,7 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
+import { createDashboardChatSession } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -469,6 +470,11 @@ export class OpenClawApp extends LitElement {
         this.paletteQuery = "";
         this.paletteActiveIndex = 0;
       }
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      void this.handleCreateDashboardChatSession();
     }
   };
 
@@ -636,6 +642,16 @@ export class OpenClawApp extends LitElement {
       messageOverride,
       opts,
     );
+  }
+
+  async handleCreateDashboardChatSession() {
+    const created = await createDashboardChatSession(this as unknown as AppViewState);
+    if (!created) {
+      return;
+    }
+    if (this.tab !== "chat") {
+      this.setTab("chat");
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {
