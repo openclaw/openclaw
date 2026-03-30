@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const resolveFeishuToolAccountMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
@@ -15,25 +16,48 @@ const driveUploadAllMock = vi.hoisted(() => vi.fn());
 const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
 const scopeListMock = vi.hoisted(() => vi.fn());
+const toolAccountModule = await import("./tool-account.js");
+const runtimeModule = await import("./runtime.js");
 
-vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
-}));
-
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      media: {
-        fetchRemoteMedia: fetchRemoteMediaMock,
+vi.spyOn(toolAccountModule, "createFeishuToolClient").mockImplementation(() =>
+  createFeishuClientMock(),
+);
+vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
+  doc: true,
+  chat: false,
+  wiki: false,
+  drive: false,
+  perm: false,
+  scopes: false,
+});
+vi.spyOn(toolAccountModule, "resolveFeishuToolAccount").mockImplementation((...args) =>
+  resolveFeishuToolAccountMock(...args),
+);
+vi.spyOn(runtimeModule, "getFeishuRuntime").mockImplementation(
+  () =>
+    ({
+      channel: {
+        media: {
+          fetchRemoteMedia: fetchRemoteMediaMock,
+          saveMediaBuffer: vi.fn(),
+        },
       },
-    },
-    media: {
-      loadWebMedia: loadWebMediaMock,
-    },
-  }),
-}));
+      media: {
+        loadWebMedia: loadWebMediaMock,
+        detectMime: vi.fn(async () => "application/octet-stream"),
+        mediaKindFromMime: vi.fn(() => "image"),
+        isVoiceCompatibleAudio: vi.fn(() => false),
+        getImageMetadata: vi.fn(async () => null),
+        resizeToJpeg: vi.fn(async () => Buffer.alloc(0)),
+      },
+    }) as unknown as ReturnType<typeof runtimeModule.getFeishuRuntime>,
+);
 
-import { registerFeishuDocTools } from "./docx.js";
+const { registerFeishuDocTools } = await import("./docx.js");
+
+type ToolResultWithDetails = {
+  details: Record<string, unknown>;
+};
 
 describe("feishu_doc image fetch hardening", () => {
   beforeEach(() => {
@@ -71,6 +95,9 @@ describe("feishu_doc image fetch hardening", () => {
           list: scopeListMock,
         },
       },
+    });
+    resolveFeishuToolAccountMock.mockReturnValue({
+      config: { mediaMaxMb: 30 },
     });
 
     convertMock.mockResolvedValue({
@@ -131,6 +158,13 @@ describe("feishu_doc image fetch hardening", () => {
     return tool as ToolLike;
   }
 
+  async function executeFeishuDocTool(
+    tool: ToolLike,
+    params: Record<string, unknown>,
+  ): Promise<ToolResultWithDetails> {
+    return (await tool.execute("tool-call", params)) as ToolResultWithDetails;
+  }
+
   it("inserts blocks sequentially to preserve document order", async () => {
     const blocks = [
       { block_type: 3, block_id: "h1" },
@@ -154,7 +188,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "append",
       doc_token: "doc_1",
       content: "plain text body",
@@ -247,7 +281,7 @@ describe("feishu_doc image fetch hardening", () => {
       (_, i) => `line ${i} with enough content to trigger fallback chunking`,
     ).join("\n");
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "append",
       doc_token: "doc_1",
       content: longMarkdown,
@@ -301,7 +335,7 @@ describe("feishu_doc image fetch hardening", () => {
       "Tail paragraph three with enough text to exceed API limits when combined. ".repeat(8),
     ].join("\n");
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "append",
       doc_token: "doc_1",
       content: fencedMarkdown,
@@ -324,7 +358,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "write",
       doc_token: "doc_1",
       content: "![x](https://x.test/image.png)",
@@ -344,7 +378,7 @@ describe("feishu_doc image fetch hardening", () => {
       requesterSenderId: "ou_123",
     });
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
     });
@@ -369,7 +403,7 @@ describe("feishu_doc image fetch hardening", () => {
       messageChannel: "feishu",
     });
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
     });
@@ -385,7 +419,7 @@ describe("feishu_doc image fetch hardening", () => {
       requesterSenderId: "ou_123",
     });
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
       grant_to_requester: false,
@@ -403,7 +437,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
     });
@@ -426,7 +460,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_file",
       doc_token: "doc_1",
       file_path: "/tmp/allowed/test-local.txt",
@@ -475,7 +509,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_file",
       doc_token: "doc_1",
       file_path: "/tmp/allowed/test-local.txt",
@@ -493,7 +527,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_file",
       doc_token: "doc_1",
       file_path: "/etc/passwd",
@@ -519,7 +553,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_image",
       doc_token: "doc_1",
       file_path: "/home/admin/.openclaw/openclaw.json",

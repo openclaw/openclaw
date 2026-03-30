@@ -4,6 +4,7 @@ const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
 const fetchClawHubPackageVersionMock = vi.fn();
 const downloadClawHubPackageArchiveMock = vi.fn();
+const archiveCleanupMock = vi.fn();
 const resolveLatestVersionFromPackageMock = vi.fn();
 const resolveCompatibilityHostVersionMock = vi.fn();
 const installPluginFromArchiveMock = vi.fn();
@@ -35,12 +36,74 @@ const { ClawHubRequestError } = await import("../infra/clawhub.js");
 const { CLAWHUB_INSTALL_ERROR_CODE, formatClawHubSpecifier, installPluginFromClawHub } =
   await import("./clawhub.js");
 
+async function expectClawHubInstallError(params: {
+  setup?: () => void;
+  spec: string;
+  expected: {
+    ok: false;
+    code: (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
+    error: string;
+  };
+}) {
+  params.setup?.();
+  await expect(installPluginFromClawHub({ spec: params.spec })).resolves.toMatchObject(
+    params.expected,
+  );
+}
+
+function createLoggerSpies() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+  };
+}
+
+function expectClawHubInstallFlow(params: {
+  baseUrl: string;
+  version: string;
+  archivePath: string;
+}) {
+  expect(fetchClawHubPackageDetailMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      name: "demo",
+      baseUrl: params.baseUrl,
+    }),
+  );
+  expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      name: "demo",
+      version: params.version,
+    }),
+  );
+  expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      archivePath: params.archivePath,
+    }),
+  );
+}
+
+function expectSuccessfulClawHubInstall(result: unknown) {
+  expect(result).toMatchObject({
+    ok: true,
+    pluginId: "demo",
+    version: "2026.3.22",
+    clawhub: {
+      source: "clawhub",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+      integrity: "sha256-demo",
+    },
+  });
+}
+
 describe("installPluginFromClawHub", () => {
   beforeEach(() => {
     parseClawHubPluginSpecMock.mockReset();
     fetchClawHubPackageDetailMock.mockReset();
     fetchClawHubPackageVersionMock.mockReset();
     downloadClawHubPackageArchiveMock.mockReset();
+    archiveCleanupMock.mockReset();
     resolveLatestVersionFromPackageMock.mockReset();
     resolveCompatibilityHostVersionMock.mockReset();
     installPluginFromArchiveMock.mockReset();
@@ -76,7 +139,9 @@ describe("installPluginFromClawHub", () => {
     downloadClawHubPackageArchiveMock.mockResolvedValue({
       archivePath: "/tmp/clawhub-demo/archive.zip",
       integrity: "sha256-demo",
+      cleanup: archiveCleanupMock,
     });
+    archiveCleanupMock.mockResolvedValue(undefined);
     resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.22");
     installPluginFromArchiveMock.mockResolvedValue({
       ok: true,
@@ -92,109 +157,119 @@ describe("installPluginFromClawHub", () => {
   });
 
   it("installs a ClawHub code plugin through the archive installer", async () => {
-    const info = vi.fn();
-    const warn = vi.fn();
+    const logger = createLoggerSpies();
     const result = await installPluginFromClawHub({
       spec: "clawhub:demo",
       baseUrl: "https://clawhub.ai",
-      logger: { info, warn },
+      logger,
     });
 
-    expect(fetchClawHubPackageDetailMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "demo",
-        baseUrl: "https://clawhub.ai",
-      }),
-    );
-    expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "demo",
-        version: "2026.3.22",
-      }),
-    );
-    expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        archivePath: "/tmp/clawhub-demo/archive.zip",
-      }),
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      pluginId: "demo",
+    expectClawHubInstallFlow({
+      baseUrl: "https://clawhub.ai",
       version: "2026.3.22",
-      clawhub: {
-        source: "clawhub",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        integrity: "sha256-demo",
-      },
+      archivePath: "/tmp/clawhub-demo/archive.zip",
     });
-    expect(info).toHaveBeenCalledWith("ClawHub code-plugin demo@2026.3.22 channel=official");
-    expect(info).toHaveBeenCalledWith("Compatibility: pluginApi=>=2026.3.22 minGateway=2026.3.0");
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("rejects packages whose plugin API range exceeds the runtime version", async () => {
-    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.3.21");
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:demo" })).resolves.toMatchObject({
-      ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-      error:
-        'Plugin "demo" requires plugin API >=2026.3.22, but this OpenClaw runtime exposes 2026.3.21.',
-    });
-  });
-
-  it("rejects skill families and redirects to skills install", async () => {
-    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
-      package: {
-        name: "calendar",
-        displayName: "Calendar",
-        family: "skill",
-        channel: "official",
-        isOfficial: true,
-        createdAt: 0,
-        updatedAt: 0,
-      },
-    });
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:calendar" })).resolves.toMatchObject({
-      ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-      error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
-    });
-  });
-
-  it("returns typed package-not-found failures", async () => {
-    fetchClawHubPackageDetailMock.mockRejectedValueOnce(
-      new ClawHubRequestError({
-        path: "/api/v1/packages/demo",
-        status: 404,
-        body: "Package not found",
-      }),
+    expectSuccessfulClawHubInstall(result);
+    expect(logger.info).toHaveBeenCalledWith("ClawHub code-plugin demo@2026.3.22 channel=official");
+    expect(logger.info).toHaveBeenCalledWith(
+      "Compatibility: pluginApi=>=2026.3.22 minGateway=2026.3.0",
     );
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:demo" })).resolves.toMatchObject({
-      ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND,
-      error: "Package not found on ClawHub.",
-    });
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
-  it("returns typed version-not-found failures", async () => {
-    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "9.9.9" });
-    fetchClawHubPackageVersionMock.mockRejectedValueOnce(
-      new ClawHubRequestError({
-        path: "/api/v1/packages/demo/versions/9.9.9",
-        status: 404,
-        body: "Version not found",
-      }),
-    );
-
-    await expect(installPluginFromClawHub({ spec: "clawhub:demo@9.9.9" })).resolves.toMatchObject({
+  it("cleans up the downloaded archive even when archive install fails", async () => {
+    installPluginFromArchiveMock.mockResolvedValueOnce({
       ok: false,
-      code: CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
-      error: "Version not found on ClawHub: demo@9.9.9.",
+      error: "bad archive",
     });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "bad archive",
+    });
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "rejects packages whose plugin API range exceeds the runtime version",
+      setup: () => {
+        resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.3.21");
+      },
+      spec: "clawhub:demo",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+        error:
+          'Plugin "demo" requires plugin API >=2026.3.22, but this OpenClaw runtime exposes 2026.3.21.',
+      },
+    },
+    {
+      name: "rejects skill families and redirects to skills install",
+      setup: () => {
+        fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+          package: {
+            name: "calendar",
+            displayName: "Calendar",
+            family: "skill",
+            channel: "official",
+            isOfficial: true,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        });
+      },
+      spec: "clawhub:calendar",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
+        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+      },
+    },
+    {
+      name: "returns typed package-not-found failures",
+      setup: () => {
+        fetchClawHubPackageDetailMock.mockRejectedValueOnce(
+          new ClawHubRequestError({
+            path: "/api/v1/packages/demo",
+            status: 404,
+            body: "Package not found",
+          }),
+        );
+      },
+      spec: "clawhub:demo",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND,
+        error: "Package not found on ClawHub.",
+      },
+    },
+    {
+      name: "returns typed version-not-found failures",
+      setup: () => {
+        parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "9.9.9" });
+        fetchClawHubPackageVersionMock.mockRejectedValueOnce(
+          new ClawHubRequestError({
+            path: "/api/v1/packages/demo/versions/9.9.9",
+            status: 404,
+            body: "Version not found",
+          }),
+        );
+      },
+      spec: "clawhub:demo@9.9.9",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND,
+        error: "Version not found on ClawHub: demo@9.9.9.",
+      },
+    },
+  ] as const)("$name", async ({ setup, spec, expected }) => {
+    await expectClawHubInstallError({ setup, spec, expected });
   });
 });

@@ -1,46 +1,23 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
-import { resolveGatewayPort } from "../config/config.js";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
-import { info } from "../globals.js";
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
-import { formatGitInstallLabel } from "../infra/update-check.js";
-import {
-  resolveMemoryCacheSummary,
-  resolveMemoryFtsState,
-  resolveMemoryVectorState,
-  type Tone,
-} from "../plugin-sdk/memory-core-host-status.js";
-import {
-  formatPluginCompatibilityNotice,
-  summarizePluginCompatibility,
-} from "../plugins/status.js";
+import type { Tone } from "../plugin-sdk/memory-core-host-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
-import { formatHealthChannelLines, type HealthSummary } from "./health.js";
-import { resolveControlUiLinks } from "./onboard-helpers.js";
-import { statusAllCommand } from "./status-all.js";
-import { groupChannelIssuesByChannel } from "./status-all/channel-issues.js";
-import { formatGatewayAuthUsed } from "./status-all/format.js";
+import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
-import {
-  formatDuration,
-  formatKTokens,
-  formatTokensCompact,
-  shortenText,
-} from "./status.format.js";
-import { scanStatus } from "./status.scan.js";
-import {
-  formatUpdateAvailableHint,
-  formatUpdateOneLiner,
-  resolveUpdateAvailability,
-} from "./status.update.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
 let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
+let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
+let statusScanModulePromise: Promise<typeof import("./status.scan.js")> | undefined;
+let statusScanFastJsonModulePromise:
+  | Promise<typeof import("./status.scan.fast-json.js")>
+  | undefined;
+let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefined;
+let statusCommandTextRuntimePromise:
+  | Promise<typeof import("./status.command.text-runtime.js")>
+  | undefined;
+let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
@@ -50,6 +27,36 @@ function loadProviderUsage() {
 function loadSecurityAuditModule() {
   securityAuditModulePromise ??= import("../security/audit.runtime.js");
   return securityAuditModulePromise;
+}
+
+function loadGatewayCallModule() {
+  gatewayCallModulePromise ??= import("../gateway/call.js");
+  return gatewayCallModulePromise;
+}
+
+function loadStatusScanModule() {
+  statusScanModulePromise ??= import("./status.scan.js");
+  return statusScanModulePromise;
+}
+
+function loadStatusScanFastJsonModule() {
+  statusScanFastJsonModulePromise ??= import("./status.scan.fast-json.js");
+  return statusScanFastJsonModulePromise;
+}
+
+function loadStatusAllModule() {
+  statusAllModulePromise ??= import("./status-all.js");
+  return statusAllModulePromise;
+}
+
+function loadStatusCommandTextRuntime() {
+  statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
+  return statusCommandTextRuntimePromise;
+}
+
+function loadStatusNodeModeModule() {
+  statusNodeModeModulePromise ??= import("./status.node-mode.js");
+  return statusNodeModeModulePromise;
 }
 
 function resolvePairingRecoveryContext(params: {
@@ -91,14 +98,19 @@ export async function statusCommand(
   runtime: RuntimeEnv,
 ) {
   if (opts.all && !opts.json) {
-    await statusAllCommand(runtime, { timeoutMs: opts.timeoutMs });
+    await loadStatusAllModule().then(({ statusAllCommand }) =>
+      statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
+    );
     return;
   }
 
-  const scan = await scanStatus(
-    { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
-    runtime,
-  );
+  const scan = opts.json
+    ? await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
+        scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+      )
+    : await loadStatusScanModule().then(({ scanStatus }) =>
+        scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+      );
   const runSecurityAudit = async () =>
     await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
       runSecurityAudit({
@@ -164,23 +176,29 @@ export async function statusCommand(
           indeterminate: true,
           enabled: opts.json !== true,
         },
-        async () =>
-          await callGateway<HealthSummary>({
+        async () => {
+          const { callGateway } = await loadGatewayCallModule();
+          return await callGateway<HealthSummary>({
             method: "health",
             params: { probe: true },
             timeoutMs: opts.timeoutMs,
             config: scan.cfg,
-          }),
+          });
+        },
       )
     : undefined;
   const lastHeartbeat =
     opts.deep && gatewayReachable
-      ? await callGateway<HeartbeatEventPayload | null>({
-          method: "last-heartbeat",
-          params: {},
-          timeoutMs: opts.timeoutMs,
-          config: scan.cfg,
-        }).catch(() => null)
+      ? await loadGatewayCallModule()
+          .then(({ callGateway }) =>
+            callGateway<HeartbeatEventPayload | null>({
+              method: "last-heartbeat",
+              params: {},
+              timeoutMs: opts.timeoutMs,
+              config: scan.cfg,
+            }),
+          )
+          .catch(() => null)
       : null;
 
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
@@ -230,11 +248,38 @@ export async function statusCommand(
   }
 
   const rich = true;
+  const {
+    formatCliCommand,
+    formatDuration,
+    formatGatewayAuthUsed,
+    formatGitInstallLabel,
+    formatHealthChannelLines,
+    formatKTokens,
+    formatPluginCompatibilityNotice,
+    formatTimeAgo,
+    formatTokensCompact,
+    formatUpdateAvailableHint,
+    formatUpdateOneLiner,
+    getTerminalTableWidth,
+    groupChannelIssuesByChannel,
+    info,
+    renderTable,
+    resolveControlUiLinks,
+    resolveGatewayPort,
+    resolveMemoryCacheSummary,
+    resolveMemoryFtsState,
+    resolveMemoryVectorState,
+    resolveUpdateAvailability,
+    shortenText,
+    summarizePluginCompatibility,
+    theme,
+  } = await loadStatusCommandTextRuntime();
   const muted = (value: string) => (rich ? theme.muted(value) : value);
   const ok = (value: string) => (rich ? theme.success(value) : value);
   const warn = (value: string) => (rich ? theme.warn(value) : value);
 
   if (opts.verbose) {
+    const { buildGatewayConnectionDetails } = await loadGatewayCallModule();
     const details = buildGatewayConnectionDetails({ config: scan.cfg });
     runtime.log(info("Gateway connection:"));
     for (const line of details.message.split("\n")) {
@@ -253,21 +298,31 @@ export async function statusCommand(
     runtime.log("");
   }
 
-  const dashboard = (() => {
-    const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
-    if (!controlUiEnabled) {
-      return "disabled";
-    }
-    const links = resolveControlUiLinks({
-      port: resolveGatewayPort(cfg),
-      bind: cfg.gateway?.bind,
-      customBindHost: cfg.gateway?.customBindHost,
-      basePath: cfg.gateway?.controlUi?.basePath,
-    });
-    return links.httpUrl;
-  })();
+  const dashboard =
+    (cfg.gateway?.controlUi?.enabled ?? true)
+      ? resolveControlUiLinks({
+          port: resolveGatewayPort(cfg),
+          bind: cfg.gateway?.bind,
+          customBindHost: cfg.gateway?.customBindHost,
+          basePath: cfg.gateway?.controlUi?.basePath,
+        }).httpUrl
+      : "disabled";
+
+  const [daemon, nodeDaemon] = await Promise.all([
+    getDaemonStatusSummary(),
+    getNodeDaemonStatusSummary(),
+  ]);
+  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
+    resolveNodeOnlyGatewayInfo({
+      daemon,
+      node: nodeDaemon,
+    }),
+  );
 
   const gatewayValue = (() => {
+    if (nodeOnlyGateway) {
+      return nodeOnlyGateway.gatewayValue;
+    }
     const target = remoteUrlMissing
       ? `fallback ${gatewayConnection.url}`
       : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
@@ -309,11 +364,6 @@ export async function statusCommand(
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
     return `${agentStatus.agents.length} · ${pending} · sessions ${agentStatus.totalSessions}${defSuffix}`;
   })();
-
-  const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
-  ]);
   const daemonValue = (() => {
     if (daemon.installed === false) {
       return `${daemon.label} not installed`;
@@ -335,6 +385,18 @@ export async function statusCommand(
     : "";
   const eventsValue =
     summary.queuedSystemEvents.length > 0 ? `${summary.queuedSystemEvents.length} queued` : "none";
+  const tasksValue =
+    summary.tasks.total > 0
+      ? [
+          `${summary.tasks.active} active`,
+          `${summary.tasks.byStatus.queued} queued`,
+          `${summary.tasks.byStatus.running} running`,
+          summary.tasks.failures > 0
+            ? warn(`${summary.tasks.failures} issue${summary.tasks.failures === 1 ? "" : "s"}`)
+            : muted("no issues"),
+          `${summary.tasks.total} tracked`,
+        ].join(" · ")
+      : muted("none");
 
   const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
 
@@ -452,6 +514,7 @@ export async function statusCommand(
     { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
+    { Item: "Tasks", Value: tasksValue },
     { Item: "Heartbeat", Value: heartbeatValue },
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
@@ -708,7 +771,9 @@ export async function statusCommand(
   runtime.log("Next steps:");
   runtime.log(`  Need to share?      ${formatCliCommand("openclaw status --all")}`);
   runtime.log(`  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`);
-  if (gatewayReachable) {
+  if (nodeOnlyGateway) {
+    runtime.log(`  Need node service?  ${formatCliCommand("openclaw node status")}`);
+  } else if (gatewayReachable) {
     runtime.log(`  Need to test channels? ${formatCliCommand("openclaw status --deep")}`);
   } else {
     runtime.log(`  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);

@@ -17,6 +17,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   kilocode: ["KILOCODE_API_KEY"],
   kimi: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
   "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+  litellm: ["LITELLM_API_KEY"],
   "microsoft-foundry": ["AZURE_OPENAI_API_KEY"],
   minimax: ["MINIMAX_API_KEY"],
   "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],

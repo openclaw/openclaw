@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   createQuickActionLauncherCard,
@@ -86,7 +87,7 @@ describe("feishu quick-action launcher", () => {
 
   it("falls back to legacy menu handling when launcher send fails", async () => {
     sendCardFeishuMock.mockRejectedValueOnce(new Error("network"));
-    const runtime: RuntimeEnv = { log: vi.fn() };
+    const runtime: RuntimeEnv = createRuntimeEnv();
 
     const handled = await maybeHandleFeishuQuickActionMenu({
       cfg,

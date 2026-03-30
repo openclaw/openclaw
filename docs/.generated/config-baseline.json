@@ -1876,6 +1876,26 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.llm",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.llm.idleTimeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.maxConcurrent",
       "kind": "core",
       "type": "integer",
@@ -2454,7 +2474,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Remote Embedding Base URL",
       "help": "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
@@ -2600,6 +2621,26 @@
     },
     {
       "path": "agents.defaults.memorySearch.store.driver",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.memorySearch.store.fts",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.store.fts.tokenizer",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -4905,7 +4946,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -5020,6 +5064,26 @@
     },
     {
       "path": "agents.list.*.memorySearch.store.driver",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.memorySearch.store.fts",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.store.fts.tokenizer",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -6675,6 +6739,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -7124,7 +7189,7 @@
         "advanced"
       ],
       "label": "Approvals",
-      "help": "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+      "help": "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
       "hasChildren": true
     },
     {
@@ -7298,6 +7363,179 @@
       ],
       "label": "Approval Target Destination",
       "help": "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider). Verify semantics per provider because destination format differs across channel integrations.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Forwarding",
+      "help": "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.agentFilter",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Agent Filter",
+      "help": "Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `[\"primary\", \"ops-agent\"]`. Use this to limit forwarding blast radius.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.agentFilter.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Forward Plugin Approvals",
+      "help": "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.mode",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Forwarding Mode",
+      "help": "Controls where plugin approval prompts are sent: \"session\" uses origin chat, \"targets\" uses configured targets, and \"both\" sends to both paths.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.sessionFilter",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Plugin Approval Session Filter",
+      "help": "Optional session-key filters matched as substring or regex-style patterns, for example `[\"discord:\", \"^agent:ops:\"]`. Use narrow patterns so only intended approval contexts are forwarded.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.sessionFilter.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Forwarding Targets",
+      "help": "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.targets.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "approvals.plugin.targets.*.accountId",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Account ID",
+      "help": "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets.*.channel",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Channel",
+      "help": "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets.*.threadId",
+      "kind": "core",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Thread ID",
+      "help": "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
+      "hasChildren": false
+    },
+    {
+      "path": "approvals.plugin.targets.*.to",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Approval Target Destination",
+      "help": "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).",
       "hasChildren": false
     },
     {
@@ -16550,7 +16788,7 @@
         "network"
       ],
       "label": "Google Chat",
-      "help": "Google Workspace Chat app via HTTP webhooks.",
+      "help": "Google Workspace Chat app with HTTP webhook.",
       "hasChildren": true
     },
     {
@@ -20818,7 +21056,7 @@
         "network"
       ],
       "label": "LINE",
-      "help": "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+      "help": "LINE Messaging API webhook bot.",
       "hasChildren": true
     },
     {
@@ -21427,7 +21665,10 @@
     {
       "path": "channels.matrix.accessToken",
       "kind": "channel",
-      "type": "string",
+      "type": [
+        "object",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -21438,6 +21679,36 @@
         "network",
         "security"
       ],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.accessToken.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.accessToken.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.accessToken.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23689,6 +23960,16 @@
       "kind": "channel",
       "type": "string",
       "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.blockStreaming",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -40541,7 +40822,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "network"
+        "network",
+        "url-secret"
       ],
       "label": "Gateway APNs Relay Base URL",
       "help": "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
@@ -42458,13 +42740,42 @@
       "hasChildren": false
     },
     {
+      "path": "mcp.servers.*.headers",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers.*.headers.*",
+      "kind": "core",
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
       "path": "mcp.servers.*.url",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -44304,7 +44615,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "models"
+        "models",
+        "url-secret"
       ],
       "label": "Model Provider Base URL",
       "help": "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
@@ -44590,6 +44902,26 @@
     },
     {
       "path": "models.providers.*.models.*.compat.toolSchemaProfile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.models.*.compat.unsupportedToolSchemaKeywords",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.models.*.compat.unsupportedToolSchemaKeywords.*",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -45205,6 +45537,20 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.acpx.config.pluginToolsMcpBridge",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into ACPX sessions so ACP agents can call plugin-registered tools.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.acpx.config.queueOwnerTtlSeconds",
       "kind": "plugin",
       "type": "number",
@@ -45475,6 +45821,127 @@
       "label": "@openclaw/anthropic-provider",
       "help": "OpenClaw Anthropic provider plugin (plugin: anthropic)",
       "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-vertex-provider",
+      "help": "OpenClaw Anthropic Vertex provider plugin (plugin: anthropic-vertex)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-vertex-provider Config",
+      "help": "Plugin-defined config payload for anthropic-vertex.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/anthropic-vertex-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic-vertex.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
     },
     {
       "path": "plugins.entries.anthropic.config",
@@ -48414,7 +48881,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Firecrawl Search Base URL",
       "help": "Firecrawl Search base URL override.",
@@ -49766,6 +50234,127 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.litellm",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/litellm-provider",
+      "help": "OpenClaw LiteLLM provider plugin (plugin: litellm)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/litellm-provider Config",
+      "help": "Plugin-defined config payload for litellm.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/litellm-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.litellm.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.litellm.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.llm-task",
       "kind": "plugin",
       "type": "object",
@@ -50561,7 +51150,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "storage"
+        "storage",
+        "url-secret"
       ],
       "label": "Base URL",
       "help": "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
@@ -51359,7 +51949,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Kimi Search Base URL",
       "help": "Kimi base URL override.",
@@ -53052,7 +53643,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Perplexity Base URL",
       "help": "Optional Perplexity/OpenRouter chat-completions base URL override.",
@@ -54197,7 +54789,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced"
+        "advanced",
+        "url-secret"
       ],
       "label": "Tavily Base URL",
       "help": "Tavily API base URL override.",
@@ -56153,7 +56746,8 @@
       "sensitive": false,
       "tags": [
         "advanced",
-        "media"
+        "media",
+        "url-secret"
       ],
       "label": "ElevenLabs Base URL",
       "hasChildren": false
@@ -56424,7 +57018,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -57051,6 +57648,72 @@
       "label": "@openclaw/xai-plugin Config",
       "help": "Plugin-defined config payload for xai.",
       "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable Code Execution",
+      "help": "Enable the code_execution tool for remote xAI sandbox analysis.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.maxTurns",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Code Execution Max Turns",
+      "help": "Optional max internal tool turns xAI may use for code_execution.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Code Execution Model",
+      "help": "xAI model override for code_execution.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Code Execution Timeout",
+      "help": "Timeout in seconds for code_execution requests.",
+      "hasChildren": false
     },
     {
       "path": "plugins.entries.xai.config.webSearch",
@@ -57774,7 +58437,7 @@
         "storage"
       ],
       "label": "Plugin Install Path",
-      "help": "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      "help": "Resolved install directory for the installed plugin bundle.",
       "hasChildren": false
     },
     {
@@ -60272,6 +60935,7 @@
       "type": "string",
       "required": false,
       "enumValues": [
+        "auto",
         "sandbox",
         "gateway",
         "node"
@@ -60281,8 +60945,8 @@
       "tags": [
         "tools"
       ],
-      "label": "Exec Host",
-      "help": "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+      "label": "Exec Target",
+      "help": "Selects execution target strategy for shell commands. Use \"auto\" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.",
       "hasChildren": false
     },
     {
@@ -60991,7 +61655,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -61199,7 +61867,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -61674,7 +62346,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -61867,7 +62543,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62317,7 +62997,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62606,7 +63290,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -62799,7 +63487,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "media",
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -63752,7 +64444,8 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "tools"
+        "tools",
+        "url-secret"
       ],
       "label": "Firecrawl Base URL",
       "help": "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
@@ -64041,7 +64734,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64158,7 +64854,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64235,7 +64934,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64312,7 +65014,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64399,7 +65104,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64491,7 +65199,10 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
       "hasChildren": false
     },
     {
@@ -64531,6 +65242,154 @@
       ],
       "label": "Web Search Timeout (sec)",
       "help": "Timeout in seconds for web_search requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.x_search.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "label": "xAI API Key",
+      "help": "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.x_search.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.cacheTtlMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "storage",
+        "tools"
+      ],
+      "label": "X Search Cache TTL (min)",
+      "help": "Cache TTL in minutes for x_search results.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable X Search Tool",
+      "help": "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.inlineCitations",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "X Search Inline Citations",
+      "help": "Keep inline citations from xAI in x_search responses when available (default: false).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.maxTurns",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Max Turns",
+      "help": "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "X Search Model",
+      "help": "Model to use for X search (default: \"grok-4-1-fast-non-reasoning\").",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Timeout (sec)",
+      "help": "Timeout in seconds for x_search requests.",
       "hasChildren": false
     },
     {

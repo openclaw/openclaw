@@ -3,6 +3,13 @@ import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
+import {
+  tasksAuditCommand,
+  tasksCancelCommand,
+  tasksListCommand,
+  tasksNotifyCommand,
+  tasksShowCommand,
+} from "../../commands/tasks.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -208,6 +215,140 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksCmd = program
+    .command("tasks")
+    .description("Inspect durable background task state")
+    .option("--json", "Output as JSON", false)
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksListCommand(
+          {
+            json: Boolean(opts.json),
+            runtime: opts.runtime as string | undefined,
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  tasksCmd.enablePositionalOptions();
+
+  tasksCmd
+    .command("list")
+    .description("List tracked background tasks")
+    .option("--json", "Output as JSON", false)
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            json?: boolean;
+            runtime?: string;
+            status?: string;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("audit")
+    .description("Show stale or broken background task runs")
+    .option("--json", "Output as JSON", false)
+    .option("--severity <level>", "Filter by severity (warn, error)")
+    .option(
+      "--code <name>",
+      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps)",
+    )
+    .option("--limit <n>", "Limit displayed findings")
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksAuditCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            severity: opts.severity as "warn" | "error" | undefined,
+            code: opts.code as
+              | "stale_queued"
+              | "stale_running"
+              | "lost"
+              | "delivery_failed"
+              | "missing_cleanup"
+              | "inconsistent_timestamps"
+              | undefined,
+            limit: parsePositiveIntOrUndefined(opts.limit),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("show")
+    .description("Show one background task by task id, run id, or session key")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("notify")
+    .description("Set task notify policy")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
+    .action(async (lookup, notify) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksNotifyCommand(
+          {
+            lookup,
+            notify: notify as "done_only" | "state_changes" | "silent",
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("cancel")
+    .description("Cancel a running background task")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksCancelCommand(
+          {
+            lookup,
           },
           defaultRuntime,
         );

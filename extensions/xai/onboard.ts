@@ -22,7 +22,7 @@ const xaiPresetAppliers = createDefaultModelsPresetAppliers<
 });
 
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return xaiPresetAppliers.applyProviderConfig(cfg, "openai-completions");
+  return xaiPresetAppliers.applyProviderConfig(cfg, "openai-responses");
 }
 
 export function applyXaiResponsesApiConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -30,5 +30,5 @@ export function applyXaiResponsesApiConfig(cfg: OpenClawConfig): OpenClawConfig 
 }
 
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return xaiPresetAppliers.applyConfig(cfg, "openai-completions");
+  return xaiPresetAppliers.applyConfig(cfg, "openai-responses");
 }
