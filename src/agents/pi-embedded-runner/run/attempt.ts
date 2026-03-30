@@ -997,7 +997,30 @@ export async function runEmbeddedAttempt(
         // Azure OpenAI (and other non-direct-OpenAI Responses API providers)
         // reject replayed reasoning items in input. Strip thinkingSignature so
         // pi-ai's convertResponsesMessages won't convert them to reasoning
-        // input items. Direct OpenAI and Codex handle replay fine.
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+
+        // Azure OpenAI (and other non-direct-OpenAI Responses API providers)
+        // reject replayed reasoning items in input. Strip signatures so
+        // pi-ai's convertResponsesMessages won't replay reasoning items or
+        // original message-item IDs. Installed AFTER downgrade so it runs
+        // BEFORE it — downgrade then sees signature-free messages and won't
+        // preserve call_id|fc_* pairings that reference removed reasoning.
         if (
           params.model.provider !== "openai" &&
           params.model.provider !== "openai-codex"
@@ -1020,24 +1043,6 @@ export async function runEmbeddedAttempt(
             return inner(model, nextContext as typeof context, options);
           };
         }
-
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
       }
 
       const innerStreamFn = activeSession.agent.streamFn;
