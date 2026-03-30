@@ -10,7 +10,14 @@ import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import {
+  buildSkillInfoJson,
+  buildSkillsCheckJson,
+  buildSkillsListJson,
+  formatSkillInfo,
+  formatSkillsCheck,
+  formatSkillsList,
+} from "./skills-cli.format.js";
 
 export type {
   SkillInfoOptions,
@@ -30,10 +37,17 @@ async function loadSkillsStatusReport(): Promise<SkillStatusReport> {
   return buildWorkspaceSkillStatus(workspaceDir, { config });
 }
 
-async function runSkillsAction(render: (report: SkillStatusReport) => string): Promise<void> {
+async function runSkillsAction(
+  render: (report: SkillStatusReport) => string,
+  opts?: { json?: boolean; buildJson?: (report: SkillStatusReport) => unknown },
+): Promise<void> {
   try {
     const report = await loadSkillsStatusReport();
-    defaultRuntime.log(render(report));
+    if (opts?.json && opts.buildJson) {
+      defaultRuntime.writeJson(opts.buildJson(report));
+    } else {
+      defaultRuntime.log(render(report));
+    }
   } catch (err) {
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);
@@ -175,7 +189,10 @@ export function registerSkillsCli(program: Command) {
     .option("--eligible", "Show only eligible (ready to use) skills", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) => {
-      await runSkillsAction((report) => formatSkillsList(report, opts));
+      await runSkillsAction((report) => formatSkillsList(report, opts), {
+        json: opts.json,
+        buildJson: (report) => buildSkillsListJson(report, opts),
+      });
     });
 
   skills
@@ -184,7 +201,10 @@ export function registerSkillsCli(program: Command) {
     .argument("<name>", "Skill name")
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) => {
-      await runSkillsAction((report) => formatSkillInfo(report, name, opts));
+      await runSkillsAction((report) => formatSkillInfo(report, name, opts), {
+        json: opts.json,
+        buildJson: (report) => buildSkillInfoJson(report, name),
+      });
     });
 
   skills
@@ -192,7 +212,10 @@ export function registerSkillsCli(program: Command) {
     .description("Check which skills are ready vs missing requirements")
     .option("--json", "Output as JSON", false)
     .action(async (opts) => {
-      await runSkillsAction((report) => formatSkillsCheck(report, opts));
+      await runSkillsAction((report) => formatSkillsCheck(report, opts), {
+        json: opts.json,
+        buildJson: (report) => buildSkillsCheckJson(report),
+      });
     });
 
   // Default action (no subcommand) - show list

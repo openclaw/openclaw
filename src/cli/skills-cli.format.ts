@@ -94,28 +94,35 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return missing.join("; ");
 }
 
+export function buildSkillsListJson(
+  report: SkillStatusReport,
+  opts: SkillsListOptions,
+): unknown {
+  const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
+  return sanitizeJsonValue({
+    workspaceDir: report.workspaceDir,
+    managedSkillsDir: report.managedSkillsDir,
+    skills: skills.map((s) => ({
+      name: s.name,
+      description: s.description,
+      emoji: s.emoji,
+      eligible: s.eligible,
+      disabled: s.disabled,
+      blockedByAllowlist: s.blockedByAllowlist,
+      source: s.source,
+      bundled: s.bundled,
+      primaryEnv: s.primaryEnv,
+      homepage: s.homepage,
+      missing: s.missing,
+    })),
+  });
+}
+
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
 
   if (opts.json) {
-    const jsonReport = sanitizeJsonValue({
-      workspaceDir: report.workspaceDir,
-      managedSkillsDir: report.managedSkillsDir,
-      skills: skills.map((s) => ({
-        name: s.name,
-        description: s.description,
-        emoji: s.emoji,
-        eligible: s.eligible,
-        disabled: s.disabled,
-        blockedByAllowlist: s.blockedByAllowlist,
-        source: s.source,
-        bundled: s.bundled,
-        primaryEnv: s.primaryEnv,
-        homepage: s.homepage,
-        missing: s.missing,
-      })),
-    });
-    return JSON.stringify(jsonReport, null, 2);
+    return JSON.stringify(buildSkillsListJson(report, opts), null, 2);
   }
 
   if (skills.length === 0) {
@@ -163,6 +170,17 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   return appendClawHubHint(lines.join("\n"), opts.json);
 }
 
+export function buildSkillInfoJson(
+  report: SkillStatusReport,
+  skillName: string,
+): unknown {
+  const skill = report.skills.find((s) => s.name === skillName || s.skillKey === skillName);
+  if (!skill) {
+    return { error: "not found", skill: skillName };
+  }
+  return sanitizeJsonValue(skill);
+}
+
 export function formatSkillInfo(
   report: SkillStatusReport,
   skillName: string,
@@ -172,7 +190,7 @@ export function formatSkillInfo(
 
   if (!skill) {
     if (opts.json) {
-      return JSON.stringify({ error: "not found", skill: skillName }, null, 2);
+      return JSON.stringify(buildSkillInfoJson(report, skillName), null, 2);
     }
     return appendClawHubHint(
       `Skill "${skillName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
@@ -181,7 +199,7 @@ export function formatSkillInfo(
   }
 
   if (opts.json) {
-    return JSON.stringify(sanitizeJsonValue(skill), null, 2);
+    return JSON.stringify(buildSkillInfoJson(report, skillName), null, 2);
   }
 
   const lines: string[] = [];
@@ -289,6 +307,32 @@ export function formatSkillInfo(
   return appendClawHubHint(lines.join("\n"), opts.json);
 }
 
+export function buildSkillsCheckJson(report: SkillStatusReport): unknown {
+  const eligible = report.skills.filter((s) => s.eligible);
+  const disabled = report.skills.filter((s) => s.disabled);
+  const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
+  const missingReqs = report.skills.filter(
+    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
+  );
+  return sanitizeJsonValue({
+    summary: {
+      total: report.skills.length,
+      eligible: eligible.length,
+      disabled: disabled.length,
+      blocked: blocked.length,
+      missingRequirements: missingReqs.length,
+    },
+    eligible: eligible.map((s) => s.name),
+    disabled: disabled.map((s) => s.name),
+    blocked: blocked.map((s) => s.name),
+    missingRequirements: missingReqs.map((s) => ({
+      name: s.name,
+      missing: s.missing,
+      install: s.install,
+    })),
+  });
+}
+
 export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
   const disabled = report.skills.filter((s) => s.disabled);
@@ -298,27 +342,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   );
 
   if (opts.json) {
-    return JSON.stringify(
-      sanitizeJsonValue({
-        summary: {
-          total: report.skills.length,
-          eligible: eligible.length,
-          disabled: disabled.length,
-          blocked: blocked.length,
-          missingRequirements: missingReqs.length,
-        },
-        eligible: eligible.map((s) => s.name),
-        disabled: disabled.map((s) => s.name),
-        blocked: blocked.map((s) => s.name),
-        missingRequirements: missingReqs.map((s) => ({
-          name: s.name,
-          missing: s.missing,
-          install: s.install,
-        })),
-      }),
-      null,
-      2,
-    );
+    return JSON.stringify(buildSkillsCheckJson(report), null, 2);
   }
 
   const lines: string[] = [];
