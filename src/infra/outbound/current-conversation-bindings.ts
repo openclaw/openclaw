@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
-import { listBundledChannelPlugins } from "../../channels/plugins/bundled.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
@@ -128,9 +127,11 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } }) =>
     plugin.id === normalized ||
     (plugin.meta?.aliases ?? []).some((alias) => alias.trim().toLowerCase() === normalized);
-  const plugin =
-    getActivePluginChannelRegistry()?.channels.find((entry) => matchesPluginId(entry.plugin))
-      ?.plugin ?? listBundledChannelPlugins().find((entry) => matchesPluginId(entry));
+  // Keep this resolver on the active runtime registry only. Importing bundled
+  // channel loaders here creates a module cycle through plugin-sdk surfaces.
+  const plugin = getActivePluginChannelRegistry()?.channels.find((entry) =>
+    matchesPluginId(entry.plugin),
+  )?.plugin;
   return plugin?.conversationBindings?.supportsCurrentConversationBinding === true;
 }
 

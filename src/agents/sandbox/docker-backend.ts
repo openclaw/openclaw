@@ -84,7 +84,7 @@ export function runDockerSandboxShellCommand(
     "sh",
     "-c",
     params.script,
-    "moltbot-sandbox-fs",
+    "openclaw-sandbox-fs",
   ];
   if (params.args?.length) {
     dockerArgs.push(...params.args);

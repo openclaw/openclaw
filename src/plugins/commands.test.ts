@@ -321,52 +321,6 @@ describe("registerPluginCommand", () => {
       },
     },
     {
-      name: "resolves Telegram topic command bindings without a Telegram registry entry",
-      params: {
-        channel: "telegram",
-        from: "telegram:group:-100123",
-        to: "telegram:group:-100123:topic:77",
-        accountId: "default",
-      },
-      expected: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-100123",
-        threadId: 77,
-      },
-    },
-    {
-      name: "resolves Telegram native slash command bindings using the From peer",
-      params: {
-        channel: "telegram",
-        from: "telegram:group:-100123:topic:77",
-        to: "slash:12345",
-        accountId: "default",
-        messageThreadId: 77,
-      },
-      expected: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-100123",
-        threadId: 77,
-      },
-    },
-    {
-      name: "falls back to the parsed From threadId for Telegram slash commands when messageThreadId is missing",
-      params: {
-        channel: "telegram",
-        from: "telegram:group:-100123:topic:77",
-        to: "slash:12345",
-        accountId: "default",
-      },
-      expected: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-100123",
-        threadId: 77,
-      },
-    },
-    {
       name: "does not resolve binding conversations for unsupported command channels",
       params: {
         channel: "slack",
