@@ -1115,7 +1115,13 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
       },
     ]);
 
-    let capturedOptions: fs.CreateReadStreamOptions | undefined;
+    let capturedOptions:
+      | {
+          encoding?: BufferEncoding;
+          start?: number;
+          end?: number;
+        }
+      | undefined;
     const originalOpen = fs.promises.open.bind(fs.promises);
     const openSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
       const fileHandle = await originalOpen(...(args as Parameters<typeof fs.promises.open>));
