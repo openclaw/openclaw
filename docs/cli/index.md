@@ -155,11 +155,16 @@ openclaw [--dev] [--profile <name>] <command>
     list
     add
     delete
+    bindings
+    bind
+    unbind
+    set-identity
   acp
   mcp
   status
   health
   sessions
+    cleanup
   tasks
     list
     show
@@ -198,7 +203,7 @@ openclaw [--dev] [--profile <name>] <command>
     fallbacks list|add|remove|clear
     image-fallbacks list|add|remove|clear
     scan
-    auth add|setup-token|paste-token
+    auth add|login|login-github-copilot|setup-token|paste-token
     auth order get|set|clear
   sandbox
     list
@@ -445,6 +450,9 @@ Options:
 - `--yes`: accept defaults without prompting (headless).
 - `--non-interactive`: skip prompts; apply safe migrations only.
 - `--deep`: scan system services for extra gateway installs.
+- `--repair` (alias: `--fix`): attempt automatic repairs for detected issues.
+- `--force`: force repairs even when not strictly needed.
+- `--generate-gateway-token`: generate a new gateway auth token.
 
 ## Channel helpers
 
@@ -744,6 +752,12 @@ Options:
 - `--verbose`
 - `--store <path>`
 - `--active <minutes>`
+- `--agent <id>` (filter sessions by agent)
+- `--all-agents` (show sessions across all agents)
+
+Subcommands:
+
+- `sessions cleanup` — remove expired or orphaned sessions
 
 ## Reset / Uninstall
 
@@ -998,11 +1012,13 @@ Options:
 - `--set-image`
 - `--json`
 
-### `models auth add|setup-token|paste-token`
+### `models auth add|login|login-github-copilot|setup-token|paste-token`
 
 Options:
 
 - `add`: interactive auth helper
+- `login`: `--provider <name>`, `--method <method>`, `--set-default`
+- `login-github-copilot`: GitHub Copilot OAuth login flow
 - `setup-token`: `--provider <name>` (default `anthropic`), `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 
