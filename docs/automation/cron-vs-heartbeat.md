@@ -14,10 +14,10 @@ Both heartbeats and cron jobs let you run tasks on a schedule. This guide helps 
 One important distinction:
 
 - **Heartbeat** is a scheduled **main-session turn** — no task record created.
-- **Cron (main)** is a scheduled **system event into the main session** — no task record created.
-- **Cron (isolated)** is a scheduled **background run** — tracked in `openclaw tasks`.
+- **Cron (main)** is a scheduled **system event into the main session** — creates a task record with `silent` notify policy.
+- **Cron (isolated)** is a scheduled **background run** — creates a task record tracked in `openclaw tasks`.
 
-Only detached background runs (isolated cron, ACP, subagents) appear in the [task ledger](/automation/tasks). Heartbeat turns and main-session cron reminders stay in session history.
+All cron job executions (main and isolated) create [task records](/automation/tasks). Heartbeat turns do not. Main-session cron tasks use `silent` notify policy by default so they do not generate notifications.
 
 ## Quick Decision Guide
 
@@ -236,7 +236,7 @@ Both heartbeat and cron can interact with the main session, but differently:
 | Context                    | Full                            | Full                     | None (isolated) / Cumulative (custom)           |
 | Model                      | Main session model              | Main session model       | Can override                                    |
 | Output                     | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default)                      |
-| [Tasks](/automation/tasks) | No task record                  | No task record           | Tracked in `openclaw tasks`                     |
+| [Tasks](/automation/tasks) | No task record                  | Task record (silent)     | Task record (visible in `openclaw tasks`)       |
 
 ### When to use main session cron
 
