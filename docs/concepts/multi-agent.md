@@ -550,3 +550,11 @@ If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
 See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.
+
+## Related
+
+- [Channel Routing](/channels/channel-routing) — how messages route to agents
+- [Sub-Agents](/tools/subagents) — spawning background agent runs
+- [ACP Agents](/tools/acp-agents) — running external coding harnesses
+- [Presence](/concepts/presence) — agent presence and availability
+- [Session](/concepts/session) — session isolation and routing

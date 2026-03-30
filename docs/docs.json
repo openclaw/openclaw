@@ -1114,6 +1114,7 @@
               {
                 "group": "Automation",
                 "pages": [
+                  "automation/index",
                   "automation/hooks",
                   "automation/standing-orders",
                   "automation/cron-jobs",
