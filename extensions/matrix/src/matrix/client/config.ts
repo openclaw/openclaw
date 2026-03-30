@@ -671,7 +671,7 @@ export async function resolveMatrixAuth(params?: {
     if (!userId || !knownDeviceId) {
       // Fetch whoami when we need to resolve userId and/or deviceId from token auth.
       ensureMatrixSdkLoggingConfigured();
-      const tempClient = new MatrixClient(homeserver, accessToken, undefined, undefined, {
+      const tempClient = new MatrixClient(homeserver, accessToken, {
         ssrfPolicy: resolved.ssrfPolicy,
         dispatcherPolicy: resolved.dispatcherPolicy,
       });
@@ -768,7 +768,7 @@ export async function resolveMatrixAuth(params?: {
 
   // Login with password using the same hardened request path as other Matrix HTTP calls.
   ensureMatrixSdkLoggingConfigured();
-  const loginClient = new MatrixClient(homeserver, "", undefined, undefined, {
+  const loginClient = new MatrixClient(homeserver, "", {
     ssrfPolicy: resolved.ssrfPolicy,
     dispatcherPolicy: resolved.dispatcherPolicy,
   });
