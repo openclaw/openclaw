@@ -79,6 +79,8 @@ export type TtsResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  fallbackFrom?: string;
+  attemptedProviders?: string[];
   outputFormat?: string;
   voiceCompatible?: boolean;
 };
@@ -89,6 +91,8 @@ export type TtsSynthesisResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  fallbackFrom?: string;
+  attemptedProviders?: string[];
   outputFormat?: string;
   voiceCompatible?: boolean;
   fileExtension?: string;
@@ -100,6 +104,8 @@ export type TtsTelephonyResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  fallbackFrom?: string;
+  attemptedProviders?: string[];
   outputFormat?: string;
   sampleRate?: number;
 };
@@ -110,6 +116,8 @@ type TtsStatusEntry = {
   textLength: number;
   summarized: boolean;
   provider?: string;
+  fallbackFrom?: string;
+  attemptedProviders?: string[];
   latencyMs?: number;
   error?: string;
 };
@@ -539,10 +547,14 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   return `${provider}: ${error.message}`;
 }
 
-function buildTtsFailureResult(errors: string[]): { success: false; error: string } {
+function buildTtsFailureResult(
+  errors: string[],
+  attemptedProviders?: string[],
+): { success: false; error: string; attemptedProviders?: string[] } {
   return {
     success: false,
     error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
+    attemptedProviders,
   };
 }
 
@@ -621,7 +633,10 @@ export async function textToSpeech(params: {
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
-    return buildTtsFailureResult([synthesis.error ?? "TTS conversion failed"]);
+    return buildTtsFailureResult(
+      [synthesis.error ?? "TTS conversion failed"],
+      synthesis.attemptedProviders,
+    );
   }
 
   const tempRoot = resolvePreferredOpenClawTmpDir();
@@ -636,6 +651,8 @@ export async function textToSpeech(params: {
     audioPath,
     latencyMs: synthesis.latencyMs,
     provider: synthesis.provider,
+    fallbackFrom: synthesis.fallbackFrom,
+    attemptedProviders: synthesis.attemptedProviders,
     outputFormat: synthesis.outputFormat,
     voiceCompatible: synthesis.voiceCompatible,
   };
@@ -665,12 +682,14 @@ export async function synthesizeSpeech(params: {
   const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
+  const attemptedProviders: string[] = [];
   const primaryProvider = providers[0];
   logVerbose(
     `TTS: starting with provider ${primaryProvider}, fallbacks: ${providers.slice(1).join(", ") || "none"}`,
   );
 
   for (const provider of providers) {
+    attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
       const resolvedProvider = resolveReadySpeechProvider({
@@ -696,6 +715,8 @@ export async function synthesizeSpeech(params: {
         audioBuffer: synthesis.audioBuffer,
         latencyMs: Date.now() - providerStart,
         provider,
+        fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
+        attemptedProviders,
         outputFormat: synthesis.outputFormat,
         voiceCompatible: synthesis.voiceCompatible,
         fileExtension: synthesis.fileExtension,
@@ -715,7 +736,7 @@ export async function synthesizeSpeech(params: {
     }
   }
 
-  return buildTtsFailureResult(errors);
+  return buildTtsFailureResult(errors, attemptedProviders);
 }
 
 export async function textToSpeechTelephony(params: {
@@ -734,8 +755,11 @@ export async function textToSpeechTelephony(params: {
 
   const { config, providers } = setup;
   const errors: string[] = [];
+  const attemptedProviders: string[] = [];
+  const primaryProvider = providers[0];
 
   for (const provider of providers) {
+    attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
       const resolvedProvider = resolveReadySpeechProvider({
@@ -760,6 +784,8 @@ export async function textToSpeechTelephony(params: {
         audioBuffer: synthesis.audioBuffer,
         latencyMs: Date.now() - providerStart,
         provider,
+        fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
+        attemptedProviders,
         outputFormat: synthesis.outputFormat,
         sampleRate: synthesis.sampleRate,
       };
@@ -768,7 +794,7 @@ export async function textToSpeechTelephony(params: {
     }
   }
 
-  return buildTtsFailureResult(errors);
+  return buildTtsFailureResult(errors, attemptedProviders);
 }
 
 export async function listSpeechVoices(params: {
@@ -935,6 +961,8 @@ export async function maybeApplyTtsToPayload(params: {
       textLength: text.length,
       summarized: wasSummarized,
       provider: result.provider,
+      fallbackFrom: result.fallbackFrom,
+      attemptedProviders: result.attemptedProviders,
       latencyMs: result.latencyMs,
     };
 
@@ -953,6 +981,7 @@ export async function maybeApplyTtsToPayload(params: {
     success: false,
     textLength: text.length,
     summarized: wasSummarized,
+    attemptedProviders: result.attemptedProviders,
     error: result.error,
   };
 
