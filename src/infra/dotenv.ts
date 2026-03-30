@@ -15,12 +15,16 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "OPENCLAW_AGENT_DIR",
-  "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_HOME",
   "OPENCLAW_OAUTH_DIR",
   "OPENCLAW_PROFILE",
   "OPENCLAW_STATE_DIR",
   "PI_CODING_AGENT_DIR",
+  // NOTE: OPENCLAW_CONFIG_PATH is intentionally NOT blocked from workspace .env.
+  // It's a legitimate project-level configuration override that enables users to
+  // specify their project's config file without requiring shell environment variables.
+  // OPENCLAW_STATE_DIR remains blocked to prevent a malicious .env from redirecting
+  // which global config is loaded or creating a shadow .env with blocked vars.
 ]);
 
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
@@ -97,10 +101,16 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
   const cwdEnvPath = path.join(process.cwd(), ".env");
+
+  // Resolve the global env path BEFORE loading workspace .env so that
+  // workspace .env cannot redirect which global config is loaded.
+  // This preserves the security invariant that untrusted workspace .env
+  // cannot hijack the user's global ~/.openclaw/.env config.
+  const globalEnvPath = path.join(resolveConfigDir(process.env), ".env");
+
   loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
-  const globalEnvPath = path.join(resolveConfigDir(process.env), ".env");
   loadRuntimeDotEnvFile(globalEnvPath, { quiet });
 }

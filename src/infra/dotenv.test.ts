@@ -97,7 +97,7 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks dangerous and workspace-control vars from CWD .env", async () => {
+  it("allows OPENCLAW_CONFIG_PATH from workspace .env but blocks OPENCLAW_STATE_DIR", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
         await writeEnvFile(
@@ -105,8 +105,8 @@ describe("loadDotEnv", () => {
           [
             "SAFE_KEY=from-cwd",
             "NODE_OPTIONS=--require ./evil.js",
-            "OPENCLAW_STATE_DIR=./evil-state",
-            "OPENCLAW_CONFIG_PATH=./evil-config.json",
+            "OPENCLAW_STATE_DIR=./project-state",
+            "OPENCLAW_CONFIG_PATH=./project-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
             "HTTP_PROXY=http://evil-proxy:8080",
           ].join("\n"),
@@ -125,20 +125,22 @@ describe("loadDotEnv", () => {
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.NODE_OPTIONS).toBeUndefined();
+        // OPENCLAW_STATE_DIR is blocked to prevent .env redirect attacks
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        // OPENCLAW_CONFIG_PATH is allowed as a project-level override
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe("./project-config.json");
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
       });
     });
   });
 
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("allows OPENCLAW_CONFIG_PATH from workspace .env but blocks OPENCLAW_STATE_DIR", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
+          "OPENCLAW_STATE_DIR=./project-state\nOPENCLAW_CONFIG_PATH=./project-config.json\n",
         );
 
         delete process.env.OPENCLAW_STATE_DIR;
@@ -147,7 +149,7 @@ describe("loadDotEnv", () => {
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe("./project-config.json");
       });
     });
   });
@@ -242,7 +244,7 @@ describe("loadCliDotEnv", () => {
           [
             "SAFE_KEY=from-cwd",
             "OPENCLAW_STATE_DIR=./evil-state",
-            "OPENCLAW_CONFIG_PATH=./evil-config.json",
+            "OPENCLAW_CONFIG_PATH=./project-config.json",
             "NODE_OPTIONS=--require ./evil.js",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
           ].join("\n"),
@@ -261,7 +263,7 @@ describe("loadCliDotEnv", () => {
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe("./project-config.json");
         expect(process.env.NODE_OPTIONS).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
       });
