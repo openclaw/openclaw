@@ -81,6 +81,19 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
       cron: 0,
     },
   })),
+  getInspectableTaskAuditSummary: vi.fn(() => ({
+    total: 1,
+    warnings: 1,
+    errors: 0,
+    byCode: {
+      stale_queued: 0,
+      stale_running: 0,
+      lost: 0,
+      delivery_failed: 1,
+      missing_cleanup: 0,
+      inconsistent_timestamps: 0,
+    },
+  })),
 }));
 
 vi.mock("../routing/session-key.js", () => ({
@@ -121,6 +134,7 @@ describe("getStatusSummary", () => {
     expect(summary.heartbeat.defaultAgentId).toBe("main");
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
+    expect(summary.taskAudit.warnings).toBe(1);
   });
 
   it("skips channel summary imports when no channels are configured", async () => {

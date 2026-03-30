@@ -50,6 +50,19 @@ describe("redactSensitiveStatusSummary", () => {
           cron: 1,
         },
       },
+      taskAudit: {
+        total: 1,
+        warnings: 1,
+        errors: 0,
+        byCode: {
+          stale_queued: 0,
+          stale_running: 0,
+          lost: 0,
+          delivery_failed: 1,
+          missing_cleanup: 0,
+          inconsistent_timestamps: 0,
+        },
+      },
       sessions: {
         paths: ["/tmp/openclaw/sessions.json"],
         count: 1,
@@ -76,5 +89,6 @@ describe("redactSensitiveStatusSummary", () => {
     expect(redacted.heartbeat).toEqual(input.heartbeat);
     expect(redacted.channelSummary).toEqual(input.channelSummary);
     expect(redacted.tasks).toEqual(input.tasks);
+    expect(redacted.taskAudit).toEqual(input.taskAudit);
   });
 });
