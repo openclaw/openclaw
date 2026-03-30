@@ -8,7 +8,11 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
+import {
+  resolveFailureDestination,
+  sendCronResultAnnounce,
+  sendFailureNotificationAnnounce,
+} from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
@@ -368,6 +372,32 @@ export function buildGatewayCronService(params: {
         const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
         const legacyWebhook = trimToOptionalString(params.cfg.cron?.webhook);
         const job = cron.getJob(evt.jobId);
+
+        if (
+          job?.payload.kind === "exec" &&
+          job.delivery?.mode === "announce" &&
+          typeof evt.summary === "string" &&
+          evt.summary.trim() &&
+          !(
+            evt.status === "error" &&
+            resolveFailureDestination(job, params.cfg.cron?.failureDestination) != null
+          )
+        ) {
+          const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+          void sendCronResultAnnounce(
+            params.deps,
+            runtimeConfig,
+            agentId,
+            job.id,
+            {
+              channel: job.delivery.channel,
+              to: job.delivery.to,
+              accountId: job.delivery.accountId,
+            },
+            evt.summary,
+          );
+        }
+
         const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
         const webhookTarget = resolveCronWebhookTarget({
           delivery:

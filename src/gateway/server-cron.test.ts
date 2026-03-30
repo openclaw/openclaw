@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -12,12 +13,14 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
+  sendCronResultAnnounceMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  sendCronResultAnnounceMock: vi.fn(async () => {}),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -57,6 +60,14 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
+vi.mock("../cron/delivery.js", async () => {
+  const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
+  return {
+    ...actual,
+    sendCronResultAnnounce: sendCronResultAnnounceMock,
+  };
+});
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
@@ -78,6 +89,7 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
+    sendCronResultAnnounceMock.mockClear();
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -197,6 +209,54 @@ describe("buildGatewayCronService", () => {
           job: expect.objectContaining({ id: job.id }),
           sessionKey: "project-alpha-monitor",
         }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("announces exec results without starting an isolated agent run", async () => {
+    const cfg = createCronConfig("server-cron-exec-announce");
+    loadConfigMock.mockReturnValue(cfg);
+    const deps = {} as CliDeps;
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "exec-announce",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "exec",
+          command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("process.stdout.write('hello')")}`,
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "12345",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      expect(sendCronResultAnnounceMock).toHaveBeenCalledWith(
+        deps,
+        expect.anything(),
+        expect.any(String),
+        job.id,
+        {
+          channel: "telegram",
+          to: "12345",
+          accountId: undefined,
+        },
+        expect.stringContaining("stdout:\nhello"),
       );
     } finally {
       state.cron.stop();

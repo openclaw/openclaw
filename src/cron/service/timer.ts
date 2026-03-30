@@ -4,6 +4,7 @@ import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { createTaskRecord, updateTaskRecordById } from "../../tasks/task-registry.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { runCronExec } from "../exec-runner.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -1209,6 +1210,13 @@ export async function executeJobCore(
       });
       return { status: "ok", summary: text };
     }
+  }
+
+  if (job.payload.kind === "exec") {
+    return await runCronExec({
+      payload: job.payload,
+      abortSignal,
+    });
   }
 
   if (job.payload.kind !== "agentTurn") {

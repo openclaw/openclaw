@@ -9,13 +9,25 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       model: Type.Optional(Type.String()),
       fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
       deliver: Type.Optional(Type.Boolean()),
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  );
+}
+
+function cronExecPayloadSchema(params?: { command?: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("exec"),
+      command: params?.command ?? NonEmptyString,
+      shell: Type.Optional(Type.Boolean()),
+      timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     },
     { additionalProperties: false },
   );
@@ -138,6 +150,7 @@ export const CronPayloadSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  cronExecPayloadSchema(),
   cronAgentTurnPayloadSchema({ message: NonEmptyString }),
 ]);
 
@@ -149,6 +162,7 @@ export const CronPayloadPatchSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  cronExecPayloadSchema({ command: Type.Optional(NonEmptyString) }),
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
 ]);
 
