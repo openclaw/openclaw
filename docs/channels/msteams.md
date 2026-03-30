@@ -30,7 +30,7 @@ openclaw plugins install @openclaw/msteams
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/msteams
+openclaw plugins install ./path/to/local/msteams-plugin
 ```
 
 If you choose Teams during setup and a git checkout is detected,
@@ -242,7 +242,7 @@ This is often easier than hand-editing JSON manifests.
 
 1. **Install the Microsoft Teams plugin**
    - From npm: `openclaw plugins install @openclaw/msteams`
-   - From a local checkout: `openclaw plugins install ./extensions/msteams`
+   - From a local checkout: `openclaw plugins install ./path/to/local/msteams-plugin`
 
 2. **Bot registration**
    - Create an Azure Bot (see above) and note:
@@ -779,3 +779,11 @@ Bots have limited support in private channels:
 - [RSC permissions reference](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
 - [Teams bot file handling](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4) (channel/group requires Graph)
 - [Proactive messaging](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

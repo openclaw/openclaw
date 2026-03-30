@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -20,11 +21,6 @@ import {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama.js";
-import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramReactionLevel,
-} from "../../../plugin-sdk/telegram-runtime.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -47,7 +43,9 @@ import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstra
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
+  resolveChannelMessageToolCapabilities,
   resolveChannelMessageToolHints,
+  resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
@@ -60,7 +58,10 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  materializeBundleMcpToolsForRun,
+} from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
@@ -151,6 +152,7 @@ import {
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
 import {
   appendAttemptCacheTtlIfNeeded,
   composeSystemPromptWithHookContext,
@@ -175,6 +177,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -212,6 +215,35 @@ export {
 } from "./attempt.tool-call-normalization.js";
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
+
+export function resolveEmbeddedAgentStreamFn(params: {
+  currentStreamFn: StreamFn | undefined;
+  providerStreamFn?: StreamFn;
+  shouldUseWebSocketTransport: boolean;
+  wsApiKey?: string;
+  sessionId: string;
+  signal?: AbortSignal;
+  model: EmbeddedRunAttemptParams["model"];
+}): StreamFn {
+  if (params.providerStreamFn) {
+    return params.providerStreamFn;
+  }
+
+  const currentStreamFn = params.currentStreamFn ?? streamSimple;
+  if (params.shouldUseWebSocketTransport) {
+    return params.wsApiKey
+      ? createOpenAIWebSocketStreamFn(params.wsApiKey, params.sessionId, {
+          signal: params.signal,
+        })
+      : currentStreamFn;
+  }
+
+  if (params.model.provider === "anthropic-vertex") {
+    return createAnthropicVertexStreamFnForModel(params.model);
+  }
+
+  return currentStreamFn;
+}
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -387,6 +419,8 @@ export async function runEmbeddedAttempt(
       ? []
       : createOpenClawCodingTools({
           agentId: sessionAgentId,
+          trigger: params.trigger,
+          memoryFlushWritePath: params.memoryFlushWritePath,
           exec: {
             ...params.execOverrides,
             elevated: params.bashElevated,
@@ -447,10 +481,17 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
-    const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
+    const bundleMcpSessionRuntime = toolsEnabled
+      ? await getOrCreateSessionMcpRuntime({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
+        })
+      : undefined;
+    const bundleMcpRuntime = bundleMcpSessionRuntime
+      ? await materializeBundleMcpToolsForRun({
+          runtime: bundleMcpSessionRuntime,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -488,43 +529,35 @@ export async function runEmbeddedAttempt(
           accountId: params.agentAccountId,
         }) ?? [])
       : undefined;
-    if (runtimeChannel === "telegram" && params.config) {
-      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
-        cfg: params.config,
-        accountId: params.agentAccountId ?? undefined,
-      });
-      if (inlineButtonsScope !== "off") {
-        if (!runtimeCapabilities) {
-          runtimeCapabilities = [];
+    const promptCapabilities =
+      runtimeChannel && params.config
+        ? resolveChannelMessageToolCapabilities({
+            cfg: params.config,
+            channel: runtimeChannel,
+            accountId: params.agentAccountId,
+          })
+        : [];
+    if (promptCapabilities.length > 0) {
+      runtimeCapabilities ??= [];
+      const seenCapabilities = new Set(
+        runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()),
+      );
+      for (const capability of promptCapabilities) {
+        const normalizedCapability = capability.trim().toLowerCase();
+        if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
+          continue;
         }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
-          runtimeCapabilities.push("inlineButtons");
-        }
+        seenCapabilities.add(normalizedCapability);
+        runtimeCapabilities.push(capability);
       }
     }
     const reactionGuidance =
       runtimeChannel && params.config
-        ? (() => {
-            if (runtimeChannel === "telegram") {
-              const resolved = resolveTelegramReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Telegram" } : undefined;
-            }
-            if (runtimeChannel === "signal") {
-              const resolved = resolveSignalReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Signal" } : undefined;
-            }
-            return undefined;
-          })()
+        ? resolveChannelReactionGuidance({
+            cfg: params.config,
+            channel: runtimeChannel,
+            accountId: params.agentAccountId,
+          })
         : undefined;
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
@@ -850,30 +883,27 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      if (providerStreamFn) {
-        activeSession.agent.streamFn = providerStreamFn;
-      } else if (
-        shouldUseOpenAIWebSocketTransport({
-          provider: params.provider,
-          modelApi: params.model.api,
-        })
-      ) {
-        const wsApiKey = await params.authStorage.getApiKey(params.provider);
-        if (wsApiKey) {
-          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
-            signal: runAbortController.signal,
-          });
-        } else {
-          log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = defaultSessionStreamFn;
-        }
-      } else if (params.model.provider === "anthropic-vertex") {
-        // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
-        // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
-        activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
-      } else {
-        activeSession.agent.streamFn = defaultSessionStreamFn;
+      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
+        provider: params.provider,
+        modelApi: params.model.api,
+      });
+      const wsApiKey = shouldUseWebSocketTransport
+        ? await params.authStorage.getApiKey(params.provider)
+        : undefined;
+      if (shouldUseWebSocketTransport && !wsApiKey) {
+        log.warn(
+          `[ws-stream] no API key for provider=${params.provider}; keeping session-managed HTTP transport`,
+        );
       }
+      activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: defaultSessionStreamFn,
+        providerStreamFn,
+        shouldUseWebSocketTransport,
+        wsApiKey,
+        sessionId: params.sessionId,
+        signal: runAbortController.signal,
+        model: params.model,
+      });
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
@@ -962,6 +992,7 @@ export async function runEmbeddedAttempt(
 
       if (
         params.model.api === "openai-responses" ||
+        params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-codex-responses"
       ) {
         const inner = activeSession.agent.streamFn;
@@ -1027,6 +1058,24 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+      // Anthropic-compatible providers can add new stop reasons before pi-ai maps them.
+      // Recover the known "sensitive" stop reason here so a model refusal does not
+      // bubble out as an uncaught runner error and stall channel polling.
+      activeSession.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(
+        activeSession.agent.streamFn,
+      );
+
+      let idleTimeoutTrigger: ((error: Error) => void) | undefined;
+
+      // Wrap stream with idle timeout detection
+      const idleTimeoutMs = resolveLlmIdleTimeoutMs(params.config);
+      if (idleTimeoutMs > 0) {
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          idleTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+        );
+      }
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -1055,7 +1104,9 @@ export async function runEmbeddedAttempt(
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
+          ? sanitizeToolUseResultPairing(truncated, {
+              erroredAssistantResultPolicy: "drop",
+            })
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
@@ -1118,6 +1169,13 @@ export async function runEmbeddedAttempt(
       };
       const makeAbortError = (signal: AbortSignal): Error => {
         const reason = getAbortReason(signal);
+        // If the reason is already an Error, preserve it to keep the original message
+        // (e.g., "LLM idle timeout (60s): no response from model" instead of "aborted")
+        if (reason instanceof Error) {
+          const err = new Error(reason.message, { cause: reason });
+          err.name = "AbortError";
+          return err;
+        }
         const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
         err.name = "AbortError";
         return err;
@@ -1148,6 +1206,9 @@ export async function runEmbeddedAttempt(
         }
         abortCompaction();
         void activeSession.abort();
+      };
+      idleTimeoutTrigger = (error) => {
+        abortRun(true, error);
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
@@ -1193,6 +1254,7 @@ export async function runEmbeddedAttempt(
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
+        silentExpected: params.silentExpected,
         config: params.config,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
@@ -1817,7 +1879,6 @@ export async function runEmbeddedAttempt(
       });
       session?.dispose();
       releaseWsSession(params.sessionId);
-      await bundleMcpRuntime?.dispose();
       await bundleLspRuntime?.dispose();
       await sessionLock.release();
     }

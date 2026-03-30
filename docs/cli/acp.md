@@ -147,6 +147,10 @@ Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
 
+If you want ACPX-backed sessions to see OpenClaw plugin tools, enable the
+gateway-side ACPX plugin bridge instead of trying to pass per-session
+`mcpServers`. See [ACP Agents](/tools/acp-agents#plugin-tools-mcp-bridge).
+
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 
 If you want a coding agent such as Codex or Claude Code to talk to your
