@@ -212,7 +212,9 @@ async function approvePendingPairingIfNeeded() {
   const pending = list.pending.at(0);
   expect(pending?.requestId).toBeDefined();
   if (pending?.requestId) {
-    await approveDevicePairing(pending.requestId);
+    await approveDevicePairing(pending.requestId, {
+      callerScopes: pending.scopes ?? ["operator.admin"],
+    });
   }
 }
 

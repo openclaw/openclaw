@@ -11,6 +11,7 @@ import {
   resolveEnvelopeFormatOptions,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
@@ -19,7 +20,6 @@ import {
   recordInboundSession,
   resolveConversationLabel,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
@@ -555,8 +555,12 @@ export async function prepareSlackMessage(params: {
     );
 
   const ackReactionMessageTs = message.ts;
+  const statusReactionsWillHandle =
+    Boolean(ackReactionMessageTs) &&
+    cfg.messages?.statusReactions?.enabled !== false &&
+    shouldAckReaction();
   const ackReactionPromise =
-    shouldAckReaction() && ackReactionMessageTs && ackReactionValue
+    !statusReactionsWillHandle && shouldAckReaction() && ackReactionMessageTs && ackReactionValue
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
           token: ctx.botToken,
           client: ctx.app.client,
@@ -567,7 +571,9 @@ export async function prepareSlackMessage(params: {
             return false;
           },
         )
-      : null;
+      : statusReactionsWillHandle
+        ? Promise.resolve(true)
+        : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const senderName = await resolveSenderName();

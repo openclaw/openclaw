@@ -120,6 +120,7 @@ const { clearPluginCommands, registerPluginCommand } = await import("../../plugi
 const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
   await import("../../agents/pi-embedded.js");
 const { __testing: subagentControlTesting } = await import("../../agents/subagent-control.js");
+const { enqueueSystemEvent } = await import("../../infra/system-events.js");
 const { resetBashChatCommandForTests } = await import("./bash-command.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 const { buildCommandsPaginationKeyboard } = await import("./commands-info.js");
@@ -129,6 +130,8 @@ const { parseConfigCommand } = await import("./config-commands.js");
 const { parseDebugCommand } = await import("./debug-commands.js");
 const { parseInlineDirectives } = await import("./directive-handling.js");
 const { buildCommandContext, handleCommands } = await import("./commands.js");
+const { createTaskRecord, resetTaskRegistryForTests } =
+  await import("../../tasks/task-registry.js");
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -149,6 +152,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.useRealTimers();
   vi.clearAllTimers();
+  resetTaskRegistryForTests();
   setDefaultChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -344,7 +348,7 @@ describe("/approve command", () => {
 
   function createTelegramApproveCfg(
     execApprovals: {
-      enabled: true;
+      enabled: boolean;
       approvers: string[];
       target: "dm";
     } | null = { enabled: true, approvers: ["123"], target: "dm" },
@@ -353,6 +357,46 @@ describe("/approve command", () => {
       commands: { text: true },
       channels: {
         telegram: {
+          allowFrom: ["*"],
+          ...(execApprovals ? { execApprovals } : {}),
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  function createTelegramTargetApproveCfg(
+    targets: Array<{ channel: string; to: string; accountId?: string }> = [
+      { channel: "telegram", to: "123" },
+    ],
+  ): OpenClawConfig {
+    return {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  function createDiscordApproveCfg(
+    execApprovals: {
+      enabled: boolean;
+      approvers: string[];
+      target: "dm" | "channel" | "both";
+    } | null = { enabled: true, approvers: ["123"], target: "channel" },
+  ): OpenClawConfig {
+    return {
+      commands: { text: true },
+      channels: {
+        discord: {
           allowFrom: ["*"],
           ...(execApprovals ? { execApprovals } : {}),
         },
@@ -382,7 +426,7 @@ describe("/approve command", () => {
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "exec.approval.resolve",
@@ -404,13 +448,147 @@ describe("/approve command", () => {
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "exec.approval.resolve",
         params: { id: "abc12345", decision: "allow-once" },
       }),
     );
+  });
+
+  it("requires configured Discord approvers for exec approvals", async () => {
+    for (const testCase of [
+      {
+        name: "discord no approver policy",
+        cfg: createDiscordApproveCfg(null),
+        senderId: "123",
+        expectedText: "not authorized to approve",
+        setup: undefined,
+        expectedGatewayCalls: 0,
+      },
+      {
+        name: "discord non approver",
+        cfg: createDiscordApproveCfg({ enabled: true, approvers: ["999"], target: "channel" }),
+        senderId: "123",
+        expectedText: "not authorized to approve",
+        setup: undefined,
+        expectedGatewayCalls: 0,
+      },
+      {
+        name: "discord approver with rich client disabled",
+        cfg: createDiscordApproveCfg({ enabled: false, approvers: ["123"], target: "channel" }),
+        senderId: "123",
+        expectedText: "Approval allow-once submitted",
+        setup: () => callGatewayMock.mockResolvedValue({ ok: true }),
+        expectedGatewayCalls: 1,
+        expectedMethod: "exec.approval.resolve",
+      },
+      {
+        name: "discord approver",
+        cfg: createDiscordApproveCfg({ enabled: true, approvers: ["123"], target: "channel" }),
+        senderId: "123",
+        expectedText: "Approval allow-once submitted",
+        setup: () => callGatewayMock.mockResolvedValue({ ok: true }),
+        expectedGatewayCalls: 1,
+        expectedMethod: "exec.approval.resolve",
+      },
+    ] as const) {
+      callGatewayMock.mockReset();
+      testCase.setup?.();
+      const params = buildParams("/approve abc12345 allow-once", testCase.cfg, {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: testCase.senderId,
+      });
+
+      const result = await handleCommands(params);
+      expect(result.shouldContinue, testCase.name).toBe(false);
+      expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
+      if ("expectedMethod" in testCase) {
+        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: testCase.expectedMethod,
+            params: { id: "abc12345", decision: "allow-once" },
+          }),
+        );
+      }
+    }
+  });
+
+  it("preserves legacy unprefixed plugin approval fallback on Discord", async () => {
+    for (const testCase of [
+      {
+        name: "discord legacy plugin approval with exec approvals disabled",
+        cfg: createDiscordApproveCfg(null),
+        senderId: "123",
+      },
+      {
+        name: "discord legacy plugin approval for non approver",
+        cfg: createDiscordApproveCfg({ enabled: true, approvers: ["999"], target: "channel" }),
+        senderId: "123",
+      },
+    ] as const) {
+      callGatewayMock.mockReset();
+      callGatewayMock.mockResolvedValue({ ok: true });
+      const params = buildParams("/approve legacy-plugin-123 allow-once", testCase.cfg, {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: testCase.senderId,
+      });
+
+      const result = await handleCommands(params);
+      expect(result.shouldContinue, testCase.name).toBe(false);
+      expect(result.reply?.text, testCase.name).toContain("Approval allow-once submitted");
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(1);
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "plugin.approval.resolve",
+          params: { id: "legacy-plugin-123", decision: "allow-once" },
+        }),
+      );
+    }
+  });
+
+  it("requires configured Discord approvers for plugin approvals", async () => {
+    for (const testCase of [
+      {
+        name: "discord plugin non approver",
+        cfg: createDiscordApproveCfg({ enabled: false, approvers: ["999"], target: "channel" }),
+        senderId: "123",
+        expectedText: "not authorized to approve plugin requests",
+        expectedGatewayCalls: 0,
+      },
+      {
+        name: "discord plugin approver",
+        cfg: createDiscordApproveCfg({ enabled: false, approvers: ["123"], target: "channel" }),
+        senderId: "123",
+        expectedText: "Approval allow-once submitted",
+        expectedGatewayCalls: 1,
+      },
+    ] as const) {
+      callGatewayMock.mockReset();
+      callGatewayMock.mockResolvedValue({ ok: true });
+      const params = buildParams("/approve plugin:abc123 allow-once", testCase.cfg, {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: testCase.senderId,
+      });
+
+      const result = await handleCommands(params);
+      expect(result.shouldContinue, testCase.name).toBe(false);
+      expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
+      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
+      if (testCase.expectedGatewayCalls > 0) {
+        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "plugin.approval.resolve",
+            params: { id: "plugin:abc123", decision: "allow-once" },
+          }),
+        );
+      }
+    }
   });
 
   it("rejects unauthorized or invalid Telegram /approve variants", async () => {
@@ -438,9 +616,12 @@ describe("/approve command", () => {
           Surface: "telegram",
           SenderId: "123",
         },
-        setup: () => callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id")),
+        setup: () =>
+          callGatewayMock.mockRejectedValue(
+            gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+          ),
         expectedText: "unknown or expired approval id",
-        expectGatewayCalls: 1,
+        expectGatewayCalls: 2,
       },
       {
         name: "telegram approvals disabled",
@@ -452,8 +633,21 @@ describe("/approve command", () => {
           SenderId: "123",
         },
         setup: undefined,
-        expectedText: "Telegram exec approvals are not enabled",
+        expectedText: "not authorized to approve",
         expectGatewayCalls: 0,
+      },
+      {
+        name: "telegram approver with rich client disabled",
+        cfg: createTelegramApproveCfg({ enabled: false, approvers: ["123"], target: "dm" }),
+        commandBody: "/approve abc12345 allow-once",
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
+        },
+        setup: () => callGatewayMock.mockResolvedValue({ ok: true }),
+        expectedText: "Approval allow-once submitted",
+        expectGatewayCalls: 1,
       },
       {
         name: "non approver",
@@ -477,7 +671,124 @@ describe("/approve command", () => {
       expect(result.shouldContinue, testCase.name).toBe(false);
       expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
       expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectGatewayCalls);
+      if (testCase.expectGatewayCalls > 0) {
+        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "exec.approval.resolve",
+            params: { id: "abc12345", decision: "allow-once" },
+          }),
+        );
+      }
     }
+  });
+
+  it("accepts Telegram /approve from active exec forwarding targets", async () => {
+    const cfg = createTelegramTargetApproveCfg([{ channel: "telegram", to: "tg:123" }]);
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("rejects Telegram plugin-prefixed IDs when no approver policy is configured", async () => {
+    const cfg = createTelegramApproveCfg(null);
+    const params = buildParams("/approve plugin:abc123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("not authorized to approve plugin requests");
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("enforces Telegram approver policy for plugin-prefixed IDs when configured", async () => {
+    const cfg = createTelegramApproveCfg({ enabled: false, approvers: ["999"], target: "dm" });
+    const params = buildParams("/approve plugin:abc123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("not authorized to approve plugin requests");
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("allows Telegram plugin-prefixed IDs for configured approvers even when exec approvals are disabled", async () => {
+    const cfg = createTelegramApproveCfg({ enabled: false, approvers: ["123"], target: "dm" });
+    const params = buildParams("/approve plugin:abc123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin:abc123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("keeps Telegram plugin-prefixed IDs explicit-only for exec forwarding targets", async () => {
+    const cfg = createTelegramTargetApproveCfg();
+    const params = buildParams("/approve plugin:abc123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("not authorized to approve plugin requests");
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("does not fall back to legacy plugin approvals for Telegram target recipients", async () => {
+    const cfg = createTelegramTargetApproveCfg();
+    const params = buildParams("/approve legacy-plugin-123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockRejectedValueOnce(
+      gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+    );
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("unknown or expired approval id");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "legacy-plugin-123", decision: "allow-once" },
+      }),
+    );
   });
 
   it("enforces gateway approval scopes", async () => {
@@ -492,12 +803,12 @@ describe("/approve command", () => {
       },
       {
         scopes: ["operator.approvals"],
-        expectedText: "Exec approval allow-once submitted",
+        expectedText: "Approval allow-once submitted",
         expectedGatewayCalls: 1,
       },
       {
         scopes: ["operator.admin"],
-        expectedText: "Exec approval allow-once submitted",
+        expectedText: "Approval allow-once submitted",
         expectedGatewayCalls: 1,
       },
     ] as const;
@@ -525,6 +836,205 @@ describe("/approve command", () => {
         );
       }
     }
+  });
+
+  function gatewayError(message: string, gatewayCode: string, opts?: { details?: unknown }): Error {
+    const err = new Error(message) as Error & { gatewayCode?: string; details?: unknown };
+    err.name = "GatewayClientRequestError";
+    err.gatewayCode = gatewayCode;
+    if (opts && "details" in opts) {
+      err.details = opts.details;
+    }
+    return err;
+  }
+
+  it("falls back to plugin.approval.resolve when exec approval id is unknown", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve plugin-123 allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock
+      .mockRejectedValueOnce(gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"))
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "exec.approval.resolve" }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin-123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("falls back to plugin.approval.resolve for INVALID_REQUEST with approval-not-found details", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve plugin-123 allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock
+      .mockRejectedValueOnce(
+        gatewayError("unknown or expired approval id", "INVALID_REQUEST", {
+          details: { reason: "APPROVAL_NOT_FOUND" },
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "exec.approval.resolve" }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin-123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("falls back to plugin.approval.resolve for legacy message-only not-found errors", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve plugin-123 allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock
+      .mockRejectedValueOnce(
+        gatewayError("unknown or expired approval id", "INVALID_REQUEST", {
+          details: { reason: "SOMETHING_ELSE" },
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "exec.approval.resolve" }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin-123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("supports old and new unknown-id gateway envelopes across sequential approvals", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const cases = [
+      {
+        id: "plugin-old-1",
+        err: gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+      },
+      {
+        id: "plugin-new-2",
+        err: gatewayError("unknown or expired approval id", "INVALID_REQUEST", {
+          details: { reason: "APPROVAL_NOT_FOUND" },
+        }),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      callGatewayMock.mockReset();
+      callGatewayMock.mockRejectedValueOnce(testCase.err).mockResolvedValueOnce({ ok: true });
+
+      const params = buildParams(`/approve ${testCase.id} allow-once`, cfg, { SenderId: "123" });
+      const result = await handleCommands(params);
+
+      expect(result.shouldContinue, testCase.id).toBe(false);
+      expect(result.reply?.text, testCase.id).toContain("Approval allow-once submitted");
+      expect(callGatewayMock, testCase.id).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          method: "exec.approval.resolve",
+          params: { id: testCase.id, decision: "allow-once" },
+        }),
+      );
+      expect(callGatewayMock, testCase.id).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          method: "plugin.approval.resolve",
+          params: { id: testCase.id, decision: "allow-once" },
+        }),
+      );
+    }
+  });
+
+  it("surfaces plugin approval error when both exec and plugin resolve fail", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve bad-id deny", cfg, { SenderId: "123" });
+
+    callGatewayMock
+      .mockRejectedValueOnce(gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"))
+      .mockRejectedValueOnce(gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"));
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Failed to submit approval");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes plugin-prefixed IDs directly to plugin.approval.resolve", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve plugin:abc-123 allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin:abc-123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("does not fall back to plugin resolve for non-id errors", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockRejectedValueOnce(new Error("gateway connection refused"));
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("gateway connection refused");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -624,6 +1134,109 @@ describe("/compact command", () => {
         agentDir,
       }),
     );
+  });
+
+  it("labels nothing-to-compact results as skipped without calling them below-threshold", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Nothing to compact (session too small)",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 31_000,
+          contextTokens: 200_000,
+        },
+      },
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction skipped: nothing compactable in this session yet • Context 31k/?",
+      },
+    });
+    expect(vi.mocked(enqueueSystemEvent)).toHaveBeenCalledWith(
+      "Compaction skipped: nothing compactable in this session yet • Context 31k/?",
+      { sessionKey: params.sessionKey },
+    );
+  });
+
+  it("formats below-threshold skip reasons with friendly copy", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction skipped: below threshold for manual compaction",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 31_000,
+          contextTokens: 200_000,
+        },
+      },
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction skipped: context is below the compaction threshold • Context 31k/?",
+      },
+    });
+  });
+
+  it("keeps true compaction errors labeled as failures", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 109_000,
+          contextTokens: 200_000,
+        },
+      },
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction failed: Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6. • Context 109k/?",
+      },
+    });
   });
 });
 
@@ -2133,6 +2746,16 @@ describe("handleCommands subagents", () => {
       endedAt: now - 1_000,
       outcome: { status: "ok" },
     });
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:abc",
+      runId: "run-1",
+      task: "do thing",
+      status: "succeeded",
+      terminalSummary: "Completed the requested task",
+      deliveryStatus: "delivered",
+    });
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -2144,6 +2767,8 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagent info");
     expect(result.reply?.text).toContain("Run: run-1");
     expect(result.reply?.text).toContain("Status: done");
+    expect(result.reply?.text).toContain("TaskStatus: succeeded");
+    expect(result.reply?.text).toContain("Task summary: Completed the requested task");
   });
 
   it("does not resolve moved child rows from a stale older parent", async () => {

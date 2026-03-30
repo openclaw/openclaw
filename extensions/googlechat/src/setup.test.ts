@@ -5,13 +5,13 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { googlechatPlugin } from "./channel.js";
@@ -49,6 +49,7 @@ function buildAccount(): ResolvedGoogleChatAccount {
 describe("googlechat setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("rejects env auth for non-default accounts", () => {
@@ -186,6 +187,32 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
+  it("parses default-account env JSON credentials only when they decode to an object", () => {
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
+
+    const resolved = resolveGoogleChatAccount({
+      cfg: { channels: { googlechat: {} } },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("env");
+    expect(resolved.credentials).toEqual({ client_email: "bot@example.com" });
+  });
+
+  it("ignores env JSON credentials when they decode to a non-object value", () => {
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
+
+    const resolved = resolveGoogleChatAccount({
+      cfg: { channels: { googlechat: {} } },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("env");
+    expect(resolved.credentials).toBeUndefined();
+    expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
+  });
+
   it("inherits shared defaults from accounts.default for named accounts", () => {
     const cfg: OpenClawConfig = {
       channels: {

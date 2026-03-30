@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/providers/modelstudio",
+      "destination": "/providers/qwen_modelstudio"
+    },
+    {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
     },
@@ -1028,7 +1032,16 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
+                  {
+                    "group": "Memory",
+                    "pages": [
+                      "concepts/memory",
+                      "concepts/memory-builtin",
+                      "concepts/memory-qmd",
+                      "concepts/memory-honcho",
+                      "concepts/memory-search"
+                    ]
+                  },
                   "concepts/compaction"
                 ]
               },
@@ -1105,6 +1118,7 @@
                   "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
+                  "automation/tasks",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
@@ -1142,6 +1156,7 @@
                     ]
                   },
                   "tools/btw",
+                  "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec",
@@ -1194,7 +1209,6 @@
                   "providers/litellm",
                   "providers/minimax",
                   "providers/mistral",
-                  "providers/modelstudio",
                   "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",
@@ -1204,6 +1218,7 @@
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",
+                  "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
                   "providers/synthetic",
@@ -1427,7 +1442,14 @@
                   },
                   {
                     "group": "Utility",
-                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                    "pages": [
+                      "cli/acp",
+                      "cli/clawbot",
+                      "cli/completion",
+                      "cli/dns",
+                      "cli/docs",
+                      "cli/mcp"
+                    ]
                   }
                 ]
               },

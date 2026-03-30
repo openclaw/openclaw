@@ -14,6 +14,11 @@ title: "Cron Jobs"
 Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
 the right time, and can optionally deliver output back to a chat.
 
+Cron does **not** mean every scheduled event becomes a background task:
+
+- `sessionTarget: "main"` schedules a system event for the main session and heartbeat flow.
+- `sessionTarget: "isolated"` or `sessionTarget: "session:..."` runs detached work that shows up in `openclaw tasks`.
+
 If you want _“run this every morning”_ or _“poke the agent in 20 minutes”_,
 cron is the mechanism.
 
@@ -155,6 +160,8 @@ They must use `payload.kind = "systemEvent"`.
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
 
+Main-session cron jobs do **not** create [background task](/automation/tasks) records.
+
 #### Isolated jobs (dedicated cron sessions)
 
 Isolated jobs run a dedicated agent turn in session `cron:<jobId>` or a custom session.
@@ -175,6 +182,8 @@ Key behaviors:
 
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
+
+These detached runs create [background task](/automation/tasks) records visible in `openclaw tasks` and subject to task audit and maintenance.
 
 ### Payload shapes (what runs)
 

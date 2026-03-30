@@ -6,6 +6,31 @@ import {
 
 type DummyTool = { name: string };
 
+function runAllowlistWarningStep(params: {
+  allow: string[];
+  label: string;
+  suppressUnavailableCoreToolWarning?: boolean;
+}) {
+  const warnings: string[] = [];
+  const tools = [{ name: "exec" }] as unknown as DummyTool[];
+  applyToolPolicyPipeline({
+    // oxlint-disable-next-line typescript/no-explicit-any
+    tools: tools as any,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    toolMeta: () => undefined,
+    warn: (msg) => warnings.push(msg),
+    steps: [
+      {
+        policy: { allow: params.allow },
+        label: params.label,
+        stripPluginOnlyAllowlist: true,
+        suppressUnavailableCoreToolWarning: params.suppressUnavailableCoreToolWarning,
+      },
+    ],
+  });
+  return warnings;
+}
+
 describe("tool-policy-pipeline", () => {
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
@@ -52,22 +77,32 @@ describe("tool-policy-pipeline", () => {
     expect(warnings[0]).toContain("unknown entries (wat)");
   });
 
-  test("warns gated core tools as unavailable instead of plugin-only unknowns", () => {
-    const warnings: string[] = [];
-    const tools = [{ name: "exec" }] as unknown as DummyTool[];
-    applyToolPolicyPipeline({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      tools: tools as any,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolMeta: () => undefined,
-      warn: (msg) => warnings.push(msg),
-      steps: [
-        {
-          policy: { allow: ["apply_patch"] },
-          label: "tools.profile (coding)",
-          stripPluginOnlyAllowlist: true,
-        },
-      ],
+  test("suppresses built-in profile warnings for unavailable gated core tools", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["apply_patch"],
+      label: "tools.profile (coding)",
+      suppressUnavailableCoreToolWarning: true,
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  test("still warns for profile steps when explicit alsoAllow entries are present", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["apply_patch"],
+      label: "tools.profile (coding)",
+      suppressUnavailableCoreToolWarning: false,
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("unknown entries (apply_patch)");
+    expect(warnings[0]).toContain(
+      "shipped core tools but unavailable in the current runtime/provider/model/config",
+    );
+  });
+
+  test("still warns for explicit allowlists that mention unavailable gated core tools", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["apply_patch"],
+      label: "tools.allow",
     });
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("unknown entries (apply_patch)");
@@ -88,8 +123,8 @@ describe("tool-policy-pipeline", () => {
       warn: (msg: string) => warnings.push(msg),
       steps: [
         {
-          policy: { allow: ["apply_patch"] },
-          label: "tools.profile (coding)",
+          policy: { allow: ["wat"] },
+          label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
       ],

@@ -2,19 +2,18 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  applyOpenAIConfig,
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
   normalizeProviderId,
-  OPENAI_DEFAULT_MODEL,
   type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAIDefaultTransportWrapper,
 } from "openclaw/plugin-sdk/provider-stream";
+import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
@@ -50,9 +49,27 @@ const OPENAI_MODERN_MODEL_IDS = [
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
+function shouldUseOpenAIResponsesTransport(params: {
+  provider: string;
+  api?: string | null;
+  baseUrl?: string;
+}): boolean {
+  if (params.api !== "openai-completions") {
+    return false;
+  }
+  const isOwnerProvider = normalizeProviderId(params.provider) === PROVIDER_ID;
+  if (isOwnerProvider) {
+    return !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl);
+  }
+  return typeof params.baseUrl === "string" && isOpenAIApiBaseUrl(params.baseUrl);
+}
+
 function normalizeOpenAITransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const useResponsesTransport =
-    model.api === "openai-completions" && (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl));
+  const useResponsesTransport = shouldUseOpenAIResponsesTransport({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+  });
 
   if (!useResponsesTransport) {
     return model;
@@ -169,6 +186,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
       }
       return normalizeOpenAITransport(ctx.model);
     },
+    normalizeTransport: ({ provider, api, baseUrl }) =>
+      shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
+        ? { api: "openai-responses", baseUrl }
+        : undefined,
     capabilities: {
       providerFamily: "openai",
     },
