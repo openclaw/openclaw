@@ -270,8 +270,16 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      // [Refactored] Structured Metadata Injection
+      const metadata = {
+        from: opts?.agentSessionKey ?? "unknown",
+        channel: opts?.agentChannel ?? "internal",
+        version: "1.0",
+      };
+      const messageWithMetadata = `[Metadata: ${JSON.stringify(metadata)}] ${message}`;
+
       const sendParams = {
-        message,
+        message: messageWithMetadata,
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
