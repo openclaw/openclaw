@@ -8,6 +8,7 @@ import {
 } from "./delivery-field-schemas.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { inferLegacyName } from "./service/normalize.js";
+import { normalizeCronSessionTargetForPersistence } from "./session-target-guard.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -460,6 +461,13 @@ export function normalizeCronJobInput(
     }
   }
 
+  if (typeof next.sessionTarget === "string") {
+    next.sessionTarget = normalizeCronSessionTargetForPersistence({
+      sessionTarget: next.sessionTarget,
+      currentSessionKey: options.sessionContext?.sessionKey,
+    });
+  }
+
   if ("wakeMode" in base) {
     const normalized = normalizeWakeMode(base.wakeMode);
     if (normalized) {
@@ -533,29 +541,6 @@ export function normalizeCronJobInput(
       }
     }
 
-    // Resolve "current" sessionTarget to the actual sessionKey from context
-    if (next.sessionTarget === "current") {
-      if (options.sessionContext?.sessionKey) {
-        const sessionKey = options.sessionContext.sessionKey.trim();
-        if (sessionKey) {
-          // Store as session:customId format for persistence
-          next.sessionTarget = `session:${sessionKey}`;
-        }
-      }
-      // If "current" wasn't resolved, fall back to "isolated" behavior
-      // This handles CLI/headless usage where no session context exists
-      if (next.sessionTarget === "current") {
-        next.sessionTarget = "isolated";
-      }
-    }
-    if (next.sessionTarget === "current") {
-      const sessionKey = options.sessionContext?.sessionKey?.trim();
-      if (sessionKey) {
-        next.sessionTarget = `session:${sessionKey}`;
-      } else {
-        next.sessionTarget = "isolated";
-      }
-    }
     if (
       "schedule" in next &&
       isRecord(next.schedule) &&

@@ -123,11 +123,25 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
-    const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
-    const candidate =
-      normalizedPatch && typeof params === "object" && params !== null
-        ? { ...params, patch: normalizedPatch }
+    const sessionKey =
+      typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
+        ? (params as { sessionKey: string }).sessionKey
+        : undefined;
+    const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch, {
+      sessionContext: { sessionKey },
+    });
+    const paramsWithoutSessionContext =
+      typeof params === "object" && params !== null && "sessionKey" in params
+        ? (({ sessionKey: _sessionKey, ...rest }) => rest)(
+            params as Record<string, unknown> & { sessionKey?: unknown },
+          )
         : params;
+    const candidate =
+      normalizedPatch &&
+      typeof paramsWithoutSessionContext === "object" &&
+      paramsWithoutSessionContext !== null
+        ? { ...paramsWithoutSessionContext, patch: normalizedPatch }
+        : paramsWithoutSessionContext;
     if (!validateCronUpdateParams(candidate)) {
       respond(
         false,
