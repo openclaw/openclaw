@@ -1887,7 +1887,7 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Why am I getting heartbeat messages every 30 minutes?">
-    Heartbeats run every **30m** by default. Tune or disable them:
+    Heartbeats run every **30m** by default (**1h** when using OAuth auth). Tune or disable them:
 
     ```json5
     {
@@ -2087,13 +2087,15 @@ for usage/billing and raise limits as needed.
 
     ```
     /model sonnet
-    /model haiku
     /model opus
     /model gpt
     /model gpt-mini
     /model gemini
     /model gemini-flash
+    /model gemini-flash-lite
     ```
+
+    These are the built-in aliases. Custom aliases can be added via `agents.defaults.models`.
 
     You can list available models with `/model`, `/model list`, or `/model status`.
 
