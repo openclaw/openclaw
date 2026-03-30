@@ -10,6 +10,9 @@ export type ChatQueueItem = {
   createdAt: number;
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  localCommandArgs?: string;
+  localCommandName?: string;
+  pendingRunId?: string;
 };
 
 export const CRON_CHANNEL_LAST = "last";
@@ -31,7 +34,7 @@ export type CronFormState = {
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";
-  sessionTarget: "main" | "isolated";
+  sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
   payloadKind: "systemEvent" | "agentTurn";
   payloadText: string;

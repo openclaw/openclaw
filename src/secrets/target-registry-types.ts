@@ -1,6 +1,6 @@
-export type SecretTargetConfigFile = "openclaw.json" | "auth-profiles.json";
-export type SecretTargetShape = "secret_input" | "sibling_ref";
-export type SecretTargetExpected = "string" | "string-or-object";
+export type SecretTargetConfigFile = "openclaw.json" | "auth-profiles.json"; // pragma: allowlist secret
+export type SecretTargetShape = "secret_input" | "sibling_ref"; // pragma: allowlist secret
+export type SecretTargetExpected = "string" | "string-or-object"; // pragma: allowlist secret
 export type AuthProfileType = "api_key" | "token";
 
 export type SecretTargetRegistryEntry = {

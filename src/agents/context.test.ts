@@ -5,26 +5,47 @@ import {
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
 } from "./context.js";
-import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
+import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
-  it("keeps the smallest context window when duplicate model ids are discovered", () => {
+  it("keeps the smallest context window when the same bare model id appears under multiple providers", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
       models: [
-        { id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
-        { id: "claude-sonnet-4-5", contextWindow: 200_000 },
+        { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
+        { id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 },
       ],
     });
 
-    expect(cache.get("claude-sonnet-4-5")).toBe(200_000);
+    // Keep the conservative (minimum) value: this cache feeds runtime paths such
+    // as flush thresholds and session persistence, not just /status display.
+    // Callers with a known provider should use resolveContextTokensForModel which
+    // tries the provider-qualified key first.
+    expect(cache.get("gemini-3.1-pro-preview")).toBe(128_000);
+  });
+
+  it("stores provider-qualified entries independently", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { id: "github-copilot/gemini-3.1-pro-preview", contextWindow: 128_000 },
+        { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      ],
+    });
+
+    expect(cache.get("github-copilot/gemini-3.1-pro-preview")).toBe(128_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 });
 
 describe("applyConfiguredContextWindows", () => {
-  it("overrides discovered cache values with explicit models.providers contextWindow", () => {
-    const cache = new Map<string, number>([["anthropic/claude-opus-4-6", 1_000_000]]);
+  it("writes bare model id to cache; does not touch raw provider-qualified discovery entries", () => {
+    // Discovery stored a provider-qualified entry; config override goes into the
+    // bare key only. resolveContextTokensForModel now scans config directly, so
+    // there is no need (and no benefit) to also write a synthetic qualified key.
+    const cache = new Map<string, number>([["openrouter/anthropic/claude-opus-4-6", 1_000_000]]);
     applyConfiguredContextWindows({
       cache,
       modelsConfig: {
@@ -37,6 +58,33 @@ describe("applyConfiguredContextWindows", () => {
     });
 
     expect(cache.get("anthropic/claude-opus-4-6")).toBe(200_000);
+    // Discovery entry is untouched — no synthetic write that could corrupt
+    // an unrelated provider's raw slash-containing model ID.
+    expect(cache.get("openrouter/anthropic/claude-opus-4-6")).toBe(1_000_000);
+  });
+
+  it("does not write synthetic provider-qualified keys; only bare model ids go into cache", () => {
+    // applyConfiguredContextWindows must NOT write "google-gemini-cli/gemini-3.1-pro-preview"
+    // into the cache — that keyspace is reserved for raw discovery model IDs and
+    // a synthetic write would overwrite unrelated entries (e.g. OpenRouter's
+    // "google/gemini-2.5-pro" being clobbered by a Google provider config).
+    const cache = new Map<string, number>();
+    cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576); // discovery entry
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          "google-gemini-cli": {
+            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 200_000 }],
+          },
+        },
+      },
+    });
+
+    // Bare key is written.
+    expect(cache.get("gemini-3.1-pro-preview")).toBe(200_000);
+    // Discovery entry is NOT overwritten.
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 
   it("adds config-only model context windows and ignores invalid entries", () => {

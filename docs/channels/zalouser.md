@@ -17,7 +17,7 @@ Status: experimental. This integration automates a **personal Zalo account** via
 Zalo Personal ships as a plugin and is not bundled with the core install.
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
-- Or from a source checkout: `openclaw plugins install ./extensions/zalouser`
+- Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 
 No external `zca`/`openzca` CLI binary is required.
@@ -41,7 +41,7 @@ No external `zca`/`openzca` CLI binary is required.
 }
 ```
 
-4. Restart the Gateway (or finish onboarding).
+4. Restart the Gateway (or finish setup).
 5. DM access defaults to pairing; approve the pairing code on first contact.
 
 ## What it is
@@ -74,7 +74,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 `channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
 
-`channels.zalouser.allowFrom` accepts user IDs or names. During onboarding, names are resolved to IDs using the plugin's in-process contact lookup.
+`channels.zalouser.allowFrom` accepts user IDs or names. During setup, names are resolved to IDs using the plugin's in-process contact lookup.
 
 Approve via:
 
@@ -86,10 +86,15 @@ Approve via:
 - Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Restrict to an allowlist with:
   - `channels.zalouser.groupPolicy = "allowlist"`
-  - `channels.zalouser.groups` (keys are group IDs or names)
+  - `channels.zalouser.groups` (keys should be stable group IDs; names are resolved to IDs on startup when possible)
+  - `channels.zalouser.groupAllowFrom` (controls which senders in allowed groups can trigger the bot)
 - Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
 - The configure wizard can prompt for group allowlists.
-- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping.
+- Group allowlist matching is ID-only by default. Unresolved names are ignored for auth unless `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled.
+- `channels.zalouser.dangerouslyAllowNameMatching: true` is a break-glass compatibility mode that re-enables mutable group-name matching.
+- If `groupAllowFrom` is unset, runtime falls back to `allowFrom` for group sender checks.
+- Sender checks apply to both normal group messages and control commands (for example `/new`, `/reset`).
 
 Example:
 
@@ -98,6 +103,7 @@ Example:
   channels: {
     zalouser: {
       groupPolicy: "allowlist",
+      groupAllowFrom: ["1471383327500481391"],
       groups: {
         "123456789": { allow: true },
         "Work Chat": { allow: true },
@@ -112,6 +118,9 @@ Example:
 - `channels.zalouser.groups.<group>.requireMention` controls whether group replies require a mention.
 - Resolution order: exact group id/name -> normalized group slug -> `*` -> default (`true`).
 - This applies both to allowlisted groups and open group mode.
+- Authorized control commands (for example `/new`) can bypass mention gating.
+- When a group message is skipped because mention is required, OpenClaw stores it as pending group history and includes it on the next processed group message.
+- Group history limit defaults to `messages.groupChat.historyLimit` (fallback `50`). You can override per account with `channels.zalouser.historyLimit`.
 
 Example:
 
@@ -164,9 +173,17 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 
 **Allowlist/group name didn't resolve:**
 
-- Use numeric IDs in `allowFrom`/`groups`, or exact friend/group names.
+- Use numeric IDs in `allowFrom`/`groupAllowFrom`/`groups`, or exact friend/group names.
 
 **Upgraded from old CLI-based setup:**
 
 - Remove any old external `zca` process assumptions.
 - The channel now runs fully in OpenClaw without external CLI binaries.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

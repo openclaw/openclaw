@@ -1,9 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean }} ChangedScope */
 
 const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
+const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|pyproject\.toml$)/;
+const CI_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/ci\.yml$/;
+const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const MACOS_PROTOCOL_GEN_RE =
   /^(apps\/macos\/Sources\/OpenClawProtocol\/|apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\/)/;
 const MACOS_NATIVE_RE = /^(apps\/macos\/|apps\/ios\/|apps\/shared\/|Swabble\/)/;
@@ -14,6 +17,8 @@ const WINDOWS_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const NATIVE_ONLY_RE =
   /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/shared\/|Swabble\/|appcast\.xml$)/;
+const CHANGED_SMOKE_SCOPE_RE =
+  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/install\.sh$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|extensions\/[^/]+\/package\.json$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 
 /**
  * @param {string[]} changedPaths
@@ -21,13 +26,22 @@ const NATIVE_ONLY_RE =
  */
 export function detectChangedScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
-    return { runNode: true, runMacos: true, runAndroid: true, runWindows: true };
+    return {
+      runNode: true,
+      runMacos: true,
+      runAndroid: true,
+      runWindows: true,
+      runSkillsPython: true,
+      runChangedSmoke: true,
+    };
   }
 
   let runNode = false;
   let runMacos = false;
   let runAndroid = false;
   let runWindows = false;
+  let runSkillsPython = false;
+  let runChangedSmoke = false;
   let hasNonDocs = false;
   let hasNonNativeNonDocs = false;
 
@@ -42,6 +56,20 @@ export function detectChangedScope(changedPaths) {
     }
 
     hasNonDocs = true;
+
+    if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
+      runSkillsPython = true;
+    }
+
+    if (CI_WORKFLOW_SCOPE_RE.test(path)) {
+      runMacos = true;
+      runAndroid = true;
+      runSkillsPython = true;
+    }
+
+    if (INSTALL_SMOKE_WORKFLOW_SCOPE_RE.test(path)) {
+      runChangedSmoke = true;
+    }
 
     if (!MACOS_PROTOCOL_GEN_RE.test(path) && MACOS_NATIVE_RE.test(path)) {
       runMacos = true;
@@ -59,6 +87,10 @@ export function detectChangedScope(changedPaths) {
       runWindows = true;
     }
 
+    if (CHANGED_SMOKE_SCOPE_RE.test(path)) {
+      runChangedSmoke = true;
+    }
+
     if (!NATIVE_ONLY_RE.test(path)) {
       hasNonNativeNonDocs = true;
     }
@@ -68,7 +100,7 @@ export function detectChangedScope(changedPaths) {
     runNode = true;
   }
 
-  return { runNode, runMacos, runAndroid, runWindows };
+  return { runNode, runMacos, runAndroid, runWindows, runSkillsPython, runChangedSmoke };
 }
 
 /**
@@ -102,6 +134,8 @@ export function writeGitHubOutput(scope, outputPath = process.env.GITHUB_OUTPUT)
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
+  appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
+  appendFileSync(outputPath, `run_changed_smoke=${scope.runChangedSmoke}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -131,11 +165,25 @@ if (isDirectRun()) {
   try {
     const changedPaths = listChangedPaths(args.base, args.head);
     if (changedPaths.length === 0) {
-      writeGitHubOutput({ runNode: true, runMacos: true, runAndroid: true, runWindows: true });
+      writeGitHubOutput({
+        runNode: true,
+        runMacos: true,
+        runAndroid: true,
+        runWindows: true,
+        runSkillsPython: true,
+        runChangedSmoke: true,
+      });
       process.exit(0);
     }
     writeGitHubOutput(detectChangedScope(changedPaths));
   } catch {
-    writeGitHubOutput({ runNode: true, runMacos: true, runAndroid: true, runWindows: true });
+    writeGitHubOutput({
+      runNode: true,
+      runMacos: true,
+      runAndroid: true,
+      runWindows: true,
+      runSkillsPython: true,
+      runChangedSmoke: true,
+    });
   }
 }

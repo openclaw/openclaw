@@ -14,7 +14,7 @@ struct ControlHeartbeatEvent: Codable {
     let reason: String?
 }
 
-struct ControlAgentEvent: Codable, Sendable, Identifiable {
+struct ControlAgentEvent: Codable, Identifiable {
     var id: String {
         "\(self.runId)-\(self.seq)"
     }
@@ -188,6 +188,10 @@ final class ControlChannel {
             return desc
         }
 
+        if let authIssue = RemoteGatewayAuthIssue(error: error) {
+            return authIssue.statusMessage
+        }
+
         // If the gateway explicitly rejects the hello (e.g., auth/token mismatch), surface it.
         if let urlErr = error as? URLError,
            urlErr.code == .dataNotAllowed // used for WS close 1008 auth failures
@@ -320,6 +324,8 @@ final class ControlChannel {
         switch source {
         case .deviceToken:
             return "Auth: device token (paired device)"
+        case .bootstrapToken:
+            return "Auth: bootstrap token (setup code)"
         case .sharedToken:
             return "Auth: shared token (\(isRemote ? "gateway.remote.token" : "gateway.auth.token"))"
         case .password:

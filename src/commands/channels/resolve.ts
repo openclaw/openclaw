@@ -2,10 +2,12 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { loadConfig } from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
   channel?: string;
@@ -70,12 +72,18 @@ function formatResolveResult(result: ResolveResult): string {
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const loadedRaw = loadConfig();
-  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadedRaw,
     commandName: "channels resolve",
     targetIds: getChannelsCommandSecretTargetIds(),
+    mode: "read_only_operational",
   });
+  let cfg = applyPluginAutoEnable({
+    config: resolvedConfig,
+    env: process.env,
+  }).config;
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
@@ -84,13 +92,38 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     throw new Error("At least one entry is required.");
   }
 
-  const selection = await resolveMessageChannelSelection({
-    cfg,
-    channel: opts.channel ?? null,
-  });
-  const plugin = getChannelPlugin(selection.channel);
+  const explicitChannel = opts.channel?.trim();
+  const resolvedExplicit = explicitChannel
+    ? await resolveInstallableChannelPlugin({
+        cfg,
+        runtime,
+        rawChannel: explicitChannel,
+        allowInstall: true,
+        supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
+      })
+    : null;
+  if (resolvedExplicit?.configChanged) {
+    cfg = resolvedExplicit.cfg;
+    await replaceConfigFile({
+      nextConfig: cfg,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
+  }
+
+  const selection = explicitChannel
+    ? {
+        channel: resolvedExplicit?.channelId,
+      }
+    : await resolveMessageChannelSelection({
+        cfg,
+        channel: opts.channel ?? null,
+      });
+  const plugin =
+    (explicitChannel ? resolvedExplicit?.plugin : undefined) ??
+    (selection.channel ? getChannelPlugin(selection.channel) : undefined);
   if (!plugin?.resolver?.resolveTargets) {
-    throw new Error(`Channel ${selection.channel} does not support resolve.`);
+    const channelText = selection.channel ?? explicitChannel ?? "";
+    throw new Error(`Channel ${channelText} does not support resolve.`);
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
@@ -141,7 +174,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify(results, null, 2));
+    writeRuntimeJson(runtime, results);
     return;
   }
 

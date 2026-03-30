@@ -6,6 +6,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -79,6 +80,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   childSessionKey: string;
   agentId: string;
   logPath?: string;
+  surfaceUpdates?: boolean;
   streamFlushMs?: number;
   noOutputNoticeMs?: number;
   noOutputPollMs?: number;
@@ -178,9 +180,15 @@ export function startAcpSpawnParentStreamRelay(params: {
       ...fields,
     });
   };
+  const shouldSurfaceUpdates = params.surfaceUpdates !== false;
   const wake = () => {
+    if (!shouldSurfaceUpdates) {
+      return;
+    }
     requestHeartbeatNow(
-      scopedHeartbeatWakeOptions(parentSessionKey, { reason: "acp:spawn:stream" }),
+      scopedHeartbeatWakeOptions(parentSessionKey, {
+        reason: "acp:spawn:stream",
+      }),
     );
   };
   const emit = (text: string, contextKey: string) => {
@@ -189,10 +197,18 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     logEvent("system_event", { contextKey, text: cleaned });
+    if (!shouldSurfaceUpdates) {
+      return;
+    }
     enqueueSystemEvent(cleaned, { sessionKey: parentSessionKey, contextKey });
     wake();
   };
   const emitStartNotice = () => {
+    recordTaskRunProgressByRunId({
+      runId,
+      lastEventAt: Date.now(),
+      eventSummary: "Started.",
+    });
     emit(
       `Started ${relayLabel} session ${params.childSessionKey}. Streaming progress updates to parent session.`,
       `${contextPrefix}:start`,
@@ -255,6 +271,11 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     stallNotified = true;
+    recordTaskRunProgressByRunId({
+      runId,
+      lastEventAt: Date.now(),
+      eventSummary: `No output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for input.`,
+    });
     emit(
       `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
       `${contextPrefix}:stall`,
@@ -296,6 +317,11 @@ export function startAcpSpawnParentStreamRelay(params: {
 
       if (stallNotified) {
         stallNotified = false;
+        recordTaskRunProgressByRunId({
+          runId,
+          lastEventAt: Date.now(),
+          eventSummary: "Resumed output.",
+        });
         emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
       }
 

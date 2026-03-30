@@ -1,13 +1,18 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../plugin-sdk/memory-core-host-engine-qmd.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
-const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
+const checkQmdBinaryAvailability = vi.hoisted(() =>
+  vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
+);
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -26,8 +31,12 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider,
 }));
 
-vi.mock("../memory/backend-config.js", () => ({
-  resolveMemoryBackendConfig,
+vi.mock("../plugins/memory-runtime.js", () => ({
+  resolveActiveMemoryBackendConfig,
+}));
+
+vi.mock("../plugin-sdk/memory-core-host-engine-qmd.js", () => ({
+  checkQmdBinaryAvailability,
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
@@ -56,8 +65,10 @@ describe("noteMemorySearchHealth", () => {
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
-    resolveMemoryBackendConfig.mockReset();
-    resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    resolveActiveMemoryBackendConfig.mockReset();
+    resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    checkQmdBinaryAvailability.mockReset();
+    checkQmdBinaryAvailability.mockResolvedValue({ available: true });
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
@@ -116,9 +127,10 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("does not warn when QMD backend is active", async () => {
-    resolveMemoryBackendConfig.mockReturnValue({
+    resolveActiveMemoryBackendConfig.mockReturnValue({
       backend: "qmd",
       citations: "auto",
+      qmd: { command: "qmd" },
     });
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
@@ -131,12 +143,67 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("warns when QMD backend is active but the qmd binary is unavailable", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue({
+      backend: "qmd",
+      citations: "auto",
+      qmd: { command: "qmd" },
+    });
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("QMD memory backend is configured");
+    expect(message).toContain("spawn qmd ENOENT");
+    expect(message).toContain("npm install -g @tobilu/qmd");
+  });
+
   it("does not warn when remote apiKey is configured for explicit provider", async () => {
     await expectNoWarningWithConfiguredRemoteApiKey("openai");
   });
 
+  it("treats SecretRef remote apiKey as configured for explicit provider", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: {
+        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("does not warn in auto mode when remote apiKey is configured", async () => {
     await expectNoWarningWithConfiguredRemoteApiKey("auto");
+  });
+
+  it("treats SecretRef remote apiKey as configured in auto mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {
+        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
   it("resolves provider auth from the default agent directory", async () => {
@@ -233,6 +300,7 @@ describe("noteMemorySearchHealth", () => {
     // provider: "local". So with no local file and no API keys, warn.
     expect(note).toHaveBeenCalledTimes(1);
     const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("needs at least one embedding provider");
     expect(message).toContain("openclaw configure --section model");
   });
 
@@ -245,7 +313,7 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockImplementation(async ({ provider }: { provider: string }) => {
       if (provider === "ollama") {
         return {
-          apiKey: "ollama-local",
+          apiKey: "ollama-local", // pragma: allowlist secret
           source: "env: OLLAMA_API_KEY",
           mode: "api-key",
         };
@@ -259,6 +327,37 @@ describe("noteMemorySearchHealth", () => {
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
+
+  it("uses runtime-derived env var hints for explicit providers", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("GEMINI_API_KEY");
+    expect(message).toContain('provider is set to "gemini"');
+  });
+
+  it("uses runtime-derived env var hints in auto mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("OPENAI_API_KEY");
+    expect(message).toContain("GEMINI_API_KEY");
+    expect(message).toContain("GOOGLE_API_KEY");
+    expect(message).toContain("VOYAGE_API_KEY");
+    expect(message).toContain("MISTRAL_API_KEY");
   });
 });
 

@@ -38,6 +38,9 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
+  "EPROTO",
+  "ERR_SSL_WRONG_VERSION_NUMBER",
+  "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
 ]);
 
 const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
@@ -48,8 +51,20 @@ const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
   "TimeoutError",
 ]);
 
+const TRANSIENT_SQLITE_CODES = new Set([
+  "SQLITE_BUSY",
+  "SQLITE_CANTOPEN",
+  "SQLITE_IOERR",
+  "SQLITE_LOCKED",
+]);
+
+const TRANSIENT_SQLITE_ERRCODES = new Set([5, 6, 10, 14]);
+
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
-  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
+  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
+
+const TRANSIENT_SQLITE_MESSAGE_CODE_RE =
+  /\b(SQLITE_BUSY|SQLITE_CANTOPEN|SQLITE_IOERR|SQLITE_LOCKED)\b/i;
 
 const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "getaddrinfo",
@@ -58,7 +73,56 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
   "network is unreachable",
   "temporary failure in name resolution",
+  "upstream connect error",
+  "disconnect/reset before headers",
+  "tlsv1 alert",
+  "ssl routines",
+  "packet length too long",
+  "write eproto",
 ];
+
+const TRANSIENT_SQLITE_MESSAGE_SNIPPETS = [
+  "unable to open database file",
+  "database is locked",
+  "database table is locked",
+  "disk i/o error",
+];
+
+function hasSqliteSignal(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+
+  const code = extractErrorCode(err);
+  if (typeof code === "string") {
+    const normalizedCode = code.trim().toUpperCase();
+    if (normalizedCode === "ERR_SQLITE_ERROR" || normalizedCode.startsWith("SQLITE_")) {
+      return true;
+    }
+  }
+
+  const name = readErrorName(err);
+  if (name.toLowerCase().includes("sqlite")) {
+    return true;
+  }
+
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+  if (message.toLowerCase().includes("sqlite")) {
+    return true;
+  }
+
+  return false;
+}
+
+function isWrappedFetchFailedMessage(message: string): boolean {
+  if (message === "fetch failed") {
+    return true;
+  }
+
+  // Keep wrapped variants (for example "...: fetch failed") while avoiding broad
+  // matches like "Web fetch failed (404): ..." that are not transport failures.
+  return /:\s*fetch failed$/.test(message);
+}
 
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
@@ -81,6 +145,21 @@ function extractErrorCodeOrErrno(err: unknown): string | undefined {
   }
   if (typeof errno === "number" && Number.isFinite(errno)) {
     return String(errno);
+  }
+  return undefined;
+}
+
+function extractNumericErrorCode(err: unknown, key: "errno" | "errcode"): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const value = (err as Record<"errno" | "errcode", unknown>)[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
 }
@@ -154,10 +233,6 @@ export function isTransientNetworkError(err: unknown): boolean {
       return true;
     }
 
-    if (candidate instanceof TypeError && candidate.message === "fetch failed") {
-      return true;
-    }
-
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
@@ -169,7 +244,7 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
       return true;
     }
-    if (message === "fetch failed") {
+    if (isWrappedFetchFailedMessage(message)) {
       return true;
     }
     if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
@@ -178,6 +253,67 @@ export function isTransientNetworkError(err: unknown): boolean {
   }
 
   return false;
+}
+
+export function isTransientSqliteError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_SQLITE_CODES.has(code)) {
+      return true;
+    }
+
+    if (!hasSqliteSignal(candidate)) {
+      continue;
+    }
+
+    const sqliteErrcode = extractNumericErrorCode(candidate, "errcode");
+    if (sqliteErrcode !== undefined && TRANSIENT_SQLITE_ERRCODES.has(sqliteErrcode)) {
+      return true;
+    }
+
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const messageParts = [
+      (candidate as { message?: unknown }).message,
+      (candidate as { errstr?: unknown }).errstr,
+    ];
+    for (const rawMessage of messageParts) {
+      const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+      if (!message) {
+        continue;
+      }
+      if (TRANSIENT_SQLITE_MESSAGE_CODE_RE.test(message)) {
+        return true;
+      }
+      if (TRANSIENT_SQLITE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export function isTransientUnhandledRejectionError(err: unknown): boolean {
+  return isTransientNetworkError(err) || isTransientSqliteError(err);
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
@@ -228,7 +364,7 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
-    if (isTransientNetworkError(reason)) {
+    if (isTransientUnhandledRejectionError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),

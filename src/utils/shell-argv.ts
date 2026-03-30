@@ -59,6 +59,10 @@ export function splitShellArgs(raw: string): string[] | null {
       inDouble = true;
       continue;
     }
+    // In POSIX shells, "#" starts a comment only when it begins a word.
+    if (ch === "#" && buf.length === 0) {
+      break;
+    }
     if (/\s/.test(ch)) {
       pushToken();
       continue;

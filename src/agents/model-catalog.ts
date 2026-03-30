@@ -1,7 +1,9 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
@@ -29,37 +31,19 @@ type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
-const defaultImportPiSdk = () => import("./pi-model-discovery.js");
+const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
+let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
-const CODEX_PROVIDER = "openai-codex";
-const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["deepseek", "kilocode"]);
 
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
-  const hasSpark = models.some(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER &&
-      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  );
-  if (hasSpark) {
-    return;
-  }
+function shouldLogModelCatalogTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
 
-  const baseModel = models.find(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
-  );
-  if (!baseModel) {
-    return;
-  }
-
-  models.push({
-    ...baseModel,
-    id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-    name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  });
+function loadModelSuppression() {
+  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
+  return modelSuppressionPromise;
 }
 
 function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
@@ -169,6 +153,15 @@ export async function loadModelCatalog(params?: {
 
   modelCatalogPromise = (async () => {
     const models: ModelCatalogEntry[] = [];
+    const timingEnabled = shouldLogModelCatalogTiming();
+    const startMs = timingEnabled ? Date.now() : 0;
+    const logStage = (stage: string, extra?: string) => {
+      if (!timingEnabled) {
+        return;
+      }
+      const suffix = extra ? ` ${extra}` : "";
+      log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
+    };
     const sortModels = (entries: ModelCatalogEntry[]) =>
       entries.sort((a, b) => {
         const p = a.provider.localeCompare(b.provider);
@@ -180,14 +173,19 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureOpenClawModelsJson(cfg);
+      logStage("models-json-ready");
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
       // will keep failing until restart).
       const piSdk = await importPiSdk();
+      logStage("pi-sdk-imported");
       const agentDir = resolveOpenClawAgentDir();
+      const { shouldSuppressBuiltInModel } = await loadModelSuppression();
+      logStage("catalog-deps-ready");
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
+      logStage("auth-storage-ready");
       const registry = new (piSdk.ModelRegistry as unknown as {
         new (
           authStorage: unknown,
@@ -198,7 +196,9 @@ export async function loadModelCatalog(params?: {
               getAll: () => Array<DiscoveredModel>;
             };
       })(authStorage, join(agentDir, "models.json"));
+      logStage("registry-ready");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
+      logStage("registry-read", `entries=${entries.length}`);
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
         if (!id) {
@@ -206,6 +206,9 @@ export async function loadModelCatalog(params?: {
         }
         const provider = String(entry?.provider ?? "").trim();
         if (!provider) {
+          continue;
+        }
+        if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
         const name = String(entry?.name ?? id).trim() || id;
@@ -218,14 +221,42 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
-      applyOpenAICodexSparkFallback(models);
+      logStage("configured-models-merged", `entries=${models.length}`);
+      const supplemental = await augmentModelCatalogWithProviderPlugins({
+        config: cfg,
+        env: process.env,
+        context: {
+          config: cfg,
+          agentDir,
+          env: process.env,
+          entries: [...models],
+        },
+      });
+      if (supplemental.length > 0) {
+        const seen = new Set(
+          models.map(
+            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+          ),
+        );
+        for (const entry of supplemental) {
+          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          models.push(entry);
+          seen.add(key);
+        }
+      }
+      logStage("plugin-models-merged", `entries=${models.length}`);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
         modelCatalogPromise = null;
       }
 
-      return sortModels(models);
+      const sorted = sortModels(models);
+      logStage("complete", `entries=${sorted.length}`);
+      return sorted;
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
@@ -265,11 +296,11 @@ export function findModelInCatalog(
   provider: string,
   modelId: string,
 ): ModelCatalogEntry | undefined {
-  const normalizedProvider = provider.toLowerCase().trim();
+  const normalizedProvider = normalizeProviderId(provider);
   const normalizedModelId = modelId.toLowerCase().trim();
   return catalog.find(
     (entry) =>
-      entry.provider.toLowerCase() === normalizedProvider &&
+      normalizeProviderId(entry.provider) === normalizedProvider &&
       entry.id.toLowerCase() === normalizedModelId,
   );
 }

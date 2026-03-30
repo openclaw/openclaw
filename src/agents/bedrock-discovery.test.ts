@@ -15,7 +15,7 @@ const baseActiveAnthropicSummary = {
 };
 
 async function loadDiscovery() {
-  const mod = await import("./bedrock-discovery.js");
+  const mod = await import("../plugin-sdk/amazon-bedrock.js");
   mod.resetBedrockDiscoveryCacheForTest();
   return mod;
 }
@@ -138,5 +138,133 @@ describe("bedrock discovery", () => {
       clientFactory,
     });
     expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves the Bedrock config apiKey from AWS auth env vars", async () => {
+    const { resolveBedrockConfigApiKey } = await loadDiscovery();
+
+    expect(
+      resolveBedrockConfigApiKey({
+        AWS_BEARER_TOKEN_BEDROCK: "bearer", // pragma: allowlist secret
+        AWS_PROFILE: "default",
+      }),
+    ).toBe("AWS_BEARER_TOKEN_BEDROCK");
+
+    expect(resolveBedrockConfigApiKey({} as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
+  });
+
+  it("merges implicit Bedrock models into explicit provider overrides", async () => {
+    const { mergeImplicitBedrockProvider } = await loadDiscovery();
+
+    expect(
+      mergeImplicitBedrockProvider({
+        existing: {
+          baseUrl: "https://override.example.com",
+          headers: { "x-test-header": "1" },
+          models: [],
+        },
+        implicit: {
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          api: "bedrock-converse-stream",
+          auth: "aws-sdk",
+          models: [
+            {
+              id: "amazon.nova-micro-v1:0",
+              name: "Nova",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1,
+              maxTokens: 1,
+            },
+          ],
+        },
+      }).models?.map((model) => model.id),
+    ).toEqual(["amazon.nova-micro-v1:0"]);
+  });
+
+  it("merges implicit Bedrock discovery into provider catalog config", async () => {
+    vi.resetModules();
+    const bedrockApi = await import("../plugin-sdk/amazon-bedrock.js");
+    vi.spyOn(bedrockApi, "resolveImplicitBedrockProvider").mockResolvedValue({
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      api: "bedrock-converse-stream",
+      auth: "aws-sdk",
+      models: [
+        {
+          id: "amazon.nova-micro-v1:0",
+          name: "Nova Micro",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32_000,
+          maxTokens: 4096,
+        },
+      ],
+    });
+    vi.spyOn(bedrockApi, "mergeImplicitBedrockProvider").mockImplementation(
+      ({ existing, implicit }) => ({
+        ...implicit,
+        ...existing,
+        models:
+          Array.isArray(existing?.models) && existing.models.length > 0
+            ? existing.models
+            : implicit.models,
+      }),
+    );
+    const result = await (async () => {
+      const implicit = await bedrockApi.resolveImplicitBedrockProvider({
+        config: {
+          models: {
+            bedrockDiscovery: {
+              enabled: true,
+            },
+          },
+        },
+        env: {
+          AWS_PROFILE: "default",
+        } as NodeJS.ProcessEnv,
+      });
+      if (!implicit) {
+        return null;
+      }
+      return {
+        provider: bedrockApi.mergeImplicitBedrockProvider({
+          existing: {
+            baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+            headers: { "x-test-header": "1" },
+            models: [],
+          },
+          implicit,
+        }),
+      };
+    })();
+
+    expect(bedrockApi.resolveImplicitBedrockProvider).toHaveBeenCalledWith({
+      config: {
+        models: {
+          bedrockDiscovery: {
+            enabled: true,
+          },
+        },
+      },
+      env: {
+        AWS_PROFILE: "default",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toMatchObject({
+      provider: {
+        api: "bedrock-converse-stream",
+        auth: "aws-sdk",
+        baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+        headers: { "x-test-header": "1" },
+      },
+    });
+    expect(
+      result && "provider" in result
+        ? result.provider.models?.map((model: { id: string }) => model.id)
+        : [],
+    ).toEqual(["amazon.nova-micro-v1:0"]);
   });
 });

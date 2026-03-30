@@ -8,6 +8,15 @@ import {
 } from "./heartbeat-wake.js";
 
 describe("heartbeat-wake", () => {
+  function setRetryOnceHeartbeatHandler() {
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+    return handler;
+  }
+
   async function expectRetryAfterDefaultDelay(params: {
     handler: ReturnType<typeof vi.fn>;
     initialReason: string;
@@ -74,11 +83,7 @@ describe("heartbeat-wake", () => {
 
   it("keeps retry cooldown even when a sooner request arrives", async () => {
     vi.useFakeTimers();
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
+    const handler = setRetryOnceHeartbeatHandler();
 
     requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
@@ -252,11 +257,7 @@ describe("heartbeat-wake", () => {
 
   it("forwards wake target fields and preserves them across retries", async () => {
     vi.useFakeTimers();
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
+    const handler = setRetryOnceHeartbeatHandler();
 
     requestHeartbeatNow({
       reason: "cron:job-1",

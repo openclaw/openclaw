@@ -1,22 +1,10 @@
-import fs from "node:fs";
-import { resolveUserPath } from "../utils.js";
+import { DEFAULT_SECRET_FILE_MAX_BYTES, readSecretFileSync } from "../infra/secret-file.js";
+
+export const MAX_SECRET_FILE_BYTES = DEFAULT_SECRET_FILE_MAX_BYTES;
 
 export function readSecretFromFile(filePath: string, label: string): string {
-  const resolvedPath = resolveUserPath(filePath.trim());
-  if (!resolvedPath) {
-    throw new Error(`${label} file path is empty.`);
-  }
-  let raw = "";
-  try {
-    raw = fs.readFileSync(resolvedPath, "utf8");
-  } catch (err) {
-    throw new Error(`Failed to read ${label} file at ${resolvedPath}: ${String(err)}`, {
-      cause: err,
-    });
-  }
-  const secret = raw.trim();
-  if (!secret) {
-    throw new Error(`${label} file at ${resolvedPath} is empty.`);
-  }
-  return secret;
+  return readSecretFileSync(filePath, label, {
+    maxBytes: MAX_SECRET_FILE_BYTES,
+    rejectSymlink: true,
+  });
 }

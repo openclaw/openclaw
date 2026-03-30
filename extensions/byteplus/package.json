@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/byteplus-provider",
+  "version": "2026.3.30",
+  "private": true,
+  "description": "OpenClaw BytePlus provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

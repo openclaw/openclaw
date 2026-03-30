@@ -81,6 +81,12 @@ Invalid plan target path for models.providers.apiKey: models.providers.openai.ba
 
 No writes are committed for an invalid plan.
 
+## Exec provider consent behavior
+
+- `--dry-run` skips exec SecretRef checks by default.
+- Plans containing exec SecretRefs/providers are rejected in write mode unless `--allow-exec` is set.
+- When validating/applying exec-containing plans, pass `--allow-exec` in both dry-run and write commands.
+
 ## Runtime and audit scope notes
 
 - Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime resolution and audit coverage.
@@ -94,6 +100,10 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 
 # Then apply for real
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+
+# For exec-containing plans, opt in explicitly in both modes
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-exec
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --allow-exec
 ```
 
 If apply fails with an invalid target path message, regenerate the plan with `openclaw secrets configure` or fix the target path to a supported shape above.

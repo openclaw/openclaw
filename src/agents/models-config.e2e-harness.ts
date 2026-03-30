@@ -2,8 +2,9 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
-export async function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-models-" });
 }
 
@@ -83,6 +84,9 @@ export async function withCopilotGithubToken<T>(
 }
 
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
+  "VITEST",
+  "NODE_ENV",
+  "AI_GATEWAY_API_KEY",
   "CLOUDFLARE_AI_GATEWAY_API_KEY",
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",
@@ -99,17 +103,25 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "OPENROUTER_API_KEY",
   "PI_CODING_AGENT_DIR",
   "QIANFAN_API_KEY",
-  "QWEN_OAUTH_TOKEN",
-  "QWEN_PORTAL_API_KEY",
+  "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "TOGETHER_API_KEY",
   "VOLCANO_ENGINE_API_KEY",
   "BYTEPLUS_API_KEY",
+  "KILOCODE_API_KEY",
+  "KIMI_API_KEY",
   "KIMICODE_API_KEY",
   "GEMINI_API_KEY",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_PROJECT_ID",
+  "ANTHROPIC_VERTEX_USE_GCP_METADATA",
   "VENICE_API_KEY",
   "VLLM_API_KEY",
   "XIAOMI_API_KEY",
+  "ANTHROPIC_VERTEX_PROJECT_ID",
+  "CLOUD_ML_REGION",
   // Avoid ambient AWS creds unintentionally enabling Bedrock discovery.
   "AWS_ACCESS_KEY_ID",
   "AWS_CONFIG_FILE",
@@ -121,6 +133,29 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SHARED_CREDENTIALS_FILE",
 ];
+
+export function snapshotImplicitProviderEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const source = env ?? process.env;
+  const snapshot: NodeJS.ProcessEnv = {};
+
+  for (const envVar of MODELS_CONFIG_IMPLICIT_ENV_VARS) {
+    const value = source[envVar];
+    if (value !== undefined) {
+      snapshot[envVar] = value;
+    }
+  }
+
+  return snapshot;
+}
+
+export function resolveImplicitProvidersForTest(
+  params: Parameters<typeof resolveImplicitProviders>[0],
+) {
+  return resolveImplicitProviders({
+    ...params,
+    env: snapshotImplicitProviderEnv(params.env),
+  });
+}
 
 export const CUSTOM_PROXY_MODELS_CONFIG: OpenClawConfig = {
   models: {
