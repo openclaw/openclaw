@@ -285,7 +285,13 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !isAssistantSilentReply(finalMessage)) {
         state.chatMessages = [...state.chatMessages, finalMessage];
-        return null;
+        // Clear pending run state so the UI exits the typing/processing
+        // indicator. Without this, the parent agent appears stuck in typing
+        // state after subagent completion even though the final response is
+        // already visible. See #57795.
+        state.chatRunId = null;
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
       }
       return "final";
     }

@@ -99,7 +99,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
-  it("appends final payload from another run without clearing active stream", () => {
+  it("appends final payload from another run and clears pending run state", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-user",
@@ -115,10 +115,12 @@ describe("handleChatEvent", () => {
         content: [{ type: "text", text: "Sub-agent findings" }],
       },
     };
-    expect(handleChatEvent(state, payload)).toBe(null);
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Working...");
-    expect(state.chatStreamStartedAt).toBe(123);
+    expect(handleChatEvent(state, payload)).toBe("final");
+    // Pending run state must be cleared so the UI exits typing indicator.
+    // See https://github.com/openclaw/openclaw/issues/57795
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toHaveLength(1);
     expect(state.chatMessages[0]).toEqual(payload.message);
   });
