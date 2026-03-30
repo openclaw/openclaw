@@ -27,7 +27,7 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { createTaskRecord } from "../../tasks/task-registry.js";
+import { createRunningTaskRun } from "../../tasks/task-executor.js";
 import {
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
@@ -191,7 +191,7 @@ function dispatchAgentRunFromGateway(params: {
 }) {
   if (params.ingressOpts.sessionKey?.trim()) {
     try {
-      createTaskRecord({
+      createRunningTaskRun({
         runtime: "cli",
         sourceId: params.runId,
         requesterSessionKey: params.ingressOpts.sessionKey,
@@ -204,7 +204,6 @@ function dispatchAgentRunFromGateway(params: {
         childSessionKey: params.ingressOpts.sessionKey,
         runId: params.runId,
         task: params.ingressOpts.message,
-        status: "running",
         deliveryStatus: "not_applicable",
         startedAt: Date.now(),
       });
