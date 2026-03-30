@@ -84,6 +84,40 @@ describe("security fix", () => {
     );
   };
 
+  const expectWhatsAppGroupPolicy = (
+    channels: Record<string, Record<string, unknown>>,
+    expectedPolicy = "allowlist",
+  ) => {
+    expect(channels.whatsapp.groupPolicy).toBe(expectedPolicy);
+  };
+
+  const expectWhatsAppAccountGroupPolicy = (
+    channels: Record<string, Record<string, unknown>>,
+    accountId: string,
+    expectedPolicy = "allowlist",
+  ) => {
+    const whatsapp = channels.whatsapp;
+    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts[accountId]?.groupPolicy).toBe(expectedPolicy);
+    return accounts;
+  };
+
+  const fixWhatsAppScenario = async (params: {
+    prefix: string;
+    whatsapp: Record<string, unknown>;
+    allowFromStore: string[];
+  }) => {
+    const stateDir = await createStateDir(params.prefix);
+    const configPath = path.join(stateDir, "openclaw.json");
+    const result = await runWhatsAppFixScenario({
+      stateDir,
+      configPath,
+      whatsapp: params.whatsapp,
+      allowFromStore: params.allowFromStore,
+    });
+    return { stateDir, configPath, ...result };
+  };
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-suite-"));
   });
@@ -142,11 +176,8 @@ describe("security fix", () => {
   });
 
   it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {
-    const stateDir = await createStateDir("per-account");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const { res, channels } = await runWhatsAppFixScenario({
-      stateDir,
-      configPath,
+    const { res, channels } = await fixWhatsAppScenario({
+      prefix: "per-account",
       whatsapp: {
         accounts: {
           a1: { groupPolicy: "open" },
@@ -155,20 +186,13 @@ describe("security fix", () => {
       allowFromStore: ["+15550001111"],
     });
     expect(res.ok).toBe(true);
-
-    const whatsapp = channels.whatsapp;
-    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
-
-    expect(accounts.a1.groupPolicy).toBe("allowlist");
+    const accounts = expectWhatsAppAccountGroupPolicy(channels, "a1");
     expect(accounts.a1.groupAllowFrom).toEqual(["+15550001111"]);
   });
 
   it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
-    const stateDir = await createStateDir("no-seed");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const { res, channels } = await runWhatsAppFixScenario({
-      stateDir,
-      configPath,
+    const { res, channels } = await fixWhatsAppScenario({
+      prefix: "no-seed",
       whatsapp: {
         groupPolicy: "open",
         allowFrom: ["+15552223333"],
@@ -176,8 +200,7 @@ describe("security fix", () => {
       allowFromStore: ["+15550001111"],
     });
     expect(res.ok).toBe(true);
-
-    expect(channels.whatsapp.groupPolicy).toBe("allowlist");
+    expectWhatsAppGroupPolicy(channels);
     expect(channels.whatsapp.groupAllowFrom).toBeUndefined();
   });
 
@@ -239,20 +262,25 @@ describe("security fix", () => {
     await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
     await fs.chmod(transcriptPath, 0o644);
 
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-    };
-
-    const res = await fixSecurityFootguns({ env, stateDir, configPath });
+    const res = await fixSecurityFootguns({
+      env: createFixEnv(stateDir, configPath),
+      stateDir,
+      configPath,
+    });
     expect(res.ok).toBe(true);
 
-    expectPerms((await fs.stat(credsDir)).mode & 0o777, 0o700);
-    expectPerms((await fs.stat(allowFromPath)).mode & 0o777, 0o600);
-    expectPerms((await fs.stat(authProfilesPath)).mode & 0o777, 0o600);
-    expectPerms((await fs.stat(sessionsStorePath)).mode & 0o777, 0o600);
-    expectPerms((await fs.stat(transcriptPath)).mode & 0o777, 0o600);
-    expectPerms((await fs.stat(includePath)).mode & 0o777, 0o600);
+    const permissionChecks: Array<readonly [string, number]> = [
+      [credsDir, 0o700],
+      [allowFromPath, 0o600],
+      [authProfilesPath, 0o600],
+      [sessionsStorePath, 0o600],
+      [transcriptPath, 0o600],
+      [includePath, 0o600],
+    ];
+    await Promise.all(
+      permissionChecks.map(async ([targetPath, expectedMode]) =>
+        expectPerms((await fs.stat(targetPath)).mode & 0o777, expectedMode),
+      ),
+    );
   });
 });

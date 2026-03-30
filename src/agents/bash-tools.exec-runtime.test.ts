@@ -1,28 +1,88 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: vi.fn(),
-}));
+const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
-}));
+let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
+let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
+let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
+let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
+let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import {
-  buildExecExitOutcome,
-  emitExecSystemEvent,
-  formatExecFailureReason,
-} from "./bash-tools.exec-runtime.js";
+describe("detectCursorKeyMode", () => {
+  beforeEach(async () => {
+    ({ detectCursorKeyMode } = await import("./bash-tools.exec-runtime.js"));
+  });
 
-const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
-const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
+  it("returns null when no toggle found", () => {
+    expect(detectCursorKeyMode("hello world")).toBe(null);
+    expect(detectCursorKeyMode("")).toBe(null);
+  });
+
+  it("detects smkx (application mode)", () => {
+    expect(detectCursorKeyMode("\x1b[?1h")).toBe("application");
+    expect(detectCursorKeyMode("\x1b[?1h\x1b=")).toBe("application");
+    expect(detectCursorKeyMode("before \x1b[?1h after")).toBe("application");
+  });
+
+  it("detects rmkx (normal mode)", () => {
+    expect(detectCursorKeyMode("\x1b[?1l")).toBe("normal");
+    expect(detectCursorKeyMode("\x1b[?1l\x1b>")).toBe("normal");
+    expect(detectCursorKeyMode("before \x1b[?1l after")).toBe("normal");
+  });
+
+  it("last toggle wins when both present", () => {
+    // smkx first, then rmkx - should be normal
+    expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l")).toBe("normal");
+    // rmkx first, then smkx - should be application
+    expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
+    // Multiple toggles - last one wins
+    expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
+  });
+});
+
+describe("resolveExecTarget", () => {
+  beforeEach(async () => {
+    ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
+  });
+
+  it("treats auto as a default strategy rather than a host allowlist", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+});
 
 describe("emitExecSystemEvent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
+    vi.doMock("../infra/heartbeat-wake.js", async () => {
+      return await mergeMockedModule(
+        await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+          "../infra/heartbeat-wake.js",
+        ),
+        () => ({
+          requestHeartbeatNow: requestHeartbeatNowMock,
+        }),
+      );
+    });
+    vi.doMock("../infra/system-events.js", () => ({
+      enqueueSystemEvent: enqueueSystemEventMock,
+    }));
+    ({ buildExecExitOutcome, emitExecSystemEvent, formatExecFailureReason } =
+      await import("./bash-tools.exec-runtime.js"));
   });
 
   it("scopes heartbeat wake to the event session key", () => {

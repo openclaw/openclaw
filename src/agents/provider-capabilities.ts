@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { resolveProviderCapabilitiesWithPlugin as resolveProviderCapabilitiesWithPluginRuntime } from "../plugins/provider-runtime.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
@@ -36,17 +36,6 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   dropThinkingBlockModelHints: [],
 };
 
-const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
-  "anthropic-vertex": {
-    providerFamily: "anthropic",
-    dropThinkingBlockModelHints: ["claude"],
-  },
-  "amazon-bedrock": {
-    providerFamily: "anthropic",
-    dropThinkingBlockModelHints: ["claude"],
-  },
-};
-
 const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
   anthropic: {
     providerFamily: "anthropic",
@@ -67,6 +56,9 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   moonshot: {
     openAiPayloadNormalizationMode: "moonshot-thinking",
   },
+  kimi: {
+    openAiPayloadNormalizationMode: "moonshot-thinking",
+  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
@@ -82,13 +74,31 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
   },
 };
 
+const defaultResolveProviderCapabilitiesWithPlugin = resolveProviderCapabilitiesWithPluginRuntime;
+const providerCapabilityDeps = {
+  resolveProviderCapabilitiesWithPlugin: defaultResolveProviderCapabilitiesWithPlugin,
+};
+
+export const __testing = {
+  setResolveProviderCapabilitiesWithPluginForTest(
+    resolveProviderCapabilitiesWithPlugin?: typeof defaultResolveProviderCapabilitiesWithPlugin,
+  ): void {
+    providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin =
+      resolveProviderCapabilitiesWithPlugin ?? defaultResolveProviderCapabilitiesWithPlugin;
+  },
+  resetDepsForTests(): void {
+    providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin =
+      defaultResolveProviderCapabilitiesWithPlugin;
+  },
+};
+
 export function resolveProviderCapabilities(
   provider?: string | null,
   options?: ProviderCapabilityLookupOptions,
 ): ProviderCapabilities {
   const normalized = normalizeProviderId(provider ?? "");
   const pluginCapabilities = normalized
-    ? resolveProviderCapabilitiesWithPlugin({
+    ? providerCapabilityDeps.resolveProviderCapabilitiesWithPlugin({
         provider: normalized,
         config: options?.config,
         workspaceDir: options?.workspaceDir,
@@ -97,8 +107,8 @@ export function resolveProviderCapabilities(
     : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...CORE_PROVIDER_CAPABILITIES[normalized],
-    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
+    ...PLUGIN_CAPABILITIES_FALLBACKS[normalized],
+    ...pluginCapabilities,
   };
 }
 

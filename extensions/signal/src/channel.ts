@@ -11,23 +11,20 @@ import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
+import { signalApprovalAuth } from "./approval-auth.js";
 import { markdownToSignalTextChunks } from "./format.js";
-import {
-  looksLikeUuid,
-  resolveSignalPeerId,
-  resolveSignalRecipient,
-  resolveSignalSender,
-} from "./identity.js";
 import { signalMessageActions } from "./message-actions.js";
-import type { SignalProbe } from "./probe.js";
+import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
+import { resolveSignalOutboundTarget } from "./outbound-session.js";
+import { probeSignal, type SignalProbe } from "./probe.js";
+import { resolveSignalReactionLevel } from "./reaction-level.js";
 import {
   buildBaseChannelStatusSummary,
+  chunkText,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
-  looksLikeSignalTargetId,
   normalizeE164,
-  normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   type ChannelPlugin,
@@ -125,63 +122,20 @@ function resolveSignalOutboundSessionRoute(params: {
   accountId?: string | null;
   target: string;
 }) {
-  const stripped = params.target.replace(/^signal:/i, "").trim();
-  const lowered = stripped.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    const groupId = stripped.slice("group:".length).trim();
-    if (!groupId) {
-      return null;
-    }
-    const peer: RoutePeer = { kind: "group", id: groupId };
-    const baseSessionKey = buildSignalBaseSessionKey({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      accountId: params.accountId,
-      peer,
-    });
-    return {
-      sessionKey: baseSessionKey,
-      baseSessionKey,
-      peer,
-      chatType: "group" as const,
-      from: `group:${groupId}`,
-      to: `group:${groupId}`,
-    };
-  }
-
-  let recipient = stripped.trim();
-  if (lowered.startsWith("username:")) {
-    recipient = stripped.slice("username:".length).trim();
-  } else if (lowered.startsWith("u:")) {
-    recipient = stripped.slice("u:".length).trim();
-  }
-  if (!recipient) {
+  const resolved = resolveSignalOutboundTarget(params.target);
+  if (!resolved) {
     return null;
   }
-
-  const uuidCandidate = recipient.toLowerCase().startsWith("uuid:")
-    ? recipient.slice("uuid:".length)
-    : recipient;
-  const sender = resolveSignalSender({
-    sourceUuid: looksLikeUuid(uuidCandidate) ? uuidCandidate : null,
-    sourceNumber: looksLikeUuid(uuidCandidate) ? null : recipient,
-  });
-  const peerId = sender ? resolveSignalPeerId(sender) : recipient;
-  const displayRecipient = sender ? resolveSignalRecipient(sender) : recipient;
-  const peer: RoutePeer = { kind: "direct", id: peerId };
   const baseSessionKey = buildSignalBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
     accountId: params.accountId,
-    peer,
+    peer: resolved.peer,
   });
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
-    peer,
-    chatType: "direct" as const,
-    from: `signal:${displayRecipient}`,
-    to: `signal:${displayRecipient}`,
+    ...resolved,
   };
 }
 
@@ -275,6 +229,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         setup: signalSetupAdapter,
       }),
       actions: signalMessageActions,
+      auth: signalApprovalAuth,
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "signal",
         resolveAccount: resolveSignalAccount,
@@ -285,6 +240,15 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         resolveDmPolicy: (account) => account.config.dmPolicy,
         resolveGroupPolicy: (account) => account.config.groupPolicy,
       }),
+      agentPrompt: {
+        reactionGuidance: ({ cfg, accountId }) => {
+          const level = resolveSignalReactionLevel({
+            cfg,
+            accountId: accountId ?? undefined,
+          }).agentReactionGuidance;
+          return level ? { level, channelLabel: "Signal" } : undefined;
+        },
+      },
       messaging: {
         normalizeTarget: normalizeSignalMessagingTarget,
         parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
@@ -306,7 +270,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           }),
         probeAccount: async ({ account, timeoutMs }) => {
           const baseUrl = account.baseUrl;
-          return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+          return await probeSignal(baseUrl, timeoutMs);
         },
         formatCapabilitiesProbe: ({ probe }) =>
           (probe as SignalProbe | undefined)?.version
@@ -355,7 +319,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkText,
         chunkerMode: "text",
         textChunkLimit: 4000,
         sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>

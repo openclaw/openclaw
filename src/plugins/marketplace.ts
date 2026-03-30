@@ -1,6 +1,8 @@
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -52,6 +54,11 @@ type LoadedMarketplace = {
 };
 
 type MarketplaceManifestOrigin = "local" | "remote";
+
+type ResolvedLocalMarketplaceSource = {
+  manifestPath: string;
+  rootDir: string;
+};
 
 type KnownMarketplaceRecord = {
   installLocation?: string;
@@ -464,53 +471,10 @@ async function loadMarketplace(params: {
   logger?: MarketplaceLogger;
   timeoutMs?: number;
 }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> {
-  const knownMarketplaces = await readClaudeKnownMarketplaces();
-  const known = knownMarketplaces[params.source];
-  if (known) {
-    if (known.installLocation) {
-      const local = await resolveLocalMarketplaceSource(known.installLocation);
-      if (local?.ok) {
-        const raw = await fs.readFile(local.manifestPath, "utf-8");
-        const parsed = parseMarketplaceManifest(raw, local.manifestPath);
-        if (!parsed.ok) {
-          return parsed;
-        }
-        const validated = validateMarketplaceManifest({
-          manifest: parsed.manifest,
-          sourceLabel: local.manifestPath,
-          rootDir: local.rootDir,
-          origin: "local",
-        });
-        if (!validated.ok) {
-          return validated;
-        }
-        return {
-          ok: true,
-          marketplace: {
-            manifest: validated.manifest,
-            rootDir: local.rootDir,
-            sourceLabel: params.source,
-          },
-        };
-      }
-    }
-
-    const normalizedSource = normalizeEntrySource(known.source);
-    if (normalizedSource.ok) {
-      return await loadMarketplace({
-        source: marketplaceEntrySourceToInput(normalizedSource.source),
-        logger: params.logger,
-        timeoutMs: params.timeoutMs,
-      });
-    }
-  }
-
-  const local = await resolveLocalMarketplaceSource(params.source);
-  if (local?.ok === false) {
-    return local;
-  }
-
-  if (local?.ok) {
+  const loadResolvedLocalMarketplace = async (
+    local: ResolvedLocalMarketplaceSource,
+    sourceLabel: string,
+  ): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
     const raw = await fs.readFile(local.manifestPath, "utf-8");
     const parsed = parseMarketplaceManifest(raw, local.manifestPath);
     if (!parsed.ok) {
@@ -530,9 +494,38 @@ async function loadMarketplace(params: {
       marketplace: {
         manifest: validated.manifest,
         rootDir: local.rootDir,
-        sourceLabel: local.manifestPath,
+        sourceLabel,
       },
     };
+  };
+
+  const knownMarketplaces = await readClaudeKnownMarketplaces();
+  const known = knownMarketplaces[params.source];
+  if (known) {
+    if (known.installLocation) {
+      const local = await resolveLocalMarketplaceSource(known.installLocation);
+      if (local?.ok) {
+        return await loadResolvedLocalMarketplace(local, params.source);
+      }
+    }
+
+    const normalizedSource = normalizeEntrySource(known.source);
+    if (normalizedSource.ok) {
+      return await loadMarketplace({
+        source: marketplaceEntrySourceToInput(normalizedSource.source),
+        logger: params.logger,
+        timeoutMs: params.timeoutMs,
+      });
+    }
+  }
+
+  const local = await resolveLocalMarketplaceSource(params.source);
+  if (local?.ok === false) {
+    return local;
+  }
+
+  if (local?.ok) {
+    return await loadResolvedLocalMarketplace(local, local.manifestPath);
   }
 
   const cloned = await cloneMarketplaceRepo({
@@ -600,12 +593,16 @@ async function downloadUrlToTempFile(url: string): Promise<
   if (!response.ok) {
     return { ok: false, error: `failed to download ${url}: HTTP ${response.status}` };
   }
+  if (!response.body) {
+    return { ok: false, error: `failed to download ${url}: empty response body` };
+  }
 
   const pathname = new URL(url).pathname;
   const fileName = path.basename(pathname) || "plugin.tgz";
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
   const targetPath = path.join(tmpDir, fileName);
-  await fs.writeFile(targetPath, Buffer.from(await response.arrayBuffer()));
+  const fileStream = createWriteStream(targetPath);
+  await response.body.pipeTo(Writable.toWeb(fileStream));
   return {
     ok: true,
     path: targetPath,

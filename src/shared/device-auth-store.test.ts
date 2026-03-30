@@ -186,7 +186,7 @@ describe("device-auth-store", () => {
     expect(entry).toEqual({
       token: "new-token",
       role: "operator",
-      scopes: ["operator.write"],
+      scopes: ["operator.read", "operator.write"],
       updatedAtMs: 2222,
     });
     expect(readStore()).toEqual({

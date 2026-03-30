@@ -33,10 +33,29 @@ let streamCallCount = 0;
 let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
 
 vi.mock("./pi-bundle-mcp-tools.js", () => ({
-  createBundleMcpToolRuntime: async () => ({
+  getOrCreateSessionMcpRuntime: async () => ({
+    sessionId: "bundle-mcp-runtime",
+    sessionKey: "agent:test:bundle-mcp-e2e",
+    workspaceDir: "/tmp",
+    configFingerprint: "test",
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    markUsed: () => {},
+    getCatalog: async () => ({
+      version: 1,
+      generatedAt: Date.now(),
+      servers: {},
+      tools: [],
+    }),
+    callTool: async () => ({
+      content: [{ type: "text", text: "FROM-BUNDLE" }],
+    }),
+    dispose: async () => {},
+  }),
+  materializeBundleMcpToolsForRun: async () => ({
     tools: [
       {
-        name: "bundle_probe",
+        name: "bundleProbe__bundle_probe",
         label: "bundle_probe",
         description: "Bundle MCP probe",
         parameters: { type: "object", properties: {} },
@@ -53,14 +72,8 @@ vi.mock("./pi-bundle-mcp-tools.js", () => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  return await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
-});
-
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
 
   const buildToolUseMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
@@ -68,7 +81,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
       {
         type: "toolCall" as const,
         id: "tc-bundle-mcp-1",
-        name: "bundle_probe",
+        name: "bundleProbe__bundle_probe",
         arguments: {},
       },
     ],

@@ -4,20 +4,37 @@ const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
-import {
-  isResolvedSessionVisibleToRequester,
-  looksLikeSessionId,
-  looksLikeSessionKey,
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  resolveSessionReference,
-  shouldVerifyRequesterSpawnedSessionVisibility,
-  shouldResolveSessionIdInput,
-} from "./sessions-resolution.js";
+let isResolvedSessionVisibleToRequester: typeof import("./sessions-resolution.js").isResolvedSessionVisibleToRequester;
+let looksLikeSessionId: typeof import("./sessions-resolution.js").looksLikeSessionId;
+let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
+let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
+let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
+let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
+let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSessionReference;
+let shouldVerifyRequesterSpawnedSessionVisibility: typeof import("./sessions-resolution.js").shouldVerifyRequesterSpawnedSessionVisibility;
+let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shouldResolveSessionIdInput;
 
-beforeEach(() => {
+async function loadFreshSessionsResolutionModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  ({
+    isResolvedSessionVisibleToRequester,
+    looksLikeSessionId,
+    looksLikeSessionKey,
+    resolveDisplaySessionKey,
+    resolveInternalSessionKey,
+    resolveMainSessionAlias,
+    resolveSessionReference,
+    shouldVerifyRequesterSpawnedSessionVisibility,
+    shouldResolveSessionIdInput,
+  } = await import("./sessions-resolution.js"));
+}
+
+beforeEach(async () => {
   callGatewayMock.mockReset();
+  await loadFreshSessionsResolutionModuleForTest();
 });
 
 describe("resolveMainSessionAlias", () => {
@@ -169,6 +186,33 @@ describe("resolved session visibility checks", () => {
         requesterSessionKey: "agent:main:main",
         targetSessionKey: "agent:main:other",
         restrictToSpawned: false,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("does not hide an exact spawned target behind the sessions.list visibility cap", async () => {
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { key?: string } }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: request.params?.key };
+        }
+        if (request.method === "sessions.list") {
+          return {
+            sessions: Array.from({ length: 500 }, (_, index) => ({
+              key: `agent:main:subagent:worker-${index}`,
+            })),
+          };
+        }
+        return {};
+      },
+    );
+
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:worker-999",
+        restrictToSpawned: true,
         resolvedViaSessionId: false,
       }),
     ).resolves.toBe(true);

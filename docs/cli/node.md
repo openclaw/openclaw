@@ -31,6 +31,11 @@ Node hosts automatically advertise a browser proxy if `browser.enabled` is not
 disabled on the node. This lets the agent use browser automation on that node
 without extra configuration.
 
+By default, the proxy exposes the node's normal browser profile surface. If you
+set `nodeHost.browserProxy.allowProfiles`, the proxy becomes restrictive:
+non-allowlisted profile targeting is rejected, and persistent profile
+create/delete routes are blocked through the proxy.
+
 Disable it on the node if needed:
 
 ```json5

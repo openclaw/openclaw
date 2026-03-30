@@ -1,5 +1,7 @@
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
 import {
   formatSlackStreamingBooleanMigrationMessage,
   formatSlackStreamModeMigrationMessage,
@@ -9,7 +11,8 @@ import {
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
 import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
-import { DEFAULT_TALK_PROVIDER, normalizeTalkSection } from "../config/talk.js";
+import { LEGACY_TALK_PROVIDER_ID, normalizeTalkSection } from "../config/talk.js";
+import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
@@ -577,6 +580,12 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
     if (!hasGoogleApiKey && legacyApiKey) {
       rawGoogle.apiKey = legacyApiKey;
+      if (!rawGoogle.baseUrl) {
+        rawGoogle.baseUrl = DEFAULT_GOOGLE_API_BASE_URL;
+      }
+      if (!Array.isArray(rawGoogle.models)) {
+        rawGoogle.models = [];
+      }
       rawProviders.google = rawGoogle;
       rawModels.providers = rawProviders as NonNullable<OpenClawConfig["models"]>["providers"];
       next = {
@@ -642,9 +651,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       return;
     }
 
-    changes.push(
-      `Moved legacy talk flat fields → talk.provider/talk.providers.${DEFAULT_TALK_PROVIDER}.`,
-    );
+    changes.push(`Moved legacy talk flat fields → talk.providers.${LEGACY_TALK_PROVIDER_ID}.`);
   };
 
   const normalizeLegacyCrossContextMessageConfig = () => {
@@ -809,11 +816,91 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     };
   };
 
+  const normalizeLegacyMistralModelMaxTokens = () => {
+    const rawProviders = next.models?.providers;
+    if (!isRecord(rawProviders)) {
+      return;
+    }
+
+    let providersChanged = false;
+    const nextProviders = { ...rawProviders };
+    for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
+      if (normalizeProviderId(providerId) !== "mistral" || !isRecord(rawProvider)) {
+        continue;
+      }
+      const rawModels = rawProvider.models;
+      if (!Array.isArray(rawModels)) {
+        continue;
+      }
+
+      let modelsChanged = false;
+      const nextModels = rawModels.map((model, index) => {
+        if (!isRecord(model)) {
+          return model;
+        }
+        const modelId = typeof model.id === "string" ? model.id.trim() : "";
+        const contextWindow =
+          typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
+            ? model.contextWindow
+            : null;
+        const maxTokens =
+          typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens)
+            ? model.maxTokens
+            : null;
+        if (!modelId || contextWindow === null || maxTokens === null) {
+          return model;
+        }
+
+        const normalizedMaxTokens = resolveNormalizedProviderModelMaxTokens({
+          providerId,
+          modelId,
+          contextWindow,
+          rawMaxTokens: maxTokens,
+        });
+        if (normalizedMaxTokens === maxTokens) {
+          return model;
+        }
+
+        modelsChanged = true;
+        changes.push(
+          `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
+        );
+        return {
+          ...model,
+          maxTokens: normalizedMaxTokens,
+        };
+      });
+
+      if (!modelsChanged) {
+        continue;
+      }
+
+      nextProviders[providerId] = {
+        ...rawProvider,
+        models: nextModels,
+      };
+      providersChanged = true;
+    }
+
+    if (!providersChanged) {
+      return;
+    }
+
+    next = {
+      ...next,
+      models: {
+        ...next.models,
+        providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
+      },
+    };
+  };
+
   normalizeBrowserSsrFPolicyAlias();
   normalizeLegacyNanoBananaSkill();
   normalizeLegacyTalkConfig();
   normalizeLegacyCrossContextMessageConfig();
   normalizeLegacyMediaProviderOptions();
+  normalizeLegacyMistralModelMaxTokens();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;

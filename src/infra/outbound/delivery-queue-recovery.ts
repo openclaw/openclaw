@@ -43,12 +43,14 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
   /chat not found/i,
   /user not found/i,
+  /bot.*not.*member/i,
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /chat_id is empty/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  /User .* not in room/i,
 ];
 
 function createEmptyRecoverySummary(): RecoverySummary {
@@ -74,6 +76,7 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     forceDocument: entry.forceDocument,
     silent: entry.silent,
     mirror: entry.mirror,
+    gatewayClientScopes: entry.gatewayClientScopes,
     skipQueue: true, // Prevent re-enqueueing during recovery.
   } satisfies Parameters<DeliverFn>[0];
 }

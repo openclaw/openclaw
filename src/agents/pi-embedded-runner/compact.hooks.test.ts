@@ -14,7 +14,7 @@ import {
   resolveModelMock,
   resolveSessionAgentIdMock,
   resetCompactHooksHarnessMocks,
-  sanitizeSessionHistoryMock,
+  resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
   sessionMessages,
   sessionCompactImpl,
@@ -77,17 +77,6 @@ function compactionConfig(mode: "await" | "off" | "async") {
   } as never;
 }
 
-function directCompactionArgs(overrides: Record<string, unknown> = {}) {
-  return {
-    sessionId: TEST_SESSION_ID,
-    sessionKey: TEST_SESSION_KEY,
-    sessionFile: TEST_SESSION_FILE,
-    workspaceDir: TEST_WORKSPACE_DIR,
-    customInstructions: TEST_CUSTOM_INSTRUCTIONS,
-    ...overrides,
-  };
-}
-
 function wrappedCompactionArgs(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: TEST_SESSION_ID,
@@ -105,6 +94,43 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
     const event = call[0] as SessionHookEvent | undefined;
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
+
+async function runCompactionHooks(params: { sessionKey?: string; messageProvider?: string }) {
+  const originalMessages = sessionMessages.slice(1) as AgentMessage[];
+  const currentMessages = sessionMessages.slice(1) as AgentMessage[];
+  const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
+    originalMessages,
+    currentMessages,
+    estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
+  });
+
+  const hookState = await compactTesting.runBeforeCompactionHooks({
+    hookRunner,
+    sessionId: TEST_SESSION_ID,
+    sessionKey: params.sessionKey,
+    sessionAgentId: "main",
+    workspaceDir: TEST_WORKSPACE_DIR,
+    messageProvider: params.messageProvider,
+    metrics: beforeMetrics,
+  });
+
+  await compactTesting.runAfterCompactionHooks({
+    hookRunner,
+    sessionId: TEST_SESSION_ID,
+    sessionAgentId: "main",
+    hookSessionKey: hookState.hookSessionKey,
+    missingSessionKey: hookState.missingSessionKey,
+    workspaceDir: TEST_WORKSPACE_DIR,
+    messageProvider: params.messageProvider,
+    messageCountAfter: 1,
+    tokensAfter: 10,
+    compactedCount: 1,
+    sessionFile: TEST_SESSION_FILE,
+    summaryLength: "summary".length,
+    tokensBefore: 120,
+    firstKeptEntryId: "entry-1",
+  });
+}
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
@@ -133,54 +159,9 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       tokensBefore: 120,
       details: { ok: true },
     });
-    sanitizeSessionHistoryMock.mockReset();
-    sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
-      return params.messages;
-    });
-    getMemorySearchManagerMock.mockReset();
-    getMemorySearchManagerMock.mockResolvedValue({
-      manager: {
-        sync: vi.fn(async () => {}),
-      },
-    });
-    resolveMemorySearchConfigMock.mockReset();
-    resolveMemorySearchConfigMock.mockReturnValue({
-      sources: ["sessions"],
-      sync: {
-        sessions: {
-          postCompactionForce: true,
-        },
-      },
-    });
-    resolveSessionAgentIdMock.mockReset();
-    resolveSessionAgentIdMock.mockReturnValue("main");
-    estimateTokensMock.mockReset();
-    estimateTokensMock.mockReturnValue(10);
-    sessionAbortCompactionMock.mockReset();
-    sessionMessages.splice(
-      0,
-      sessionMessages.length,
-      { role: "user", content: "hello", timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-      {
-        role: "toolResult",
-        toolCallId: "t1",
-        toolName: "exec",
-        content: [{ type: "text", text: "output" }],
-        isError: false,
-        timestamp: 3,
-      },
-    );
+    resetCompactSessionStateMocks();
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
-
-  async function runDirectCompaction(customInstructions = TEST_CUSTOM_INSTRUCTIONS) {
-    return await compactEmbeddedPiSessionDirect(
-      directCompactionArgs({
-        customInstructions,
-      }),
-    );
-  }
 
   it("bootstraps runtime plugins with the resolved workspace", async () => {
     // This assertion only cares about bootstrap wiring, so stop before the
@@ -230,23 +211,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    let sanitizedCount = 0;
-    sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
-      const sanitized = params.messages.slice(1);
-      sanitizedCount = sanitized.length;
-      return sanitized;
+    await runCompactionHooks({
+      sessionKey: TEST_SESSION_KEY,
+      messageProvider: "telegram",
     });
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      messageChannel: "telegram",
-      customInstructions: "focus on decisions",
-    });
-
-    expect(result.ok).toBe(true);
     expect(sessionHook("compact:before")).toMatchObject({
       type: "session",
       action: "compact:before",
@@ -257,8 +226,8 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(beforeContext).toMatchObject({
       messageCount: 2,
       tokenCount: 20,
-      messageCountOriginal: sanitizedCount,
-      tokenCountOriginal: sanitizedCount * 10,
+      messageCountOriginal: 2,
+      tokenCountOriginal: 20,
     });
     expect(afterContext).toMatchObject({
       messageCount: 1,
@@ -288,15 +257,8 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
   it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
+    await runCompactionHooks({});
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      customInstructions: "focus on decisions",
-    });
-
-    expect(result.ok).toBe(true);
     expect(sessionHook("compact:before")?.sessionKey).toBe("session-1");
     expect(sessionHook("compact:after")?.sessionKey).toBe("session-1");
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
@@ -311,11 +273,20 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
   it("applies validated transcript before hooks even when it becomes empty", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    sanitizeSessionHistoryMock.mockResolvedValue([]);
+    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
+      originalMessages: [],
+      currentMessages: [],
+      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
+    });
+    await compactTesting.runBeforeCompactionHooks({
+      hookRunner,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionAgentId: "main",
+      workspaceDir: "/tmp",
+      metrics: beforeMetrics,
+    });
 
-    const result = await runDirectCompaction();
-
-    expect(result.ok).toBe(true);
     const beforeContext = sessionHook("compact:before")?.context;
     expect(beforeContext).toMatchObject({
       messageCountOriginal: 0,
@@ -329,15 +300,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     const cleanup = onSessionTranscriptUpdate(listener);
 
     try {
-      const result = await compactEmbeddedPiSessionDirect({
-        sessionId: "session-1",
+      await compactTesting.runPostCompactionSideEffects({
         sessionKey: "agent:main:session-1",
         sessionFile: "  /tmp/session.jsonl  ",
-        workspaceDir: "/tmp",
-        customInstructions: "focus on decisions",
       });
 
-      expect(result.ok).toBe(true);
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
     } finally {
@@ -356,24 +323,13 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       }
       return 5;
     });
-    sessionCompactImpl.mockResolvedValue({
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 20,
-      details: { ok: true },
+    const tokensAfter = compactTesting.estimateTokensAfterCompaction({
+      messagesAfter: [{ role: "user", content: "kept ask" }] as AgentMessage[],
+      fullSessionTokensBefore: 55,
+      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
     });
 
-    const result = await runDirectCompaction();
-
-    expect(result).toMatchObject({
-      ok: true,
-      compacted: true,
-      result: {
-        tokensBefore: 20,
-        tokensAfter: 30,
-      },
-    });
-    expect(sessionHook("compact:after")?.context?.tokenCount).toBe(30);
+    expect(tokensAfter).toBe(30);
   });
 
   it("treats pre-compaction token estimation failures as a no-op sanity check", async () => {
@@ -387,29 +343,20 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       }
       return 5;
     });
-    sessionCompactImpl.mockResolvedValue({
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 20,
-      details: { ok: true },
+    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
+      originalMessages: sessionMessages as AgentMessage[],
+      currentMessages: sessionMessages as AgentMessage[],
+      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
+    });
+    const tokensAfter = compactTesting.estimateTokensAfterCompaction({
+      messagesAfter: [{ role: "user", content: "kept ask" }] as AgentMessage[],
+      fullSessionTokensBefore: 0,
+      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
     });
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      customInstructions: "focus on decisions",
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      compacted: true,
-      result: {
-        tokensAfter: 30,
-      },
-    });
-    expect(sessionHook("compact:after")?.context?.tokenCount).toBe(30);
+    expect(beforeMetrics.tokenCountOriginal).toBeUndefined();
+    expect(beforeMetrics.tokenCountBefore).toBeUndefined();
+    expect(tokensAfter).toBe(30);
   });
 
   it("skips sync in await mode when postCompactionForce is false", async () => {
@@ -424,13 +371,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       },
     });
 
-    const result = await compactEmbeddedPiSessionDirect(
-      directCompactionArgs({
-        config: compactionConfig("await"),
-      }),
-    );
+    await compactTesting.runPostCompactionSideEffects({
+      config: compactionConfig("await"),
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_FILE,
+    });
 
-    expect(result.ok).toBe(true);
     expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
       sessionKey: TEST_SESSION_KEY,
       config: expect.any(Object),
@@ -449,11 +395,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
     let settled = false;
 
-    const resultPromise = compactEmbeddedPiSessionDirect(
-      directCompactionArgs({
-        config: compactionConfig("await"),
-      }),
-    );
+    const resultPromise = compactTesting.runPostCompactionSideEffects({
+      config: compactionConfig("await"),
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_FILE,
+    });
 
     void resultPromise.then(() => {
       settled = true;
@@ -464,8 +410,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
     expect(settled).toBe(false);
     syncRelease.resolve(undefined);
-    const result = await resultPromise;
-    expect(result.ok).toBe(true);
+    await resultPromise;
     expect(settled).toBe(true);
   });
 
@@ -473,13 +418,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     const sync = vi.fn(async () => {});
     getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
 
-    const result = await compactEmbeddedPiSessionDirect(
-      directCompactionArgs({
-        config: compactionConfig("off"),
-      }),
-    );
+    await compactTesting.runPostCompactionSideEffects({
+      config: compactionConfig("off"),
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_FILE,
+    });
 
-    expect(result.ok).toBe(true);
     expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
@@ -499,11 +443,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
     let settled = false;
 
-    const resultPromise = compactEmbeddedPiSessionDirect(
-      directCompactionArgs({
-        config: compactionConfig("async"),
-      }),
-    );
+    const resultPromise = compactTesting.runPostCompactionSideEffects({
+      config: compactionConfig("async"),
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_FILE,
+    });
 
     await managerRequested.promise;
     void resultPromise.then(() => {
@@ -521,9 +465,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("skips compaction when the transcript only contains boilerplate replies and tool output", async () => {
-    sessionMessages.splice(
-      0,
-      sessionMessages.length,
+    const messages = [
       { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
       {
         role: "toolResult",
@@ -533,50 +475,22 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         isError: false,
         timestamp: 2,
       },
-    );
+    ] as AgentMessage[];
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      customInstructions: "focus on decisions",
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      compacted: false,
-      reason: "no real conversation messages",
-    });
-    expect(sessionCompactImpl).not.toHaveBeenCalled();
+    expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
   });
 
   it("skips compaction when the transcript only contains heartbeat boilerplate and reasoning blocks", async () => {
-    sessionMessages.splice(
-      0,
-      sessionMessages.length,
+    const messages = [
       { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
       {
         role: "assistant",
         content: [{ type: "thinking", thinking: "checking" }],
         timestamp: 2,
       },
-    );
+    ] as AgentMessage[];
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      customInstructions: "focus on decisions",
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      compacted: false,
-      reason: "no real conversation messages",
-    });
-    expect(sessionCompactImpl).not.toHaveBeenCalled();
+    expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
   });
 
   it("does not treat assistant-only tool-call blocks as meaningful conversation", () => {
@@ -661,20 +575,30 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("aborts in-flight compaction when the caller abort signal fires", async () => {
+    const { compactWithSafetyTimeout } = await vi.importActual<
+      typeof import("./compaction-safety-timeout.js")
+    >("./compaction-safety-timeout.js");
     const controller = new AbortController();
-    sessionCompactImpl.mockImplementationOnce(() => new Promise<never>(() => {}));
+    const compactStarted = createDeferred<void>();
 
-    const resultPromise = compactEmbeddedPiSessionDirect(
-      directCompactionArgs({
+    const resultPromise = compactWithSafetyTimeout(
+      async () => {
+        compactStarted.resolve(undefined);
+        return await new Promise<never>(() => {});
+      },
+      30_000,
+      {
         abortSignal: controller.signal,
-      }),
+        onCancel: () => {
+          sessionAbortCompactionMock();
+        },
+      },
     );
 
+    await compactStarted.promise;
     controller.abort(new Error("request timed out"));
-    const result = await resultPromise;
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("request timed out");
+    await expect(resultPromise).rejects.toThrow("request timed out");
     expect(sessionAbortCompactionMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -226,6 +226,7 @@ export async function handleInlineActions(params: {
         agentAccountId: (ctx as { AccountId?: string }).AccountId,
         agentTo: ctx.OriginatingTo ?? ctx.To,
         agentThreadId: ctx.MessageThreadId ?? undefined,
+        requesterAgentIdOverride: agentId,
         agentDir,
         workspaceDir,
         config: cfg,
@@ -439,6 +440,19 @@ export async function handleInlineActions(params: {
   let abortedLastRun = initialAbortedLastRun;
   if (!sessionEntry && command.abortKey) {
     abortedLastRun = getAbortMemory(command.abortKey) ?? false;
+  }
+
+  const shouldRunCommandHandlers =
+    inlineCommand !== null ||
+    directiveAck !== undefined ||
+    inlineStatusRequested ||
+    command.commandBodyNormalized.trim().startsWith("/");
+  if (!shouldRunCommandHandlers) {
+    return {
+      kind: "continue",
+      directives,
+      abortedLastRun,
+    };
   }
 
   const commandResult = await runCommands(command);

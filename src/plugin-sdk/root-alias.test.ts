@@ -22,6 +22,7 @@ type EmptySchema = {
 
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
+  distEntries?: string[];
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
@@ -62,7 +63,18 @@ function loadRootAliasWithStubs(options?: {
               "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
             },
           }),
-        existsSync: () => options?.distExists ?? false,
+        existsSync: (targetPath: string) => {
+          if (targetPath.endsWith(path.join("dist", "infra", "diagnostic-events.js"))) {
+            return options?.distExists ?? false;
+          }
+          return options?.distExists ?? false;
+        },
+        readdirSync: () =>
+          (options?.distEntries ?? []).map((name) => ({
+            name,
+            isFile: () => true,
+            isDirectory: () => false,
+          })),
       };
     }
     if (id === "jiti") {
@@ -94,6 +106,14 @@ function loadRootAliasWithStubs(options?: {
     },
     loadedSpecifiers,
   };
+}
+
+function createPackageRoot() {
+  return path.dirname(path.dirname(rootAliasPath));
+}
+
+function createDistAliasPath() {
+  return path.join(createPackageRoot(), "dist", "plugin-sdk", "root-alias.cjs");
 }
 
 describe("plugin-sdk root alias", () => {
@@ -137,7 +157,7 @@ describe("plugin-sdk root alias", () => {
   it("loads legacy root exports on demand and preserves reflection", () => {
     const lazyModule = loadRootAliasWithStubs({
       monolithicExports: {
-        slowHelper: () => "loaded",
+        slowHelper: (): string => "loaded",
       },
     });
     const lazyRootSdk = lazyModule.moduleExports;
@@ -152,40 +172,56 @@ describe("plugin-sdk root alias", () => {
     expect(Object.getOwnPropertyDescriptor(lazyRootSdk, "slowHelper")).toBeDefined();
   });
 
-  it("prefers native loading when compat resolves to dist", () => {
-    const lazyModule = loadRootAliasWithStubs({
-      distExists: true,
-      monolithicExports: {
-        slowHelper: () => "loaded",
+  it.each([
+    {
+      name: "prefers source loading when the source root alias runs in development",
+      options: {
+        distExists: true,
+        env: { NODE_ENV: "development" },
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
       },
-    });
+      expectedTryNative: false,
+    },
+    {
+      name: "prefers native loading when compat resolves to dist",
+      options: {
+        distExists: true,
+        env: { NODE_ENV: "production" },
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
+      },
+      expectedTryNative: true,
+    },
+    {
+      name: "prefers source loading under vitest even when compat resolves to dist",
+      options: {
+        distExists: true,
+        env: { VITEST: "1" },
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
+      },
+      expectedTryNative: false,
+    },
+  ])("$name", ({ options, expectedTryNative }) => {
+    const lazyModule = loadRootAliasWithStubs(options);
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
-    expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(true);
-  });
-
-  it("prefers source loading under vitest even when compat resolves to dist", () => {
-    const lazyModule = loadRootAliasWithStubs({
-      distExists: true,
-      env: { VITEST: "1" },
-      monolithicExports: {
-        slowHelper: () => "loaded",
-      },
-    });
-
-    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
-    expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
+    expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(expectedTryNative);
   });
 
   it("falls back to src files even when the alias itself is loaded from dist", () => {
-    const packageRoot = path.dirname(path.dirname(rootAliasPath));
-    const distAliasPath = path.join(packageRoot, "dist", "plugin-sdk", "root-alias.cjs");
+    const packageRoot = createPackageRoot();
+    const distAliasPath = createDistAliasPath();
     const lazyModule = loadRootAliasWithStubs({
       aliasPath: distAliasPath,
       distExists: false,
       monolithicExports: {
-        onDiagnosticEvent: () => () => undefined,
-        slowHelper: () => "loaded",
+        onDiagnosticEvent: (): (() => void) => () => undefined,
+        slowHelper: (): string => "loaded",
       },
     });
 
@@ -203,36 +239,68 @@ describe("plugin-sdk root alias", () => {
     );
   });
 
-  it("forwards delegateCompactionToRuntime through the compat-backed root alias", () => {
-    const delegateCompactionToRuntime = () => "delegated";
+  it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
+    const packageRoot = createPackageRoot();
+    const distAliasPath = createDistAliasPath();
     const lazyModule = loadRootAliasWithStubs({
+      aliasPath: distAliasPath,
+      distExists: false,
+      distEntries: ["diagnostic-events-W3Hz61fI.js"],
       monolithicExports: {
-        delegateCompactionToRuntime,
+        r: (): (() => void) => () => undefined,
+        slowHelper: (): string => "loaded",
       },
     });
-    const lazyRootSdk = lazyModule.moduleExports;
 
-    expect(typeof lazyRootSdk.delegateCompactionToRuntime).toBe("function");
-    expect(lazyRootSdk.delegateCompactionToRuntime).toBe(delegateCompactionToRuntime);
-    expect("delegateCompactionToRuntime" in lazyRootSdk).toBe(true);
-  });
-
-  it("forwards onDiagnosticEvent through the compat-backed root alias", () => {
-    const onDiagnosticEvent = () => () => undefined;
-    const lazyModule = loadRootAliasWithStubs({
-      monolithicExports: {
-        onDiagnosticEvent,
-      },
-    });
-    const lazyRootSdk = lazyModule.moduleExports;
-
-    expect(typeof lazyRootSdk.onDiagnosticEvent).toBe("function");
     expect(
-      typeof (lazyRootSdk.onDiagnosticEvent as (listener: () => void) => () => void)(
+      typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
         () => undefined,
       ),
     ).toBe("function");
-    expect("onDiagnosticEvent" in lazyRootSdk).toBe(true);
+    expect(lazyModule.loadedSpecifiers).toContain(
+      path.join(packageRoot, "dist", "diagnostic-events-W3Hz61fI.js"),
+    );
+    expect(lazyModule.loadedSpecifiers).not.toContain(
+      path.join(packageRoot, "src", "infra", "diagnostic-events.ts"),
+    );
+  });
+
+  it.each([
+    {
+      name: "forwards delegateCompactionToRuntime through the compat-backed root alias",
+      exportName: "delegateCompactionToRuntime",
+      exportValue: () => "delegated",
+      expectIdentity: true,
+      assertForwarded: (value: unknown) => {
+        expect(typeof value).toBe("function");
+        expect((value as () => string)()).toBe("delegated");
+      },
+    },
+    {
+      name: "forwards onDiagnosticEvent through the compat-backed root alias",
+      exportName: "onDiagnosticEvent",
+      exportValue: () => () => undefined,
+      expectIdentity: false,
+      assertForwarded: (value: unknown) => {
+        expect(typeof value).toBe("function");
+        expect(typeof (value as (listener: () => void) => () => void)(() => undefined)).toBe(
+          "function",
+        );
+      },
+    },
+  ])("$name", ({ exportName, exportValue, expectIdentity, assertForwarded }) => {
+    const lazyModule = loadRootAliasWithStubs({
+      monolithicExports: {
+        [exportName]: exportValue,
+      },
+    });
+    const forwarded = lazyModule.moduleExports[exportName];
+
+    assertForwarded(forwarded);
+    if (expectIdentity) {
+      expect(forwarded).toBe(exportValue);
+    }
+    expect(exportName in lazyModule.moduleExports).toBe(true);
   });
 
   it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {

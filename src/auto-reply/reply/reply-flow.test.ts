@@ -719,6 +719,58 @@ describe("parseSlackDirectives", () => {
     ]);
   });
 
+  it("parses optional Slack button styles without truncating callback values", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_buttons: Approve:pluginbind:approval-123:o:primary, Reject:deny:danger, Skip:skip:secondary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            value: "pluginbind:approval-123:o",
+            style: "primary",
+          },
+          {
+            label: "Reject",
+            value: "deny",
+            style: "danger",
+          },
+          {
+            label: "Skip",
+            value: "skip",
+            style: "secondary",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves slack_select values that end in style-like suffixes", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Choose one | Queue:queue:danger, Archive:archive:primary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Choose one",
+        options: [
+          {
+            label: "Queue",
+            value: "queue:danger",
+          },
+          {
+            label: "Archive",
+            value: "archive:primary",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps existing interactive blocks when compiling additional Slack directives", () => {
     const result = parseSlackDirectives({
       text: "Choose [[slack_buttons: Retry:retry]]",
@@ -1454,7 +1506,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
   });
 
-  it("processes a message enqueued after the drain empties and deletes the queue", async () => {
+  it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
     const key = `test-idle-window-race-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
@@ -1485,10 +1537,16 @@ describe("followup queue drain restart after idle window", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     // Simulate the race: a new message arrives AFTER the drain finished and
-    // deleted the queue, but WITHOUT calling scheduleFollowupDrain again.
-    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    // deleted the queue. The next enqueue refreshes the callback and should
+    // kick a new idle drain automatically.
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      runFollowup,
+    );
 
-    // kickFollowupDrainIfIdle should have restarted the drain automatically.
     await secondProcessed.promise;
 
     expect(calls).toHaveLength(2);
@@ -1496,7 +1554,80 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[1]?.prompt).toBe("after-idle");
   });
 
-  it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
+  it("restarts an idle drain with the newest followup callback", async () => {
+    const key = `test-idle-window-fresh-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+    const firstProcessed = createDeferred<void>();
+    const secondProcessed = createDeferred<void>();
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+      if (staleCalls.length === 1) {
+        firstProcessed.resolve();
+      }
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+      secondProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, staleFollowup);
+    await firstProcessed.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      freshFollowup,
+    );
+    await secondProcessed.promise;
+
+    expect(staleCalls).toHaveLength(1);
+    expect(staleCalls[0]?.prompt).toBe("before-idle");
+    expect(freshCalls).toHaveLength(1);
+    expect(freshCalls[0]?.prompt).toBe("after-idle");
+  });
+
+  it("does not auto-start a drain when a busy run only refreshes the callback", async () => {
+    const key = `test-busy-run-refreshes-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "queued-while-busy" }),
+      settings,
+      "message-id",
+      freshFollowup,
+      false,
+    );
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(freshCalls).toHaveLength(0);
+
+    scheduleFollowupDrain(key, staleFollowup);
+    await vi.waitFor(() => {
+      expect(freshCalls).toHaveLength(1);
+    });
+
+    expect(staleCalls).toHaveLength(0);
+    expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
+  });
+
+  it("restarts an idle drain across distinct enqueue and drain module instances when enqueue refreshes the callback", async () => {
     const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
       import.meta.url,
       "./queue/drain.js?scope=restart-a",
@@ -1527,7 +1658,13 @@ describe("followup queue drain restart after idle window", () => {
 
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+      enqueueB.enqueueFollowupRun(
+        key,
+        createRun({ prompt: "after-idle" }),
+        settings,
+        "message-id",
+        runFollowup,
+      );
 
       await vi.waitFor(
         () => {
@@ -1611,6 +1748,33 @@ describe("followup queue drain restart after idle window", () => {
     // Only the first message was processed; the post-clear one is still pending.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-clear");
+  });
+
+  it("clears the remembered callback after a queue drains fully", async () => {
+    const key = `test-auto-clear-callback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstProcessed = createDeferred<void>();
+
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      firstProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstProcessed.promise;
+
+    // Let the idle drain finish and clear its callback.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Enqueueing after a clean drain should not auto-start anything until a
+    // fresh finalize path supplies a new callback.
+    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe("before-idle");
   });
 });
 

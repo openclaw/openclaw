@@ -1,7 +1,9 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
@@ -31,20 +33,12 @@ let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
-let providerRuntimePromise:
-  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
-  | undefined;
 let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["deepseek", "kilocode"]);
 
 function shouldLogModelCatalogTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
-}
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
 }
 
 function loadModelSuppression() {
@@ -187,8 +181,7 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       logStage("pi-sdk-imported");
       const agentDir = resolveOpenClawAgentDir();
-      const [{ shouldSuppressBuiltInModel }, { augmentModelCatalogWithProviderPlugins }] =
-        await Promise.all([loadModelSuppression(), loadProviderRuntime()]);
+      const { shouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
@@ -303,11 +296,11 @@ export function findModelInCatalog(
   provider: string,
   modelId: string,
 ): ModelCatalogEntry | undefined {
-  const normalizedProvider = provider.toLowerCase().trim();
+  const normalizedProvider = normalizeProviderId(provider);
   const normalizedModelId = modelId.toLowerCase().trim();
   return catalog.find(
     (entry) =>
-      entry.provider.toLowerCase() === normalizedProvider &&
+      normalizeProviderId(entry.provider) === normalizedProvider &&
       entry.id.toLowerCase() === normalizedModelId,
   );
 }

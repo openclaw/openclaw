@@ -1,18 +1,12 @@
 import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerDiscordComponentEntries } from "./components-registry.js";
-import {
-  editDiscordComponentMessage,
-  registerBuiltDiscordComponentMessage,
-  sendDiscordComponentMessage,
-} from "./send.components.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
 
-vi.mock("../../../src/config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/config/config.js")>(
-    "../../../src/config/config.js",
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
   );
   return {
     ...actual,
@@ -24,10 +18,23 @@ vi.mock("./components-registry.js", () => ({
   registerDiscordComponentEntries: vi.fn(),
 }));
 
-describe("sendDiscordComponentMessage", () => {
-  const registerMock = vi.mocked(registerDiscordComponentEntries);
+let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
+let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
+let registerBuiltDiscordComponentMessage: typeof import("./send.components.js").registerBuiltDiscordComponentMessage;
+let sendDiscordComponentMessage: typeof import("./send.components.js").sendDiscordComponentMessage;
 
-  beforeEach(() => {
+describe("sendDiscordComponentMessage", () => {
+  let registerMock: ReturnType<typeof vi.mocked<typeof registerDiscordComponentEntries>>;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
+    ({
+      editDiscordComponentMessage,
+      registerBuiltDiscordComponentMessage,
+      sendDiscordComponentMessage,
+    } = await import("./send.components.js"));
+    registerMock = vi.mocked(registerDiscordComponentEntries);
     vi.clearAllMocks();
   });
 

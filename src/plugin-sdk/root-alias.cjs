@@ -7,7 +7,17 @@ let monolithicSdk = null;
 let diagnosticEventsModule = null;
 const jitiLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
-const shouldPreferSourceInTests = Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
+const isDistRootAlias = __filename.includes(
+  `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
+);
+// Source plugin entry loading must stay on the source graph end-to-end. Mixing a
+// source root alias with dist compat/runtime shims can split singleton deps
+// (for example matrix-js-sdk) across two module graphs.
+const shouldPreferSourceGraph =
+  !isDistRootAlias &&
+  (process.env.NODE_ENV !== "production" ||
+    Boolean(process.env.VITEST) ||
+    process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1");
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -76,6 +86,20 @@ function getPackageRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
+function findDistChunkByPrefix(prefix) {
+  const distRoot = path.join(getPackageRoot(), "dist");
+  try {
+    const entries = fs.readdirSync(distRoot, { withFileTypes: true });
+    const match = entries.find(
+      (entry) =>
+        entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),
+    );
+    return match ? path.join(distRoot, match.name) : null;
+  } catch {
+    return null;
+  }
+}
+
 function listPluginSdkExportedSubpaths() {
   const packageRoot = getPackageRoot();
   if (pluginSdkSubpathsCache.has(packageRoot)) {
@@ -139,7 +163,7 @@ function loadMonolithicSdk() {
   }
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
+  if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
     try {
       monolithicSdk = getJiti(true)(distCandidate);
       return monolithicSdk;
@@ -157,7 +181,7 @@ function loadDiagnosticEventsModule() {
     return diagnosticEventsModule;
   }
 
-  const distCandidate = path.resolve(
+  const directDistCandidate = path.resolve(
     __dirname,
     "..",
     "..",
@@ -165,19 +189,40 @@ function loadDiagnosticEventsModule() {
     "infra",
     "diagnostic-events.js",
   );
-  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
-    try {
-      diagnosticEventsModule = getJiti(true)(distCandidate);
-      return diagnosticEventsModule;
-    } catch {
-      // Fall through to source path if dist is unavailable or stale.
+  if (!shouldPreferSourceGraph) {
+    const distCandidate =
+      (fs.existsSync(directDistCandidate) && directDistCandidate) ||
+      findDistChunkByPrefix("diagnostic-events");
+    if (distCandidate) {
+      try {
+        diagnosticEventsModule = normalizeDiagnosticEventsModule(getJiti(true)(distCandidate));
+        return diagnosticEventsModule;
+      } catch {
+        // Fall through to source path if dist is unavailable or stale.
+      }
     }
   }
 
-  diagnosticEventsModule = getJiti(false)(
-    path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts"),
+  diagnosticEventsModule = normalizeDiagnosticEventsModule(
+    getJiti(false)(path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts")),
   );
   return diagnosticEventsModule;
+}
+
+function normalizeDiagnosticEventsModule(mod) {
+  if (!mod || typeof mod !== "object") {
+    return mod;
+  }
+  if (typeof mod.onDiagnosticEvent === "function") {
+    return mod;
+  }
+  if (typeof mod.r === "function") {
+    return {
+      ...mod,
+      onDiagnosticEvent: mod.r,
+    };
+  }
+  return mod;
 }
 
 function tryLoadMonolithicSdk() {

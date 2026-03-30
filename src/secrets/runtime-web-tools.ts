@@ -8,6 +8,7 @@ import type {
 } from "../plugins/types.js";
 import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -23,6 +24,7 @@ import type {
   RuntimeWebFetchFirecrawlMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
+  RuntimeWebXSearchMetadata,
 } from "./runtime-web-tools.types.js";
 
 type WebSearchProvider = string;
@@ -33,6 +35,7 @@ export type {
   RuntimeWebFetchFirecrawlMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
+  RuntimeWebXSearchMetadata,
 };
 
 type FetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -261,6 +264,13 @@ function setResolvedFirecrawlApiKey(params: {
   firecrawl.apiKey = params.value;
 }
 
+function setResolvedXSearchApiKey(params: { resolvedConfig: OpenClawConfig; value: string }): void {
+  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureObject(tools, "web");
+  const xSearch = ensureObject(web, "x_search");
+  xSearch.apiKey = params.value;
+}
+
 function keyPathForProvider(provider: PluginWebSearchProviderEntry): string {
   return provider.credentialPath;
 }
@@ -297,33 +307,36 @@ export async function resolveRuntimeWebTools(params: {
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
-  const providers = search
-    ? configuredBundledPluginId
-      ? resolveBundledPluginWebSearchProviders({
-          config: params.sourceConfig,
-          env: { ...process.env, ...params.context.env },
-          bundledAllowlistCompat: true,
-          onlyPluginIds: [configuredBundledPluginId],
-        })
-      : !hasCustomWebSearchPluginRisk(params.sourceConfig)
-        ? resolveBundledPluginWebSearchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-          })
-        : resolvePluginWebSearchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-          })
-    : [];
 
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
     diagnostics: [],
   };
 
-  const searchEnabled = search?.enabled !== false;
+  const searchConfigured = Boolean(search);
+  const searchEnabled = searchConfigured && search?.enabled !== false;
+  const providers = sortWebSearchProvidersForAutoDetect(
+    searchConfigured
+      ? configuredBundledPluginId
+        ? resolveBundledPluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+            onlyPluginIds: [configuredBundledPluginId],
+          })
+        : !hasCustomWebSearchPluginRisk(params.sourceConfig)
+          ? resolveBundledPluginWebSearchProviders({
+              config: params.sourceConfig,
+              env: { ...process.env, ...params.context.env },
+              bundledAllowlistCompat: true,
+            })
+          : resolvePluginWebSearchProviders({
+              config: params.sourceConfig,
+              env: { ...process.env, ...params.context.env },
+              bundledAllowlistCompat: true,
+            })
+      : [],
+  );
   const configuredProvider = normalizeProvider(rawProvider, providers);
 
   if (rawProvider && !configuredProvider) {
@@ -346,7 +359,7 @@ export async function resolveRuntimeWebTools(params: {
     searchMetadata.providerSource = "configured";
   }
 
-  if (searchEnabled && search) {
+  if (searchEnabled) {
     const candidates = configuredProvider
       ? providers.filter((provider) => provider.id === configuredProvider)
       : providers;
@@ -512,7 +525,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && !configuredProvider && searchMetadata.selectedProvider) {
+  if (searchEnabled && !configuredProvider && searchMetadata.selectedProvider) {
     for (const provider of providers) {
       if (provider.id === searchMetadata.selectedProvider) {
         continue;
@@ -566,6 +579,103 @@ export async function resolveRuntimeWebTools(params: {
           path,
           details: `tools.web.search.provider is "${configuredProvider}".`,
         });
+      }
+    }
+  }
+
+  const xSearch = isRecord(web?.x_search) ? web.x_search : undefined;
+  const xSearchEnabled = xSearch?.enabled !== false;
+  const xSearchPath = "tools.web.x_search.apiKey";
+  let xSearchResolution: SecretResolutionResult = {
+    source: "missing",
+    secretRefConfigured: false,
+    fallbackUsedAfterRefFailure: false,
+  };
+  const xSearchDiagnostics: RuntimeWebDiagnostic[] = [];
+
+  if (xSearchEnabled) {
+    xSearchResolution = await resolveSecretInputWithEnvFallback({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      defaults,
+      value: xSearch?.apiKey,
+      path: xSearchPath,
+      envVars: ["XAI_API_KEY"],
+    });
+
+    if (xSearchResolution.value) {
+      setResolvedXSearchApiKey({
+        resolvedConfig: params.resolvedConfig,
+        value: xSearchResolution.value,
+      });
+    }
+
+    if (xSearchResolution.secretRefConfigured) {
+      if (xSearchResolution.fallbackUsedAfterRefFailure) {
+        const diagnostic: RuntimeWebDiagnostic = {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+          message:
+            `${xSearchPath} SecretRef could not be resolved; using ${xSearchResolution.fallbackEnvVar ?? "env fallback"}. ` +
+            (xSearchResolution.unresolvedRefReason ?? "").trim(),
+          path: xSearchPath,
+        };
+        diagnostics.push(diagnostic);
+        xSearchDiagnostics.push(diagnostic);
+        pushWarning(params.context, {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+          path: xSearchPath,
+          message: diagnostic.message,
+        });
+      }
+
+      if (!xSearchResolution.value && xSearchResolution.unresolvedRefReason) {
+        const diagnostic: RuntimeWebDiagnostic = {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+          message: xSearchResolution.unresolvedRefReason,
+          path: xSearchPath,
+        };
+        diagnostics.push(diagnostic);
+        xSearchDiagnostics.push(diagnostic);
+        pushWarning(params.context, {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+          path: xSearchPath,
+          message: xSearchResolution.unresolvedRefReason,
+        });
+        throw new Error(
+          `[WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${xSearchResolution.unresolvedRefReason}`,
+        );
+      }
+    }
+  } else if (hasConfiguredSecretRef(xSearch?.apiKey, defaults)) {
+    pushInactiveSurfaceWarning({
+      context: params.context,
+      path: xSearchPath,
+      details: "tools.web.x_search is disabled.",
+    });
+    xSearchResolution = {
+      source: "secretRef",
+      secretRefConfigured: true,
+      fallbackUsedAfterRefFailure: false,
+    };
+  } else {
+    const configuredInlineValue = normalizeSecretInput(xSearch?.apiKey);
+    if (configuredInlineValue) {
+      xSearchResolution = {
+        value: configuredInlineValue,
+        source: "config",
+        secretRefConfigured: false,
+        fallbackUsedAfterRefFailure: false,
+      };
+    } else {
+      const envFallback = readNonEmptyEnvValue(params.context.env, ["XAI_API_KEY"]);
+      if (envFallback.value) {
+        xSearchResolution = {
+          value: envFallback.value,
+          source: "env",
+          fallbackEnvVar: envFallback.envVar,
+          secretRefConfigured: false,
+          fallbackUsedAfterRefFailure: false,
+        };
       }
     }
   }
@@ -677,6 +787,11 @@ export async function resolveRuntimeWebTools(params: {
 
   return {
     search: searchMetadata,
+    xSearch: {
+      active: Boolean(xSearchEnabled && xSearchResolution.value),
+      apiKeySource: xSearchResolution.source,
+      diagnostics: xSearchDiagnostics,
+    },
     fetch: {
       firecrawl: {
         active: firecrawlActive,

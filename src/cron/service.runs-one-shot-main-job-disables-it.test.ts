@@ -75,15 +75,13 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual.promises,
     mkdir: async (p: string) => {
       if (!isFixtureInMock(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.mkdir as any)(p, { recursive: true });
+        return await actual.promises.mkdir(p, { recursive: true });
       }
       ensureDir(p);
     },
     readFile: async (p: string) => {
       if (!isFixtureInMock(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.readFile as any)(p, "utf-8");
+        return await actual.promises.readFile(p, "utf-8");
       }
       const entry = fsState.entries.get(absInMock(p));
       if (!entry || entry.kind !== "file") {
@@ -93,16 +91,14 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     writeFile: async (p: string, data: string | Uint8Array) => {
       if (!isFixtureInMock(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.writeFile as any)(p, data, "utf-8");
+        return await actual.promises.writeFile(p, data, "utf-8");
       }
       const content = typeof data === "string" ? data : Buffer.from(data).toString("utf-8");
       setFile(p, content);
     },
     rename: async (from: string, to: string) => {
       if (!isFixtureInMock(from) || !isFixtureInMock(to)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.rename as any)(from, to);
+        return await actual.promises.rename(from, to);
       }
       const fromAbs = absInMock(from);
       const toAbs = absInMock(to);
@@ -116,8 +112,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     copyFile: async (from: string, to: string) => {
       if (!isFixtureInMock(from) || !isFixtureInMock(to)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.copyFile as any)(from, to);
+        return await actual.promises.copyFile(from, to);
       }
       const entry = fsState.entries.get(absInMock(from));
       if (!entry || entry.kind !== "file") {
@@ -127,8 +122,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     stat: async (p: string) => {
       if (!isFixtureInMock(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.stat as any)(p);
+        return await actual.promises.stat(p);
       }
       const entry = fsState.entries.get(absInMock(p));
       if (!entry) {
@@ -142,8 +136,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     access: async (p: string) => {
       if (!isFixtureInMock(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.access as any)(p);
+        return await actual.promises.access(p);
       }
       const entry = fsState.entries.get(absInMock(p));
       if (!entry) {
@@ -152,8 +145,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     unlink: async (p: string) => {
       if (!isFixtureInMock(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.unlink as any)(p);
+        return await actual.promises.unlink(p);
       }
       fsState.entries.delete(absInMock(p));
     },
@@ -169,15 +161,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     mkdir: async (p: string, _opts?: unknown) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.mkdir as any)(p, { recursive: true });
+        return await actual.mkdir(p, { recursive: true });
       }
       ensureDir(p);
     },
     writeFile: async (p: string, data: string, _enc?: unknown) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.writeFile as any)(p, data, "utf-8");
+        return await actual.writeFile(p, data, "utf-8");
       }
       setFile(p, data);
     },

@@ -1,8 +1,10 @@
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -33,8 +35,9 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
   };
 });
 
-const { AcpSessionManager } = await import("./manager.js");
-const { AcpRuntimeError } = await import("../runtime/errors.js");
+let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
+let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
+let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
 
 const baseCfg = {
   acp: {
@@ -43,6 +46,19 @@ const baseCfg = {
     dispatch: { enabled: true },
   },
 } as const;
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>): Promise<void> {
+  await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetTaskRegistryForTests();
+    try {
+      await run(root);
+    } finally {
+      resetTaskRegistryForTests();
+    }
+  });
+}
 
 function createRuntime(): {
   runtime: AcpRuntime;
@@ -149,12 +165,31 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 }
 
 describe("AcpSessionManager", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({
+      AcpSessionManager,
+      __testing: { resetAcpSessionManagerForTests },
+    } = await import("./manager.js"));
+    ({ AcpRuntimeError } = await import("../runtime/errors.js"));
+  });
+
   beforeEach(() => {
+    resetAcpSessionManagerForTests();
     vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
     hoisted.requireAcpRuntimeBackendMock.mockReset();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    resetTaskRegistryForTests();
   });
 
   it("marks ACP-shaped sessions without metadata as stale", () => {
@@ -223,6 +258,72 @@ describe("AcpSessionManager", () => {
         sessionKey: "agent:main:main",
       }),
     );
+  });
+
+  it("tracks parented direct ACP turns in the task registry", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
+        };
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Quant patch",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Implement the feature and report back",
+        mode: "prompt",
+        requestId: "direct-parented-run",
+      });
+
+      expect(findTaskByRunId("direct-parented-run")).toMatchObject({
+        runtime: "acp",
+        requesterSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        childSessionKey: "agent:codex:acp:child-1",
+        label: "Quant patch",
+        task: "Implement the feature and report back",
+        status: "succeeded",
+        progressSummary: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
+        terminalOutcome: "blocked",
+        terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
+      });
+    });
   });
 
   it("serializes concurrent turns for the same ACP session", async () => {
@@ -685,7 +786,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:deadbeef";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:deadbeef";
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
@@ -728,7 +829,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:oneshot";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:oneshot";
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
@@ -800,7 +901,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:retry-fresh";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:retry-fresh";
     let currentMeta: SessionAcpMeta = {
       ...readySessionMeta(),
       runtimeSessionName: sessionKey,
@@ -1411,6 +1512,47 @@ describe("AcpSessionManager", () => {
     expect(states).not.toContain("error");
   });
 
+  it("retries once with a fresh runtime handle after an early acpx signal exit", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn
+      .mockImplementationOnce(async function* () {
+        yield {
+          type: "error" as const,
+          message: "acpx exited with signal SIGTERM",
+        };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: "done" as const };
+      });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states).toContain("idle");
+    expect(states).not.toContain("error");
+  });
+
   it("persists runtime mode changes through setSessionRuntimeMode", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1486,7 +1628,7 @@ describe("AcpSessionManager", () => {
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       key: "model",
-      value: "openai-codex/gpt-5.3-codex",
+      value: "openai-codex/gpt-5.4",
     });
     expect(runtimeState.setMode).not.toHaveBeenCalled();
 
@@ -1743,7 +1885,7 @@ describe("AcpSessionManager", () => {
         ...readySessionMeta(),
         runtimeOptions: {
           runtimeMode: "plan",
-          model: "openai-codex/gpt-5.3-codex",
+          model: "openai-codex/gpt-5.4",
           permissionProfile: "strict",
           timeoutSeconds: 120,
         },
@@ -1767,7 +1909,7 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "model",
-        value: "openai-codex/gpt-5.3-codex",
+        value: "openai-codex/gpt-5.4",
       }),
     );
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
@@ -1809,7 +1951,7 @@ describe("AcpSessionManager", () => {
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         key: "model",
-        value: "gpt-5.3-codex",
+        value: "gpt-5.4",
       }),
     ).rejects.toMatchObject({
       code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
