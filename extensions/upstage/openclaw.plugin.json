@@ -1,0 +1,28 @@
+{
+  "id": "upstage",
+  "enabledByDefault": true,
+  "providers": ["upstage"],
+  "providerAuthEnvVars": {
+    "upstage": ["UPSTAGE_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "upstage",
+      "method": "api-key",
+      "choiceId": "upstage-api-key",
+      "choiceLabel": "Upstage API key",
+      "groupId": "upstage",
+      "groupLabel": "Upstage",
+      "groupHint": "API key",
+      "optionKey": "upstageApiKey",
+      "cliFlag": "--upstage-api-key",
+      "cliOption": "--upstage-api-key <key>",
+      "cliDescription": "Upstage API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

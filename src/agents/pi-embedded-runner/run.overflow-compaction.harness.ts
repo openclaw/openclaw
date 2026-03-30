@@ -68,6 +68,14 @@ export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+export const mockedResolveLiveSessionModelSelection = vi.fn(() => null);
+export const mockedConsumeLiveSessionModelSwitch = vi.fn(() => undefined);
+export const mockedHasDifferentLiveSessionModelSelection = vi.fn(
+  (
+    current: { provider: string; model: string },
+    next: { provider: string; model: string } | null,
+  ) => Boolean(next) && (current.provider !== next.provider || current.model !== next.model),
+);
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
 export const mockedTruncateOversizedToolResultsInSession = vi.fn<
@@ -214,6 +222,17 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
   mockedRunEmbeddedAttempt.mockReset();
+  mockedResolveLiveSessionModelSelection.mockReset();
+  mockedResolveLiveSessionModelSelection.mockReturnValue(null);
+  mockedConsumeLiveSessionModelSwitch.mockReset();
+  mockedConsumeLiveSessionModelSwitch.mockReturnValue(undefined);
+  mockedHasDifferentLiveSessionModelSelection.mockReset();
+  mockedHasDifferentLiveSessionModelSelection.mockImplementation(
+    (
+      current: { provider: string; model: string },
+      next: { provider: string; model: string } | null,
+    ) => Boolean(next) && (current.provider !== next.provider || current.model !== next.model),
+  );
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
@@ -331,6 +350,17 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
   }));
+
+  vi.doMock("../live-model-switch.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../live-model-switch.js")>("../live-model-switch.js");
+    return {
+      ...actual,
+      resolveLiveSessionModelSelection: mockedResolveLiveSessionModelSelection,
+      consumeLiveSessionModelSwitch: mockedConsumeLiveSessionModelSwitch,
+      hasDifferentLiveSessionModelSelection: mockedHasDifferentLiveSessionModelSelection,
+    };
+  });
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,

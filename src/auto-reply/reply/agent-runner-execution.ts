@@ -140,9 +140,11 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  const MAX_LIVE_SESSION_SWITCH_RESTARTS = 3;
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
+  let liveSessionSwitchRestartCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
@@ -255,10 +257,13 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
+      let fallbackAttemptIndex = 0;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
         run: (provider, model, runOptions) => {
+          const isFallbackRetry = fallbackAttemptIndex > 0;
+          fallbackAttemptIndex += 1;
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -397,6 +402,7 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
                 ...senderContext,
                 ...runBaseParams,
+                suppressPersistedLiveModelSelection: isFallbackRetry,
                 prompt: params.commandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
@@ -606,6 +612,18 @@ export async function runAgentTurnWithFallback(params: {
       break;
     } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
+        liveSessionSwitchRestartCount += 1;
+        if (liveSessionSwitchRestartCount > MAX_LIVE_SESSION_SWITCH_RESTARTS) {
+          return {
+            kind: "final",
+            payload: {
+              text:
+                "⚠️ Model selection kept restarting during fallback. " +
+                "Please try again, or use /new to start a fresh session.",
+              isError: true,
+            },
+          };
+        }
         params.followupRun.run.provider = err.provider;
         params.followupRun.run.model = err.model;
         params.followupRun.run.authProfileId = err.authProfileId;
@@ -616,6 +634,7 @@ export async function runAgentTurnWithFallback(params: {
         fallbackModel = err.model;
         continue;
       }
+      liveSessionSwitchRestartCount = 0;
       const message = err instanceof Error ? err.message : String(err);
       const isBilling = isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);

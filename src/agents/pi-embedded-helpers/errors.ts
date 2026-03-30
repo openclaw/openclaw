@@ -539,6 +539,15 @@ function stripFinalTagsFromText(text: string): string {
   return text.replace(FINAL_TAG_RE, "");
 }
 
+const LEADING_STREAM_CONTROL_TOKEN_RE = /^(?:\s*<\|[a-z0-9_.-]+\|>\s*)+/i;
+
+function stripLeadingStreamControlTokens(text: string): string {
+  if (!text || !text.includes("<|")) {
+    return text;
+  }
+  return text.replace(LEADING_STREAM_CONTROL_TOKEN_RE, "");
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -744,7 +753,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripLeadingStreamControlTokens(stripFinalTagsFromText(text));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

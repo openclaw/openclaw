@@ -218,6 +218,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-core/**"
+"extensions: upstage":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/upstage/**"
 "extensions: memory-lancedb":
   - changed-files:
       - any-glob-to-any-file:

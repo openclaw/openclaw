@@ -16872,6 +16872,49 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "upstage",
+    idHint: "upstage",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
+    packageName: "@openclaw/upstage-provider",
+    packageVersion: "2026.3.28",
+    packageDescription: "OpenClaw Upstage provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "upstage",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      enabledByDefault: true,
+      providers: ["upstage"],
+      providerAuthEnvVars: {
+        upstage: ["UPSTAGE_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "upstage",
+          method: "api-key",
+          choiceId: "upstage-api-key",
+          choiceLabel: "Upstage API key",
+          groupId: "upstage",
+          groupLabel: "Upstage",
+          groupHint: "API key",
+          optionKey: "upstageApiKey",
+          cliFlag: "--upstage-api-key",
+          cliOption: "--upstage-api-key <key>",
+          cliDescription: "Upstage API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "twitch",
     idHint: "twitch",
     source: {

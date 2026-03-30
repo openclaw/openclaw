@@ -15,6 +15,11 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips leading stream control tokens", () => {
+    expect(sanitizeUserFacingText("<|content|>Hello")).toBe("Hello");
+    expect(sanitizeUserFacingText("<|assistant|>\n<|content|>\nHello")).toBe("Hello");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {

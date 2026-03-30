@@ -258,6 +258,12 @@ export function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
+  log.info(
+    `[fallback-attempt] sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? "-"} ` +
+      `provider=${params.providerOverride}/${params.modelOverride} ` +
+      `isFallbackRetry=${params.isFallbackRetry ? "yes" : "no"} ` +
+      `suppressPersistedLiveModelSelection=${params.isFallbackRetry ? "yes" : "no"}`,
+  );
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
@@ -398,6 +404,7 @@ export function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    suppressPersistedLiveModelSelection: params.isFallbackRetry,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,

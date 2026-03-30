@@ -129,4 +129,11 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * When true, do not treat the persisted session model override as a live
+   * switch target for this run. This is used by automatic fallback retries,
+   * where the session's selected model should remain the requested model
+   * without aborting each candidate attempt back to that persisted selection.
+   */
+  suppressPersistedLiveModelSelection?: boolean;
 };

@@ -242,6 +242,7 @@ export async function runEmbeddedPiAgent(
           defaultProvider: provider,
           defaultModel: modelId,
         });
+      const shouldHonorPersistedLiveSelection = params.suppressPersistedLiveModelSelection !== true;
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -449,7 +450,15 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = resolvePersistedLiveSelection();
+          const nextSelection = shouldHonorPersistedLiveSelection
+            ? resolvePersistedLiveSelection()
+            : null;
+          log.info(
+            `[live-selection-check] sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? "-"} ` +
+              `provider=${provider}/${modelId} attempt=${runLoopIterations} ` +
+              `suppressPersistedLiveModelSelection=${shouldHonorPersistedLiveSelection ? "no" : "yes"} ` +
+              `persistedSelection=${nextSelection ? `${nextSelection.provider}/${nextSelection.model}` : "-"}`,
+          );
           if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
             log.info(
               `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
@@ -604,9 +613,18 @@ export async function runEmbeddedPiAgent(
           }
           const failedOrAbortedAttempt =
             aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection = failedOrAbortedAttempt
-            ? resolvePersistedLiveSelection()
-            : null;
+          const persistedSelection =
+            failedOrAbortedAttempt && shouldHonorPersistedLiveSelection
+              ? resolvePersistedLiveSelection()
+              : null;
+          if (failedOrAbortedAttempt) {
+            log.info(
+              `[live-selection-after-attempt] sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? "-"} ` +
+                `provider=${provider}/${modelId} ` +
+                `suppressPersistedLiveModelSelection=${shouldHonorPersistedLiveSelection ? "no" : "yes"} ` +
+                `persistedSelection=${persistedSelection ? `${persistedSelection.provider}/${persistedSelection.model}` : "-"}`,
+            );
+          }
           if (
             failedOrAbortedAttempt &&
             canRestartForLiveSwitch &&
