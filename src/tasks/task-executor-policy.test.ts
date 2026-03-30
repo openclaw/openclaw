@@ -106,5 +106,23 @@ describe("task-executor-policy", () => {
         preferredTaskId: "task-2",
       }),
     ).toBe(true);
+    expect(
+      shouldSuppressDuplicateTerminalDelivery({
+        task: createTask({
+          runtime: "acp",
+          runId: "run-duplicate",
+        }),
+        preferredTaskId: "task-1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressDuplicateTerminalDelivery({
+        task: createTask({
+          runtime: "acp",
+          runId: "run-duplicate",
+        }),
+        preferredTaskId: undefined,
+      }),
+    ).toBe(false);
   });
 });
