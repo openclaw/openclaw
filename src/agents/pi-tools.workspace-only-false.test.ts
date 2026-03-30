@@ -311,4 +311,68 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(hasToolError(result)).toBe(false);
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });
+
+  it("allows reads outside the workspace when fs roots permit them", async () => {
+    const allowedDir = path.join(tmpDir, "outside-read-root");
+    const allowedFile = path.join(allowedDir, "note.txt");
+    await fs.mkdir(allowedDir, { recursive: true });
+    await fs.writeFile(allowedFile, "hello from roots");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      config: {
+        tools: {
+          fs: {
+            roots: [{ path: allowedDir, kind: "dir", access: "rw" }],
+          },
+        },
+      },
+    });
+
+    const readTool = tools.find((tool) => tool.name === "read");
+    expect(readTool).toBeDefined();
+
+    const result = await readTool!.execute("test-call-roots-read-allow", {
+      path: allowedFile,
+    });
+    expect(hasToolError(result)).toBe(false);
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "hello from roots",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "blocks read symlink aliases that escape configured fs roots",
+    async () => {
+      const allowedDir = path.join(tmpDir, "outside-read-root");
+      const outsideDir = path.join(tmpDir, "outside-secret-root");
+      const aliasFile = path.join(allowedDir, "alias.txt");
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.mkdir(allowedDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "secret");
+      await fs.symlink(outsideFile, aliasFile);
+
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        config: {
+          tools: {
+            fs: {
+              roots: [{ path: allowedDir, kind: "dir", access: "rw" }],
+            },
+          },
+        },
+      });
+
+      const readTool = tools.find((tool) => tool.name === "read");
+      expect(readTool).toBeDefined();
+
+      await expect(
+        readTool!.execute("test-call-roots-read-deny", {
+          path: aliasFile,
+        }),
+      ).rejects.toThrow(/symlink escapes fs root|outside workspace root|regular file under root/i);
+    },
+  );
 });

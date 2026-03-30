@@ -657,6 +657,23 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
+export function createHostWorkspaceReadTool(
+  root: string,
+  options: {
+    roots: FsRootResolved[];
+    modelContextWindowTokens?: number;
+    imageSanitization?: ImageSanitizationLimits;
+  },
+) {
+  const base = createReadTool(root, {
+    operations: createHostRootReadOperations(options.roots),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    modelContextWindowTokens: options.modelContextWindowTokens,
+    imageSanitization: options.imageSanitization,
+  });
+}
+
 export function createHostWorkspaceEditTool(
   root: string,
   options?: { workspaceOnly?: boolean; roots?: FsRootResolved[] },
@@ -672,6 +689,61 @@ export function createHostWorkspaceEditTool(
       : (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
   });
   return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+}
+
+function createHostRootReadOperations(roots: FsRootResolved[]) {
+  return {
+    readFile: async (absolutePath: string) => {
+      const target = resolveRootScopedPath(absolutePath, "read", roots);
+      const safeRead = await readFileWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        rejectHardlinks: true,
+      });
+      return safeRead.buffer;
+    },
+    access: async (absolutePath: string) => {
+      let target: ReturnType<typeof resolveRootScopedPath>;
+      try {
+        target = resolveRootScopedPath(absolutePath, "read", roots);
+      } catch {
+        // Keep parity with the workspace-only access wrapper: let the later
+        // readFile/detectImageMimeType call surface the real roots error.
+        return;
+      }
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
+          rejectHardlinks: true,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (
+          error instanceof SafeOpenError &&
+          (error.code === "outside-workspace" ||
+            error.code === "invalid-path" ||
+            error.code === "path-mismatch")
+        ) {
+          return;
+        }
+        throw error;
+      }
+    },
+    detectImageMimeType: async (absolutePath: string) => {
+      const target = resolveRootScopedPath(absolutePath, "read", roots);
+      const safeRead = await readFileWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        rejectHardlinks: true,
+      });
+      const mime = await detectMime({ buffer: safeRead.buffer, filePath: absolutePath });
+      return mime && mime.startsWith("image/") ? mime : undefined;
+    },
+  } as const;
 }
 
 function createHostRootWriteOperations(roots: FsRootResolved[]) {
