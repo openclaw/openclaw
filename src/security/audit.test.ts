@@ -650,6 +650,17 @@ description: test skill
         },
         expectedSeverity: "critical",
       },
+      {
+        name: "newly denied exec override",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: { token: "secret" },
+            tools: { allow: ["exec"] },
+          },
+        },
+        expectedSeverity: "critical",
+      },
     ];
     await runConfigAuditCases(
       cases,
