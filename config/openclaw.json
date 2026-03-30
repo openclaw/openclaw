@@ -6,65 +6,41 @@
   "models": {
     "mode": "merge",
     "providers": {
-      "vllm": {
-        "baseUrl": "http://172.27.192.1:8000/v1",
-        "apiKey": "vllm",
+      "openrouter": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKey": "${OPENROUTER_API_KEY}",
         "api": "openai-responses",
         "models": [
           {
-            "id": "Qwen/Qwen2.5-14B-Instruct-AWQ",
-            "name": "Qwen 2.5 14B AWQ (Planner/General)",
+            "id": "meta-llama/llama-3.3-70b-instruct:free",
+            "name": "Llama 3.3 70B (Planner/General)",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 8192,
+            "contextWindow": 131072,
             "maxTokens": 4096
           },
           {
-            "id": "casperhansen/deepseek-r1-distill-qwen-14b-awq",
-            "name": "DeepSeek R1 14B AWQ (Analytical/Reasoning)",
+            "id": "deepseek/deepseek-r1:free",
+            "name": "DeepSeek R1 (Analytical/Reasoning)",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 8192,
+            "contextWindow": 131072,
             "maxTokens": 4096
           },
           {
-            "id": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
-            "name": "Qwen 2.5 Coder 7B AWQ (Executor/Coding)",
+            "id": "qwen/qwen-2.5-coder-32b-instruct:free",
+            "name": "Qwen 2.5 Coder 32B (Executor/Coding)",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 8192,
+            "contextWindow": 32768,
             "maxTokens": 4096
           },
           {
-            "id": "pytorch/gemma-3-12b-it-AWQ-INT4",
-            "name": "Gemma 3 12B AWQ (Archivist/Summary)",
+            "id": "google/gemma-3-27b-it:free",
+            "name": "Gemma 3 27B (Archivist/Summary)",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 8192,
+            "contextWindow": 131072,
             "maxTokens": 4096
           }
         ]
@@ -74,23 +50,23 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "vllm/Qwen/Qwen2.5-14B-Instruct-AWQ",
+        "primary": "meta-llama/llama-3.3-70b-instruct:free",
         "fallbacks": [
-          "vllm/casperhansen/deepseek-r1-distill-qwen-14b-awq",
-          "vllm/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"
+          "deepseek/deepseek-r1:free",
+          "qwen/qwen-2.5-coder-32b-instruct:free"
         ]
       },
       "models": {
-        "vllm/Qwen/Qwen2.5-14B-Instruct-AWQ": {
+        "meta-llama/llama-3.3-70b-instruct:free": {
           "alias": "Planner/General"
         },
-        "vllm/casperhansen/deepseek-r1-distill-qwen-14b-awq": {
+        "deepseek/deepseek-r1:free": {
           "alias": "Auditor/Reasoning"
         },
-        "vllm/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ": {
+        "qwen/qwen-2.5-coder-32b-instruct:free": {
           "alias": "Executor/Coding"
         },
-        "vllm/pytorch/gemma-3-12b-it-AWQ-INT4": {
+        "google/gemma-3-27b-it:free": {
           "alias": "Archivist/Summary"
         }
       },
@@ -112,7 +88,7 @@
       "customCommands": [
         {
           "command": "test",
-          "description": "Запуск VRAM-теста моделей"
+          "description": "Тест облачных моделей"
         },
         {
           "command": "models",

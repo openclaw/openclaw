@@ -1571,8 +1571,8 @@ class PipelineExecutor:
         pass  # No-op in cloud-only mode
 
     async def execute_stream(self, prompt, brigade="Dmarket", max_steps=5, status_callback=None, task_type=None):
-        from src.vllm_inference import execute_stream
-        return await execute_stream(self, prompt, brigade, max_steps, status_callback, task_type)
+        # Streaming delegates to regular execute in cloud-only mode
+        return await self.execute(prompt, brigade=brigade, max_steps=max_steps, status_callback=status_callback, task_type=task_type)
 
     @asynccontextmanager
     async def _vram_protection(self, target_model: str, prev_model: Optional[str]):
