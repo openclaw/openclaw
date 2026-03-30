@@ -381,12 +381,40 @@ export function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
   sessionHasHistory?: boolean;
+  primaryProvider?: string;
+  previousFailureReason?: FailoverReason;
+  previousPartialExecution?: PartialExecution;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
   });
+  const isCrossProviderRetry =
+    params.isFallbackRetry &&
+    !!params.primaryProvider &&
+    params.primaryProvider !== params.providerOverride;
+
+  // Build partial execution warning for same-provider retries only.
+  // Cross-provider retries skip this to avoid leaking tool names (CWE-200).
+  const partialExecContext =
+    !isCrossProviderRetry && params.previousPartialExecution
+      ? buildPartialExecutionSystemContext(params.previousPartialExecution)
+      : undefined;
+
+  const effectiveExtraSystemPrompt = partialExecContext
+    ? [params.opts.extraSystemPrompt, partialExecContext].filter(Boolean).join("\n\n")
+    : params.opts.extraSystemPrompt;
+
+  // Resolve images with failure-mode awareness instead of unconditional stripping.
+  const retryImages = resolveRetryImages({
+    images: params.opts.images,
+    isFallbackRetry: params.isFallbackRetry,
+    previousFailureReason: params.previousFailureReason,
+    primaryProvider: params.primaryProvider,
+    currentProvider: params.providerOverride,
+  });
+
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
@@ -412,15 +440,15 @@ export function runAgentAttempt(params: {
         thinkLevel: params.resolvedThinkLevel,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
-        extraSystemPrompt: params.opts.extraSystemPrompt,
+        extraSystemPrompt: effectiveExtraSystemPrompt,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === cliSessionBinding?.sessionId ? cliSessionBinding : undefined,
         authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
-        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+        images: retryImages,
+        imageOrder: retryImages ? params.opts.imageOrder : undefined,
         streamParams: params.opts.streamParams,
       });
     return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
@@ -507,8 +535,8 @@ export function runAgentAttempt(params: {
     config: params.cfg,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+    images: retryImages,
+    imageOrder: retryImages ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
@@ -520,7 +548,7 @@ export function runAgentAttempt(params: {
     runId: params.runId,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
+    extraSystemPrompt: effectiveExtraSystemPrompt,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
