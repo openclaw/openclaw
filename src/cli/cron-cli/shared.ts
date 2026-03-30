@@ -133,7 +133,8 @@ const CRON_TARGET_PAD = 9;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
-const pad = (value: string, width: number) => value.padEnd(width);
+/** Pad a value for table display; missing values render as "-" (not available). */
+const pad = (value: string | undefined | null, width: number) => (value ?? "-").padEnd(width);
 
 const truncate = (value: string, width: number) => {
   if (value.length <= width) {
