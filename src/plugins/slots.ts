@@ -97,7 +97,10 @@ export function applyExclusiveSlotSelection(params: {
         if (plugin.id === params.selectedId) {
           continue;
         }
-        if (!hasKind(plugin.kind, slotKey === "memory" ? "memory" : "context-engine")) {
+        const kindForSlot = (Object.keys(SLOT_BY_KIND) as PluginKind[]).find(
+          (k) => SLOT_BY_KIND[k] === slotKey,
+        );
+        if (!kindForSlot || !hasKind(plugin.kind, kindForSlot)) {
           continue;
         }
         const entry = entries[plugin.id];

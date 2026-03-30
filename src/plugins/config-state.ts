@@ -5,7 +5,8 @@ import {
   BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
 } from "./bundled-capability-metadata.js";
 import type { PluginRecord } from "./registry.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, hasKind } from "./slots.js";
+import type { PluginKind } from "./types.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -316,9 +317,7 @@ export function resolveMemorySlotDecision(params: {
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  const kindIncludesMemory =
-    params.kind === "memory" || (Array.isArray(params.kind) && params.kind.includes("memory"));
-  if (!kindIncludesMemory) {
+  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
     return { enabled: true };
   }
   if (params.slot === null) {

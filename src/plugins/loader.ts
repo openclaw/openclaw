@@ -67,7 +67,7 @@ import type {
   PluginFormat,
   PluginLogger,
 } from "./types.js";
-import { hasKind } from "./slots.js";
+import { hasKind, normalizeKinds } from "./slots.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -1268,7 +1268,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (
       manifestKind &&
       exportKind &&
-      JSON.stringify(manifestKind) !== JSON.stringify(exportKind)
+      JSON.stringify([...normalizeKinds(manifestKind)].sort()) !==
+        JSON.stringify([...normalizeKinds(exportKind)].sort())
     ) {
       registry.diagnostics.push({
         level: "warn",
@@ -1636,7 +1637,8 @@ export async function loadOpenClawPluginCliRegistry(
     if (
       manifestKind &&
       exportKind &&
-      JSON.stringify(manifestKind) !== JSON.stringify(exportKind)
+      JSON.stringify([...normalizeKinds(manifestKind)].sort()) !==
+        JSON.stringify([...normalizeKinds(exportKind)].sort())
     ) {
       registry.diagnostics.push({
         level: "warn",
