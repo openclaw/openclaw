@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { getFlowById, listFlowRecords, resetFlowRegistryForTests } from "./flow-registry.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -12,15 +13,41 @@ import {
 import { findTaskByRunId, resetTaskRegistryForTests } from "./task-registry.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const hoisted = vi.hoisted(() => {
+  const sendMessageMock = vi.fn();
+  const cancelSessionMock = vi.fn();
+  const killSubagentRunAdminMock = vi.fn();
+  return {
+    sendMessageMock,
+    cancelSessionMock,
+    killSubagentRunAdminMock,
+  };
+});
+
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage: hoisted.sendMessageMock,
+}));
+
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    cancelSession: hoisted.cancelSessionMock,
+  }),
+}));
+
+vi.mock("../agents/subagent-control.js", () => ({
+  killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
+}));
 
 async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests();
     try {
       await run(root);
     } finally {
       resetTaskRegistryForTests();
+      resetFlowRegistryForTests();
     }
   });
 }
@@ -33,6 +60,10 @@ describe("task-executor", () => {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests();
+    hoisted.sendMessageMock.mockReset();
+    hoisted.cancelSessionMock.mockReset();
+    hoisted.killSubagentRunAdminMock.mockReset();
   });
 
   it("advances a queued run through start and completion", async () => {
@@ -108,6 +139,61 @@ describe("task-executor", () => {
         error: "tool failed",
         deliveryStatus: "failed",
       });
+    });
+  });
+
+  it("auto-creates a one-task flow and keeps it synced with task status", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:subagent:child",
+        runId: "run-executor-flow",
+        task: "Write summary",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      expect(created.parentFlowId).toEqual(expect.any(String));
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        ownerSessionKey: "agent:main:main",
+        status: "running",
+        goal: "Write summary",
+        notifyPolicy: "done_only",
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-executor-flow",
+        endedAt: 40,
+        lastEventAt: 40,
+        terminalSummary: "Done.",
+      });
+
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        status: "succeeded",
+        endedAt: 40,
+        goal: "Write summary",
+        notifyPolicy: "done_only",
+      });
+    });
+  });
+
+  it("does not auto-create one-task flows for non-returning bookkeeping runs", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:main",
+        runId: "run-executor-cli",
+        task: "Foreground gateway run",
+        deliveryStatus: "not_applicable",
+        startedAt: 10,
+      });
+
+      expect(created.parentFlowId).toBeUndefined();
+      expect(listFlowRecords()).toEqual([]);
     });
   });
 });

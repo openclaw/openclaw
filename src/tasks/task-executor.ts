@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createFlowForTask, deleteFlowRecordById } from "./flow-registry.js";
 import {
   cancelTaskById,
   createTaskRecord,
+  linkTaskToFlowById,
   markTaskLostById,
   markTaskRunningByRunId,
   markTaskTerminalByRunId,
@@ -17,6 +20,53 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+
+const log = createSubsystemLogger("tasks/executor");
+
+function isOneTaskFlowEligible(task: TaskRecord): boolean {
+  if (task.parentFlowId?.trim() || !task.requesterSessionKey.trim()) {
+    return false;
+  }
+  if (task.deliveryStatus === "not_applicable") {
+    return false;
+  }
+  return task.runtime === "acp" || task.runtime === "subagent";
+}
+
+function ensureSingleTaskFlow(params: {
+  task: TaskRecord;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+}): TaskRecord {
+  if (!isOneTaskFlowEligible(params.task)) {
+    return params.task;
+  }
+  try {
+    const flow = createFlowForTask({
+      task: params.task,
+      requesterOrigin: params.requesterOrigin,
+    });
+    const linked = linkTaskToFlowById({
+      taskId: params.task.taskId,
+      flowId: flow.flowId,
+    });
+    if (!linked) {
+      deleteFlowRecordById(flow.flowId);
+      return params.task;
+    }
+    if (linked.parentFlowId !== flow.flowId) {
+      deleteFlowRecordById(flow.flowId);
+      return linked;
+    }
+    return linked;
+  } catch (error) {
+    log.warn("Failed to create one-task flow for detached run", {
+      taskId: params.task.taskId,
+      runId: params.task.runId,
+      error,
+    });
+    return params.task;
+  }
+}
 
 export function createQueuedTaskRun(params: {
   runtime: TaskRuntime;
@@ -34,9 +84,13 @@ export function createQueuedTaskRun(params: {
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
 }): TaskRecord {
-  return createTaskRecord({
+  const task = createTaskRecord({
     ...params,
     status: "queued",
+  });
+  return ensureSingleTaskFlow({
+    task,
+    requesterOrigin: params.requesterOrigin,
   });
 }
 
@@ -59,9 +113,13 @@ export function createRunningTaskRun(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
 }): TaskRecord {
-  return createTaskRecord({
+  const task = createTaskRecord({
     ...params,
     status: "running",
+  });
+  return ensureSingleTaskFlow({
+    task,
+    requesterOrigin: params.requesterOrigin,
   });
 }
 
