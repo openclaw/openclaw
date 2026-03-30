@@ -102,7 +102,9 @@ describe("createOpenClawCodingTools", () => {
       const props = params.properties ?? {};
 
       expect(props.file_path).toEqual(props.path);
-      expect(params.required ?? []).not.toContain("path");
+      // Schema keeps canonical required keys (path) and adds aliases to properties only.
+      // This ensures LLMs know which parameters are required while accepting multiple aliases.
+      expect(params.required ?? []).toContain("path");
       expect(params.required ?? []).not.toContain("file_path");
     });
 
