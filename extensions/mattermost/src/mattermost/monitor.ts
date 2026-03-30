@@ -1,3 +1,34 @@
+import os from "node:os";
+import type {
+  ChannelAccountSnapshot,
+  ChatType,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "../runtime-api.js";
+import {
+  buildAgentMediaPayload,
+  buildModelsProviderData,
+  DM_GROUP_ACCESS_REASON,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  logInboundDrop,
+  logTypingFailure,
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+  isDangerousNameMatchingEnabled,
+  registerPluginHttpRoute,
+  resolveControlCommandGate,
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveChannelMediaMaxBytes,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
+} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
@@ -44,7 +75,10 @@ import {
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import { createMattermostMonitorResources, type MattermostMediaInfo } from "./monitor-resources.js";
-import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
+import {
+  cleanupMattermostMonitorSlashCommands,
+  registerMattermostMonitorSlashCommands,
+} from "./monitor-slash.js";
 import {
   createMattermostConnectOnce,
   type MattermostEventPayload,
@@ -52,38 +86,7 @@ import {
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
-import type {
-  ChannelAccountSnapshot,
-  ChatType,
-  OpenClawConfig,
-  ReplyPayload,
-  RuntimeEnv,
-} from "./runtime-api.js";
-import {
-  buildAgentMediaPayload,
-  buildModelsProviderData,
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  logInboundDrop,
-  logTypingFailure,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
-  isDangerousNameMatchingEnabled,
-  registerPluginHttpRoute,
-  resolveControlCommandGate,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveChannelMediaMaxBytes,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type HistoryEntry,
-} from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
-import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
 
 export {
@@ -305,7 +308,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
-  await registerMattermostMonitorSlashCommands({
+  const slashLifecycle = await registerMattermostMonitorSlashCommands({
     client,
     cfg,
     runtime,
@@ -1694,12 +1697,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       // Snapshot registered commands before deactivating state.
       // This listener may run concurrently with startup in a new process, so we keep
       // monitor shutdown alive until the remote cleanup completes.
-      const commands = getSlashCommandState(account.accountId)?.registeredCommands ?? [];
+      const slashState = getSlashCommandState(account.accountId);
+      const commands = slashState?.registeredCommands ?? [];
       // Deactivate state immediately to prevent new local dispatches during teardown.
       deactivateSlashCommands(account.accountId);
 
-      slashShutdownCleanup = cleanupSlashCommands({
+      slashShutdownCleanup = cleanupMattermostMonitorSlashCommands({
         client,
+        lifecycle: slashState ? slashLifecycle : null,
         commands,
         log: (msg) => runtime.log?.(msg),
       }).catch((err) => {
