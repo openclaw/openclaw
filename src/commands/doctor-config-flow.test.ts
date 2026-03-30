@@ -1039,6 +1039,9 @@ describe("doctor config flow", () => {
           ),
         ),
       ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some((call) => String(call[0]).includes("cannot auto-resolve")),
+      ).toBe(true);
     } finally {
       noteSpy.mockRestore();
       vi.unstubAllGlobals();

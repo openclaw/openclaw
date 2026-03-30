@@ -129,10 +129,13 @@ export async function collectDoctorPreviewWarnings(params: {
     params.cfg,
     params.bundledPluginPathOptions,
   );
-  if (staleBundledPluginPaths.length > 0) {
+  const installPathWarnings = staleBundledPluginPaths.filter(
+    (hit) => hit.installFieldHits.length > 0,
+  );
+  if (installPathWarnings.length > 0) {
     warnings.push(
       ...collectBundledPluginInstallPathWarnings({
-        hits: staleBundledPluginPaths,
+        hits: installPathWarnings,
         doctorFixCommand: params.doctorFixCommand,
       }),
     );
