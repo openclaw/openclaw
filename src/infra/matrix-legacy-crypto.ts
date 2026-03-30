@@ -330,21 +330,8 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
   const changes: string[] = [];
   const writeJsonFileAtomically =
     params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomicallyImpl;
-  if (detection.plans.length === 0) {
-    if (warnings.length > 0) {
-      params.log?.warn?.(
-        `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
-      );
-    }
-    return {
-      migrated: false,
-      changes,
-      warnings,
-    };
-  }
-
   let inspectLegacyStore = params.deps?.inspectLegacyStore;
-  if (!inspectLegacyStore) {
+  if (!inspectLegacyStore && detection.plans.length > 0) {
     try {
       inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
         cfg: params.cfg,
@@ -390,7 +377,8 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
 
     let summary: MatrixLegacyCryptoSummary;
     try {
-      summary = await inspectLegacyStore({
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      summary = await inspectLegacyStore!({
         cryptoRootDir: plan.legacyCryptoPath,
         userId: plan.userId,
         deviceId: plan.deviceId,
