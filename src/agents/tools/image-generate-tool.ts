@@ -114,7 +114,7 @@ function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
   return getProviderEnvVars(providerId);
 }
 
-function resolveImageGenerateTimeoutMs(cfg: OpenClawConfig | undefined): number | undefined {
+function resolveImageGenerateTimeoutMs(cfg: OpenClawConfig | undefined): number {
   const timeoutSeconds = cfg?.tools?.media?.imageGenerate?.timeoutSeconds;
   if (
     typeof timeoutSeconds !== "number" ||
