@@ -500,6 +500,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("redacts single-segment absolute Unix paths like /etc, /tmp, /.ssh", () => {
+    const testCases: Array<{ error: string; expectedDetail: string; absentDetail: string }> = [
+      {
+        error: "Path escapes workspace root: /etc",
+        expectedDetail: "Path escapes workspace root: <path>",
+        absentDetail: "/etc",
+      },
+      {
+        error: "Cannot access /tmp: operation not permitted",
+        expectedDetail: "Cannot access <path>: operation not permitted",
+        absentDetail: "/tmp",
+      },
+      {
+        error: "Permission denied: /.ssh",
+        expectedDetail: "Permission denied: <path>",
+        absentDetail: "/.ssh",
+      },
+    ];
+
+    for (const { error, expectedDetail, absentDetail } of testCases) {
+      const payloads = buildPayloads({
+        lastToolError: { toolName: "read", error },
+        verboseLevel: "off",
+      });
+      expectSingleToolErrorPayload(payloads, {
+        title: "Read",
+        detail: expectedDetail,
+        absentDetail,
+      });
+    }
+  });
+
   it("does not redact /dev/null in prose", () => {
     const payloads = buildPayloads({
       lastToolError: {

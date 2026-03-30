@@ -87,7 +87,7 @@ function truncateErrorReason(error: string): string {
   // are redacted as well (#46592 review).
   cleaned = cleaned.replace(/data:[a-zA-Z0-9/+._-]*[;,]\S*/gi, "<data-uri>");
   cleaned = cleaned.replace(/(?:https?|wss?):\/\/\S+/gi, "<url>");
-  // Scrub absolute filesystem paths — any Unix path with 2+ segments and
+  // Scrub absolute filesystem paths — any Unix path with 1+ segments and
   // Windows drive-letter roots (C:\...) — to avoid leaking sandbox/host
   // directory structure in non-verbose mode (#46592).
   // Match path segments (no spaces) to preserve trailing reason text such as
@@ -96,8 +96,14 @@ function truncateErrorReason(error: string): string {
   // The Unicode-aware character classes (\p{L}\p{N}) ensure paths whose first
   // segment starts with a dot (/.ssh/…) or non-ASCII characters (/資料/…)
   // are also redacted (#46592 review).
+  // Single-segment paths like /etc, /tmp, /.ssh are matched by making the
+  // trailing-segments group optional (* instead of +) (#46592 review).
+  // The second negative lookahead (?!null\b) prevents the regex from
+  // matching the isolated "/null" segment of the "/dev/null" exclusion —
+  // without it, the first lookahead stops "/dev/null" but the engine
+  // re-anchors at "/null" and replaces it as a single-segment path.
   cleaned = cleaned.replace(
-    /\/(?!dev\/null\b)(?:[a-zA-Z0-9_.]|[\p{L}\p{N}])(?:[a-zA-Z0-9._+-]|[\p{L}\p{N}])*(?:\/(?:[a-zA-Z0-9._+-]|[\p{L}\p{N}])+)+/gu,
+    /\/(?!dev\/null\b)(?!null\b)(?:[a-zA-Z0-9_.]|[\p{L}\p{N}])(?:[a-zA-Z0-9._+-]|[\p{L}\p{N}])*(?:\/(?:[a-zA-Z0-9._+-]|[\p{L}\p{N}])+)*/gu,
     "<path>",
   );
   // Second pass (three sub-passes): absorb space-bearing remnants and Unicode
