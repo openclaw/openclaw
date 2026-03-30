@@ -18,6 +18,9 @@ import { OnboardingPage } from "@/pages/OnboardingPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { PerformancePage } from "@/pages/PerformancePage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
+import { SecurityPage } from "@/pages/SecurityPage";
+import { SessionsPage } from "@/pages/SessionsPage";
+import { SkillsPage } from "@/pages/SkillsPage";
 import { SuppliersPage } from "@/pages/SuppliersPage";
 import { SupplyChainPage } from "@/pages/SupplyChainPage";
 import { TasksPage } from "@/pages/TasksPage";
@@ -157,6 +160,21 @@ const governanceRoute = createRoute({
   path: "/governance",
   component: GovernancePage,
 });
+const skillsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/skills",
+  component: SkillsPage,
+});
+const sessionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions",
+  component: SessionsPage,
+});
+const securityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/security",
+  component: SecurityPage,
+});
 // Workflows layout route: renders Outlet for child routes
 const workflowsLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -198,6 +216,9 @@ const routeTree = rootRoute.addChildren([
   goalsRoute,
   knowledgeGraphRoute,
   governanceRoute,
+  skillsRoute,
+  sessionsRoute,
+  securityRoute,
   workflowsLayoutRoute.addChildren([workflowsIndexRoute, workflowEditorRoute]),
 ]);
 
