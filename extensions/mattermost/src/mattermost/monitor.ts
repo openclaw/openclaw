@@ -1102,6 +1102,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     const commandAuthorized = commandGate.commandAuthorized;
 
+    let senderBlockedByGroupAllowlist = false;
     if (accessDecision.decision !== "allow") {
       if (kind === "direct") {
         if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
@@ -1144,16 +1145,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return;
       }
       if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
-        logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
+        logVerboseMessage(`mattermost: group sender=${senderId} not in groupAllowFrom (history-only)`);
+        senderBlockedByGroupAllowlist = true;
+      } else {
+        logVerboseMessage(
+          `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.reason})`,
+        );
         return;
       }
-      logVerboseMessage(
-        `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.reason})`,
-      );
-      return;
     }
 
-    if (kind !== "direct" && commandGate.shouldBlock) {
+    if (kind !== "direct" && commandGate.shouldBlock && !senderBlockedByGroupAllowlist) {
       logInboundDrop({
         log: logVerboseMessage,
         channel: "mattermost",
@@ -1259,6 +1261,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         `mattermost: drop group message (missing mention channel=${channelId} sender=${senderId} requireMention=${shouldRequireMention} bypass=${shouldBypassMention} canDetectMention=${canDetectMention})`,
       );
       recordPendingHistory();
+      return;
+    }
+    if (senderBlockedByGroupAllowlist) {
+      recordPendingHistory();
+      logVerboseMessage(`mattermost: recorded history for blocked sender=${senderId}, not responding`);
       return;
     }
     const mediaList = await resolveMattermostMedia(post.file_ids);
