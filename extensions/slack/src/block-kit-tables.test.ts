@@ -16,14 +16,14 @@ describe("markdownTableToSlackTableBlock", () => {
     const block = markdownTableToSlackTableBlock(table);
 
     expect(block.column_settings).toHaveLength(20);
-    // 100 data rows + 1 header (from visible headers) capped to 100,
-    // plus 1 truncation indicator row = 101
-    expect(block.rows).toHaveLength(101);
+    // header + 98 data rows + 1 indicator = 100 (within Slack's limit)
+    expect(block.rows).toHaveLength(100);
     expect(block.rows[0]).toHaveLength(20);
 
     // Last row should be the truncation indicator (both rows and columns)
+    // 120 input - 98 shown = 22 truncated rows, 25 - 20 = 5 truncated columns
     const lastRow = block.rows[block.rows.length - 1];
-    expect(lastRow?.[0]?.text).toBe("+20 more rows, +5 more columns");
+    expect(lastRow?.[0]?.text).toBe("+22 more rows, +5 more columns");
     expect(lastRow?.[1]?.text).toBe("");
   });
 
