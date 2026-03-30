@@ -924,6 +924,7 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
+                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
