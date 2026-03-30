@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
 import { describe, expect, it, vi } from "vitest";
+import { RequestBodyLimitError } from "../../../src/infra/http-body.js";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import { readLineWebhookRequestBody } from "./webhook-node.js";
@@ -316,6 +317,36 @@ describe("createLineNodeWebhookHandler", () => {
     expect(inFlightLimiter.tryAcquire).toHaveBeenCalledWith("/line/webhook");
     expect(inFlightLimiter.release).toHaveBeenCalledWith("/line/webhook");
     expect(res.statusCode).toBe(200);
+  });
+
+  it("releases the shared pre-auth in-flight slot when reading the body fails", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const inFlightLimiter: WebhookInFlightLimiter = {
+      tryAcquire: vi.fn(() => true),
+      release: vi.fn(),
+      size: vi.fn(() => 1),
+      clear: vi.fn(),
+    };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: "secret",
+      bot,
+      runtime,
+      readBody: async () => {
+        throw new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
+      },
+      inFlightLimiter,
+      inFlightKey: "/line/webhook",
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret: "secret", res });
+
+    expect(inFlightLimiter.tryAcquire).toHaveBeenCalledWith("/line/webhook");
+    expect(inFlightLimiter.release).toHaveBeenCalledWith("/line/webhook");
+    expect(res.statusCode).toBe(408);
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
   it("falls back to the request pathname when a limiter is provided without an explicit key", async () => {
