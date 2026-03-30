@@ -532,12 +532,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (existingRuntime.pluginId === record.id) {
         // Same plugin re-registering the same channel (e.g. hot-reload) — update in place.
         existingRuntime.plugin = plugin;
+        existingRuntime.pluginName = record.name;
         existingRuntime.source = record.source;
+        existingRuntime.rootDir = record.rootDir;
         const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
         if (existingSetup) {
           existingSetup.plugin = plugin;
+          existingSetup.pluginName = record.name;
           existingSetup.source = record.source;
           existingSetup.enabled = record.enabled;
+          existingSetup.rootDir = record.rootDir;
         }
         return;
       }
@@ -554,8 +558,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (existingSetup.pluginId === record.id) {
         // Same plugin re-registering — update in place.
         existingSetup.plugin = plugin;
+        existingSetup.pluginName = record.name;
         existingSetup.source = record.source;
         existingSetup.enabled = record.enabled;
+        existingSetup.rootDir = record.rootDir;
         return;
       }
       pushDiagnostic({

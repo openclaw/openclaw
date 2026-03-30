@@ -2004,7 +2004,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         },
       },
       {
-        label: "rejects duplicate channel ids during plugin registration",
+        label: "silently updates channel on same-plugin re-registration",
         pluginId: "channel-dup",
         body: `module.exports = { id: "channel-dup", register(api) {
   api.registerChannel({
