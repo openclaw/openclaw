@@ -54,7 +54,10 @@ describe("withResolvedMatrixClient", () => {
 
     const result = await withResolvedMatrixClient({ accountId: "default" }, async () => "ok");
 
-    await expectOneOffSharedMatrixClient();
+    await expectOneOffSharedMatrixClient({
+      prepareForOneOffCalls: 0,
+      startCalls: 1,
+    });
     expect(result).toBe("ok");
   });
 
@@ -83,6 +86,8 @@ describe("withResolvedMatrixClient", () => {
 
     await expectOneOffSharedMatrixClient({
       accountId: "ops",
+      prepareForOneOffCalls: 0,
+      startCalls: 1,
     });
   });
 
@@ -114,5 +119,15 @@ describe("withResolvedMatrixClient", () => {
     ).rejects.toThrow("boom");
 
     expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+  });
+
+  it("starts one-off clients before outbound sends so encrypted rooms can reuse live crypto state", async () => {
+    const sharedClient = createMockMatrixClient();
+    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
+
+    await withResolvedMatrixClient({ accountId: "default" }, async () => "ok");
+
+    expect(sharedClient.start).toHaveBeenCalledTimes(1);
+    expect(sharedClient.prepareForOneOff).not.toHaveBeenCalled();
   });
 });

@@ -31,7 +31,9 @@ export async function withResolvedMatrixClient<T>(
   return await withResolvedRuntimeMatrixClient(
     {
       ...opts,
-      readiness: "prepared",
+      // One-off outbound sends still need a started client so room encryption
+      // state and live crypto sessions are available before sendMessage/sendEvent.
+      readiness: "started",
     },
     run,
   );
