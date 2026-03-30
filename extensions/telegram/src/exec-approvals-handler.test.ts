@@ -204,4 +204,38 @@ describe("TelegramExecApprovalHandler", () => {
       }),
     );
   });
+
+  it("does not deliver plugin approvals for a different Telegram account", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "dm",
+          },
+          accounts: {
+            secondary: {
+              execApprovals: {
+                enabled: true,
+                approvers: ["999"],
+                target: "dm",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...pluginRequest,
+      request: {
+        ...pluginRequest.request,
+        turnSourceAccountId: "secondary",
+      },
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
 });

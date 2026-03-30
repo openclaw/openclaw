@@ -4,6 +4,7 @@ import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
   resolveChannelNativeApprovalDeliveryPlan,
+  resolveExecApprovalSessionTarget,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -16,7 +17,7 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { parseAgentSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
@@ -38,6 +39,52 @@ type PendingMessage = {
   chatId: string;
   messageId: string;
 };
+
+function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
+  return "command" in request.request;
+}
+
+function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
+  if (isExecApprovalRequest(request)) {
+    return request;
+  }
+  return {
+    id: request.id,
+    request: {
+      command: request.request.title,
+      agentId: request.request.agentId ?? undefined,
+      sessionKey: request.request.sessionKey ?? undefined,
+      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
+      turnSourceTo: request.request.turnSourceTo ?? undefined,
+      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
+      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
+    },
+    createdAtMs: request.createdAtMs,
+    expiresAtMs: request.expiresAtMs,
+  };
+}
+
+function resolveBoundTelegramAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequest;
+}): string | null {
+  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase();
+  if (turnSourceChannel === "telegram") {
+    return params.request.request.turnSourceAccountId?.trim() || null;
+  }
+  const sessionTarget = resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: toExecLikeRequest(params.request),
+    turnSourceChannel: params.request.request.turnSourceChannel ?? undefined,
+    turnSourceTo: params.request.request.turnSourceTo ?? undefined,
+    turnSourceAccountId: params.request.request.turnSourceAccountId ?? undefined,
+    turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
+  });
+  if (!sessionTarget || sessionTarget.channel !== "telegram") {
+    return null;
+  }
+  return sessionTarget.accountId?.trim() || null;
+}
 
 export type TelegramExecApprovalHandlerOpts = {
   token: string;
@@ -96,6 +143,16 @@ function matchesFilters(params: {
     if (!matches) {
       return false;
     }
+  }
+  const boundAccountId = resolveBoundTelegramAccountId({
+    cfg: params.cfg,
+    request: params.request,
+  });
+  if (
+    boundAccountId &&
+    normalizeAccountId(boundAccountId) !== normalizeAccountId(params.accountId)
+  ) {
+    return false;
   }
   return true;
 }

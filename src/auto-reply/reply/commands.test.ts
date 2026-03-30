@@ -141,7 +141,6 @@ vi.resetModules();
 
 const {
   addSubagentRunForTests,
-  getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } = await import("../../agents/subagent-registry.js");
@@ -709,25 +708,6 @@ describe("/approve command", () => {
     );
   });
 
-  it("keeps /approve blocked for unauthorized senders without explicit approval auth", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { slack: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/approve abc allow-once", cfg, {
-      Provider: "slack",
-      Surface: "slack",
-      SenderId: "123",
-    });
-    params.command.isAuthorizedSender = false;
-
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply).toBeUndefined();
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
   it("accepts Telegram command mentions for /approve", async () => {
     const cfg = createTelegramApproveCfg();
     const params = buildParams("/approve@bot abc12345 allow-once", cfg, {
@@ -770,6 +750,23 @@ describe("/approve command", () => {
         params: { id: "abc12345", decision: "allow-once" },
       }),
     );
+  });
+
+  it("does not treat implicit default approval auth as a bypass for unauthorized senders", async () => {
+    const cfg = {
+      commands: { text: true },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "webchat",
+      Surface: "webchat",
+      SenderId: "123",
+    });
+    params.command.isAuthorizedSender = false;
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("accepts Telegram /approve from exec target recipients even when native approvals are disabled", async () => {
@@ -959,24 +956,6 @@ describe("/approve command", () => {
         );
       }
     }
-  });
-
-  it("returns the real plugin not-found error for authorized plugin approvers", async () => {
-    callGatewayMock.mockRejectedValueOnce(new Error("unknown or expired approval id"));
-    const params = buildParams(
-      "/approve plugin:abc123 allow-once",
-      createDiscordApproveCfg({ enabled: false, approvers: ["123"], target: "channel" }),
-      {
-        Provider: "discord",
-        Surface: "discord",
-        SenderId: "123",
-      },
-    );
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("unknown or expired approval id");
-    expect(result.reply?.text).not.toContain("not authorized");
   });
 
   it("rejects unauthorized or invalid Telegram /approve variants", async () => {

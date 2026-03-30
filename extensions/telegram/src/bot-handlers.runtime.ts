@@ -1336,11 +1336,9 @@ export const registerTelegramHandlers = ({
         const authorizedApprovalSender = isPluginApproval
           ? pluginApprovalAuthorizedSender
           : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
-        if (
-          !authorizedApprovalSender
-        ) {
+        if (!authorizedApprovalSender) {
           logVerbose(
-            `Blocked telegram exec approval callback from ${senderId || "unknown"} (not authorized)`,
+            `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
           );
           return;
         }
@@ -1359,7 +1357,9 @@ export const registerTelegramHandlers = ({
           logVerbose(
             `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
           );
-          await replyToCallbackChat(`❌ Failed to submit approval: ${errStr}`);
+          await replyToCallbackChat(
+            "❌ Failed to submit approval. Please try again or contact an admin.",
+          );
           return;
         }
         try {

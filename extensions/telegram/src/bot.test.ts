@@ -436,6 +436,7 @@ describe("createTelegramBot", () => {
       decision: "allow-once",
       allowPluginFallback: true,
       senderId: "9",
+      allowPluginFallback: true,
     });
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
@@ -544,6 +545,7 @@ describe("createTelegramBot", () => {
       decision: "allow-once",
       allowPluginFallback: true,
       senderId: "9",
+      allowPluginFallback: true,
     });
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
@@ -594,6 +596,52 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-blocked");
+  });
+
+  it("does not leak raw approval callback errors back into Telegram chat", async () => {
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    resolveExecApprovalSpy.mockRejectedValueOnce(new Error("gateway secret detail"));
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-error",
+        data: "/approve 138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(
+      "❌ Failed to submit approval. Please try again or contact an admin.",
+    );
   });
 
   it("allows exec approval callbacks from target-only Telegram recipients", async () => {
@@ -652,6 +700,7 @@ describe("createTelegramBot", () => {
       decision: "allow-once",
       allowPluginFallback: false,
       senderId: "9",
+      allowPluginFallback: false,
     });
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
