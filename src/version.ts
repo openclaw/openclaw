@@ -149,8 +149,13 @@ export function resolveCompatibilityHostVersion(
 // Single source of truth for the current OpenClaw version.
 // - Embedded/bundled builds: injected define or env var.
 // - Dev/npm builds: package.json.
+const injected =
+  typeof __OPENCLAW_VERSION__ === "string" && __OPENCLAW_VERSION__ !== "0.0.0"
+    ? __OPENCLAW_VERSION__
+    : undefined;
+
 export const VERSION = resolveBinaryVersion({
   moduleUrl: import.meta.url,
-  injectedVersion: typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
+  injectedVersion: injected,
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
 });
