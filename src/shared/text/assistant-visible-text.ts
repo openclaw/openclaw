@@ -84,7 +84,11 @@ export function stripAssistantInternalScaffolding(
   text: string,
   options?: { trimStart?: boolean },
 ): string {
-  const withoutReasoning = stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
+  const trimMode = options?.trimStart === false ? "none" : "start";
+  const withoutReasoning = stripReasoningTagsFromText(text, {
+    mode: "preserve",
+    trim: trimMode,
+  });
   const withoutToolCalls = stripToolCallTags(withoutReasoning);
   const cleaned = stripRelevantMemoriesTags(withoutToolCalls);
   return options?.trimStart === false ? cleaned : cleaned.trimStart();

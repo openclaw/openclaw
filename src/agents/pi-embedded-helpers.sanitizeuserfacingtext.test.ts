@@ -40,6 +40,12 @@ describe("sanitizeUserFacingText", () => {
     ).toBe("    key: value");
   });
 
+  it("preserves indentation after stripping leading reasoning scaffolding", () => {
+    expect(sanitizeUserFacingText("<thinking>secret</thinking>\n    key: value")).toBe(
+      "    key: value",
+    );
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
