@@ -7,6 +7,7 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
@@ -218,7 +219,14 @@ export async function applyAuthChoiceLoadedPluginProvider(
     // When setDefaultModel is false (e.g., adding a new agent), do not override
     // the agent's model. Let it inherit from agents.defaults.model instead of
     // baking in the provider's defaultModel. See issue #24170.
+    // However, if there is no inherited primary model, we must still return the
+    // provider's default to avoid creating an agent with no model at all.
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
+    const inheritedPrimary = resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+    if (!inheritedPrimary) {
+      return { config: nextConfig, agentModelOverride: applied.defaultModel };
+    }
+    return { config: nextConfig };
   }
 
   return { config: nextConfig };
@@ -307,7 +315,13 @@ export async function applyAuthChoicePluginProvider(
     // When setDefaultModel is false (e.g., adding a new agent), do not override
     // the agent's model. Let it inherit from agents.defaults.model instead of
     // baking in the provider's defaultModel. See issue #24170.
+    // However, if there is no inherited primary model, we must still return the
+    // provider's default to avoid creating an agent with no model at all.
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
+    const inheritedPrimary = resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+    if (!inheritedPrimary) {
+      return { config: nextConfig, agentModelOverride: applied.defaultModel };
+    }
     return { config: nextConfig };
   }
 
