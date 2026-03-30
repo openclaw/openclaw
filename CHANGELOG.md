@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Docs/zh-CN: add a Chinese Diffs tool page so Chinese readers can access the full Diffs viewer, file-rendering, security, and troubleshooting docs. (#40773) Thanks @elliotllliu.
 - Docs/zh-CN: align the Chinese Diffs tool page with the current English source and generated translation metadata. Thanks @gumadeiras.
 - Agents/LLM: add a configurable idle-stream timeout for embedded runner requests so stalled model streams abort cleanly instead of hanging until the broader run timeout fires. (#55072) Thanks @liuy.
+- OpenAI/Responses: forward configured `text.verbosity` across Responses HTTP and WebSocket transports, surface it in `/status`, and keep per-agent verbosity precedence aligned with runtime behavior. (#47106) Thanks @merc1305 and @vincentkoc.
 
 ### Fixes
 
