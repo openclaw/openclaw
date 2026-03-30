@@ -138,6 +138,57 @@ export function mergePromptAttachmentImages(params: {
   return promptImages;
 }
 
+function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
+  if (count <= 0) {
+    return [];
+  }
+
+  const lines = prompt.split(/\r?\n/);
+  const uris: string[] = [];
+  for (let index = lines.length - 1; index >= 0 && uris.length < count; index--) {
+    const line = lines[index]?.trim();
+    if (!line || line.includes("\0")) {
+      break;
+    }
+    const match = line.match(/^\[media attached:\s*(media:\/\/inbound\/[^\]\s/\\]+)\]$/);
+    if (!match?.[1]) {
+      break;
+    }
+    uris.unshift(match[1]);
+  }
+  return uris;
+}
+
+export function splitPromptAndAttachmentRefs(params: {
+  prompt: string;
+  refs: DetectedImageRef[];
+  imageOrder?: PromptImageOrderEntry[];
+}): {
+  promptRefs: DetectedImageRef[];
+  attachmentRefs: DetectedImageRef[];
+} {
+  const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
+  if (offloadedCount === 0) {
+    return { promptRefs: params.refs, attachmentRefs: [] };
+  }
+
+  const attachmentUris = new Set(extractTrailingAttachmentMediaUris(params.prompt, offloadedCount));
+  if (attachmentUris.size === 0) {
+    return { promptRefs: params.refs, attachmentRefs: [] };
+  }
+
+  const promptRefs: DetectedImageRef[] = [];
+  const attachmentRefs: DetectedImageRef[] = [];
+  for (const ref of params.refs) {
+    if (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) {
+      attachmentRefs.push(ref);
+      continue;
+    }
+    promptRefs.push(ref);
+  }
+  return { promptRefs, attachmentRefs };
+}
+
 async function sanitizeImagesWithLog(
   images: ImageContent[],
   label: string,
@@ -456,11 +507,11 @@ export async function detectAndLoadPromptImages(params: {
   }
 
   log.debug(`Native image: detected ${allRefs.length} image refs in prompt`);
-  const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
-  const attachmentRefs =
-    offloadedCount > 0 ? allRefs.slice(Math.max(0, allRefs.length - offloadedCount)) : [];
-  const promptRefs =
-    offloadedCount > 0 ? allRefs.slice(0, Math.max(0, allRefs.length - offloadedCount)) : allRefs;
+  const { promptRefs, attachmentRefs } = splitPromptAndAttachmentRefs({
+    prompt: params.prompt,
+    refs: allRefs,
+    imageOrder: params.imageOrder,
+  });
   const promptRefImages: ImageContent[] = [];
   const offloadedImages: Array<ImageContent | null> = [];
 

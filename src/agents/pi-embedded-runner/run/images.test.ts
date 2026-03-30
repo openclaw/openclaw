@@ -10,6 +10,7 @@ import {
   loadImageFromRef,
   mergePromptAttachmentImages,
   modelSupportsImages,
+  splitPromptAndAttachmentRefs,
 } from "./images.js";
 
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
@@ -300,6 +301,34 @@ describe("detectAndLoadPromptImages", () => {
     expect(merged).toEqual([
       { type: "image", data: "large-a", mimeType: "image/jpeg" },
       { type: "image", data: "small-b", mimeType: "image/png" },
+    ]);
+  });
+
+  it("classifies trailing offloaded refs separately from prompt refs", () => {
+    const prompt =
+      "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.png]";
+    const refs = detectImageReferences(prompt);
+
+    const split = splitPromptAndAttachmentRefs({
+      prompt,
+      refs,
+      imageOrder: ["inline", "offloaded"],
+    });
+
+    expect(split.promptRefs).toEqual([
+      {
+        raw: "media://inbound/prompt-ref.png",
+        type: "media-uri",
+        resolved: "media://inbound/prompt-ref.png",
+      },
+      { raw: "./prompt-b.png", type: "path", resolved: "./prompt-b.png" },
+    ]);
+    expect(split.attachmentRefs).toEqual([
+      {
+        raw: "media://inbound/att-b.png",
+        type: "media-uri",
+        resolved: "media://inbound/att-b.png",
+      },
     ]);
   });
 
