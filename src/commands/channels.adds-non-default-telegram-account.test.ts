@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPatchedAccountSetupAdapter } from "../channels/plugins/setup-helpers.js";
+import type { ChannelStatusIssue } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -69,13 +70,10 @@ function resolveScopedAccount(
   const resolvedAccountId = normalizeAccountId(accountId);
   const channel = cfg.channels?.[channelKey] as ChannelSectionConfig | undefined;
   const scoped = channel?.accounts?.[resolvedAccountId];
-  const base =
-    resolvedAccountId === DEFAULT_ACCOUNT_ID
-      ? channel
-      : undefined;
+  const base = resolvedAccountId === DEFAULT_ACCOUNT_ID ? channel : undefined;
   return {
-    ...(base ?? {}),
-    ...(scoped ?? {}),
+    ...base,
+    ...scoped,
     enabled:
       typeof scoped?.enabled === "boolean"
         ? scoped.enabled
@@ -168,7 +166,7 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
         if (account.enabled !== true || account.configured !== true) {
           return [];
         }
-        const issues = [];
+        const issues: ChannelStatusIssue[] = [];
         if (account.allowUnmentionedGroups === true) {
           issues.push({
             channel: "telegram",
@@ -239,11 +237,9 @@ function setMinimalChannelsCommandRegistryForTests(): void {
               if (account.enabled !== true || account.configured !== true) {
                 return [];
               }
-              const issues = [];
+              const issues: ChannelStatusIssue[] = [];
               const messageContent = (
-                account.application as
-                  | { intents?: { messageContent?: string } }
-                  | undefined
+                account.application as { intents?: { messageContent?: string } } | undefined
               )?.intents?.messageContent;
               if (messageContent === "disabled") {
                 issues.push({
