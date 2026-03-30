@@ -81,7 +81,9 @@ export function resolveTranscriptPolicy(params: {
   const requiresOpenAiCompatibleToolIdSanitization =
     params.modelApi === "openai-completions" ||
     (!isOpenAi &&
-      (params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses"));
+      (params.modelApi === "openai-responses" ||
+        params.modelApi === "openai-codex-responses" ||
+        params.modelApi === "azure-openai-responses"));
 
   // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
   // original signatures are preserved byte-for-byte. Drop them at send-time to
