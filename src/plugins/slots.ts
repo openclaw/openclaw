@@ -28,10 +28,7 @@ export function normalizeKinds(kind?: PluginKind | PluginKind[]): PluginKind[] {
 }
 
 /** Check whether a plugin's kind field includes a specific kind. */
-export function hasKind(
-  kind: PluginKind | PluginKind[] | undefined,
-  target: PluginKind,
-): boolean {
+export function hasKind(kind: PluginKind | PluginKind[] | undefined, target: PluginKind): boolean {
   if (!kind) {
     return false;
   }
@@ -116,10 +113,11 @@ export function applyExclusiveSlotSelection(params: {
         if (!kindForSlot || !hasKind(plugin.kind, kindForSlot)) {
           continue;
         }
-        // Don't disable a plugin that still owns another slot.
-        const stillOwnsOtherSlot = Object.entries(slots).some(
-          ([sk, sv]) => sk !== slotKey && sv === plugin.id,
-        );
+        // Don't disable a plugin that still owns another slot (explicit or default).
+        const stillOwnsOtherSlot = (Object.keys(SLOT_BY_KIND) as PluginKind[])
+          .map((k) => SLOT_BY_KIND[k])
+          .filter((sk) => sk !== slotKey)
+          .some((sk) => (slots[sk] ?? defaultSlotIdForKey(sk)) === plugin.id);
         if (stillOwnsOtherSlot) {
           continue;
         }

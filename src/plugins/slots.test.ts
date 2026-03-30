@@ -242,6 +242,31 @@ describe("applyExclusiveSlotSelection", () => {
     // dual-plugin still owns contextEngine — must NOT be disabled
     expect(result.config.plugins?.entries?.["dual-plugin"]?.enabled).not.toBe(false);
   });
+
+  it("does not disable a dual-kind plugin that owns another slot via default", () => {
+    // contextEngine is NOT explicitly set — defaults to "legacy"
+    const config: OpenClawConfig = {
+      plugins: {
+        slots: { memory: "legacy" },
+        entries: {
+          legacy: { enabled: true },
+        },
+      },
+    };
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "new-memory",
+      selectedKind: "memory",
+      registry: buildSelectionRegistry([
+        { id: "legacy", kind: ["memory", "context-engine"] },
+        { id: "new-memory", kind: "memory" },
+      ]),
+    });
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.slots?.memory).toBe("new-memory");
+    // legacy still owns contextEngine via default — must NOT be disabled
+    expect(result.config.plugins?.entries?.legacy?.enabled).not.toBe(false);
+  });
 });
 
 describe("normalizeKinds", () => {

@@ -59,6 +59,7 @@ import {
   resolvePluginSdkScopedAliasMap,
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
+import { hasKind, kindsEqual } from "./slots.js";
 import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
@@ -67,7 +68,6 @@ import type {
   PluginFormat,
   PluginLogger,
 } from "./types.js";
-import { hasKind, kindsEqual } from "./slots.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -1265,11 +1265,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     record.version = definition?.version ?? record.version;
     const manifestKind = record.kind;
     const exportKind = definition?.kind;
-    if (
-      manifestKind &&
-      exportKind &&
-      !kindsEqual(manifestKind, exportKind)
-    ) {
+    if (manifestKind && exportKind && !kindsEqual(manifestKind, exportKind)) {
       registry.diagnostics.push({
         level: "warn",
         pluginId: record.id,
@@ -1302,6 +1298,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = record.id;
+        record.memorySlotSelected = true;
       }
     }
 
@@ -1633,11 +1630,7 @@ export async function loadOpenClawPluginCliRegistry(
     record.version = definition?.version ?? record.version;
     const manifestKind = record.kind;
     const exportKind = definition?.kind;
-    if (
-      manifestKind &&
-      exportKind &&
-      !kindsEqual(manifestKind, exportKind)
-    ) {
+    if (manifestKind && exportKind && !kindsEqual(manifestKind, exportKind)) {
       registry.diagnostics.push({
         level: "warn",
         pluginId: record.id,
@@ -1663,6 +1656,7 @@ export async function loadOpenClawPluginCliRegistry(
     }
     if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
+      record.memorySlotSelected = true;
     }
 
     if (typeof register !== "function") {
