@@ -102,11 +102,13 @@ async function withTaskRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
   return await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests();
     try {
       return await run(root);
     } finally {
       // Close the sqlite-backed registry before Windows temp-dir cleanup tries to remove it.
       resetTaskRegistryForTests();
+      resetFlowRegistryForTests();
     }
   });
 }
@@ -1128,7 +1130,7 @@ describe("task-registry", () => {
   });
 
   it("routes state-change updates through the parent flow owner when a task is flow-linked", async () => {
-    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+    await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       resetFlowRegistryForTests();
@@ -1315,7 +1317,7 @@ describe("task-registry", () => {
   });
 
   it("routes terminal delivery through the parent flow owner when a task is flow-linked", async () => {
-    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+    await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       resetFlowRegistryForTests();
@@ -1385,7 +1387,7 @@ describe("task-registry", () => {
   });
 
   it("queues fallback terminal delivery on the parent flow owner session when a task is flow-linked", async () => {
-    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+    await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       resetFlowRegistryForTests();
