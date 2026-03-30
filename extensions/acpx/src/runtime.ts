@@ -960,9 +960,15 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     this.healthy = true;
+    const computerUseNote =
+      this.config.computerUse && process.platform !== "darwin"
+        ? " [warning: computerUse is enabled but requires macOS — current platform: " +
+          process.platform +
+          "]"
+        : "";
     return {
       ok: true,
-      message: `acpx command available (${this.config.command}, version ${result.versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,
+      message: `acpx command available (${this.config.command}, version ${result.versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})${computerUseNote}`,
     };
   }
 
@@ -1037,6 +1043,9 @@ export class AcpxRuntime implements AcpRuntime {
       prefix.push("--timeout", String(this.config.timeoutSeconds));
     }
     prefix.push("--ttl", String(this.queueOwnerTtlSeconds));
+    if (this.config.computerUse) {
+      prefix.push("--settings", JSON.stringify({ enableBuiltinMcpServers: ["computer-use"] }));
+    }
     return await this.buildVerbArgs({
       agent: params.agent,
       cwd: params.cwd,

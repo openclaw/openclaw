@@ -269,6 +269,37 @@ describe("acpx plugin config parsing", () => {
     ).toThrow("strictWindowsCmdWrapper must be a boolean");
   });
 
+  it("defaults computerUse to false when not specified", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.computerUse).toBe(false);
+  });
+
+  it("accepts computerUse boolean override", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        computerUse: true,
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.computerUse).toBe(true);
+  });
+
+  it("rejects non-boolean computerUse", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          computerUse: "yes",
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("computerUse must be a boolean");
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),

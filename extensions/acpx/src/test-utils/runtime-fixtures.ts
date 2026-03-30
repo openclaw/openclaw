@@ -390,6 +390,7 @@ export async function createMockRuntimeFixture(params?: {
     strictWindowsCmdWrapper: true,
     queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
     mcpServers: params?.mcpServers ?? {},
+    computerUse: false,
   };
 
   return {

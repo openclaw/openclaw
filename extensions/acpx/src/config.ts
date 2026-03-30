@@ -96,6 +96,22 @@ export type AcpxPluginConfig = {
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Enable the built-in `computer-use` MCP server in Claude Code sessions.
+   *
+   * **Requirements:**
+   * - Claude Code v2.1.85+
+   * - macOS only (research preview)
+   * - macOS Accessibility and Screen Recording permissions must be granted
+   * - The underlying `claude-agent-acp` adapter may need updating to support
+   *   the `--settings` flag for enabling built-in MCP servers.
+   *
+   * When enabled, the runtime passes
+   * `--settings '{"enableBuiltinMcpServers":["computer-use"]}'` to acpx prompt
+   * commands so Claude Code can open apps, click through UIs, take screenshots,
+   * and interact with the desktop.
+   */
+  computerUse?: boolean;
 };
 
 export type ResolvedAcpxPluginConfig = {
@@ -112,6 +128,11 @@ export type ResolvedAcpxPluginConfig = {
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
   mcpServers: Record<string, McpServerConfig>;
+  /**
+   * Enable the built-in `computer-use` MCP server in Claude Code sessions.
+   * Defaults to `false`. macOS only — requires Accessibility and Screen Recording permissions.
+   */
+  computerUse: boolean;
 };
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
@@ -171,6 +192,7 @@ const AcpxPluginConfigSchema = z.strictObject({
     .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
     .optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
+  computerUse: z.boolean({ error: "computerUse must be a boolean" }).optional(),
 });
 
 function formatAcpxConfigIssue(issue: z.ZodIssue | undefined): string {
@@ -326,5 +348,6 @@ export function resolveAcpxPluginConfig(params: {
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
     mcpServers,
+    computerUse: normalized.computerUse === true,
   };
 }

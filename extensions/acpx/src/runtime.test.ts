@@ -31,6 +31,7 @@ beforeAll(async () => {
       strictWindowsCmdWrapper: true,
       queueOwnerTtlSeconds: 0.1,
       mcpServers: {},
+      computerUse: false,
     },
     { logger: NOOP_LOGGER },
   );
@@ -993,6 +994,108 @@ describe("AcpxRuntime", () => {
     expect(report.ok).toBe(false);
     expect(report.code).toBe("ACP_BACKEND_UNAVAILABLE");
     expect(report.installCommand).toContain("acpx");
+  });
+
+  it("passes --settings with computer-use MCP server when computerUse is enabled", async () => {
+    const { config, logPath } = await createMockRuntimeFixture();
+    const runtime = new AcpxRuntime(
+      {
+        ...config,
+        computerUse: true,
+      },
+      { logger: NOOP_LOGGER },
+    );
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:computer-use",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "test-computer-use",
+      mode: "prompt",
+      requestId: "req-computer-use",
+    })) {
+      // Drain events.
+    }
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const prompt = logs.find(
+      (entry) =>
+        entry.kind === "prompt" &&
+        String(entry.sessionName ?? "") === "agent:codex:acp:computer-use",
+    );
+    expect(prompt).toBeDefined();
+    const promptArgs = (prompt?.args as string[]) ?? [];
+    const settingsIndex = promptArgs.indexOf("--settings");
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    const settingsValue = JSON.parse(promptArgs[settingsIndex + 1]);
+    expect(settingsValue).toEqual({
+      enableBuiltinMcpServers: ["computer-use"],
+    });
+  });
+
+  it("does not pass --settings when computerUse is disabled", async () => {
+    const { config, logPath } = await createMockRuntimeFixture();
+    const runtime = new AcpxRuntime(
+      {
+        ...config,
+        computerUse: false,
+      },
+      { logger: NOOP_LOGGER },
+    );
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:no-computer-use",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "test-no-computer-use",
+      mode: "prompt",
+      requestId: "req-no-computer-use",
+    })) {
+      // Drain events.
+    }
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const prompt = logs.find(
+      (entry) =>
+        entry.kind === "prompt" &&
+        String(entry.sessionName ?? "") === "agent:codex:acp:no-computer-use",
+    );
+    expect(prompt).toBeDefined();
+    const promptArgs = (prompt?.args as string[]) ?? [];
+    expect(promptArgs).not.toContain("--settings");
+  });
+
+  it("includes platform warning in doctor report when computerUse is enabled on non-macOS", async () => {
+    const { config } = await createMockRuntimeFixture();
+    const runtime = new AcpxRuntime(
+      {
+        ...config,
+        computerUse: true,
+      },
+      { logger: NOOP_LOGGER },
+    );
+
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+    try {
+      const report = await runtime.doctor();
+      expect(report.ok).toBe(true);
+      expect(report.message).toContain("computerUse is enabled but requires macOS");
+      expect(report.message).toContain("linux");
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
   });
 
   it("falls back to 'sessions new' when 'sessions ensure' returns no session IDs", async () => {

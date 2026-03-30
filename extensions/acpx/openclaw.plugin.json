@@ -64,6 +64,9 @@
           },
           "required": ["command"]
         }
+      },
+      "computerUse": {
+        "type": "boolean"
       }
     }
   },
@@ -111,6 +114,11 @@
     "mcpServers": {
       "label": "MCP Servers",
       "help": "Named MCP server definitions to inject into ACPX-backed session bootstrap. Each entry needs a command and can include args and env.",
+      "advanced": true
+    },
+    "computerUse": {
+      "label": "Computer Use",
+      "help": "Enable the built-in computer-use MCP server in Claude Code sessions. macOS only (research preview). Requires Claude Code v2.1.85+, Accessibility and Screen Recording permissions.",
       "advanced": true
     }
   }
