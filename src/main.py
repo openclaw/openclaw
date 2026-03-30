@@ -50,32 +50,7 @@ class OpenClawGateway:
         _tg = TelegramConfig(**_tg_raw)
         self.bot_token = _tg.bot_token
         self.admin_id = int(_tg.admin_chat_id)
-        self.vllm_url = self.config["system"].get("vllm_base_url", "http://localhost:8000/v1")
-
-        # Initialize vLLM model manager ONLY when local models are enabled.
-        # Cloud-Only mode (use_local_models=false) skips all vLLM/WSL setup.
-        vllm_cfg = self.config["system"]
-        or_cfg = vllm_cfg.get("openrouter", {})
-        self._use_local_models = or_cfg.get("use_local_models", True)
-        self._cloud_only = (
-            or_cfg.get("force_cloud", False)
-            and or_cfg.get("enabled", False)
-            and bool(or_cfg.get("api_key", ""))
-            and not self._use_local_models
-        )
-
-        if self._cloud_only:
-            logger.info("Cloud-Only mode: vLLM/WSL/Ollama disabled. All inference via OpenRouter.")
-            self.vllm_manager = None
-        else:
-            from src.vllm_manager import VLLMModelManager
-            self.vllm_manager = VLLMModelManager(
-                port=vllm_cfg.get("vllm_port", 8000),
-                gpu_memory_utilization=vllm_cfg.get("vllm_gpu_memory_utilization", 0.90),
-                max_model_len=vllm_cfg.get("vllm_max_model_len", 8192),
-                quantization=vllm_cfg.get("vllm_quantization"),
-                vllm_extra_args=vllm_cfg.get("vllm_extra_args"),
-            )
+        self.vllm_manager = None
 
         # Initialize Tailscale monitor
         self.tailscale = TailscaleMonitor(self.config)
@@ -83,8 +58,8 @@ class OpenClawGateway:
         self.bot = Bot(token=self.bot_token)
         self.dp = Dispatcher()
         self.archivist = TelegramArchivist(self.bot_token, str(self.admin_id))
-        self.pipeline = PipelineExecutor(self.config, self.vllm_url, self.vllm_manager)
-        self.memory_gc = MemoryGarbageCollector(self.vllm_url)
+        self.pipeline = PipelineExecutor(self.config)
+        self.memory_gc = MemoryGarbageCollector(self.config)
         self._intent_cache: dict = {}  # Simple cache for intent classification
         self.processed_task_hashes = set()
 
@@ -105,7 +80,7 @@ class OpenClawGateway:
         )
         self._observer.start()
 
-        # Start Prometheus metrics server on port 9090 (8000 is reserved for vLLM)
+        # Start Prometheus metrics server on port 9090
         try:
             start_http_server(9090)
             logger.info("Prometheus metrics server started on port 9090")
@@ -173,18 +148,8 @@ class OpenClawGateway:
         except Exception as e:
             logger.error(f"Failed to reload config: {e}")
 
-    async def _preload_model(self, model_name: str):
-        """Pre-load default vLLM model at startup."""
-        try:
-            logger.info("Pre-loading default model", model=model_name)
-            await self.vllm_manager.ensure_model_loaded(model_name)
-            logger.info("Default model pre-loaded", model=model_name)
-        except Exception as e:
-            logger.warning("Failed to pre-load model", model=model_name, error=str(e))
-
     async def run(self):
         logger.info("Starting OpenClaw Gateway...")
-        logger.info("vLLM URL", vllm_url=self.vllm_url)
         logger.info("Admin ID", admin_id=self.admin_id)
 
         # --- Heartbeat: first-signal test ---
@@ -248,7 +213,7 @@ class OpenClawGateway:
                     BotCommand(command="help", description="Список всех команд"),
                     BotCommand(command="status", description="Статус системы"),
                     BotCommand(command="models", description="Список моделей"),
-                    BotCommand(command="test", description="VRAM тест"),
+                    BotCommand(command="test", description="Тест системы"),
                     BotCommand(command="test_all_models", description="Тест всех 20 ролей"),
                 ])
                 logger.info("Bot commands registered in Telegram menu")
