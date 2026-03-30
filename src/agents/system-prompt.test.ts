@@ -250,6 +250,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
+    expect(prompt).not.toContain(
+      "Pi standard tool catalog (reference only; not enabled in this session):",
+    );
+  });
+
+  it("separates empty enabled tools from the standard catalog", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: [],
+    });
+
+    expect(prompt).toContain("Tool availability (filtered by policy):");
+    expect(prompt).toContain("Available tools in this runtime:");
+    expect(prompt).toContain("- none (tool policy currently disables all tools for this session)");
+    expect(prompt).toContain(
+      "Pi standard tool catalog (reference only; not enabled in this session):",
+    );
+    expect(prompt).not.toContain("Pi lists the standard tools above. This runtime enables:");
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {
