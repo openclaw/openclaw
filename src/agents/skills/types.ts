@@ -1,11 +1,5 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
-export type OpenClawSkill = Skill & {
-  sourceInfo?: {
-    source?: string;
-  };
-};
-
 export type SkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -74,7 +68,7 @@ export type SkillsInstallPreferences = {
 export type ParsedSkillFrontmatter = Record<string, string>;
 
 export type SkillEntry = {
-  skill: OpenClawSkill;
+  skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
@@ -94,6 +88,6 @@ export type SkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
-  resolvedSkills?: OpenClawSkill[];
+  resolvedSkills?: Skill[];
   version?: number;
 };
