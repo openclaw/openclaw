@@ -2020,6 +2020,60 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it('reuses the cached v1 tool across collections when the explicit mcporter override is "query"', async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          searchTool: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: path.join(workspaceDir, "notes-a"), pattern: "**/*.md", name: "workspace-a" },
+            { path: path.join(workspaceDir, "notes-b"), pattern: "**/*.md", name: "workspace-b" },
+          ],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const selectors: string[] = [];
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        const selector = args[1] ?? "";
+        selectors.push(selector);
+        if (selector === "qmd.query") {
+          queueMicrotask(() => {
+            child.stderr.emit("data", "MCP error -32602: Tool query not found");
+            child.closeWith(1);
+          });
+          return child;
+        }
+        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        expect(selector).toBe("qmd.search");
+        expect(callArgs).toMatchObject({
+          query: "hello",
+          limit: 6,
+          minScore: 0,
+        });
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    expect(selectors).toEqual(["qmd.query", "qmd.search", "qmd.search"]);
+
+    await manager.close();
+  });
+
   it("uses an explicit mcporter search tool override across multiple collections", async () => {
     cfg = {
       ...cfg,

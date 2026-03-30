@@ -1575,7 +1575,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // (e.g. from runMcporterAcrossCollections iterating after the first collection
     // triggered the fallback), resolve the correct v1 tool name immediately.
     const effectiveTool =
-      !params.explicitToolOverride && params.tool === "query" && this.qmdMcpToolVersion === "v1"
+      params.tool === "query" && this.qmdMcpToolVersion === "v1"
         ? this.resolveQmdMcpTool(params.searchCommand ?? "query")
         : params.tool;
 
