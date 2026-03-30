@@ -1350,18 +1350,28 @@
                 ]
               },
               {
-                "group": "Nodes and devices",
+                "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
                   "nodes/troubleshooting",
-                  "nodes/media-understanding",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command",
-                  "tools/tts"
+                  {
+                    "group": "Media capabilities",
+                    "pages": [
+                      "nodes/media-understanding",
+                      "nodes/images",
+                      "nodes/audio",
+                      "nodes/camera",
+                      "tools/tts"
+                    ]
+                  },
+                  {
+                    "group": "Node features",
+                    "pages": [
+                      "nodes/talk",
+                      "nodes/voicewake",
+                      "nodes/location-command"
+                    ]
+                  }
                 ]
               },
               {
