@@ -4,6 +4,9 @@ import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js"
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 
+const resolveComparablePath = (value: string, workspaceDir = "/workspace/root"): string =>
+  path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value);
+
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
     const cfg = { agents: { defaults: { workspace: "/tmp/memory-test" } } } as OpenClawConfig;
@@ -181,7 +184,10 @@ describe("memorySearch.extraPaths integration", () => {
     );
     expect(customCollections.length).toBeGreaterThanOrEqual(2);
     expect(customCollections.map((collection) => collection.path)).toEqual(
-      expect.arrayContaining(["/home/user/docs", "/home/user/vault"]),
+      expect.arrayContaining([
+        resolveComparablePath("/home/user/docs"),
+        resolveComparablePath("/home/user/vault"),
+      ]),
     );
   });
 
@@ -211,8 +217,8 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
     const paths = customCollections.map((collection) => collection.path);
-    expect(paths).toContain("/agent/specific/path");
-    expect(paths).toContain("/default/path");
+    expect(paths).toContain(resolveComparablePath("/agent/specific/path"));
+    expect(paths).toContain(resolveComparablePath("/default/path"));
   });
 
   it("falls back to defaults when agent has no overrides", () => {
@@ -241,7 +247,7 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
     const paths = customCollections.map((collection) => collection.path);
-    expect(paths).toContain("/default/path");
+    expect(paths).toContain(resolveComparablePath("/default/path"));
   });
 
   it("deduplicates merged memorySearch.extraPaths for QMD collections", () => {
@@ -271,8 +277,10 @@ describe("memorySearch.extraPaths integration", () => {
     );
     const paths = customCollections.map((collection) => collection.path);
 
-    expect(paths.filter((collectionPath) => collectionPath === "/shared/path")).toHaveLength(1);
-    expect(paths).toContain("/agent-only");
+    expect(
+      paths.filter((collectionPath) => collectionPath === resolveComparablePath("/shared/path")),
+    ).toHaveLength(1);
+    expect(paths).toContain(resolveComparablePath("/agent-only"));
   });
 
   it("matches per-agent memorySearch.extraPaths using normalized agent ids", () => {
@@ -298,7 +306,9 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
 
-    expect(customCollections.map((collection) => collection.path)).toContain("/agent/mixed-case");
+    expect(customCollections.map((collection) => collection.path)).toContain(
+      resolveComparablePath("/agent/mixed-case"),
+    );
   });
 
   it("deduplicates identical roots shared by memory.qmd.paths and memorySearch.extraPaths", () => {
@@ -325,7 +335,7 @@ describe("memorySearch.extraPaths integration", () => {
     );
     const docsCollections = customCollections.filter(
       (collection) =>
-        collection.path === "/workspace/root/docs" && collection.pattern === "**/*.md",
+        collection.path === resolveComparablePath("./docs") && collection.pattern === "**/*.md",
     );
 
     expect(docsCollections).toHaveLength(1);
