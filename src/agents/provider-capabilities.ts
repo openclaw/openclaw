@@ -218,6 +218,22 @@ export function shouldSanitizeGeminiThoughtSignaturesForModel(params: {
   );
 }
 
+/**
+ * Global model-name hints that always require strict9 tool-call IDs, regardless
+ * of provider. This catches Mistral models routed through OpenRouter, custom
+ * OpenAI-compatible endpoints, or any other proxy that does not declare its own
+ * transcriptToolCallIdModelHints.
+ */
+const GLOBAL_STRICT9_MODEL_HINTS: string[] = [
+  "mistral",
+  "mixtral",
+  "codestral",
+  "pixtral",
+  "devstral",
+  "ministral",
+  "mistralai",
+];
+
 export function resolveTranscriptToolCallIdMode(
   provider?: string | null,
   modelId?: string | null,
@@ -229,6 +245,11 @@ export function resolveTranscriptToolCallIdMode(
     return mode;
   }
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
+    return "strict9";
+  }
+  // Fallback: check global model hints for providers that don't declare their
+  // own hints (e.g. OpenRouter routing to Mistral).
+  if (modelIncludesAnyHint(modelId, GLOBAL_STRICT9_MODEL_HINTS)) {
     return "strict9";
   }
   return undefined;
