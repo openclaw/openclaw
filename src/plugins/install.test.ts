@@ -264,12 +264,20 @@ async function installFromFileWithWarnings(params: { extensionsDir: string; file
   return { result, warnings };
 }
 
-function setupManifestInstallFixture(params: { manifestId: string }) {
+function setupManifestInstallFixture(params: { manifestId: string; packageName?: string }) {
   const caseDir = makeTempDir();
   const stateDir = path.join(caseDir, "state");
   const pluginDir = path.join(caseDir, "plugin-src");
   fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(manifestInstallTemplateDir, pluginDir, { recursive: true });
+  if (params.packageName) {
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      name?: string;
+    };
+    manifest.name = params.packageName;
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+  }
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
@@ -1078,6 +1086,23 @@ describe("installPluginFromDir", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("does not warn when a scoped npm package name matches the manifest id", async () => {
+    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
+      manifestId: "matrix",
+      packageName: "@openclaw/matrix",
+    });
+
+    const infoMessages: string[] = [];
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
+    });
+
+    expectInstalledWithPluginId(res, extensionsDir, "matrix");
+    expect(infoMessages.some((msg) => msg.includes("differs from npm package name"))).toBe(false);
   });
 
   it.each([
