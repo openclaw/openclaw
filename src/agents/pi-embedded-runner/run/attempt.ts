@@ -99,6 +99,7 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -417,8 +418,11 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
+    let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+    let clientToolDefsForSession: ReturnType<typeof toClientToolDefinitions> = [];
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const toolsEnabled = supportsModelTools(params.model);
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -479,21 +483,50 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
-    const toolsAfterHook = await applyBeforeToolsResolveHook(toolsRaw, {
+    const clientTools = toolsEnabled ? params.clientTools : undefined;
+    const clientToolLoopDetection = resolveToolLoopDetectionConfig({
+      cfg: params.config,
+      agentId: sessionAgentId,
+    });
+    const clientToolDefsPre =
+      toolsEnabled && clientTools
+        ? toClientToolDefinitions(
+            clientTools,
+            (toolName, toolParams) => {
+              clientToolCallDetected = { name: toolName, params: toolParams };
+            },
+            {
+              agentId: sessionAgentId,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
+              runId: params.runId,
+              loopDetection: clientToolLoopDetection,
+            },
+          )
+        : [];
+    const providerChannel = normalizeMessageChannel(
+      params.messageChannel ?? params.messageProvider,
+    );
+    const mergedForBeforeToolsResolve = [...toolsRaw, ...clientToolDefsPre];
+    const mergedAfterHook = await applyBeforeToolsResolveHook(mergedForBeforeToolsResolve, {
       agentId: sessionAgentId,
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
-      channelId: params.currentChannelId,
+      channelId: providerChannel ?? undefined,
       messageProvider: params.messageChannel ?? params.messageProvider,
       requesterSenderId: params.senderId ?? undefined,
       senderIsOwner: params.senderIsOwner,
     });
-    const toolsEnabled = supportsModelTools(params.model);
+    type ClientToolDef = ReturnType<typeof toClientToolDefinitions>[number];
+    const toolsRawRefSet = new Set<AnyAgentTool | ClientToolDef>(toolsRaw);
+    const toolsAfterHook = mergedAfterHook.filter((t) => toolsRawRefSet.has(t)) as AnyAgentTool[];
+    clientToolDefsForSession = mergedAfterHook.filter((t) => !toolsRawRefSet.has(t)) as ReturnType<
+      typeof toClientToolDefinitions
+    >;
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsAfterHook : [],
       provider: params.provider,
     });
-    const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -811,26 +844,7 @@ export async function runEmbeddedAttempt(
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
-      const clientToolLoopDetection = resolveToolLoopDetectionConfig({
-        cfg: params.config,
-        agentId: sessionAgentId,
-      });
-      const clientToolDefs = clientTools
-        ? toClientToolDefinitions(
-            clientTools,
-            (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
-            },
-            {
-              agentId: sessionAgentId,
-              sessionKey: sandboxSessionKey,
-              sessionId: params.sessionId,
-              runId: params.runId,
-              loopDetection: clientToolLoopDetection,
-            },
-          )
-        : [];
+      const clientToolDefs = clientToolDefsForSession;
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 

@@ -634,20 +634,21 @@ export function createOpenClawCodingTools(options?: {
  * Apply the before_tools_resolve plugin hook to filter tools based on caller
  * identity. Call this after createOpenClawCodingTools() in async contexts.
  * Returns the filtered tool list unchanged if no hooks are registered.
+ * Accepts built-in tools and client `ToolDefinition` values (anything with a `name`).
  */
-export async function applyBeforeToolsResolveHook(
-  tools: AnyAgentTool[],
+export async function applyBeforeToolsResolveHook<T extends { name: string }>(
+  tools: readonly T[],
   ctx: PluginHookBeforeToolsResolveContext,
-): Promise<AnyAgentTool[]> {
+): Promise<T[]> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tools_resolve")) {
-    return tools;
+    return [...tools];
   }
 
   const toolNames = tools.map((t) => normalizeToolName(t.name));
   const result = await hookRunner.runBeforeToolsResolve({ toolNames }, ctx);
   if (!result) {
-    return tools;
+    return [...tools];
   }
 
   const denySet = result.deny?.length

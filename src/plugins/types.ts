@@ -2225,6 +2225,7 @@ export type PluginHookBeforeToolsResolveContext = {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
+  /** Normalized provider/channel id (e.g. telegram, discord), not a per-conversation thread id. */
   channelId?: string;
   messageProvider?: string;
   requesterSenderId?: string;
