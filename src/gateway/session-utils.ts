@@ -1090,9 +1090,9 @@ export async function resolveGatewayModelSupportsImages(params: {
       (entry) =>
         entry.id === params.model && (!params.provider || entry.provider === params.provider),
     );
-    return modelEntry ? (modelEntry.input?.includes("image") ?? false) : true;
+    return modelEntry ? (modelEntry.input?.includes("image") ?? false) : false;
   } catch {
-    return true;
+    return false;
   }
 }
 
