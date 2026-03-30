@@ -884,9 +884,112 @@ describe("sessions tools", () => {
     );
     expect(replySteps).toHaveLength(2);
     expect(sendParams).toMatchObject({
-      to: "group:target",
+      to: "group:req",
       channel: "discord",
       message: "announce now",
+    });
+  });
+
+  it("sessions_send announces back to the requester session target, not the target session target", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "agent:design-agent:webchat:group:self";
+    const targetKey = "agent:coding-agent:openclaw-tmcp-dingtalk:group:self";
+    let sendParams: { to?: string; channel?: string; message?: string } = {};
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              message?: string;
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "announce back to requester";
+        }
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted", acceptedAt: 3000 + agentCallCount };
+      }
+      if (request.method === "agent.wait") {
+        const runId = typeof request.params?.runId === "string" ? request.params.runId : undefined;
+        lastWaitedRunId = runId;
+        return { runId: runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: requesterKey,
+              deliveryContext: { channel: "webchat", to: "group:self" },
+            },
+            {
+              key: targetKey,
+              deliveryContext: { channel: "openclaw-tmcp-dingtalk", to: "group:self" },
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        sendParams = {
+          to: typeof request.params?.to === "string" ? request.params.to : undefined,
+          channel: typeof request.params?.channel === "string" ? request.params.channel : undefined,
+          message: typeof request.params?.message === "string" ? request.params.message : undefined,
+        };
+        return { messageId: "m-announce" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call8", {
+      sessionKey: targetKey,
+      message: "doc update",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+    });
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    expect(sendParams).toMatchObject({
+      to: "self",
+      channel: "webchat",
+      message: "announce back to requester",
     });
   });
 
