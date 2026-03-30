@@ -155,11 +155,21 @@ openclaw [--dev] [--profile <name>] <command>
     list
     add
     delete
+    bindings
+    bind
+    unbind
+    set-identity
   acp
   mcp
   status
   health
   sessions
+    cleanup
+  tasks
+    list
+    show
+    notify
+    cancel
   gateway
     call
     health
@@ -193,7 +203,7 @@ openclaw [--dev] [--profile <name>] <command>
     fallbacks list|add|remove|clear
     image-fallbacks list|add|remove|clear
     scan
-    auth add|setup-token|paste-token
+    auth add|login|login-github-copilot|setup-token|paste-token
     auth order get|set|clear
   sandbox
     list
@@ -349,7 +359,18 @@ Options:
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
-- `--auth-choice <setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ollama|ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|mistral-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|opencode-go|custom-api-key|skip>`
+- `--auth-choice <choice>` where `<choice>` is one of:
+  `setup-token`, `token`, `chutes`, `deepseek-api-key`, `openai-codex`, `openai-api-key`,
+  `openrouter-api-key`, `kilocode-api-key`, `litellm-api-key`, `ai-gateway-api-key`,
+  `cloudflare-ai-gateway-api-key`, `moonshot-api-key`, `moonshot-api-key-cn`,
+  `kimi-code-api-key`, `synthetic-api-key`, `venice-api-key`, `together-api-key`,
+  `huggingface-api-key`, `apiKey`, `gemini-api-key`, `google-gemini-cli`, `zai-api-key`,
+  `zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`, `xiaomi-api-key`,
+  `minimax-global-oauth`, `minimax-global-api`, `minimax-cn-oauth`, `minimax-cn-api`,
+  `opencode-zen`, `opencode-go`, `github-copilot`, `copilot-proxy`, `xai-api-key`,
+  `mistral-api-key`, `volcengine-api-key`, `byteplus-api-key`, `qianfan-api-key`,
+  `modelstudio-standard-api-key-cn`, `modelstudio-standard-api-key`,
+  `modelstudio-api-key-cn`, `modelstudio-api-key`, `custom-api-key`, `skip`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
@@ -367,8 +388,8 @@ Options:
 - `--minimax-api-key <key>`
 - `--opencode-zen-api-key <key>`
 - `--opencode-go-api-key <key>`
-- `--custom-base-url <url>` (non-interactive; used with `--auth-choice custom-api-key` or `--auth-choice ollama`)
-- `--custom-model-id <id>` (non-interactive; used with `--auth-choice custom-api-key` or `--auth-choice ollama`)
+- `--custom-base-url <url>` (non-interactive; used with `--auth-choice custom-api-key`)
+- `--custom-model-id <id>` (non-interactive; used with `--auth-choice custom-api-key`)
 - `--custom-api-key <key>` (non-interactive; optional; used with `--auth-choice custom-api-key`; falls back to `CUSTOM_API_KEY` when omitted)
 - `--custom-provider-id <id>` (non-interactive; optional custom provider id)
 - `--custom-compatibility <openai|anthropic>` (non-interactive; optional; default `openai`)
@@ -429,6 +450,9 @@ Options:
 - `--yes`: accept defaults without prompting (headless).
 - `--non-interactive`: skip prompts; apply safe migrations only.
 - `--deep`: scan system services for extra gateway installs.
+- `--repair` (alias: `--fix`): attempt automatic repairs for detected issues.
+- `--force`: force repairs even when not strictly needed.
+- `--generate-gateway-token`: generate a new gateway auth token.
 
 ## Channel helpers
 
@@ -582,15 +606,19 @@ Run one agent turn via the Gateway (or `--local` embedded).
 
 Required:
 
-- `--message <text>`
+- `-m, --message <text>`
 
 Options:
 
-- `--to <dest>` (for session key and optional delivery)
+- `-t, --to <dest>` (for session key and optional delivery)
 - `--session-id <id>`
-- `--thinking <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
-- `--verbose <on|full|off>`
-- `--channel <whatsapp|telegram|discord|slack|mattermost|signal|imessage|msteams>`
+- `--agent <id>` (agent id; overrides routing bindings)
+- `--thinking <off|minimal|low|medium|high|xhigh>` (provider support varies; not model-gated at CLI level)
+- `--verbose <on|off>`
+- `--channel <channel>` (delivery channel; omit to use the main session channel)
+- `--reply-to <target>` (delivery target override, separate from session routing)
+- `--reply-channel <channel>` (delivery channel override)
+- `--reply-account <id>` (delivery account id override)
 - `--local`
 - `--deliver`
 - `--json`
@@ -724,6 +752,12 @@ Options:
 - `--verbose`
 - `--store <path>`
 - `--active <minutes>`
+- `--agent <id>` (filter sessions by agent)
+- `--all-agents` (show sessions across all agents)
+
+Subcommands:
+
+- `sessions cleanup` — remove expired or orphaned sessions
 
 ## Reset / Uninstall
 
@@ -760,6 +794,15 @@ Options:
 Notes:
 
 - `--non-interactive` requires `--yes` and explicit scopes (or `--all`).
+
+### `tasks`
+
+List and manage task runs across agents.
+
+- `tasks list` — show active and recent task runs
+- `tasks show <id>` — show details for a specific task run
+- `tasks notify <id>` — send a notification for a task run
+- `tasks cancel <id>` — cancel a running task
 
 ## Gateway
 
@@ -878,8 +921,9 @@ Anthropic Claude CLI migration:
 
 ```bash
 openclaw models auth login --provider anthropic --method cli --set-default
-openclaw onboard --auth-choice anthropic-cli
 ```
+
+Note: `--auth-choice anthropic-cli` is a deprecated legacy alias. Use `models auth login` instead.
 
 ### `models` (root)
 
@@ -968,11 +1012,13 @@ Options:
 - `--set-image`
 - `--json`
 
-### `models auth add|setup-token|paste-token`
+### `models auth add|login|login-github-copilot|setup-token|paste-token`
 
 Options:
 
 - `add`: interactive auth helper
+- `login`: `--provider <name>`, `--method <method>`, `--set-default`
+- `login-github-copilot`: GitHub Copilot OAuth login flow
 - `setup-token`: `--provider <name>` (default `anthropic`), `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 
