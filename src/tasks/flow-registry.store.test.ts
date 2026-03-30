@@ -19,6 +19,19 @@ function createStoredFlow(): FlowRecord {
   };
 }
 
+async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
+  return await withTempDir({ prefix: "openclaw-flow-store-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetFlowRegistryForTests();
+    try {
+      return await run(root);
+    } finally {
+      // Close the sqlite-backed registry before Windows temp-dir cleanup removes the store root.
+      resetFlowRegistryForTests();
+    }
+  });
+}
+
 describe("flow-registry store runtime", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -60,7 +73,7 @@ describe("flow-registry store runtime", () => {
   });
 
   it("restores persisted flows from the default sqlite store", async () => {
-    await withTempDir({ prefix: "openclaw-flow-store-" }, async (root) => {
+    await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
@@ -85,7 +98,7 @@ describe("flow-registry store runtime", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir({ prefix: "openclaw-flow-store-" }, async (root) => {
+    await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetFlowRegistryForTests();
 
