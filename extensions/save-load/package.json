@@ -1,0 +1,22 @@
+{
+  "name": "@openclaw/save-load-plugin",
+  "version": "2026.3.30",
+  "description": "OpenClaw save/load conversation context plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.30"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
