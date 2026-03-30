@@ -574,6 +574,144 @@ class OpenAlexAdapter(SourceAdapter):
         return items
 
 
+# ─── StackOverflow adapter (REST API) ─────────────────────────────────
+
+
+class StackOverflowAdapter(SourceAdapter):
+    """Search StackOverflow questions via the public /search/excerpts API."""
+
+    name = "stackoverflow"
+
+    _API = "https://api.stackexchange.com/2.3"
+
+    async def fetch(
+        self, query: str = "", limit: int = 20, timeout: int = _DEFAULT_TIMEOUT
+    ) -> list[ResearchItem]:
+        limit = min(limit, 50)
+        url = (
+            f"{self._API}/search/excerpts"
+            f"?order=desc&sort=relevance&q={quote_plus(query)}"
+            f"&site=stackoverflow&pagesize={limit}&filter=default"
+        )
+
+        try:
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                connector=aiohttp.TCPConnector(ssl=ssl_ctx),
+            ) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        logger.warning("stackoverflow_search_failed", status=resp.status)
+                        return []
+                    data = await resp.json()
+        except Exception as e:
+            logger.warning("stackoverflow_fetch_error", error=str(e))
+            return []
+
+        items: list[ResearchItem] = []
+        for item_data in data.get("items", [])[:limit]:
+            if item_data.get("item_type") != "question":
+                continue
+            qid = item_data.get("question_id", "")
+            title = item_data.get("title", "")
+            # HTML entity cleanup
+            title = re.sub(r"&[a-z]+;", " ", title)
+            excerpt = item_data.get("excerpt", "")
+            excerpt = re.sub(r"<[^>]+>", "", excerpt)[:500]
+            tags = item_data.get("tags", [])
+            score = float(item_data.get("question_score", 0))
+            answers = item_data.get("answer_count", 0)
+            has_accepted = item_data.get("has_accepted_answer", False)
+
+            items.append(
+                ResearchItem(
+                    title=title,
+                    url=f"https://stackoverflow.com/questions/{qid}",
+                    source=self.name,
+                    summary=excerpt,
+                    tags=tags,
+                    score=score,
+                    extra={
+                        "answers": answers,
+                        "has_accepted": has_accepted,
+                        "score": int(score),
+                    },
+                )
+            )
+
+        logger.info("stackoverflow_parsed", count=len(items))
+        return items
+
+
+# ─── HackerNews adapter (Algolia API) ────────────────────────────────
+
+
+class HackerNewsAdapter(SourceAdapter):
+    """Search Hacker News stories via the free Algolia HN Search API."""
+
+    name = "hackernews"
+
+    _API = "https://hn.algolia.com/api/v1"
+
+    async def fetch(
+        self, query: str = "", limit: int = 20, timeout: int = _DEFAULT_TIMEOUT
+    ) -> list[ResearchItem]:
+        limit = min(limit, 50)
+        url = (
+            f"{self._API}/search"
+            f"?query={quote_plus(query)}&tags=story&hitsPerPage={limit}"
+        )
+
+        try:
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                connector=aiohttp.TCPConnector(ssl=ssl_ctx),
+            ) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        logger.warning("hackernews_search_failed", status=resp.status)
+                        return []
+                    data = await resp.json()
+        except Exception as e:
+            logger.warning("hackernews_fetch_error", error=str(e))
+            return []
+
+        items: list[ResearchItem] = []
+        for hit in data.get("hits", [])[:limit]:
+            title = hit.get("title", "")
+            hn_url = hit.get("url", "")
+            hn_id = hit.get("objectID", "")
+            if not hn_url:
+                hn_url = f"https://news.ycombinator.com/item?id={hn_id}"
+            author = hit.get("author", "")
+            points = hit.get("points", 0)
+            comments = hit.get("num_comments", 0)
+            created = hit.get("created_at", "")
+
+            items.append(
+                ResearchItem(
+                    title=title,
+                    url=hn_url,
+                    source=self.name,
+                    summary=f"{points} points, {comments} comments on HN",
+                    authors=[author] if author else [],
+                    score=float(points or 0),
+                    published=created,
+                    extra={
+                        "hn_id": hn_id,
+                        "points": points,
+                        "comments": comments,
+                        "hn_url": f"https://news.ycombinator.com/item?id={hn_id}",
+                    },
+                )
+            )
+
+        logger.info("hackernews_parsed", count=len(items))
+        return items
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -593,6 +731,8 @@ _ALL_ADAPTERS: list[type[SourceAdapter]] = [
     SemanticScholarAdapter,
     ArxivAdapter,
     OpenAlexAdapter,
+    StackOverflowAdapter,
+    HackerNewsAdapter,
 ]
 
 

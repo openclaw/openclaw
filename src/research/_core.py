@@ -16,6 +16,7 @@ from src.llm_gateway import route_llm
 from src.research._searcher import (
     search_sub_query,
     multi_source_search,
+    instant_answers,
 )
 from src.research._analyzer import (
     score_evidence,
@@ -202,6 +203,13 @@ class DeepResearchPipeline:
                 state.add_evidence(EvidencePiece(
                     query=res["query"], source_type="multi_source",
                     content=res["multi_source"], confidence=0.6,
+                ))
+            # v4: integrate DuckDuckGo news results
+            if res.get("news"):
+                all_evidence.append(f"[News: {res['query']}]\n{res['news']}")
+                state.add_evidence(EvidencePiece(
+                    query=res["query"], source_type="news",
+                    content=res["news"], confidence=0.7,
                 ))
 
         self._research_context.append(

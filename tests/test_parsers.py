@@ -1,4 +1,4 @@
-"""Unit tests for UniversalParser and source adapters (v11.6)."""
+"""Unit tests for UniversalParser and source adapters (v11.6 + v4 improvements)."""
 import asyncio
 import sys
 import os
@@ -10,6 +10,8 @@ from src.parsers.universal import (
     HabrAdapter,
     RedditAdapter,
     GitHubAdapter,
+    StackOverflowAdapter,
+    HackerNewsAdapter,
     UniversalParser,
 )
 
@@ -69,8 +71,6 @@ def test_habr_parse_invalid_xml():
 # ---------------------------------------------------------------------------
 def test_reddit_fetch_sub_parse():
     adapter = RedditAdapter()
-    # We test the internal parsing by calling _fetch_sub indirectly through data
-    # Here we just verify the adapter exists and has correct config
     assert adapter.name == "reddit"
     assert "MachineLearning" in adapter.DEFAULT_SUBREDDITS
     assert "LanguageTechnology" in adapter.DEFAULT_SUBREDDITS
@@ -89,6 +89,36 @@ def test_github_adapter_headers():
 
 
 # ---------------------------------------------------------------------------
+# StackOverflow adapter (v4)
+# ---------------------------------------------------------------------------
+def test_stackoverflow_adapter_name():
+    adapter = StackOverflowAdapter()
+    assert adapter.name == "stackoverflow"
+    print("[PASS] StackOverflowAdapter name")
+
+
+def test_stackoverflow_adapter_api_url():
+    adapter = StackOverflowAdapter()
+    assert "stackexchange.com" in adapter._API
+    print("[PASS] StackOverflowAdapter API URL")
+
+
+# ---------------------------------------------------------------------------
+# HackerNews adapter (v4)
+# ---------------------------------------------------------------------------
+def test_hackernews_adapter_name():
+    adapter = HackerNewsAdapter()
+    assert adapter.name == "hackernews"
+    print("[PASS] HackerNewsAdapter name")
+
+
+def test_hackernews_adapter_api_url():
+    adapter = HackerNewsAdapter()
+    assert "algolia.com" in adapter._API
+    print("[PASS] HackerNewsAdapter API URL")
+
+
+# ---------------------------------------------------------------------------
 # UniversalParser
 # ---------------------------------------------------------------------------
 def test_universal_parser_adapter_names():
@@ -100,25 +130,42 @@ def test_universal_parser_adapter_names():
     assert "semantic_scholar" in names
     assert "arxiv" in names
     assert "openalex" in names
-    print("[PASS] UniversalParser has all adapters")
+    # v4: new adapters
+    assert "stackoverflow" in names
+    assert "hackernews" in names
+    print("[PASS] UniversalParser has all 8 adapters")
 
 
 def test_universal_parser_get_adapter():
     parser = UniversalParser()
     assert parser.get_adapter("arxiv") is not None
+    assert parser.get_adapter("stackoverflow") is not None
+    assert parser.get_adapter("hackernews") is not None
     assert parser.get_adapter("nonexistent") is None
     print("[PASS] UniversalParser get_adapter")
+
+
+def test_universal_parser_adapter_count():
+    parser = UniversalParser()
+    assert len(parser.adapter_names) == 8  # v4: 6 original + 2 new
+    print("[PASS] UniversalParser 8 adapters total")
 
 
 # ---------------------------------------------------------------------------
 # Run all
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    test_research_item_dedup_key()
-    test_habr_parse_rss()
-    test_habr_parse_invalid_xml()
-    test_reddit_fetch_sub_parse()
-    test_github_adapter_headers()
-    test_universal_parser_adapter_names()
-    test_universal_parser_get_adapter()
-    print("\n✅ All UniversalParser tests passed!")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    passed = 0
+    failed = 0
+    for t in tests:
+        try:
+            t()
+            passed += 1
+        except Exception as e:
+            print(f"[FAIL] {t.__name__}: {e}")
+            failed += 1
+    print(f"\n{'='*40}")
+    print(f"Total: {passed + failed}, Passed: {passed}, Failed: {failed}")
+    if failed:
+        sys.exit(1)
