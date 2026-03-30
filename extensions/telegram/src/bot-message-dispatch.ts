@@ -12,6 +12,7 @@ import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { getAgentScopedMediaLocalRootsForSources } from "openclaw/plugin-sdk/media-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -488,8 +489,14 @@ export const dispatchTelegramMessage = async ({
     return { ...payload, text };
   };
   const sendPayload = async (payload: ReplyPayload) => {
+    const payloadMediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
+      cfg,
+      agentId: route.agentId,
+      mediaSources: resolveSendableOutboundReplyParts(payload).mediaUrls,
+    });
     const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       ...deliveryBaseOptions,
+      mediaLocalRoots: payloadMediaLocalRoots,
       replies: [payload],
       onVoiceRecording: sendRecordVoice,
       silent: silentErrorReplies && payload.isError === true,

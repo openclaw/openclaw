@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChunkMode as resolveChunkModeRuntime } from "../../../src/auto-reply/chunk.js";
@@ -360,6 +361,45 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("expands mediaLocalRoots for final local-media replies", async () => {
+    const generatedFile = path.resolve("/tmp", "telegram-generated", "report.pdf");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Here is your file",
+          mediaUrl: generatedFile,
+          mediaUrls: [generatedFile],
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        route: {
+          agentId: "work",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([
+          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/u),
+          path.dirname(generatedFile),
+        ]),
+        replies: [
+          expect.objectContaining({
+            mediaUrl: generatedFile,
+            mediaUrls: [generatedFile],
+          }),
+        ],
+      }),
+    );
   });
 
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
