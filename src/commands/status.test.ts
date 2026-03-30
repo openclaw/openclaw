@@ -632,6 +632,50 @@ describe("statusCommand", () => {
     ).toBe(true);
   });
 
+  it("caps cached percentage at the prompt-token denominator for legacy session totals", async () => {
+    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": {
+        ...createDefaultSessionStoreEntry(),
+        inputTokens: undefined,
+        cacheRead: 1_200,
+        cacheWrite: 0,
+        totalTokens: 1_000,
+      },
+    });
+    try {
+      const logs = await runStatusAndGetLogs();
+      expect(logs.some((line) => line.includes("100% cached"))).toBe(true);
+      expect(logs.some((line) => line.includes("120% cached"))).toBe(false);
+    } finally {
+      if (originalLoadSessionStore) {
+        mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+      }
+    }
+  });
+
+  it("uses prompt-side tokens for cached percentage when they differ from totalTokens", async () => {
+    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": {
+        ...createDefaultSessionStoreEntry(),
+        inputTokens: 500,
+        cacheRead: 2_000,
+        cacheWrite: 500,
+        totalTokens: 5_000,
+      },
+    });
+    try {
+      const logs = await runStatusAndGetLogs();
+      expect(logs.some((line) => line.includes("67% cached"))).toBe(true);
+      expect(logs.some((line) => line.includes("40% cached"))).toBe(false);
+    } finally {
+      if (originalLoadSessionStore) {
+        mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+      }
+    }
+  });
+
   it("shows node-only gateway info when no local gateway service is installed", async () => {
     mocks.resolveGatewayService.mockReturnValueOnce({
       label: "LaunchAgent",
