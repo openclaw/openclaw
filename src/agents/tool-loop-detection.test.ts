@@ -331,6 +331,28 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("does not escalate generic repeat to critical for non-consecutive calls", () => {
+      const state = createState();
+
+      // Interleave reads of /same.txt with other tool calls.
+      // Total /same.txt count exceeds CRITICAL_THRESHOLD but they are not consecutive.
+      for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `same-${i}`);
+        // Break the streak with a different call every time
+        recordToolCall(state, "write", { path: `/out-${i}.txt` }, `other-${i}`);
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        enabledLoopDetectionConfig,
+      );
+
+      // Consecutive streak is only 1 (last call was a write), so no warning/critical
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
       const { params, result } = createNoProgressPollFixture("sess-custom");

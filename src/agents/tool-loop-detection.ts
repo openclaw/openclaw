@@ -484,28 +484,36 @@ export function detectToolCallLoop(
   }
 
   // Generic detector: repeated identical calls (args-only, ignores result).
+  // Uses a consecutive tail streak (not aggregate count) so that intermittent
+  // legitimate reads of the same path during a longer workflow are not
+  // misclassified as a runaway loop.
   // Escalates to critical at criticalThreshold to hard-block tools whose
   // result hashes vary due to volatile fields (e.g. exec durationMs) —
   // the global circuit breaker depends on stable result hashes and may
   // not fire for those tools, so this is the last line of defense.
-  const recentCount = history.filter(
-    (h) => h.toolName === toolName && h.argsHash === currentHash,
-  ).length;
+  let consecutiveStreak = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const call = history[i];
+    if (!call || call.toolName !== toolName || call.argsHash !== currentHash) {
+      break;
+    }
+    consecutiveStreak += 1;
+  }
 
   if (
     !knownPollTool &&
     resolvedConfig.detectors.genericRepeat &&
-    recentCount >= resolvedConfig.criticalThreshold
+    consecutiveStreak >= resolvedConfig.criticalThreshold
   ) {
     log.error(
-      `Generic repeat critical: ${toolName} called ${recentCount} times with identical arguments`,
+      `Generic repeat critical: ${toolName} called ${consecutiveStreak} consecutive times with identical arguments`,
     );
     return {
       stuck: true,
       level: "critical",
       detector: "generic_repeat",
-      count: recentCount,
-      message: `CRITICAL: ${toolName} has been called ${recentCount} times with identical arguments. Session execution blocked to prevent runaway loops.`,
+      count: consecutiveStreak,
+      message: `CRITICAL: ${toolName} has been called ${consecutiveStreak} consecutive times with identical arguments. Session execution blocked to prevent runaway loops.`,
       warningKey: `generic:${toolName}:${currentHash}`,
     };
   }
@@ -513,15 +521,15 @@ export function detectToolCallLoop(
   if (
     !knownPollTool &&
     resolvedConfig.detectors.genericRepeat &&
-    recentCount >= resolvedConfig.warningThreshold
+    consecutiveStreak >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    log.warn(`Loop warning: ${toolName} called ${consecutiveStreak} consecutive times with identical arguments`);
     return {
       stuck: true,
       level: "warning",
       detector: "generic_repeat",
-      count: recentCount,
-      message: `WARNING: You have called ${toolName} ${recentCount} times with identical arguments. If this is not making progress, stop retrying and report the task as failed.`,
+      count: consecutiveStreak,
+      message: `WARNING: You have called ${toolName} ${consecutiveStreak} consecutive times with identical arguments. If this is not making progress, stop retrying and report the task as failed.`,
       warningKey: `generic:${toolName}:${currentHash}`,
     };
   }

@@ -66,7 +66,7 @@ Per-agent override (optional):
 
 ### Field behavior
 
-- `enabled`: Master switch. `false` means no loop detection is performed.
+- `enabled`: Master switch (default: `true`). `false` means no loop detection is performed.
 - `historySize`: number of recent tool calls kept for analysis.
 - `warningThreshold`: threshold before classifying a pattern as warning-only.
 - `criticalThreshold`: threshold for blocking repetitive loop patterns.
