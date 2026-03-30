@@ -1,6 +1,6 @@
 # BlueBubbles extension (developer reference)
 
-This directory contains the **BlueBubbles external channel plugin** for OpenClaw.
+This package contains the **BlueBubbles external channel plugin** for OpenClaw.
 
 If you’re looking for **how to use BlueBubbles as an agent/tool user**, see:
 
@@ -8,22 +8,22 @@ If you’re looking for **how to use BlueBubbles as an agent/tool user**, see:
 
 ## Layout
 
-- Extension package: `extensions/bluebubbles/` (entry: `index.ts`).
-- Channel implementation: `extensions/bluebubbles/src/channel.ts`.
-- Webhook handling: `extensions/bluebubbles/src/monitor.ts` (register per-account route via `registerPluginHttpRoute`).
-- REST helpers: `extensions/bluebubbles/src/send.ts` + `extensions/bluebubbles/src/probe.ts`.
-- Runtime bridge: `extensions/bluebubbles/src/runtime.ts` (set via `api.runtime`).
+- Package entry: `index.ts`.
+- Channel implementation: `src/channel.ts`.
+- Webhook handling: `src/monitor.ts` (register per-account route via `registerPluginHttpRoute`).
+- REST helpers: `src/send.ts` + `src/probe.ts`.
+- Runtime bridge: `src/runtime.ts` (set via `api.runtime`).
 - Catalog entry for setup selection: `src/channels/plugins/catalog.ts`.
 
 ## Internal helpers (use these, not raw API calls)
 
-- `probeBlueBubbles` in `extensions/bluebubbles/src/probe.ts` for health checks.
-- `sendMessageBlueBubbles` in `extensions/bluebubbles/src/send.ts` for text delivery.
-- `resolveChatGuidForTarget` in `extensions/bluebubbles/src/send.ts` for chat lookup.
-- `sendBlueBubblesReaction` in `extensions/bluebubbles/src/reactions.ts` for tapbacks.
-- `sendBlueBubblesTyping` + `markBlueBubblesChatRead` in `extensions/bluebubbles/src/chat.ts`.
-- `downloadBlueBubblesAttachment` in `extensions/bluebubbles/src/attachments.ts` for inbound media.
-- `buildBlueBubblesApiUrl` + `blueBubblesFetchWithTimeout` in `extensions/bluebubbles/src/types.ts` for shared REST plumbing.
+- `probeBlueBubbles` in `src/probe.ts` for health checks.
+- `sendMessageBlueBubbles` in `src/send.ts` for text delivery.
+- `resolveChatGuidForTarget` in `src/send.ts` for chat lookup.
+- `sendBlueBubblesReaction` in `src/reactions.ts` for tapbacks.
+- `sendBlueBubblesTyping` + `markBlueBubblesChatRead` in `src/chat.ts`.
+- `downloadBlueBubblesAttachment` in `src/attachments.ts` for inbound media.
+- `buildBlueBubblesApiUrl` + `blueBubblesFetchWithTimeout` in `src/types.ts` for shared REST plumbing.
 
 ## Webhooks
 

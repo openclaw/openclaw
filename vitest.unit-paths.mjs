@@ -1,4 +1,5 @@
 import path from "node:path";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "./scripts/lib/bundled-plugin-paths.mjs";
 
 export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
@@ -16,7 +17,7 @@ export const unitTestIncludePatterns = [
 
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
-  "extensions/**",
+  `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
   "src/browser/**",
   "src/line/**",
   "src/agents/**",

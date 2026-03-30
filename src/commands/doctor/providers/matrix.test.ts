@@ -102,7 +102,8 @@ describe("doctor matrix provider helpers", () => {
     expect(warnings[0]).toContain("custom path that no longer exists");
     expect(warnings[0]).toContain(missingPath);
     expect(warnings[1]).toContain("openclaw plugins install @openclaw/matrix");
-    expect(warnings[2]).toContain("openclaw plugins install ./extensions/matrix");
+    expect(warnings[2]).toContain("openclaw plugins install ");
+    expect(warnings[2]).toContain(path.join("extensions", "matrix"));
   });
 
   it("summarizes matrix repair messaging", async () => {
@@ -218,7 +219,14 @@ describe("doctor matrix provider helpers", () => {
 
     try {
       const result = await runMatrixDoctorSequence({
-        cfg: {},
+        cfg: {
+          channels: {
+            matrix: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "tok-123",
+            },
+          },
+        },
         env: process.env,
         shouldRepair: false,
       });
@@ -228,6 +236,32 @@ describe("doctor matrix provider helpers", () => {
         expect.stringContaining("Matrix plugin upgraded in place."),
         "- matrix warning",
       ]);
+    } finally {
+      stateSpy.mockRestore();
+      cryptoSpy.mockRestore();
+    }
+  });
+
+  it("skips Matrix migration probes for unrelated configs", async () => {
+    const matrixStateModule = await import("../../../infra/matrix-legacy-state.js");
+    const matrixCryptoModule = await import("../../../infra/matrix-legacy-crypto.js");
+
+    const stateSpy = vi.spyOn(matrixStateModule, "detectLegacyMatrixState");
+    const cryptoSpy = vi.spyOn(matrixCryptoModule, "detectLegacyMatrixCrypto");
+
+    try {
+      const result = await runMatrixDoctorSequence({
+        cfg: {
+          gateway: { auth: { mode: "token", token: "123" } },
+          agents: { list: [{ id: "pi" }] },
+        },
+        env: {},
+        shouldRepair: false,
+      });
+
+      expect(result).toEqual({ changeNotes: [], warningNotes: [] });
+      expect(stateSpy).not.toHaveBeenCalled();
+      expect(cryptoSpy).not.toHaveBeenCalled();
     } finally {
       stateSpy.mockRestore();
       cryptoSpy.mockRestore();

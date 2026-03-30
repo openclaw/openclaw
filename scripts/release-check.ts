@@ -32,8 +32,9 @@ const requiredPathGroups = [
 const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack with
-// restored bundled upgrade surfaces while still catching regressions quickly.
-const npmPackUnpackedSizeBudgetBytes = 190 * 1024 * 1024;
+// restored bundled upgrade surfaces and Control UI assets while still catching
+// regressions quickly.
+const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -59,16 +60,93 @@ function collectBundledExtensions(): BundledExtension[] {
   });
 }
 
+function collectRuntimeDependencySpecs(packageJson: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}): Map<string, string> {
+  return new Map([
+    ...Object.entries(packageJson.dependencies ?? {}),
+    ...Object.entries(packageJson.optionalDependencies ?? {}),
+  ]);
+}
+
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  if (manifestErrors.length > 0) {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+  const rootRuntimeDeps = collectRuntimeDependencySpecs(rootPackage);
+  const rootMirrorErrors = collectBundledExtensionRootDependencyMirrorErrors(
+    extensions,
+    rootRuntimeDeps,
+  );
+  const errors = [...manifestErrors, ...rootMirrorErrors];
+  if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
-    for (const error of manifestErrors) {
+    for (const error of errors) {
       console.error(`  - ${error}`);
     }
     process.exit(1);
   }
+}
+
+export function collectBundledExtensionRootDependencyMirrorErrors(
+  extensions: BundledExtension[],
+  rootRuntimeDeps: ReadonlyMap<string, string>,
+): string[] {
+  const errors: string[] = [];
+
+  for (const extension of extensions) {
+    const rawReleaseChecks = extension.packageJson.openclaw?.releaseChecks;
+    const allowlist = (rawReleaseChecks as { rootDependencyMirrorAllowlist?: unknown } | undefined)
+      ?.rootDependencyMirrorAllowlist;
+
+    if (allowlist === undefined) {
+      continue;
+    }
+    if (!Array.isArray(allowlist)) {
+      errors.push(
+        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array`,
+      );
+      continue;
+    }
+
+    const extensionRuntimeDeps = collectRuntimeDependencySpecs(extension.packageJson);
+
+    for (const entry of allowlist) {
+      if (typeof entry !== "string" || entry.trim().length === 0) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entries must be non-empty strings`,
+        );
+        continue;
+      }
+
+      const extensionSpec = extensionRuntimeDeps.get(entry);
+      if (!extensionSpec) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
+        );
+      }
+      const rootSpec = rootRuntimeDeps.get(entry);
+      if (!rootSpec) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
+        );
+      }
+      if (!extensionSpec || !rootSpec) {
+        continue;
+      }
+      if (extensionSpec !== rootSpec) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must match root runtime dependency version (extension '${extensionSpec}', root '${rootSpec}')`,
+        );
+      }
+    }
+  }
+
+  return errors;
 }
 
 function runPackDry(): PackResult[] {

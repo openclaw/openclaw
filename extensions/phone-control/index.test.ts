@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
@@ -164,6 +164,25 @@ describe("phone-control plugin", () => {
 
       expect(String(res?.text ?? "")).toContain("Phone control: disarmed.");
       expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("blocks non-webchat gateway callers with operator.write from mutating phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const armRes = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.write"],
+      });
+      expect(String(armRes?.text ?? "")).toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+
+      const disarmRes = await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.write"],
+      });
+      expect(String(disarmRes?.text ?? "")).toContain("requires operator.admin");
     });
   });
 

@@ -11,7 +11,9 @@ import {
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  hasEffectivePairedDeviceRole,
   listDevicePairing,
+  listEffectivePairedDeviceRoles,
   requestDevicePairing,
   updatePairedDeviceMetadata,
   verifyDeviceToken,
@@ -88,6 +90,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 import {
@@ -546,10 +549,13 @@ export function attachGatewayWsMessageHandler(params: {
           // allow path, including trusted token-authenticated backend operators.
           if (
             !device &&
-            (decision.kind !== "allow" ||
-              (!controlUiAuthPolicy.allowBypass &&
-                !preserveInsecureLocalControlUiScopes &&
-                (authMethod === "token" || authMethod === "password" || trustedProxyAuthOk)))
+            shouldClearUnboundScopesForMissingDeviceIdentity({
+              decision,
+              controlUiAuthPolicy,
+              preserveInsecureLocalControlUiScopes,
+              authMethod,
+              trustedProxyAuthOk,
+            })
           ) {
             clearUnboundScopes();
           }
@@ -749,12 +755,7 @@ export function attachGatewayWsMessageHandler(params: {
               if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
                 return false;
               }
-              const pairedRoles = Array.isArray(pairedCandidate.roles)
-                ? pairedCandidate.roles
-                : pairedCandidate.role
-                  ? [pairedCandidate.role]
-                  : [];
-              if (pairedRoles.length > 0 && !pairedRoles.includes(role)) {
+              if (!hasEffectivePairedDeviceRole(pairedCandidate, role)) {
                 return false;
               }
               if (scopes.length === 0) {
@@ -906,11 +907,7 @@ export function attachGatewayWsMessageHandler(params: {
                 connectParams.client.deviceFamily = metadataPinning.pinnedDeviceFamily;
               }
             }
-            const pairedRoles = Array.isArray(paired.roles)
-              ? paired.roles
-              : paired.role
-                ? [paired.role]
-                : [];
+            const pairedRoles = listEffectivePairedDeviceRoles(paired);
             const pairedScopes = Array.isArray(paired.scopes)
               ? paired.scopes
               : Array.isArray(paired.approvedScopes)

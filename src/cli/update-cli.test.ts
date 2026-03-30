@@ -49,8 +49,8 @@ vi.mock("../infra/openclaw-root.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(),
+  replaceConfigFile: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
-  writeConfigFile: vi.fn(),
 }));
 
 vi.mock("../infra/update-check.js", async (importOriginal) => {
@@ -149,7 +149,7 @@ vi.mock("../runtime.js", () => ({
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-const { readConfigFileSnapshot, writeConfigFile } = await import("../config/config.js");
+const { readConfigFileSnapshot, replaceConfigFile } = await import("../config/config.js");
 const { checkUpdateStatus, fetchNpmPackageTargetStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
@@ -182,8 +182,10 @@ describe("update-cli", () => {
     raw: "{}",
     parsed: {},
     resolved: baseConfig,
+    sourceConfig: baseConfig,
     valid: true,
     config: baseConfig,
+    runtimeConfig: baseConfig,
     issues: [],
     warnings: [],
     legacyIssues: [],
@@ -417,7 +419,7 @@ describe("update-cli", () => {
         await updateCommand({ dryRun: true, channel: "beta" });
       },
       assert: () => {
-        expect(writeConfigFile).not.toHaveBeenCalled();
+        expect(replaceConfigFile).not.toHaveBeenCalled();
         expect(runGatewayUpdate).not.toHaveBeenCalled();
         expect(runDaemonInstall).not.toHaveBeenCalled();
         expect(runRestartScript).not.toHaveBeenCalled();
@@ -553,11 +555,11 @@ describe("update-cli", () => {
       }
 
       if (expectedPersistedChannel !== undefined) {
-        expect(writeConfigFile).toHaveBeenCalled();
-        const writeCall = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
-          update?: { channel?: string };
-        };
-        expect(writeCall?.update?.channel).toBe(expectedPersistedChannel);
+        expect(replaceConfigFile).toHaveBeenCalled();
+        const writeCall = vi.mocked(replaceConfigFile).mock.calls[0]?.[0] as
+          | { nextConfig?: { update?: { channel?: string } } }
+          | undefined;
+        expect(writeCall?.nextConfig?.update?.channel).toBe(expectedPersistedChannel);
       }
     },
   );
@@ -704,7 +706,7 @@ describe("update-cli", () => {
     await updateCommand({ yes: true, tag: "2026.3.23-2" });
 
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
     expect(logs.join("\n")).toContain("global install verify");
     expect(logs.join("\n")).toContain("expected installed version 2026.3.23-2, found 2026.3.23");
@@ -811,16 +813,19 @@ describe("update-cli", () => {
           call[0][2] === "-g",
       );
     expect(installCallIndex).toBeGreaterThanOrEqual(0);
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(writeConfigFile).toHaveBeenCalledWith({
-      update: {
-        channel: "beta",
+    expect(replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        update: {
+          channel: "beta",
+        },
       },
+      baseHash: undefined,
     });
     expect(
       vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[installCallIndex] ?? 0,
     ).toBeLessThan(
-      vi.mocked(writeConfigFile).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+      vi.mocked(replaceConfigFile).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
     );
   });
 
@@ -850,7 +855,7 @@ describe("update-cli", () => {
 
     await updateCommand({ channel: "beta", yes: true });
 
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -875,10 +880,10 @@ describe("update-cli", () => {
 
     await updateCommand({ channel: "beta", yes: true });
 
-    const lastWrite = vi.mocked(writeConfigFile).mock.calls.at(-1)?.[0] as
-      | { update?: { channel?: string } }
+    const lastWrite = vi.mocked(replaceConfigFile).mock.calls.at(-1)?.[0] as
+      | { nextConfig?: { update?: { channel?: string } } }
       | undefined;
-    expect(lastWrite?.update?.channel).toBe("beta");
+    expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");
   });
 
   it.each([
