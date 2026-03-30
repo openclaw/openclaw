@@ -13,6 +13,7 @@ import {
   buildDefaultToolPolicyPipelineSteps,
 } from "../agents/tool-policy-pipeline.js";
 import {
+  applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
@@ -28,14 +29,18 @@ import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
 } from "./http-common.js";
-import { getHeader } from "./http-utils.js";
+import {
+  authorizeGatewayHttpRequestOrReply,
+  getHeader,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -156,7 +161,7 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   const cfg = loadConfig();
-  const ok = await authorizeGatewayBearerRequestOrReply({
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -164,7 +169,31 @@ export async function handleToolsInvokeHttpRequest(
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!ok) {
+  if (!requestAuth) {
+    return true;
+  }
+
+  if (!requestAuth.trustDeclaredOperatorScopes) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "gateway bearer auth cannot invoke tools over HTTP",
+      },
+    });
+    return true;
+  }
+
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod("agent", requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
     return true;
   }
 
@@ -305,7 +334,10 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
-  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+  // HTTP bearer auth does not bind a device-owner identity, so owner-only tools
+  // stay unavailable on this surface even when callers assert admin scopes.
+  const ownerFiltered = applyOwnerOnlyToolPolicy(subagentFiltered, false);
+  const gatewayFiltered = ownerFiltered.filter((t) => !gatewayDenySet.has(t.name));
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {

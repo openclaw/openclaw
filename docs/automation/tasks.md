@@ -17,13 +17,13 @@ ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated opera
 Tasks do **not** replace sessions, cron jobs, or heartbeats — they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
 
 <Note>
-Not every agent run creates a task. Heartbeat turns and main-session cron reminders stay in main-session history. Only **detached** work appears in the task ledger.
+Not every agent run creates a task. Heartbeat turns and normal interactive chat do not. All cron executions, ACP spawns, subagent spawns, and CLI agent commands do.
 </Note>
 
 ## TL;DR
 
 - Tasks are **records**, not schedulers — cron and heartbeat decide _when_ work runs, tasks track _what happened_.
-- Only detached work creates tasks: ACP, subagents, isolated cron, CLI operations.
+- ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
 - `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
@@ -54,17 +54,18 @@ openclaw tasks audit
 
 ## What creates a task
 
-| Source                 | Runtime type | When a task record is created                            |
-| ---------------------- | ------------ | -------------------------------------------------------- |
-| ACP background runs    | `acp`        | Spawning a child ACP session                             |
-| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`                 |
-| Isolated cron jobs     | `cron`       | Each execution of an isolated or custom-session cron job |
-| CLI operations         | `cli`        | Background CLI commands that run through the gateway     |
+| Source                 | Runtime type | When a task record is created                          | Default notify policy |
+| ---------------------- | ------------ | ------------------------------------------------------ | --------------------- |
+| ACP background runs    | `acp`        | Spawning a child ACP session                           | `done_only`           |
+| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
+| Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
+| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `done_only`           |
+
+Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
 **What does not create tasks:**
 
 - Heartbeat turns — main-session; see [Heartbeat](/gateway/heartbeat)
-- Main-session cron (`sessionTarget: "main"`) — see [Cron Jobs](/automation/cron-jobs)
 - Normal interactive chat turns
 - Direct `/command` responses
 
@@ -211,7 +212,7 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ### Tasks and cron
 
-A cron job **definition** lives in `~/.openclaw/cron/jobs.json`. Each **execution** of an isolated cron job creates a task record. Main-session cron jobs do not.
+A cron job **definition** lives in `~/.openclaw/cron/jobs.json`. **Every** cron execution creates a task record — both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
 
 See [Cron Jobs](/automation/cron-jobs).
 
@@ -231,6 +232,7 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 
 ## Related
 
+- [Automation Overview](/automation) — all automation mechanisms at a glance
 - [Cron Jobs](/automation/cron-jobs) — scheduling background work
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns

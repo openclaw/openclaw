@@ -2,11 +2,43 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
+import { buildDmGroupAccountAllowlistAdapter } from "../../plugin-sdk/allowlist-config-edit.js";
+import { resolveApprovalApprovers } from "../../plugin-sdk/approval-approvers.js";
+import { createApproverRestrictedNativeApprovalAdapter } from "../../plugin-sdk/approval-runtime.js";
+import { createScopedChannelConfigAdapter } from "../../plugin-sdk/channel-config-helpers.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../test-utils/bundled-plugin-public-surface.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
+
+const { discordPlugin } = loadBundledPluginPublicSurfaceSync<{
+  discordPlugin: ChannelPlugin;
+}>({
+  pluginId: "discord",
+  artifactBasename: "index.ts",
+});
+const { slackPlugin } = loadBundledPluginPublicSurfaceSync<{
+  slackPlugin: ChannelPlugin;
+}>({
+  pluginId: "slack",
+  artifactBasename: "index.ts",
+});
+const { whatsappPlugin } = loadBundledPluginPublicSurfaceSync<{
+  whatsappPlugin: ChannelPlugin;
+}>({
+  pluginId: "whatsapp",
+  artifactBasename: "index.ts",
+});
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -113,8 +145,6 @@ const {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } = await import("../../agents/subagent-registry.js");
-const { setDefaultChannelPluginRegistryForTests } =
-  await import("../../commands/channel-test-helpers.js");
 const internalHooks = await import("../../hooks/internal-hooks.js");
 const { clearPluginCommands, registerPluginCommand } = await import("../../plugins/commands.js");
 const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
@@ -135,6 +165,273 @@ const { createTaskRecord, resetTaskRegistryForTests } =
 
 let testWorkspaceDir = os.tmpdir();
 
+type TelegramTestAccountConfig = {
+  enabled?: boolean;
+  allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
+  dmPolicy?: string;
+  groupPolicy?: string;
+  configWrites?: boolean;
+  execApprovals?: {
+    enabled?: boolean;
+    approvers?: string[];
+    target?: "dm" | "channel" | "both";
+  };
+};
+
+type TelegramTestSectionConfig = TelegramTestAccountConfig & {
+  accounts?: Record<string, TelegramTestAccountConfig>;
+};
+
+function listConfiguredTelegramAccountIds(cfg: OpenClawConfig): string[] {
+  const channel = cfg.channels?.telegram as TelegramTestSectionConfig | undefined;
+  const accountIds = Object.keys(channel?.accounts ?? {});
+  if (accountIds.length > 0) {
+    return accountIds;
+  }
+  if (!channel) {
+    return [];
+  }
+  const { accounts: _accounts, ...base } = channel;
+  return Object.values(base).some((value) => value !== undefined) ? [DEFAULT_ACCOUNT_ID] : [];
+}
+
+function resolveTelegramTestAccount(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): TelegramTestAccountConfig {
+  const resolvedAccountId = normalizeAccountId(accountId);
+  const channel = cfg.channels?.telegram as TelegramTestSectionConfig | undefined;
+  const scoped = channel?.accounts?.[resolvedAccountId];
+  const base = resolvedAccountId === DEFAULT_ACCOUNT_ID ? channel : undefined;
+  return {
+    ...base,
+    ...scoped,
+    enabled:
+      typeof scoped?.enabled === "boolean"
+        ? scoped.enabled
+        : typeof channel?.enabled === "boolean"
+          ? channel.enabled
+          : true,
+  };
+}
+
+function normalizeTelegramAllowFromEntries(values: Array<string | number>): string[] {
+  return formatAllowFromLowercase({ allowFrom: values, stripPrefixRe: /^(telegram|tg):/i });
+}
+
+function stripTelegramInternalPrefixes(value: string): string {
+  let trimmed = value.trim();
+  let strippedTelegramPrefix = false;
+  while (true) {
+    const next = (() => {
+      if (/^(telegram|tg):/i.test(trimmed)) {
+        strippedTelegramPrefix = true;
+        return trimmed.replace(/^(telegram|tg):/i, "").trim();
+      }
+      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
+        return trimmed.replace(/^group:/i, "").trim();
+      }
+      return trimmed;
+    })();
+    if (next === trimmed) {
+      return trimmed;
+    }
+    trimmed = next;
+  }
+}
+
+function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
+  const normalized = stripTelegramInternalPrefixes(String(value));
+  if (!normalized || normalized.startsWith("-")) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function getTelegramExecApprovalApprovers(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string[] {
+  const account = resolveTelegramTestAccount(params.cfg, params.accountId);
+  return resolveApprovalApprovers({
+    explicit: account.execApprovals?.approvers,
+    allowFrom: account.allowFrom,
+    normalizeApprover: normalizeTelegramDirectApproverId,
+  });
+}
+
+function isTelegramExecApprovalTargetRecipient(params: {
+  cfg: OpenClawConfig;
+  senderId?: string | null;
+  accountId?: string | null;
+}): boolean {
+  const senderId = params.senderId?.trim();
+  const execApprovals = params.cfg.approvals?.exec;
+  if (
+    !senderId ||
+    execApprovals?.enabled !== true ||
+    (execApprovals.mode !== "targets" && execApprovals.mode !== "both")
+  ) {
+    return false;
+  }
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  return (execApprovals.targets ?? []).some((target) => {
+    if (target.channel?.trim().toLowerCase() !== "telegram") {
+      return false;
+    }
+    if (accountId && target.accountId && normalizeAccountId(target.accountId) !== accountId) {
+      return false;
+    }
+    const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
+    return Boolean(to && to === senderId);
+  });
+}
+
+function isTelegramExecApprovalAuthorizedSender(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  senderId?: string | null;
+}): boolean {
+  const senderId = params.senderId ? normalizeTelegramDirectApproverId(params.senderId) : undefined;
+  if (!senderId) {
+    return false;
+  }
+  return (
+    getTelegramExecApprovalApprovers(params).includes(senderId) ||
+    isTelegramExecApprovalTargetRecipient(params)
+  );
+}
+
+function isTelegramExecApprovalClientEnabled(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  const config = resolveTelegramTestAccount(params.cfg, params.accountId).execApprovals;
+  return Boolean(config?.enabled && getTelegramExecApprovalApprovers(params).length > 0);
+}
+
+function resolveTelegramExecApprovalTarget(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): "dm" | "channel" | "both" {
+  return resolveTelegramTestAccount(params.cfg, params.accountId).execApprovals?.target ?? "dm";
+}
+
+const telegramNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
+  channel: "telegram",
+  channelLabel: "Telegram",
+  listAccountIds: listConfiguredTelegramAccountIds,
+  hasApprovers: ({ cfg, accountId }) =>
+    getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
+  isExecAuthorizedSender: isTelegramExecApprovalAuthorizedSender,
+  isPluginAuthorizedSender: ({ cfg, accountId, senderId }) => {
+    const normalizedSenderId = senderId?.trim();
+    return Boolean(
+      normalizedSenderId &&
+      getTelegramExecApprovalApprovers({ cfg, accountId }).includes(normalizedSenderId),
+    );
+  },
+  isNativeDeliveryEnabled: isTelegramExecApprovalClientEnabled,
+  resolveNativeDeliveryMode: resolveTelegramExecApprovalTarget,
+  requireMatchingTurnSourceChannel: true,
+});
+
+const telegramCommandTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "telegram",
+    label: "Telegram",
+    docsPath: "/channels/telegram",
+    capabilities: {
+      chatTypes: ["direct", "group", "channel", "thread"],
+      reactions: true,
+      threads: true,
+      media: true,
+      polls: true,
+      nativeCommands: true,
+      blockStreaming: true,
+    },
+  }),
+  config: createScopedChannelConfigAdapter({
+    sectionKey: "telegram",
+    listAccountIds: listConfiguredTelegramAccountIds,
+    resolveAccount: (cfg, accountId) => resolveTelegramTestAccount(cfg, accountId),
+    defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+    clearBaseFields: [],
+    resolveAllowFrom: (account) => account.allowFrom,
+    formatAllowFrom: normalizeTelegramAllowFromEntries,
+  }),
+  auth: telegramNativeApprovalAdapter.auth,
+  pairing: {
+    idLabel: "telegramUserId",
+  },
+  allowlist: buildDmGroupAccountAllowlistAdapter({
+    channelId: "telegram",
+    resolveAccount: ({ cfg, accountId }) => resolveTelegramTestAccount(cfg, accountId),
+    normalize: ({ values }) => normalizeTelegramAllowFromEntries(values),
+    resolveDmAllowFrom: (account) => account.allowFrom,
+    resolveGroupAllowFrom: (account) => account.groupAllowFrom,
+    resolveDmPolicy: (account) => account.dmPolicy,
+    resolveGroupPolicy: (account) => account.groupPolicy,
+  }),
+};
+
+describe("telegram command test plugin helpers", () => {
+  it("normalizes telegram allowFrom entries like the production adapter", () => {
+    expect(normalizeTelegramAllowFromEntries([" TG:123 ", "telegram:456", "@Alice"])).toEqual([
+      "123",
+      "456",
+      "@alice",
+    ]);
+  });
+
+  it("falls back to allowFrom when explicit exec approvers are empty", () => {
+    expect(
+      getTelegramExecApprovalApprovers({
+        cfg: {
+          channels: {
+            telegram: {
+              allowFrom: ["tg:123"],
+              execApprovals: { enabled: true, approvers: [] },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toEqual(["123"]);
+  });
+
+  it("rejects prefixed telegram group ids as direct approvers", () => {
+    expect(normalizeTelegramDirectApproverId("tg:-100123456")).toBeUndefined();
+  });
+});
+
+function setMinimalChannelPluginRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: discordPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: slackPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "telegram",
+        plugin: telegramCommandTestPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "whatsapp",
+        plugin: whatsappPlugin,
+        source: "test",
+      },
+    ]),
+  );
+}
+
 beforeAll(async () => {
   testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commands-"));
   await fs.writeFile(path.join(testWorkspaceDir, "AGENTS.md"), "# Agents\n", "utf-8");
@@ -153,7 +450,7 @@ beforeEach(() => {
   vi.useRealTimers();
   vi.clearAllTimers();
   resetTaskRegistryForTests();
-  setDefaultChannelPluginRegistryForTests();
+  setMinimalChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
@@ -517,7 +814,7 @@ describe("/approve command", () => {
     }
   });
 
-  it("preserves legacy unprefixed plugin approval fallback on Discord", async () => {
+  it("rejects legacy unprefixed plugin approval fallback on Discord before exec fallback", async () => {
     for (const testCase of [
       {
         name: "discord legacy plugin approval with exec approvals disabled",
@@ -540,14 +837,8 @@ describe("/approve command", () => {
 
       const result = await handleCommands(params);
       expect(result.shouldContinue, testCase.name).toBe(false);
-      expect(result.reply?.text, testCase.name).toContain("Approval allow-once submitted");
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(1);
-      expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "plugin.approval.resolve",
-          params: { id: "legacy-plugin-123", decision: "allow-once" },
-        }),
-      );
+      expect(result.reply?.text, testCase.name).toContain("not authorized to approve");
+      expect(callGatewayMock, testCase.name).not.toHaveBeenCalled();
     }
   });
 
@@ -1832,7 +2123,7 @@ function buildPolicyParams(
 describe("handleCommands /allowlist", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalChannelPluginRegistryForTests();
   });
 
   it("lists config + store allowFrom entries", async () => {

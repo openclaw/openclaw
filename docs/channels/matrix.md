@@ -577,6 +577,15 @@ Current behavior:
 - `reactionNotifications: "off"` disables reaction system events.
 - Reaction removals are still not synthesized into system events because Matrix surfaces those as redactions, not as standalone `m.reaction` removals.
 
+## History context
+
+- `channels.matrix.historyLimit` controls how many recent room messages are included as `InboundHistory` when a Matrix room message triggers the agent.
+- It falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- Matrix room history is room-only. DMs keep using normal session history.
+- Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
+- The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
+- Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.
+
 ## DM and room policy example
 
 ```json5
@@ -732,6 +741,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `groupPolicy`: `open`, `allowlist`, or `disabled`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
+- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
 - `streaming`: `off` (default) or `partial`. `partial` enables single-message draft previews with edit-in-place updates.
 - `threadReplies`: `off`, `inbound`, or `always`.
@@ -753,3 +763,11 @@ Live directory lookup uses the logged-in Matrix account:
 - `groups`: per-room policy map. Prefer room IDs or aliases; unresolved room names are ignored at runtime. Session/group identity uses the stable room ID after resolution, while human-readable labels still come from room names.
 - `rooms`: legacy alias for `groups`.
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

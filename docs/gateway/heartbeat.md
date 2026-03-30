@@ -397,3 +397,11 @@ Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce c
 - Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).
 - Keep `HEARTBEAT.md` small.
 - Use `target: "none"` if you only want internal state updates.
+
+## Related
+
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — when to use each
+- [Background Tasks](/automation/tasks) — how detached work is tracked
+- [Timezone](/concepts/timezone) — how timezone affects heartbeat scheduling
+- [Troubleshooting](/automation/troubleshooting) — debugging automation issues

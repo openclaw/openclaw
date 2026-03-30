@@ -731,6 +731,47 @@ describe("session_status tool", () => {
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
+  it("blocks unsandboxed same-agent bare main session_status outside self visibility", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "self" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    await expect(
+      tool.execute("call-self-visibility-bare-main", {
+        sessionKey: "main",
+        model: "default",
+      }),
+    ).rejects.toThrow(
+      "Session status visibility is restricted to the current session (tools.sessions.visibility=self).",
+    );
+
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
   it("blocks unsandboxed same-agent session_status outside tree visibility before mutation", async () => {
     resetSessionStore({
       "agent:main:main": {

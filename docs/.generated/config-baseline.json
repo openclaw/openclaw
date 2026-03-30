@@ -21359,6 +21359,66 @@
       "hasChildren": false
     },
     {
+      "path": "channels.line.accounts.*.threadBindings",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.idleHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.maxAgeHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.spawnSubagentSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.line.accounts.*.tokenFile",
       "kind": "channel",
       "type": "string",
@@ -21645,6 +21705,66 @@
         "security",
         "storage"
       ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.line.threadBindings.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.idleHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.maxAgeHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.spawnSubagentSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -22297,6 +22417,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.historyLimit",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.homeserver",
       "kind": "channel",
       "type": "string",
@@ -22663,6 +22793,23 @@
       "kind": "channel",
       "type": "number",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.streaming",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "string"
+      ],
+      "required": false,
+      "enumValues": [
+        "partial",
+        "off"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -44553,7 +44700,8 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama"
+        "ollama",
+        "azure-openai-responses"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -44767,7 +44915,8 @@
         "google-generative-ai",
         "github-copilot",
         "bedrock-converse-stream",
-        "ollama"
+        "ollama",
+        "azure-openai-responses"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -47572,7 +47721,6 @@
       "kind": "plugin",
       "type": "number",
       "required": false,
-      "defaultValue": 960,
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -47608,7 +47756,6 @@
       "kind": "plugin",
       "type": "number",
       "required": false,
-      "defaultValue": 2,
       "deprecated": false,
       "sensitive": false,
       "tags": [

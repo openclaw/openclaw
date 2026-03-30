@@ -200,3 +200,6 @@ Preview with `openclaw sessions cleanup --dry-run`.
 - [Session Tools](/concepts/session-tool) -- agent tools for cross-session work
 - [Session Management Deep Dive](/reference/session-management-compaction) --
   store schema, transcripts, send policy, origin metadata, and advanced config
+- [Multi-Agent](/concepts/multi-agent) — routing and session isolation across agents
+- [Background Tasks](/automation/tasks) — how detached work creates task records with session references
+- [Channel Routing](/channels/channel-routing) — how inbound messages are routed to sessions

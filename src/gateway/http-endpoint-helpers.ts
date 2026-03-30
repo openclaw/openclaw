@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  authorizeGatewayBearerRequestOrReply,
-  resolveGatewayRequestedOperatorScopes,
-} from "./http-auth-helpers.js";
 import { readJsonBodyOrError, sendJson, sendMethodNotAllowed } from "./http-common.js";
+import {
+  authorizeGatewayHttpRequestOrReply,
+  type AuthorizedGatewayHttpRequest,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 export async function handleGatewayPostJsonEndpoint(
@@ -20,7 +21,7 @@ export async function handleGatewayPostJsonEndpoint(
     rateLimiter?: AuthRateLimiter;
     requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
   },
-): Promise<false | { body: unknown } | undefined> {
+): Promise<false | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest } | undefined> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
   if (url.pathname !== opts.pathname) {
     return false;
@@ -31,7 +32,7 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  const authorized = await authorizeGatewayBearerRequestOrReply({
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -39,12 +40,12 @@ export async function handleGatewayPostJsonEndpoint(
     allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authorized) {
+  if (!requestAuth) {
     return undefined;
   }
 
   if (opts.requiredOperatorMethod) {
-    const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
+    const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
     const scopeAuth = authorizeOperatorScopesForMethod(
       opts.requiredOperatorMethod,
       requestedScopes,
@@ -66,5 +67,5 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  return { body };
+  return { body, requestAuth };
 }

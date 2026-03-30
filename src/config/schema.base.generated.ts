@@ -1051,6 +1051,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     "github-copilot",
                     "bedrock-converse-stream",
                     "ollama",
+                    "azure-openai-responses",
                   ],
                 },
                 injectNumCtxForOpenAICompat: {
@@ -1155,6 +1156,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           "github-copilot",
                           "bedrock-converse-stream",
                           "ollama",
+                          "azure-openai-responses",
                         ],
                       },
                       reasoning: {

@@ -62,7 +62,7 @@ const pluginPkg = JSON.parse(fs.readFileSync(path.join(ACPX_PLUGIN_ROOT, "packag
 const acpxVersion: unknown = pluginPkg?.dependencies?.acpx;
 if (typeof acpxVersion !== "string" || acpxVersion.trim() === "") {
   throw new Error(
-    `Could not read acpx version from ${path.join(ACPX_PLUGIN_ROOT, "package.json")} — expected a non-empty string at dependencies.acpx`
+    `Could not read acpx version from ${path.join(ACPX_PLUGIN_ROOT, "package.json")} — expected a non-empty string at dependencies.acpx`,
   );
 }
 export const ACPX_PINNED_VERSION: string = acpxVersion.replace(/^[^0-9]*/, "");

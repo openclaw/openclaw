@@ -552,7 +552,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       // Hook errors are non-fatal — built-in scanner results still apply.
     }
   }
-
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
   const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);
