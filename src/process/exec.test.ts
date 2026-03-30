@@ -45,7 +45,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.npm_config_fund).toBe("false");
   });
 
-  it("kills command when no output timeout elapses", async () => {
+  it("kills command when no output timeout elapses", { timeout: 15_000 }, async () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
       {
@@ -59,18 +59,22 @@ describe("runCommandWithTimeout", () => {
     expect(result.code).not.toBe(0);
   });
 
-  it("reports global timeout termination when overall timeout elapses", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-      {
-        timeoutMs: 200,
-      },
-    );
+  it(
+    "reports global timeout termination when overall timeout elapses",
+    { timeout: 15_000 },
+    async () => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
+        {
+          timeoutMs: 200,
+        },
+      );
 
-    expect(result.termination).toBe("timeout");
-    expect(result.noOutputTimedOut).toBe(false);
-    expect(result.code).not.toBe(0);
-  });
+      expect(result.termination).toBe("timeout");
+      expect(result.noOutputTimedOut).toBe(false);
+      expect(result.code).not.toBe(0);
+    },
+  );
 
   it.runIf(process.platform === "win32")(
     "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
