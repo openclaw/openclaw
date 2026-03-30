@@ -607,6 +607,8 @@ export class TelegramPollingSession {
     try {
       const response = await fetchImpl(url, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
         signal: controller.signal,
       });
       const status = response.status;
