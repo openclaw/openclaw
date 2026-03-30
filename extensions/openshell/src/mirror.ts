@@ -2,15 +2,31 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
+const COPY_TREE_CONCURRENCY = 16;
 
 function createExcludeMatcher(excludeDirs?: readonly string[]) {
   const excluded = new Set((excludeDirs ?? []).map((d) => d.toLowerCase()));
   return (name: string) => excluded.has(name.toLowerCase());
 }
 
+async function lstatIfExists(targetPath: string) {
+  return await fs.lstat(targetPath).catch(() => null);
+}
+
+async function mapWithConcurrency<T>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let index = 0; index < items.length; index += limit) {
+    await Promise.all(items.slice(index, index + limit).map(mapper));
+  }
+}
+
 async function copyTreeWithoutSymlinks(params: {
   sourcePath: string;
   targetPath: string;
+  preserveTargetSymlinks?: boolean;
 }): Promise<void> {
   const stats = await fs.lstat(params.sourcePath);
   // Mirror sync only carries regular files and directories across the
@@ -18,17 +34,20 @@ async function copyTreeWithoutSymlinks(params: {
   if (stats.isSymbolicLink()) {
     return;
   }
+  const targetStats = await lstatIfExists(params.targetPath);
+  if (params.preserveTargetSymlinks && targetStats?.isSymbolicLink()) {
+    return;
+  }
   if (stats.isDirectory()) {
     await fs.mkdir(params.targetPath, { recursive: true });
     const entries = await fs.readdir(params.sourcePath);
-    await Promise.all(
-      entries.map(async (entry) => {
-        await copyTreeWithoutSymlinks({
-          sourcePath: path.join(params.sourcePath, entry),
-          targetPath: path.join(params.targetPath, entry),
-        });
-      }),
-    );
+    await mapWithConcurrency(entries, COPY_TREE_CONCURRENCY, async (entry) => {
+      await copyTreeWithoutSymlinks({
+        sourcePath: path.join(params.sourcePath, entry),
+        targetPath: path.join(params.targetPath, entry),
+        preserveTargetSymlinks: params.preserveTargetSymlinks,
+      });
+    });
     return;
   }
   if (stats.isFile()) {
@@ -49,12 +68,17 @@ export async function replaceDirectoryContents(params: {
   await Promise.all(
     existing
       .filter((entry) => !isExcluded(entry))
-      .map((entry) =>
-        fs.rm(path.join(params.targetDir, entry), {
+      .map(async (entry) => {
+        const targetPath = path.join(params.targetDir, entry);
+        const stats = await lstatIfExists(targetPath);
+        if (stats?.isSymbolicLink()) {
+          return;
+        }
+        await fs.rm(targetPath, {
           recursive: true,
           force: true,
-        }),
-      ),
+        });
+      }),
   );
   const sourceEntries = await fs.readdir(params.sourceDir);
   for (const entry of sourceEntries) {
@@ -64,6 +88,7 @@ export async function replaceDirectoryContents(params: {
     await copyTreeWithoutSymlinks({
       sourcePath: path.join(params.sourceDir, entry),
       targetPath: path.join(params.targetDir, entry),
+      preserveTargetSymlinks: true,
     });
   }
 }
