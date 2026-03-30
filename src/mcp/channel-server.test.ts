@@ -111,12 +111,31 @@ async function connectMcp(params: {
   };
 }
 
+async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | "on" | "off" }) {
+  const serverHarness = await createOpenClawChannelMcpServer({
+    claudeChannelMode: params?.claudeChannelMode ?? "auto",
+    verbose: false,
+  });
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await serverHarness.server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return {
+    client,
+    bridge: serverHarness.bridge,
+    close: async () => {
+      await client.close();
+      await serverHarness.close();
+    },
+  };
+}
+
 describe("openclaw channel mcp server", () => {
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
       installGatewayTestHooks();
 
-      test("lists conversations, reads messages, and waits for events", async () => {
+      test("lists conversations and reads messages", async () => {
         const storePath = await createSessionStoreFile();
         const sessionKey = "agent:main:main";
         await seedSession({
@@ -217,51 +236,6 @@ describe("openclaw channel mcp server", () => {
               }),
             ]),
           );
-
-          emitSessionTranscriptUpdate({
-            sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
-            sessionKey,
-            messageId: "msg-2",
-            message: {
-              role: "user",
-              content: [{ type: "text", text: "inbound live message" }],
-              timestamp: Date.now() + 1,
-            },
-          });
-
-          await vi.waitFor(async () => {
-            const polled = (await connectedMcp.client.callTool({
-              name: "events_poll",
-              arguments: { session_key: sessionKey, after_cursor: 0, limit: 5 },
-            })) as {
-              structuredContent?: { events?: Array<Record<string, unknown>> };
-            };
-            expect(polled.structuredContent?.events).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  type: "message",
-                  sessionKey,
-                  messageId: "msg-2",
-                  role: "user",
-                  text: "inbound live message",
-                }),
-              ]),
-            );
-          });
-
-          const waited = (await connectedMcp.client.callTool({
-            name: "events_wait",
-            arguments: { session_key: sessionKey, after_cursor: 0, timeout_ms: 250 },
-          })) as {
-            structuredContent?: { event?: Record<string, unknown> };
-          };
-          expect(waited.structuredContent?.event).toMatchObject({
-            type: "message",
-            sessionKey,
-            messageId: "msg-2",
-            role: "user",
-            text: "inbound live message",
-          });
         } finally {
           await mcp?.close();
           await harness.close();
@@ -544,6 +518,45 @@ describe("openclaw channel mcp server", () => {
           },
         }),
       ).resolves.toBeUndefined();
+    });
+
+    test("waits for queued events through the MCP tool", async () => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+      try {
+        await (
+          mcp.bridge as unknown as {
+            handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+          }
+        ).handleSessionMessageEvent({
+          sessionKey: "agent:main:main",
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
+          messageId: "msg-2",
+          messageSeq: 1,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "inbound live message" }],
+          },
+        });
+
+        const waited = (await mcp.client.callTool({
+          name: "events_wait",
+          arguments: { session_key: "agent:main:main", after_cursor: 0, timeout_ms: 250 },
+        })) as {
+          structuredContent?: { event?: Record<string, unknown> };
+        };
+        expect(waited.structuredContent?.event).toMatchObject({
+          type: "message",
+          sessionKey: "agent:main:main",
+          messageId: "msg-2",
+          role: "user",
+          text: "inbound live message",
+        });
+      } finally {
+        await mcp.close();
+      }
     });
   });
 });
