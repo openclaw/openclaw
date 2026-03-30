@@ -734,3 +734,11 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - If the announce flow returns `false` (e.g. requester session is busy), the gateway retries up to 3 times with tracking via `announceRetryCount`.
 - Announces older than 5 minutes past `endedAt` are force-expired to prevent stale entries from looping indefinitely.
 - If you see repeated announce deliveries in logs, check the subagent registry for entries with high `announceRetryCount` values.
+
+## Related
+
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — when to use each
+- [Background Tasks](/automation/tasks) — task ledger for cron executions
+- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Troubleshooting](/automation/troubleshooting) — debugging automation issues
