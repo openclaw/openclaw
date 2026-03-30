@@ -236,7 +236,7 @@ Both heartbeat and cron can interact with the main session, but differently:
 | Context  | Full                            | Full                     | None (isolated) / Cumulative (custom)           |
 | Model    | Main session model              | Main session model       | Can override                                    |
 | Output   | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default)                      |
-| Tasks UI | No task run                     | No task run              | Visible in `openclaw tasks`                     |
+| [Tasks](/automation/tasks) | No task record | No task record | Tracked in `openclaw tasks` |
 
 ### When to use main session cron
 
