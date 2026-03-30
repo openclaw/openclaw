@@ -646,6 +646,7 @@ export async function importMigrateArchive(
     // from being written to disk. Throwing from filter aborts the entire
     // tar stream immediately. onReadEntry only fires for entries that
     // pass filter, so we use it only for byte-size tracking.
+    const skippedSymlinks: string[] = [];
     await tar.x({
       file: archivePath,
       cwd: tempDir,
@@ -662,7 +663,9 @@ export async function importMigrateArchive(
           throw new Error(`Blocked unsafe tar entry type "${entryType}": ${_entryPath}`);
         }
         // Skip symlinks — they won't be extracted to disk.
+        // Track them so we can warn the user about incomplete restoration.
         if (entryType === "SymbolicLink") {
+          skippedSymlinks.push(_entryPath);
           return false;
         }
         return true;
@@ -679,6 +682,12 @@ export async function importMigrateArchive(
         }
       },
     });
+
+    if (skippedSymlinks.length > 0) {
+      warnings.push(
+        `${skippedSymlinks.length} symbolic link(s) were skipped during import and not restored. Affected paths: ${skippedSymlinks.slice(0, 5).join(", ")}${skippedSymlinks.length > 5 ? ` (and ${skippedSymlinks.length - 5} more)` : ""}`,
+      );
+    }
 
     const resolvedTempDir = await fs.realpath(tempDir);
     const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
