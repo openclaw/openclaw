@@ -79,9 +79,11 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
       await fs.writeFile(memoryFile, "seed", "utf-8");
 
       const { wrapToolMemoryFlushAppendOnlyWrite } = await import("../../pi-tools.read.js");
-      const fallbackWrite = vi.fn(async () => {
-        throw new Error("append-only wrapper should not delegate to the base write tool");
-      });
+      const delegatedWrite = vi.fn(async (_toolCallId, params) => ({
+        content: [{ type: "text" as const, text: JSON.stringify(params) }],
+        details: undefined,
+      }));
+      const fallbackWrite = delegatedWrite;
       const writeTool: AnyAgentTool = {
         name: "write",
         label: "write",
@@ -100,13 +102,16 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
           content: "new durable note",
         }),
       ).resolves.toMatchObject({
-        content: [{ type: "text", text: `Appended content to ${MEMORY_RELATIVE_PATH}.` }],
-        details: {
-          path: MEMORY_RELATIVE_PATH,
-          appendOnly: true,
-        },
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              path: MEMORY_RELATIVE_PATH,
+              content: "seed\nnew durable note",
+            }),
+          },
+        ],
       });
-      await expect(fs.readFile(memoryFile, "utf-8")).resolves.toBe("seed\nnew durable note");
       await expect(
         wrapped.execute("call-memory-flush-deny", {
           path: "memory/other-day.md",
@@ -115,7 +120,47 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
       ).rejects.toThrow(
         `Memory flush writes are restricted to ${MEMORY_RELATIVE_PATH}; use that path only.`,
       );
-      expect(fallbackWrite).not.toHaveBeenCalled();
+      expect(fallbackWrite).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes valid memory flush appends through the wrapped write tool", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
+    const memoryFile = path.join(workspaceDir, MEMORY_RELATIVE_PATH);
+
+    try {
+      await fs.mkdir(path.dirname(memoryFile), { recursive: true });
+      await fs.writeFile(memoryFile, "seed", "utf-8");
+
+      const { wrapToolMemoryFlushAppendOnlyWrite } = await import("../../pi-tools.read.js");
+      const delegatedWrite = vi.fn(async (_toolCallId, params) => ({
+        content: [{ type: "text" as const, text: JSON.stringify(params) }],
+        details: undefined,
+      }));
+      const writeTool: AnyAgentTool = {
+        name: "write",
+        label: "write",
+        description: "Write content to a file.",
+        parameters: { type: "object", properties: {} },
+        execute: delegatedWrite,
+      };
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(writeTool, {
+        root: workspaceDir,
+        relativePath: MEMORY_RELATIVE_PATH,
+      });
+
+      await wrapped.execute("call-memory-flush-delegate", {
+        path: MEMORY_RELATIVE_PATH,
+        content: "new durable note",
+      });
+
+      expect(delegatedWrite).toHaveBeenCalledTimes(1);
+      expect(delegatedWrite.mock.calls[0]?.[1]).toMatchObject({
+        path: MEMORY_RELATIVE_PATH,
+        content: "seed\nnew durable note",
+      });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

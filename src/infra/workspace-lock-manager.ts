@@ -35,10 +35,46 @@ type HeldLock = {
 
 const CROSS_USER_LOCK_DIR_MODE = 0o777;
 
-function normalizeLockPathCase(value: string): string {
-  return process.platform === "win32" || process.platform === "darwin"
-    ? value.toLowerCase()
-    : value;
+async function shouldNormalizeUnresolvedPathCase(targetPath: string): Promise<boolean> {
+  if (process.platform === "win32") {
+    return true;
+  }
+  if (process.platform !== "darwin") {
+    return false;
+  }
+
+  let cursor = path.resolve(targetPath);
+  while (true) {
+    try {
+      return await probeDirectoryCaseInsensitive(cursor);
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return false;
+      }
+      cursor = parent;
+    }
+  }
+}
+
+async function probeDirectoryCaseInsensitive(existingPath: string): Promise<boolean> {
+  const parent = path.dirname(existingPath);
+  const probeName = `.openclaw-case-probe-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const probePath = path.join(parent, probeName);
+  const altPath = path.join(parent, probeName.toUpperCase());
+  await fs.writeFile(probePath, "", { flag: "wx" });
+  try {
+    await fs.stat(altPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await fs.rm(probePath, { force: true }).catch(() => undefined);
+  }
+}
+
+function normalizeLockPathCase(value: string, normalizeCase: boolean): string {
+  return normalizeCase ? value.toLowerCase() : value;
 }
 
 export type WorkspaceLockHandle = {
@@ -58,6 +94,7 @@ async function canonicalizePathViaNearestExistingAncestor(targetPath: string): P
   const resolved = path.resolve(targetPath);
   const suffix: string[] = [];
   let cursor = resolved;
+  const normalizeCase = await shouldNormalizeUnresolvedPathCase(resolved);
 
   // Walk upward until we hit an existing ancestor (or filesystem root).
   while (true) {
@@ -71,7 +108,7 @@ async function canonicalizePathViaNearestExistingAncestor(targetPath: string): P
       }
       // Preserve unresolved suffix casing so lock identity remains stable before and
       // after path materialization for the same logical target string.
-      suffix.push(normalizeLockPathCase(path.basename(cursor)));
+      suffix.push(normalizeLockPathCase(path.basename(cursor), normalizeCase));
       cursor = parent;
     }
   }

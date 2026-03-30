@@ -821,7 +821,40 @@ describe("workspace lock manager", () => {
     await lock.release();
   });
 
-  it("normalizes unresolved file-path casing on case-insensitive platforms", async () => {
+  it("normalizes unresolved file-path casing on win32", async () => {
+    const dir = await makeCaseDir();
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!originalPlatformDescriptor) {
+      throw new Error("missing process.platform descriptor");
+    }
+
+    Object.defineProperty(process, "platform", {
+      ...originalPlatformDescriptor,
+      value: "win32",
+    });
+
+    try {
+      const upper = await acquireWorkspaceLock(path.join(dir, "New", "State.json"), {
+        kind: "file",
+        timeoutMs: 100,
+        ttlMs: 5_000,
+      });
+      await upper.release();
+
+      const lower = await acquireWorkspaceLock(path.join(dir, "new", "state.json"), {
+        kind: "file",
+        timeoutMs: 100,
+        ttlMs: 5_000,
+      });
+
+      expect(lower.lockPath).toBe(upper.lockPath);
+      await lower.release();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
+  it("preserves distinct unresolved file-path casing on case-sensitive darwin volumes", async () => {
     const dir = await makeCaseDir();
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     if (!originalPlatformDescriptor) {
@@ -847,7 +880,7 @@ describe("workspace lock manager", () => {
         ttlMs: 5_000,
       });
 
-      expect(lower.lockPath).toBe(upper.lockPath);
+      expect(lower.lockPath).not.toBe(upper.lockPath);
       await lower.release();
     } finally {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);

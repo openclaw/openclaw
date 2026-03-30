@@ -67,4 +67,40 @@ describe("wrapToolMutationLock timeout policy", () => {
     expect(withWorkspaceLockMock.mock.calls[1]?.[0]).toBe("/tmp/workspace/src/b.ts");
     expect(withWorkspaceLockMock.mock.calls[1]?.[1]).toMatchObject({ kind: "file" });
   });
+
+  it("deduplicates canonical apply_patch lock targets before nesting", async () => {
+    withWorkspaceLockMock.mockClear();
+    const realPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!realPlatformDescriptor) {
+      throw new Error("missing process.platform descriptor");
+    }
+    Object.defineProperty(process, "platform", { ...realPlatformDescriptor, value: "win32" });
+
+    try {
+      const { wrapApplyPatchMutationLock } = await import("./pi-tools.read.js");
+      const wrapped = wrapApplyPatchMutationLock(
+        {
+          name: "apply_patch",
+          label: "apply_patch",
+          description: "apply_patch",
+          parameters: {},
+          execute: async (): Promise<AgentToolResult<unknown>> => ({
+            content: [{ type: "text", text: "ok" }],
+            details: undefined,
+          }),
+        },
+        "/tmp/workspace",
+      );
+
+      await wrapped.execute("call-3", {
+        input:
+          "*** Begin Patch\n*** Update File: src/Foo.ts\n@@\n-a\n+b\n*** Update File: src/foo.ts\n@@\n-c\n+d\n*** End Patch",
+      });
+
+      expect(withWorkspaceLockMock).toHaveBeenCalledTimes(1);
+      expect(withWorkspaceLockMock.mock.calls[0]?.[0]).toBe("/tmp/workspace/src/foo.ts");
+    } finally {
+      Object.defineProperty(process, "platform", realPlatformDescriptor);
+    }
+  });
 });

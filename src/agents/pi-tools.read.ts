@@ -3,7 +3,6 @@ import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
-  appendFileWithinRoot,
   SafeOpenError,
   openFileWithinRoot,
   readFileWithinRoot,
@@ -495,6 +494,13 @@ function extractApplyPatchTouchedPaths(root: string, params: unknown): string[] 
   return [...touched].toSorted();
 }
 
+async function normalizeCanonicalLockKeys(paths: string[]): Promise<string[]> {
+  const canonical = await Promise.all(
+    paths.map(async (target) => await canonicalizeMutationLockKey(target)),
+  );
+  return [...new Set(canonical)];
+}
+
 export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): AnyAgentTool {
   const resolvedRoot = path.resolve(root);
   const queueKey = `${APPLY_PATCH_WORKSPACE_LOCK_PREFIX}${resolvedRoot}`;
@@ -514,7 +520,9 @@ export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): An
         await waitForQueuedMutation(previous, signal);
         ranMutation = true;
         const lockFn = await getWithWorkspaceLock();
-        const touchedPaths = extractApplyPatchTouchedPaths(resolvedRoot, params);
+        const touchedPaths = await normalizeCanonicalLockKeys(
+          extractApplyPatchTouchedPaths(resolvedRoot, params),
+        );
         const runTool = async (): Promise<ReturnType<typeof tool.execute>> =>
           await tool.execute(toolCallId, params, signal, onUpdate);
 
@@ -538,9 +546,8 @@ export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): An
           if (!target) {
             return await runTool();
           }
-          const lockKey = await canonicalizeMutationLockKey(target);
           return await lockFn(
-            lockKey,
+            target,
             {
               kind: "file",
               timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
@@ -616,6 +623,7 @@ async function canonicalizeMutationLockKey(targetPath: string): Promise<string> 
   const resolved = path.resolve(targetPath);
   const suffix: string[] = [];
   let cursor = resolved;
+  const normalizeCase = await shouldNormalizeMutationLockCase(resolved);
 
   while (true) {
     try {
@@ -629,9 +637,48 @@ async function canonicalizeMutationLockKey(targetPath: string): Promise<string> 
       if (parent === cursor) {
         return resolved;
       }
-      suffix.push(path.basename(cursor));
+      const basename = path.basename(cursor);
+      suffix.push(normalizeCase ? basename.toLowerCase() : basename);
       cursor = parent;
     }
+  }
+}
+
+async function shouldNormalizeMutationLockCase(targetPath: string): Promise<boolean> {
+  if (process.platform === "win32") {
+    return true;
+  }
+  if (process.platform !== "darwin") {
+    return false;
+  }
+
+  let cursor = path.resolve(targetPath);
+  while (true) {
+    try {
+      return await probeDirectoryCaseInsensitive(cursor);
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return false;
+      }
+      cursor = parent;
+    }
+  }
+}
+
+async function probeDirectoryCaseInsensitive(existingPath: string): Promise<boolean> {
+  const parent = path.dirname(existingPath);
+  const probeName = `.openclaw-case-probe-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const probePath = path.join(parent, probeName);
+  const altPath = path.join(parent, probeName.toUpperCase());
+  await fs.writeFile(probePath, "", { flag: "wx" });
+  try {
+    await fs.stat(altPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await fs.rm(probePath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -772,56 +819,6 @@ async function readOptionalUtf8File(params: {
   }
 }
 
-async function appendMemoryFlushContent(params: {
-  absolutePath: string;
-  root: string;
-  relativePath: string;
-  content: string;
-  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
-  signal?: AbortSignal;
-}) {
-  if (!params.sandbox) {
-    await appendFileWithinRoot({
-      rootDir: params.root,
-      relativePath: params.relativePath,
-      data: params.content,
-      mkdir: true,
-      prependNewlineIfNeeded: true,
-    });
-    return;
-  }
-
-  const existing = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
-    relativePath: params.relativePath,
-    sandbox: params.sandbox,
-    signal: params.signal,
-  });
-  const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
-  const next = `${existing}${separator}${params.content}`;
-  if (params.sandbox) {
-    const parent = path.posix.dirname(params.relativePath);
-    if (parent && parent !== ".") {
-      await params.sandbox.bridge.mkdirp({
-        filePath: parent,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-    }
-    await params.sandbox.bridge.writeFile({
-      filePath: params.relativePath,
-      cwd: params.sandbox.root,
-      data: next,
-      mkdir: true,
-      signal: params.signal,
-    });
-    return;
-  }
-  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
-  await fs.writeFile(params.absolutePath, next, "utf-8");
-}
-
 export function wrapToolMemoryFlushAppendOnlyWrite(
   tool: AnyAgentTool,
   options: MemoryFlushAppendOnlyWriteOptions,
@@ -854,21 +851,25 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      await appendMemoryFlushContent({
+      const existing = await readOptionalUtf8File({
         absolutePath: allowedAbsolutePath,
-        root: options.root,
         relativePath: options.relativePath,
-        content,
         sandbox: options.sandbox,
         signal,
       });
-      return {
-        content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: {
+      const separator =
+        existing.length > 0 && !existing.endsWith("\n") && !content.startsWith("\n") ? "\n" : "";
+
+      return await tool.execute(
+        toolCallId,
+        {
+          ...record,
           path: options.relativePath,
-          appendOnly: true,
+          content: `${existing}${separator}${content}`,
         },
-      };
+        signal,
+        onUpdate,
+      );
     },
   };
 }
