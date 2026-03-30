@@ -37,7 +37,10 @@ describe("task-registry store runtime", () => {
 
   it("uses the configured task store for restore and save", () => {
     const storedTask = createStoredTask();
-    const loadSnapshot = vi.fn(() => new Map([[storedTask.taskId, storedTask]]));
+    const loadSnapshot = vi.fn(() => ({
+      tasks: new Map([[storedTask.taskId, storedTask]]),
+      deliveryStates: new Map(),
+    }));
     const saveSnapshot = vi.fn();
     configureTaskRegistryRuntime({
       store: {
@@ -63,16 +66,21 @@ describe("task-registry store runtime", () => {
     });
 
     expect(saveSnapshot).toHaveBeenCalled();
-    const latestSnapshot = saveSnapshot.mock.calls.at(-1)?.[0] as ReadonlyMap<string, TaskRecord>;
-    expect(latestSnapshot.size).toBe(2);
-    expect(latestSnapshot.get("task-restored")?.task).toBe("Restored task");
+    const latestSnapshot = saveSnapshot.mock.calls.at(-1)?.[0] as {
+      tasks: ReadonlyMap<string, TaskRecord>;
+    };
+    expect(latestSnapshot.tasks.size).toBe(2);
+    expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
   });
 
   it("emits incremental hook events for restore, mutation, and delete", () => {
     const events: TaskRegistryHookEvent[] = [];
     configureTaskRegistryRuntime({
       store: {
-        loadSnapshot: () => new Map([[createStoredTask().taskId, createStoredTask()]]),
+        loadSnapshot: () => ({
+          tasks: new Map([[createStoredTask().taskId, createStoredTask()]]),
+          deliveryStates: new Map(),
+        }),
         saveSnapshot: () => {},
       },
       hooks: {
