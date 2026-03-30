@@ -20,6 +20,7 @@ import {
   ORACLE_PROVIDER_ID,
   resolveOracleAuth,
 } from "./oci-auth.js";
+import { isOracleCatalogModelVisible } from "./oci-routing.js";
 
 const ORACLE_BASE_URL = "oci://generative-ai";
 
@@ -167,6 +168,12 @@ function isOracleChatBaseModel(model: OracleModelSummary): boolean {
   );
 }
 
+function shouldIncludeOracleCatalogModel(model: OracleModelSummary): boolean {
+  return (
+    isOracleChatBaseModel(model) && isOracleCatalogModelVisible(buildOracleCatalogModelId(model))
+  );
+}
+
 function loadOracleProfileMetadata(
   agentDir?: string,
   profileId = ORACLE_PROFILE_ID,
@@ -269,7 +276,7 @@ export async function resolveOracleCatalogProvider(
   let models;
   try {
     models = (await listOracleModels(auth.configFile, auth.profile, auth.compartmentId))
-      .filter((model) => isOracleChatBaseModel(model))
+      .filter((model) => shouldIncludeOracleCatalogModel(model))
       .map((model) => buildOracleCatalogModelDefinition(model))
       .toSorted((left, right) => left.name.localeCompare(right.name));
   } catch (error) {

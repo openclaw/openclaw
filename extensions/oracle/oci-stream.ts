@@ -18,12 +18,23 @@ import {
   resolveStoredOracleAuth,
   type OracleResolvedAuth,
 } from "./oci-auth.js";
+import {
+  resolveOracleModelRouting,
+  type OracleChatApiFormat,
+  type OracleOutputTokenField,
+} from "./oci-routing.js";
 
 type OracleMessageRole = "SYSTEM" | "USER" | "ASSISTANT" | "TOOL";
 
 type OracleTextBlock = {
   type: "TEXT";
   text: string;
+};
+
+type OracleCohereToolParameterDefinition = {
+  type: string;
+  description?: string;
+  isRequired?: boolean;
 };
 
 type OracleFunctionCall = {
@@ -45,6 +56,76 @@ type OracleToolDefinition = {
   name: string;
   description?: string;
   parameters?: Record<string, unknown>;
+};
+
+type OracleCohereToolDefinition = {
+  name: string;
+  description: string;
+  parameterDefinitions?: Record<string, OracleCohereToolParameterDefinition>;
+};
+
+type OracleCohereToolCall = {
+  name: string;
+  parameters: Record<string, unknown>;
+};
+
+type OracleCohereToolResult = {
+  call: OracleCohereToolCall;
+  outputs: Array<Record<string, unknown>>;
+};
+
+type OracleCohereChatHistoryMessage =
+  | { role: "SYSTEM"; message: string }
+  | { role: "USER"; message: string }
+  | { role: "CHATBOT"; message?: string; toolCalls?: OracleCohereToolCall[] }
+  | { role: "TOOL"; toolResults: OracleCohereToolResult[] };
+
+type OracleCohereChatRequestShape = {
+  apiFormat: "COHERE";
+  message: string;
+  chatHistory?: OracleCohereChatHistoryMessage[];
+  tools?: OracleCohereToolDefinition[];
+  toolResults?: OracleCohereToolResult[];
+  preambleOverride?: string;
+  isStream: false;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+};
+
+type OracleCohereV2ToolFunction = {
+  name?: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  arguments?: string;
+};
+
+type OracleCohereV2ToolDefinition = {
+  type: "FUNCTION";
+  function: OracleCohereV2ToolFunction;
+};
+
+type OracleCohereV2ToolCall = {
+  id?: string;
+  type?: "FUNCTION";
+  function?: OracleCohereV2ToolFunction;
+};
+
+type OracleCohereV2Message = {
+  role: OracleMessageRole;
+  content: OracleTextBlock[];
+  toolCallId?: string;
+  toolCalls?: OracleCohereV2ToolCall[];
+};
+
+type OracleCohereV2ChatRequestShape = {
+  apiFormat: "COHEREV2";
+  messages: OracleCohereV2Message[];
+  tools?: OracleCohereV2ToolDefinition[];
+  isStream: false;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
 };
 
 type OracleUsageShape = {
@@ -69,13 +150,67 @@ type OracleChatChoice = {
 };
 
 type OracleChatResponseShape = {
+  apiFormat?: string;
   usage?: OracleUsageShape;
   choices?: OracleChatChoice[];
 };
 
+type OracleCohereChatResponseShape = {
+  apiFormat?: string;
+  text?: string;
+  toolCalls?: Array<{
+    name?: string;
+    parameters?: Record<string, unknown>;
+  }>;
+  finishReason?: string;
+  usage?: OracleUsageShape;
+  errorMessage?: string;
+};
+
+type OracleCohereV2ChatResponseShape = {
+  apiFormat?: string;
+  message?: {
+    role?: string;
+    content?: Array<{ type?: string; text?: string }>;
+    toolCalls?: Array<{
+      id?: string;
+      type?: string;
+      function?: {
+        name?: string;
+        arguments?: string | Record<string, unknown>;
+      };
+    }>;
+    toolPlan?: string;
+  };
+  finishReason?: string;
+  usage?: OracleUsageShape;
+  errorMessage?: string;
+};
+
+type OracleGenericChatRequestShape = {
+  apiFormat: "GENERIC";
+  isStream: false;
+  messages: OracleMessage[];
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  maxCompletionTokens?: number;
+  tools?: OracleToolDefinition[];
+};
+
+type OracleChatRequestShape =
+  | OracleGenericChatRequestShape
+  | OracleCohereChatRequestShape
+  | OracleCohereV2ChatRequestShape;
+
+type OracleAnyChatResponseShape =
+  | OracleChatResponseShape
+  | OracleCohereChatResponseShape
+  | OracleCohereV2ChatResponseShape;
+
 type OracleChatResultShape = {
   modelId?: string;
-  chatResponse?: OracleChatResponseShape;
+  chatResponse?: OracleAnyChatResponseShape;
 };
 
 type OracleChatResponseEnvelope = {
@@ -527,6 +662,155 @@ function normalizeOracleToolParameters(parameters: unknown): Record<string, unkn
   return record;
 }
 
+function trimOracleString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function appendOracleDescription(
+  base: string | undefined,
+  extra: string | undefined,
+): string | undefined {
+  const trimmedBase = trimOracleString(base);
+  const trimmedExtra = trimOracleString(extra);
+  if (!trimmedBase) {
+    return trimmedExtra;
+  }
+  if (!trimmedExtra) {
+    return trimmedBase;
+  }
+  return `${trimmedBase} ${trimmedExtra}`;
+}
+
+function stringifyOracleEnumValues(values: unknown[]): string | undefined {
+  const entries = values
+    .map((value) => {
+      if (typeof value === "string") {
+        return value;
+      }
+      if (typeof value === "number" || typeof value === "boolean") {
+        return String(value);
+      }
+      return undefined;
+    })
+    .filter((value): value is string => Boolean(value));
+  return entries.length > 0 ? entries.join(", ") : undefined;
+}
+
+function describeOracleSchemaForCohere(schema: Record<string, unknown>): string | undefined {
+  let description = appendOracleDescription(
+    trimOracleString(schema.description),
+    trimOracleString(schema.title),
+  );
+
+  if (Array.isArray(schema.enum)) {
+    description = appendOracleDescription(
+      description,
+      (() => {
+        const values = stringifyOracleEnumValues(schema.enum);
+        return values ? `Allowed values: ${values}.` : undefined;
+      })(),
+    );
+  }
+
+  if (schema.type === "array") {
+    const items =
+      schema.items && typeof schema.items === "object" && !Array.isArray(schema.items)
+        ? (schema.items as Record<string, unknown>)
+        : undefined;
+    const itemType = items ? normalizeOracleCohereParameterType(items.type) : undefined;
+    description = appendOracleDescription(
+      description,
+      itemType ? `Array items should be ${itemType}.` : "Provide a JSON array.",
+    );
+  }
+
+  if (schema.type === "object") {
+    const propertyNames =
+      schema.properties &&
+      typeof schema.properties === "object" &&
+      !Array.isArray(schema.properties)
+        ? Object.keys(schema.properties as Record<string, unknown>)
+        : [];
+    description = appendOracleDescription(
+      description,
+      propertyNames.length > 0
+        ? `Provide a JSON object with keys such as ${propertyNames.join(", ")}.`
+        : "Provide a JSON object.",
+    );
+  }
+
+  return description;
+}
+
+function normalizeOracleCohereParameterType(typeValue: unknown): string {
+  if (Array.isArray(typeValue)) {
+    const firstNonNull = typeValue.find((entry) => entry !== "null");
+    return normalizeOracleCohereParameterType(firstNonNull);
+  }
+  switch (typeValue) {
+    case "string":
+      return "str";
+    case "integer":
+      return "int";
+    case "number":
+      return "float";
+    case "boolean":
+      return "bool";
+    case "array":
+      return "list";
+    case "object":
+      return "dict";
+    default:
+      return "Any";
+  }
+}
+
+function normalizeOracleCohereParameterDefinitions(
+  parameters: unknown,
+): Record<string, OracleCohereToolParameterDefinition> | undefined {
+  const normalized = normalizeOracleToolParameters(parameters);
+  const properties =
+    normalized.properties &&
+    typeof normalized.properties === "object" &&
+    !Array.isArray(normalized.properties)
+      ? (normalized.properties as Record<string, unknown>)
+      : undefined;
+  if (!properties || Object.keys(properties).length === 0) {
+    return undefined;
+  }
+
+  const required = new Set(
+    Array.isArray(normalized.required)
+      ? normalized.required.filter((entry): entry is string => typeof entry === "string")
+      : [],
+  );
+
+  const definitions = Object.fromEntries(
+    Object.entries(properties).map(([name, schemaValue]) => {
+      const schema =
+        schemaValue && typeof schemaValue === "object" && !Array.isArray(schemaValue)
+          ? (schemaValue as Record<string, unknown>)
+          : {};
+      return [
+        name,
+        {
+          type: normalizeOracleCohereParameterType(schema.type),
+          ...(describeOracleSchemaForCohere(schema)
+            ? { description: describeOracleSchemaForCohere(schema) }
+            : {}),
+          ...(required.has(name) ? { isRequired: true } : {}),
+        } satisfies OracleCohereToolParameterDefinition,
+      ];
+    }),
+  );
+
+  return Object.keys(definitions).length > 0 ? definitions : undefined;
+}
+
 function buildAssistantMessage(params: {
   model: { api: string; provider: string; id: string };
   content: AssistantMessage["content"];
@@ -815,7 +1099,7 @@ export function convertPiMessagesToOracleMessages(params: {
   return oracleMessages;
 }
 
-function convertTools(tools: Tool[] | undefined): OracleToolDefinition[] | undefined {
+function convertGenericTools(tools: Tool[] | undefined): OracleToolDefinition[] | undefined {
   if (!tools || tools.length === 0) {
     return undefined;
   }
@@ -829,6 +1113,43 @@ function convertTools(tools: Tool[] | undefined): OracleToolDefinition[] | undef
       // OCI's tool validator rejects several JSON Schema keywords that OpenClaw
       // tool definitions commonly include, such as patternProperties.
       parameters: normalizeOracleToolParameters(tool.parameters),
+    }));
+
+  return converted.length > 0 ? converted : undefined;
+}
+
+function convertCohereTools(tools: Tool[] | undefined): OracleCohereToolDefinition[] | undefined {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+
+  const converted = tools
+    .filter((tool) => typeof tool.name === "string" && tool.name.trim().length > 0)
+    .map((tool) => ({
+      name: tool.name,
+      description: trimOracleString(tool.description) ?? `${tool.name} tool`,
+      parameterDefinitions: normalizeOracleCohereParameterDefinitions(tool.parameters),
+    }));
+
+  return converted.length > 0 ? converted : undefined;
+}
+
+function convertCohereV2Tools(
+  tools: Tool[] | undefined,
+): OracleCohereV2ToolDefinition[] | undefined {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+
+  const converted = tools
+    .filter((tool) => typeof tool.name === "string" && tool.name.trim().length > 0)
+    .map((tool) => ({
+      type: "FUNCTION" as const,
+      function: {
+        name: tool.name,
+        ...(typeof tool.description === "string" ? { description: tool.description } : {}),
+        parameters: normalizeOracleToolParameters(tool.parameters),
+      },
     }));
 
   return converted.length > 0 ? converted : undefined;
@@ -859,12 +1180,293 @@ function parseToolArguments(argumentsText: string | undefined): Record<string, u
   return {};
 }
 
-export function convertOracleChatResultToAssistantMessage(
-  chatResult: OracleChatResultShape,
+function parseOracleToolArgumentsValue(
+  value: string | Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  return parseToolArguments(typeof value === "string" ? value : undefined);
+}
+
+function buildOracleSharedChatOptions(params: {
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  outputTokenField?: OracleOutputTokenField;
+}): {
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  maxCompletionTokens?: number;
+} {
+  return {
+    ...(typeof params.temperature === "number" ? { temperature: params.temperature } : {}),
+    ...(typeof params.topP === "number" ? { topP: params.topP } : {}),
+    ...(typeof params.maxTokens === "number"
+      ? params.outputTokenField === "maxCompletionTokens"
+        ? { maxCompletionTokens: params.maxTokens }
+        : { maxTokens: params.maxTokens }
+      : {}),
+  };
+}
+
+function buildOracleCohereToolOutputs(
+  content: OracleTextBlock[] | undefined,
+): Array<Record<string, unknown>> {
+  const text = extractOracleText(content);
+  return text ? [{ text }] : [{}];
+}
+
+function toOracleCohereV2Message(message: OracleMessage): OracleCohereV2Message | undefined {
+  switch (message.role) {
+    case "SYSTEM":
+    case "USER":
+      return message.content ? { role: message.role, content: message.content } : undefined;
+    case "ASSISTANT":
+      if (!message.content && !message.toolCalls) {
+        return undefined;
+      }
+      return {
+        role: "ASSISTANT",
+        content: message.content ?? [],
+        ...(message.toolCalls
+          ? {
+              toolCalls: message.toolCalls.map((toolCall) => ({
+                id: toolCall.id,
+                type: "FUNCTION",
+                function: {
+                  ...(toolCall.name ? { name: toolCall.name } : {}),
+                  arguments: toolCall.arguments ?? "{}",
+                },
+              })),
+            }
+          : {}),
+      };
+    case "TOOL":
+      if (!message.toolCallId && !message.content) {
+        return undefined;
+      }
+      return {
+        role: "TOOL",
+        toolCallId: trimOracleString(message.toolCallId) ?? `oracle_call_${randomUUID()}`,
+        content: message.content ?? [],
+      };
+  }
+}
+
+function buildOracleGenericChatRequest(params: {
+  modelId?: string;
+  systemPrompt?: string;
+  messages: Message[];
+  tools?: Tool[];
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  outputTokenField: OracleOutputTokenField;
+}): OracleGenericChatRequestShape {
+  const convertedTools = convertGenericTools(params.tools);
+  return {
+    apiFormat: "GENERIC",
+    isStream: false,
+    messages: convertPiMessagesToOracleMessages({
+      systemPrompt: params.systemPrompt,
+      messages: params.messages,
+      modelId: params.modelId,
+    }),
+    ...buildOracleSharedChatOptions(params),
+    ...(convertedTools ? { tools: convertedTools } : {}),
+  };
+}
+
+function buildOracleCohereChatRequest(params: {
+  modelId?: string;
+  systemPrompt?: string;
+  messages: Message[];
+  tools?: Tool[];
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+}): OracleCohereChatRequestShape {
+  const oracleMessages = convertPiMessagesToOracleMessages({
+    messages: params.messages,
+    modelId: params.modelId,
+  });
+  const chatHistory: OracleCohereChatHistoryMessage[] = [];
+  const assistantToolCallsById = new Map<string, OracleCohereToolCall>();
+  let pendingToolResults: OracleCohereToolResult[] = [];
+  let lastUserHistoryIndex = -1;
+
+  const flushPendingToolResults = () => {
+    if (pendingToolResults.length === 0) {
+      return;
+    }
+    chatHistory.push({ role: "TOOL", toolResults: pendingToolResults });
+    pendingToolResults = [];
+  };
+
+  for (const message of oracleMessages) {
+    if (message.role !== "TOOL") {
+      flushPendingToolResults();
+    }
+
+    if (message.role === "SYSTEM") {
+      const text = extractOracleText(message.content);
+      if (text) {
+        chatHistory.push({ role: "SYSTEM", message: text });
+      }
+      continue;
+    }
+
+    if (message.role === "USER") {
+      const text = extractOracleText(message.content);
+      if (text) {
+        chatHistory.push({ role: "USER", message: text });
+        lastUserHistoryIndex = chatHistory.length - 1;
+      }
+      continue;
+    }
+
+    if (message.role === "ASSISTANT") {
+      const text = extractOracleText(message.content);
+      const toolCalls =
+        message.toolCalls?.map((toolCall) => {
+          const call = {
+            name: trimOracleString(toolCall.name) ?? "tool",
+            parameters: parseToolArguments(toolCall.arguments),
+          } satisfies OracleCohereToolCall;
+          assistantToolCallsById.set(toolCall.id, call);
+          return call;
+        }) ?? [];
+      if (text || toolCalls.length > 0) {
+        chatHistory.push({
+          role: "CHATBOT",
+          ...(text ? { message: text } : {}),
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        });
+      }
+      continue;
+    }
+
+    const toolCallId = trimOracleString(message.toolCallId);
+    if (!toolCallId) {
+      continue;
+    }
+    const call = assistantToolCallsById.get(toolCallId);
+    if (!call) {
+      continue;
+    }
+    pendingToolResults.push({
+      call,
+      outputs: buildOracleCohereToolOutputs(message.content),
+    });
+  }
+
+  const toolResults = pendingToolResults.length > 0 ? pendingToolResults : undefined;
+  let currentMessage = "";
+  if (lastUserHistoryIndex >= 0) {
+    const lastUserEntry = chatHistory[lastUserHistoryIndex];
+    if (lastUserEntry?.role === "USER") {
+      currentMessage = lastUserEntry.message;
+      chatHistory.splice(lastUserHistoryIndex, 1);
+    }
+  }
+
+  const convertedTools = convertCohereTools(params.tools);
+  return {
+    apiFormat: "COHERE",
+    message: currentMessage,
+    ...(chatHistory.length > 0 ? { chatHistory } : {}),
+    ...(convertedTools ? { tools: convertedTools } : {}),
+    ...(toolResults ? { toolResults } : {}),
+    ...(trimOracleString(params.systemPrompt)
+      ? { preambleOverride: params.systemPrompt?.trim() }
+      : {}),
+    isStream: false,
+    ...buildOracleSharedChatOptions(params),
+  };
+}
+
+function buildOracleCohereV2ChatRequest(params: {
+  modelId?: string;
+  systemPrompt?: string;
+  messages: Message[];
+  tools?: Tool[];
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+}): OracleCohereV2ChatRequestShape {
+  const messages = convertPiMessagesToOracleMessages({
+    systemPrompt: params.systemPrompt,
+    messages: params.messages,
+    modelId: params.modelId,
+  })
+    .map((message) => toOracleCohereV2Message(message))
+    .filter((message): message is OracleCohereV2Message => Boolean(message));
+  const convertedTools = convertCohereV2Tools(params.tools);
+  return {
+    apiFormat: "COHEREV2",
+    messages,
+    ...(convertedTools ? { tools: convertedTools } : {}),
+    isStream: false,
+    ...buildOracleSharedChatOptions(params),
+  };
+}
+
+function buildOracleChatRequest(params: {
+  modelId?: string;
+  systemPrompt?: string;
+  messages: Message[];
+  tools?: Tool[];
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+}): OracleChatRequestShape {
+  const routing = resolveOracleModelRouting(params.modelId);
+  switch (routing.apiFormat) {
+    case "COHERE":
+      return buildOracleCohereChatRequest(params);
+    case "COHEREV2":
+      return buildOracleCohereV2ChatRequest(params);
+    default:
+      return buildOracleGenericChatRequest({
+        ...params,
+        outputTokenField: routing.outputTokenField,
+      });
+  }
+}
+
+function normalizeOracleFinishReason(value: unknown): string | undefined {
+  const trimmed = trimOracleString(value);
+  return trimmed ? trimmed.toLowerCase().replaceAll("-", "_") : undefined;
+}
+
+function isOracleLengthFinishReason(reason: string | undefined): boolean {
+  return reason === "length" || reason === "max_tokens";
+}
+
+function isOracleToolUseFinishReason(reason: string | undefined): boolean {
+  return reason === "tool_call" || reason === "tool_use";
+}
+
+function normalizeOracleResponseApiFormat(value: unknown): OracleChatApiFormat | undefined {
+  switch (trimOracleString(value)?.toUpperCase()) {
+    case "COHERE":
+      return "COHERE";
+    case "COHEREV2":
+      return "COHEREV2";
+    case "GENERIC":
+      return "GENERIC";
+    default:
+      return undefined;
+  }
+}
+
+function convertGenericOracleChatResultToAssistantMessage(
+  response: OracleChatResponseShape,
   model: { api: string; provider: string; id: string },
 ): AssistantMessage {
-  const response = chatResult.chatResponse;
-  const choice = response?.choices?.[0];
+  const choice = response.choices?.[0];
   const assistantMessage = choice?.message;
   const assistantText = extractOracleText(assistantMessage?.content);
   const toolCalls = assistantMessage?.toolCalls ?? [];
@@ -887,15 +1489,121 @@ export function convertOracleChatResultToAssistantMessage(
     });
   }
 
+  const finishReason = normalizeOracleFinishReason(choice?.finishReason);
   const stopReason: StopReason =
-    toolCalls.length > 0 ? "toolUse" : choice?.finishReason === "LENGTH" ? "length" : "stop";
+    toolCalls.length > 0 ? "toolUse" : isOracleLengthFinishReason(finishReason) ? "length" : "stop";
 
   return buildAssistantMessage({
     model,
     content,
     stopReason,
-    usage: buildUsage(choice?.usage ?? response?.usage),
+    usage: buildUsage(choice?.usage ?? response.usage),
   });
+}
+
+function convertCohereOracleChatResultToAssistantMessage(
+  response: OracleCohereChatResponseShape,
+  model: { api: string; provider: string; id: string },
+): AssistantMessage {
+  const content: Array<{ type: "text"; text: string } | ToolCall> = [];
+  const assistantText = trimOracleString(response.text);
+  if (assistantText) {
+    content.push({ type: "text", text: assistantText });
+  }
+
+  for (const toolCall of response.toolCalls ?? []) {
+    content.push({
+      type: "toolCall",
+      id: `oracle_call_${randomUUID()}`,
+      name: trimOracleString(toolCall.name) ?? "tool",
+      arguments:
+        toolCall.parameters && typeof toolCall.parameters === "object" ? toolCall.parameters : {},
+    });
+  }
+
+  const finishReason = normalizeOracleFinishReason(response.finishReason);
+  const stopReason: StopReason =
+    (response.toolCalls?.length ?? 0) > 0 || isOracleToolUseFinishReason(finishReason)
+      ? "toolUse"
+      : isOracleLengthFinishReason(finishReason)
+        ? "length"
+        : "stop";
+
+  return buildAssistantMessage({
+    model,
+    content,
+    stopReason,
+    usage: buildUsage(response.usage),
+  });
+}
+
+function convertCohereV2OracleChatResultToAssistantMessage(
+  response: OracleCohereV2ChatResponseShape,
+  model: { api: string; provider: string; id: string },
+): AssistantMessage {
+  const content: Array<{ type: "text"; text: string } | ToolCall> = [];
+  const assistantText = extractOracleText(response.message?.content);
+  if (assistantText) {
+    content.push({ type: "text", text: assistantText });
+  }
+
+  for (const toolCall of response.message?.toolCalls ?? []) {
+    const functionShape =
+      toolCall.function && typeof toolCall.function === "object"
+        ? (toolCall.function as { name?: unknown; arguments?: string | Record<string, unknown> })
+        : undefined;
+    content.push({
+      type: "toolCall",
+      id:
+        typeof toolCall.id === "string" && toolCall.id.trim().length > 0
+          ? toolCall.id
+          : `oracle_call_${randomUUID()}`,
+      name: trimOracleString(functionShape?.name) ?? "tool",
+      arguments: parseOracleToolArgumentsValue(functionShape?.arguments),
+    });
+  }
+
+  const finishReason = normalizeOracleFinishReason(response.finishReason);
+  const stopReason: StopReason =
+    (response.message?.toolCalls?.length ?? 0) > 0 || isOracleToolUseFinishReason(finishReason)
+      ? "toolUse"
+      : isOracleLengthFinishReason(finishReason)
+        ? "length"
+        : "stop";
+
+  return buildAssistantMessage({
+    model,
+    content,
+    stopReason,
+    usage: buildUsage(response.usage),
+  });
+}
+
+export function convertOracleChatResultToAssistantMessage(
+  chatResult: OracleChatResultShape,
+  model: { api: string; provider: string; id: string },
+): AssistantMessage {
+  const response = chatResult.chatResponse;
+  const apiFormat =
+    normalizeOracleResponseApiFormat(
+      (response as { apiFormat?: unknown } | undefined)?.apiFormat,
+    ) ?? resolveOracleModelRouting(chatResult.modelId ?? model.id).apiFormat;
+  if (apiFormat === "COHERE") {
+    return convertCohereOracleChatResultToAssistantMessage(
+      (response ?? {}) as OracleCohereChatResponseShape,
+      model,
+    );
+  }
+  if (apiFormat === "COHEREV2") {
+    return convertCohereV2OracleChatResultToAssistantMessage(
+      (response ?? {}) as OracleCohereV2ChatResponseShape,
+      model,
+    );
+  }
+  return convertGenericOracleChatResultToAssistantMessage(
+    (response ?? {}) as OracleChatResponseShape,
+    model,
+  );
 }
 
 function createDefaultOracleInferenceClient(auth: OracleResolvedAuth): OracleInferenceClient {
@@ -958,8 +1666,16 @@ export function createOracleStreamFn(
       try {
         const auth = resolveOracleStreamAuth({ agentDir, options });
         client = createClient(auth);
-        const tools = convertTools(context.tools);
         const providerOptions = (options ?? {}) as Record<string, unknown>;
+        const chatRequest = buildOracleChatRequest({
+          modelId: model.id,
+          systemPrompt: context.systemPrompt,
+          messages: context.messages,
+          tools: context.tools,
+          temperature: options?.temperature,
+          topP: typeof providerOptions.topP === "number" ? providerOptions.topP : undefined,
+          maxTokens: options?.maxTokens,
+        });
         const response = (await client.chat({
           chatDetails: {
             compartmentId: auth.compartmentId,
@@ -967,21 +1683,7 @@ export function createOracleStreamFn(
               servingType: "ON_DEMAND",
               modelId: model.id,
             },
-            chatRequest: {
-              apiFormat: "GENERIC",
-              isStream: false,
-              messages: convertPiMessagesToOracleMessages({
-                systemPrompt: context.systemPrompt,
-                messages: context.messages,
-                modelId: model.id,
-              }),
-              ...(typeof options?.temperature === "number"
-                ? { temperature: options.temperature }
-                : {}),
-              ...(typeof providerOptions.topP === "number" ? { topP: providerOptions.topP } : {}),
-              ...(typeof options?.maxTokens === "number" ? { maxTokens: options.maxTokens } : {}),
-              ...(tools ? { tools } : {}),
-            },
+            chatRequest,
           },
         })) as OracleChatResponseEnvelope | null;
 
