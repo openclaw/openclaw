@@ -38,10 +38,18 @@ export type RegisteredMemorySearchManager = {
   close?(): Promise<void>;
 };
 
-export type MemoryRuntimeBackendConfig = {
-  backend: "builtin" | "qmd";
-  qmd?: object;
+export type MemoryRuntimeQmdConfig = {
+  command?: string;
 };
+
+export type MemoryRuntimeBackendConfig =
+  | {
+      backend: "builtin";
+    }
+  | {
+      backend: "qmd";
+      qmd?: MemoryRuntimeQmdConfig;
+    };
 
 export type MemoryPluginRuntime = {
   getMemorySearchManager(params: {
