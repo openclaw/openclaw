@@ -22,7 +22,7 @@ afterAll(async () => {
 async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
+    auth: { mode: "none" },
     controlUiEnabled: false,
     openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
   });
@@ -31,7 +31,6 @@ async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?:
 async function getModels(pathname: string, headers?: Record<string, string>) {
   return await fetch(`http://127.0.0.1:${enabledPort}${pathname}`, {
     headers: {
-      authorization: "Bearer secret",
       ...READ_SCOPE_HEADER,
       ...headers,
     },
@@ -114,7 +113,7 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     const server = await startServer(port, { openAiChatCompletionsEnabled: false });
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
-        headers: { authorization: "Bearer secret" },
+        headers: {},
       });
       expect(res.status).toBe(404);
     } finally {
