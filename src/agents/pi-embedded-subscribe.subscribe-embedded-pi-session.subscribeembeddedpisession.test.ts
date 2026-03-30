@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
   createStubSessionHarness,
@@ -259,6 +260,50 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " files</think>\nFinal answer");
 
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets raw reasoning dedupe state between assistant messages", () => {
+    resetAgentEventsForTest();
+    const runId = "run-raw-reset";
+    const rawDeltas: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId || evt.stream !== "thinking-raw") {
+        return;
+      }
+      const rawDelta = typeof evt.data?.rawDelta === "string" ? evt.data.rawDelta : "";
+      if (rawDelta) {
+        rawDeltas.push(rawDelta);
+      }
+    });
+
+    const { emit } = createSubscribedHarness({
+      runId,
+      reasoningMode: "off",
+    });
+    const repeatedThinkingMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "Shared prefix" }],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: repeatedThinkingMessage,
+      assistantMessageEvent: { type: "thinking_delta", delta: "Shared prefix" },
+    });
+    emit({ type: "message_end", message: repeatedThinkingMessage });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: repeatedThinkingMessage,
+      assistantMessageEvent: { type: "thinking_delta", delta: "Shared prefix" },
+    });
+    emit({ type: "message_end", message: repeatedThinkingMessage });
+
+    expect(rawDeltas).toEqual(["Shared prefix", "Shared prefix"]);
+    unsubscribe();
+    resetAgentEventsForTest();
   });
 
   it("emits delta chunks in agent events for streaming assistant text", () => {

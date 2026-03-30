@@ -626,6 +626,47 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("does not broadcast thinking-raw events to agent or node subscribers", () => {
+    const { broadcast, nodeSendToSession, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-thinking-raw",
+    });
+    registerAgentRunContext("run-thinking-raw", {
+      sessionKey: "session-thinking-raw",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-thinking-raw",
+      seq: 1,
+      stream: "thinking-raw",
+      ts: Date.now(),
+      data: { rawText: "step one", rawDelta: "step one" },
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(agentRunSeq.get("run-thinking-raw")).toBe(1);
+
+    // Follow-up events should not trigger seq-gap errors after a hidden thinking-raw event.
+    handler({
+      runId: "run-thinking-raw",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "final answer" },
+    });
+
+    const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(agentCalls).toHaveLength(1);
+    const firstAgentPayload = agentCalls[0] ? (agentCalls[0][1] as { stream?: string }) : undefined;
+    expect(firstAgentPayload?.stream).toBe("assistant");
+    const seqGapErrors = agentCalls.filter(
+      ([, payload]) => (payload as { stream?: string }).stream === "error",
+    );
+    expect(seqGapErrors).toHaveLength(0);
+    resetAgentRunContextForTest();
+  });
+
   it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
     const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",

@@ -141,6 +141,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
+    state.lastStreamedReasoningRaw = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
@@ -573,9 +574,31 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (params.silentExpected) {
       return;
     }
-    if (!state.streamReasoning || !params.onReasoningStream) {
+    if (!text) {
       return;
     }
+
+    const rawPrior = state.lastStreamedReasoningRaw ?? "";
+    const rawDelta = text.startsWith(rawPrior) ? text.slice(rawPrior.length) : text;
+    state.lastStreamedReasoningRaw = text;
+
+    if (!rawDelta) {
+      return;
+    }
+
+    // Always emit a non-broadcast raw event for HTTP listeners (e.g.
+    // OpenResponses /v1/responses). Uses "thinking-raw" so the generic
+    // WS broadcast path does not forward it to Control UI / channel clients.
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "thinking-raw",
+      data: { rawText: text, rawDelta },
+    });
+
+    if (!state.streamReasoning) {
+      return;
+    }
+
     const formatted = formatReasoningMessage(text);
     if (!formatted) {
       return;
@@ -583,23 +606,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (formatted === state.lastStreamedReasoning) {
       return;
     }
-    // Compute delta: new text since the last emitted reasoning.
-    // Guard against non-prefix changes (e.g. trim/format altering earlier content).
     const prior = state.lastStreamedReasoning ?? "";
     const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
     state.lastStreamedReasoning = formatted;
 
-    // Broadcast thinking event to WebSocket clients in real-time
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
-      data: {
-        text: formatted,
-        delta,
-      },
+      data: { text: formatted, delta, rawText: text, rawDelta },
     });
 
-    void params.onReasoningStream({
+    void params.onReasoningStream?.({
       text: formatted,
     });
   };

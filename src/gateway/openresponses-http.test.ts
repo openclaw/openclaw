@@ -740,6 +740,53 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(res);
   });
 
+  it("preserves non-stream reasoning segment boundaries when snapshots share prefixes", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: { rawText: "Shared prefix", rawDelta: "Shared prefix" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: {
+          rawText: "Shared prefix and second segment",
+          rawDelta: "Shared prefix and second segment",
+        },
+      });
+      return {
+        payloads: [{ text: "Final answer." }],
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "explain this",
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("completed");
+    expect(json.output?.map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect((json.output?.[0]?.content as string | undefined) ?? "").toBe(
+      "Shared prefix\n\nShared prefix and second segment",
+    );
+    expect(
+      ((json.output?.[1]?.content as Array<Record<string, unknown>> | undefined)?.[0]?.text as
+        | string
+        | undefined) ?? "",
+    ).toBe("Final answer.");
+    await ensureResponseConsumed(res);
+  });
+
   it("falls back to payload text for streamed function_call responses", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
@@ -787,6 +834,90 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ?.text as string | undefined) ?? "",
     ).toBe("Let me check that.");
     expect(response?.output?.[1]?.name).toBe("get_weather");
+    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+  });
+
+  it("streams reset-aware reasoning deltas and emits a single reasoning.done in tool-call mode", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: { rawText: "Shared prefix", rawDelta: "Shared prefix" },
+      });
+      // Simulate providers that emit lifecycle end before the command returns.
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: {
+          rawText: "Shared prefix and second segment",
+          rawDelta: "Shared prefix and second segment",
+        },
+      });
+      return {
+        payloads: [{ text: "Let me check that." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+
+    const reasoningDeltas = events
+      .filter((event) => event.event === "response.reasoning.delta")
+      .map((event) => JSON.parse(event.data) as { delta?: string });
+    expect(reasoningDeltas.map((event) => event.delta)).toEqual([
+      "Shared prefix",
+      "\n\nShared prefix and second segment",
+    ]);
+
+    const reasoningDoneEvents = events.filter((event) => event.event === "response.reasoning.done");
+    expect(reasoningDoneEvents).toHaveLength(1);
+
+    const reasoningDoneIndex = events.findIndex(
+      (event) => event.event === "response.reasoning.done",
+    );
+    const lastReasoningDeltaIndex = events.reduce(
+      (latest, event, index) => (event.event === "response.reasoning.delta" ? index : latest),
+      -1,
+    );
+    const firstOutputItemDoneIndex = events.findIndex(
+      (event) => event.event === "response.output_item.done",
+    );
+    expect(lastReasoningDeltaIndex).toBeGreaterThanOrEqual(0);
+    expect(reasoningDoneIndex).toBeGreaterThanOrEqual(0);
+    expect(firstOutputItemDoneIndex).toBeGreaterThanOrEqual(0);
+    expect(lastReasoningDeltaIndex).toBeLessThan(reasoningDoneIndex);
+    expect(reasoningDoneIndex).toBeLessThan(firstOutputItemDoneIndex);
+
+    const reasoningDone = reasoningDoneEvents[0];
+    expect((JSON.parse(reasoningDone?.data ?? "{}") as { text?: string }).text).toBe(
+      "Shared prefix\n\nShared prefix and second segment",
+    );
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
   });
 

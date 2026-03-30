@@ -23,6 +23,8 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+const THINKING_TAG_CHUNK_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {
@@ -194,8 +196,7 @@ export function handleMessageUpdate(
       delta: thinkingDelta,
       content: thinkingContent,
     });
-    if (ctx.state.streamReasoning) {
-      // Prefer full partial-message thinking when available; fall back to event payloads.
+    {
       const partialThinking = extractAssistantThinking(msg);
       ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
     }
@@ -253,8 +254,12 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.state.streamReasoning) {
-    // Handle partial <think> tags: stream whatever reasoning is visible so far.
+  const chunkMayChangeTaggedThinking = Boolean(chunk && THINKING_TAG_CHUNK_RE.test(chunk));
+  if (
+    ctx.state.streamReasoning ||
+    ctx.state.partialBlockState.thinking ||
+    chunkMayChangeTaggedThinking
+  ) {
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
 
@@ -371,11 +376,14 @@ export function handleMessageEnd(
     text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
+  // Always extract raw thinking so HTTP listeners (OpenResponses) can capture
+  // it even when the channel reasoning mode is off.
   const rawThinking =
-    ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
+    extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText);
+  const formattedReasoning =
+    rawThinking && (ctx.state.includeReasoning || ctx.state.streamReasoning)
+      ? formatReasoningMessage(rawThinking)
       : "";
-  const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
   let cleanedText = parsedText?.text ?? "";
@@ -516,7 +524,7 @@ export function handleMessageEnd(
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
   }
-  if (!ctx.params.silentExpected && ctx.state.streamReasoning && rawThinking) {
+  if (rawThinking) {
     ctx.emitReasoningStream(rawThinking);
   }
 
