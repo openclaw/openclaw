@@ -34,7 +34,14 @@ describe("Dockerfile", () => {
     expect(browserArgIndex).toBeGreaterThan(-1);
     expect(browserArgIndex).toBeGreaterThan(installIndex);
     expect(dockerfile).toContain(
+      "ENV OPENCLAW_PLAYWRIGHT_BROWSERS_PATH=/opt/openclaw/ms-playwright",
+    );
+    expect(dockerfile).toContain('PLAYWRIGHT_BROWSERS_PATH="$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH"');
+    expect(dockerfile).toContain(
       "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
+    );
+    expect(dockerfile).toContain(
+      "ln -sf /app/scripts/docker/playwright-chromium.sh /usr/local/bin/openclaw-playwright-chromium",
     );
     expect(baseAptPackagesMatch).not.toBeNull();
     expect(baseAptPackagesMatch?.[1]).toContain("xvfb");

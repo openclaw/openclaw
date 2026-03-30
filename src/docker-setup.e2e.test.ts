@@ -302,6 +302,127 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_TZ=Asia/Shanghai");
   });
 
+  it("configures Docker browser defaults when OPENCLAW_INSTALL_BROWSER is enabled", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_INSTALL_BROWSER: "1",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("--build-arg OPENCLAW_INSTALL_BROWSER=1");
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set browser.enabled true",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set browser.defaultProfile openclaw",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set browser.headless true",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set browser.noSandbox true",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set browser.executablePath /usr/local/bin/openclaw-playwright-chromium",
+    );
+  });
+
+  it("preserves explicit browser config when Docker browser defaults are applied", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const configDir = join(activeSandbox.rootDir, "config-browser-explicit");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-browser-explicit");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "openclaw.json"),
+      JSON.stringify({
+        browser: {
+          enabled: false,
+          headless: false,
+          executablePath: "/custom/browser",
+        },
+      }),
+    );
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_INSTALL_BROWSER: "1",
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).not.toContain("config set browser.enabled true");
+    expect(log).not.toContain("config set browser.headless true");
+    expect(log).not.toContain(
+      "config set browser.executablePath /usr/local/bin/openclaw-playwright-chromium",
+    );
+    expect(log).toContain("config set browser.defaultProfile openclaw");
+    expect(log).toContain("config set browser.noSandbox true");
+  });
+
+  it("applies Docker exec policy defaults and preserves existing allowlist entries", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const configDir = join(activeSandbox.rootDir, "config-exec-policy");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-exec-policy");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "exec-approvals.json"),
+      JSON.stringify({
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+        },
+        agents: {
+          main: {
+            allowlist: [{ pattern: "/usr/bin/uname" }],
+          },
+        },
+      }),
+    );
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+      OPENCLAW_DOCKER_EXEC_SECURITY: "full",
+      OPENCLAW_DOCKER_EXEC_ASK: "off",
+      OPENCLAW_DOCKER_EXEC_ASK_FALLBACK: "full",
+    });
+
+    expect(result.status).toBe(0);
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set tools.exec.security full",
+    );
+    expect(log).toContain(
+      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set tools.exec.ask off",
+    );
+
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_DOCKER_EXEC_SECURITY=full");
+    expect(envFile).toContain("OPENCLAW_DOCKER_EXEC_ASK=off");
+    expect(envFile).toContain("OPENCLAW_DOCKER_EXEC_ASK_FALLBACK=full");
+
+    const approvals = JSON.parse(await readFile(join(configDir, "exec-approvals.json"), "utf8"));
+    expect(approvals.defaults).toMatchObject({
+      security: "full",
+      ask: "off",
+      askFallback: "full",
+    });
+    expect(approvals.agents.main).toMatchObject({
+      security: "full",
+      ask: "off",
+      askFallback: "full",
+    });
+    expect(approvals.agents.main.allowlist).toEqual([{ pattern: "/usr/bin/uname" }]);
+  });
+
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");

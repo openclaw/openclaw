@@ -216,13 +216,15 @@ libgbm1 libnss3 libasound2 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposit
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
+ENV OPENCLAW_PLAYWRIGHT_BROWSERS_PATH=/opt/openclaw/ms-playwright
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-      mkdir -p /home/node/.cache/ms-playwright && \
-      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+      mkdir -p "$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH" && \
+      PLAYWRIGHT_BROWSERS_PATH="$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH" \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright; \
+      chmod -R a+rX "$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH" && \
+      chown -R node:node "$OPENCLAW_PLAYWRIGHT_BROWSERS_PATH"; \
     fi
 
 # ---- Install Go (official) ----
@@ -321,9 +323,10 @@ RUN for dir in /app/extensions /app/.agent /app/.agents; do \
         find "$dir" -type f -exec chmod 644 {} +; \
       fi; \
     done
-RUN chmod +x scripts/docker/gateway-entrypoint.sh
+RUN chmod +x scripts/docker/gateway-entrypoint.sh scripts/docker/playwright-chromium.sh
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
+ && ln -sf /app/scripts/docker/playwright-chromium.sh /usr/local/bin/openclaw-playwright-chromium \
  && chmod 755 /app/openclaw.mjs
 
 ENV NODE_ENV=production

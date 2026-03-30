@@ -139,6 +139,9 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_INSTALL_DOCKER_CLI`        | Install Docker CLI in the image (auto-set for sandbox bootstrap) |
 | `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS` | Allow trusted private-network `ws://` client targets             |
 | `OPENCLAW_TZ`                        | Set container timezone (for example `America/Los_Angeles`)       |
+| `OPENCLAW_DOCKER_EXEC_SECURITY`      | Pin `tools.exec.security` during Docker setup                    |
+| `OPENCLAW_DOCKER_EXEC_ASK`           | Pin `tools.exec.ask` during Docker setup                         |
+| `OPENCLAW_DOCKER_EXEC_ASK_FALLBACK`  | Pin gateway exec approval fallback policy during Docker setup    |
 
 ### Use a remote image (skip local build)
 
@@ -204,8 +207,30 @@ export OPENCLAW_INSTALL_BROWSER=1
 ./scripts/docker/setup.sh
 ```
 
-This installs Chromium through Playwright during the image build and stores it
-under `/home/node/.cache/ms-playwright`.
+This installs Chromium through Playwright during the image build, configures
+Docker-safe browser defaults automatically, and wires
+`browser.executablePath` to the bundled
+`openclaw-playwright-chromium` launcher. Verify it from the running gateway:
+
+```bash
+docker compose exec openclaw-gateway node dist/index.js browser status
+```
+
+### Keep permissive exec policy in Docker (optional, trusted setups only)
+
+If you want Docker setup to keep gateway exec fully permissive across rebuilds
+and restarts:
+
+```bash
+export OPENCLAW_DOCKER_EXEC_SECURITY=full
+export OPENCLAW_DOCKER_EXEC_ASK=off
+export OPENCLAW_DOCKER_EXEC_ASK_FALLBACK=full
+./scripts/docker/setup.sh
+```
+
+This pins both `tools.exec.*` config and the gateway `exec-approvals.json`
+defaults for the `main` agent. Use this only on a trusted single-user gateway,
+because it disables interactive approval prompts for host exec.
 
 ### Pre-install extension dependencies (optional)
 

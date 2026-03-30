@@ -11,6 +11,9 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+DOCKER_EXEC_SECURITY="${OPENCLAW_DOCKER_EXEC_SECURITY:-}"
+DOCKER_EXEC_ASK="${OPENCLAW_DOCKER_EXEC_ASK:-}"
+DOCKER_EXEC_ASK_FALLBACK="${OPENCLAW_DOCKER_EXEC_ASK_FALLBACK:-}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -103,6 +106,216 @@ read_env_gateway_token() {
   if [[ -n "$token" ]]; then
     printf '%s' "$token"
   fi
+}
+
+config_path_exists() {
+  local path="$1"
+  local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
+  if [[ ! -f "$config_path" ]]; then
+    return 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$config_path" "$path" <<'PY'
+import json
+import sys
+
+config_path = sys.argv[1]
+path = sys.argv[2].split(".")
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        current = json.load(f)
+except Exception:
+    raise SystemExit(1)
+
+for part in path:
+    if not isinstance(current, dict) or part not in current:
+        raise SystemExit(1)
+    current = current[part]
+
+raise SystemExit(0)
+PY
+    return $?
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node - "$config_path" "$path" <<'NODE'
+const fs = require("node:fs");
+const configPath = process.argv[2];
+const parts = process.argv[3].split(".");
+try {
+  let current = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  for (const part of parts) {
+    if (!current || typeof current !== "object" || !(part in current)) {
+      process.exit(1);
+    }
+    current = current[part];
+  }
+  process.exit(0);
+} catch {
+  process.exit(1);
+}
+NODE
+    return $?
+  fi
+  return 1
+}
+
+set_config_if_missing() {
+  local path="$1"
+  local value="$2"
+
+  if config_path_exists "$path"; then
+    return 0
+  fi
+
+  run_prestart_cli config set "$path" "$value" >/dev/null
+  echo "Set $path=$value"
+}
+
+set_config_value() {
+  local path="$1"
+  local value="$2"
+  run_prestart_cli config set "$path" "$value" >/dev/null
+  echo "Set $path=$value"
+}
+
+configure_docker_browser_defaults() {
+  if [[ -z "${OPENCLAW_INSTALL_BROWSER:-}" ]]; then
+    return 0
+  fi
+
+  echo "Applying Docker browser defaults for Playwright Chromium."
+  set_config_if_missing browser.enabled true
+  set_config_if_missing browser.defaultProfile openclaw
+  set_config_if_missing browser.headless true
+  set_config_if_missing browser.noSandbox true
+  set_config_if_missing browser.executablePath /usr/local/bin/openclaw-playwright-chromium
+}
+
+validate_exec_security_value() {
+  local label="$1"
+  local value="$2"
+  case "$value" in
+    deny | allowlist | full) ;;
+    *) fail "$label must be one of: deny, allowlist, full." ;;
+  esac
+}
+
+validate_exec_ask_value() {
+  local label="$1"
+  local value="$2"
+  case "$value" in
+    off | on-miss | always) ;;
+    *) fail "$label must be one of: off, on-miss, always." ;;
+  esac
+}
+
+write_exec_approvals_policy() {
+  local approvals_path="$OPENCLAW_CONFIG_DIR/exec-approvals.json"
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$approvals_path" "$DOCKER_EXEC_SECURITY" "$DOCKER_EXEC_ASK" "$DOCKER_EXEC_ASK_FALLBACK" <<'PY'
+import json
+import os
+import sys
+
+path, security, ask, ask_fallback = sys.argv[1:5]
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        raise SystemExit(f"Failed to parse {path}: {exc}")
+
+if not isinstance(data, dict):
+    raise SystemExit(f"Failed to parse {path}: expected a JSON object")
+
+data.setdefault("version", 1)
+defaults = data.get("defaults")
+if not isinstance(defaults, dict):
+    defaults = {}
+    data["defaults"] = defaults
+
+agents = data.get("agents")
+if not isinstance(agents, dict):
+    agents = {}
+    data["agents"] = agents
+
+main = agents.get("main")
+if not isinstance(main, dict):
+    main = {}
+    agents["main"] = main
+
+for target in (defaults, main):
+    if security:
+        target["security"] = security
+    if ask:
+        target["ask"] = ask
+    if ask_fallback:
+        target["askFallback"] = ask_fallback
+
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+    return 0
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    node - "$approvals_path" "$DOCKER_EXEC_SECURITY" "$DOCKER_EXEC_ASK" "$DOCKER_EXEC_ASK_FALLBACK" <<'NODE'
+const fs = require("node:fs");
+const [approvalsPath, security, ask, askFallback] = process.argv.slice(2);
+
+let data = {};
+if (fs.existsSync(approvalsPath)) {
+  try {
+    data = JSON.parse(fs.readFileSync(approvalsPath, "utf8"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to parse ${approvalsPath}: ${message}`);
+    process.exit(1);
+  }
+}
+
+if (!data || typeof data !== "object" || Array.isArray(data)) {
+  console.error(`Failed to parse ${approvalsPath}: expected a JSON object`);
+  process.exit(1);
+}
+
+data.version ??= 1;
+data.defaults = data.defaults && typeof data.defaults === "object" ? data.defaults : {};
+data.agents = data.agents && typeof data.agents === "object" ? data.agents : {};
+data.agents.main =
+  data.agents.main && typeof data.agents.main === "object" ? data.agents.main : {};
+
+for (const target of [data.defaults, data.agents.main]) {
+  if (security) target.security = security;
+  if (ask) target.ask = ask;
+  if (askFallback) target.askFallback = askFallback;
+}
+
+fs.writeFileSync(approvalsPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+NODE
+    return 0
+  fi
+
+  fail "Need python3 or node to update exec approvals policy."
+}
+
+configure_docker_exec_policy() {
+  if [[ -z "$DOCKER_EXEC_SECURITY" && -z "$DOCKER_EXEC_ASK" && -z "$DOCKER_EXEC_ASK_FALLBACK" ]]; then
+    return 0
+  fi
+
+  echo "Applying Docker exec policy defaults."
+  if [[ -n "$DOCKER_EXEC_SECURITY" ]]; then
+    set_config_value tools.exec.security "$DOCKER_EXEC_SECURITY"
+  fi
+  if [[ -n "$DOCKER_EXEC_ASK" ]]; then
+    set_config_value tools.exec.ask "$DOCKER_EXEC_ASK"
+  fi
+  write_exec_approvals_policy
+  echo "Aligned exec approvals defaults in $OPENCLAW_CONFIG_DIR/exec-approvals.json."
 }
 
 ensure_control_ui_allowed_origins() {
@@ -258,6 +471,24 @@ if [[ -n "$TIMEZONE" ]]; then
     fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
   fi
 fi
+if [[ -n "$DOCKER_EXEC_SECURITY" ]]; then
+  if contains_disallowed_chars "$DOCKER_EXEC_SECURITY"; then
+    fail "OPENCLAW_DOCKER_EXEC_SECURITY contains unsupported control characters."
+  fi
+  validate_exec_security_value "OPENCLAW_DOCKER_EXEC_SECURITY" "$DOCKER_EXEC_SECURITY"
+fi
+if [[ -n "$DOCKER_EXEC_ASK" ]]; then
+  if contains_disallowed_chars "$DOCKER_EXEC_ASK"; then
+    fail "OPENCLAW_DOCKER_EXEC_ASK contains unsupported control characters."
+  fi
+  validate_exec_ask_value "OPENCLAW_DOCKER_EXEC_ASK" "$DOCKER_EXEC_ASK"
+fi
+if [[ -n "$DOCKER_EXEC_ASK_FALLBACK" ]]; then
+  if contains_disallowed_chars "$DOCKER_EXEC_ASK_FALLBACK"; then
+    fail "OPENCLAW_DOCKER_EXEC_ASK_FALLBACK contains unsupported control characters."
+  fi
+  validate_exec_security_value "OPENCLAW_DOCKER_EXEC_ASK_FALLBACK" "$DOCKER_EXEC_ASK_FALLBACK"
+fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
@@ -282,6 +513,9 @@ export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
+export OPENCLAW_DOCKER_EXEC_SECURITY="$DOCKER_EXEC_SECURITY"
+export OPENCLAW_DOCKER_EXEC_ASK="$DOCKER_EXEC_ASK"
+export OPENCLAW_DOCKER_EXEC_ASK_FALLBACK="$DOCKER_EXEC_ASK_FALLBACK"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -468,7 +702,10 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
   OPENCLAW_INSTALL_BROWSER \
-  OPENCLAW_TZ
+  OPENCLAW_TZ \
+  OPENCLAW_DOCKER_EXEC_SECURITY \
+  OPENCLAW_DOCKER_EXEC_ASK \
+  OPENCLAW_DOCKER_EXEC_ASK_FALLBACK
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
@@ -522,6 +759,14 @@ sync_gateway_mode_and_bind
 echo ""
 echo "==> Control UI origin allowlist"
 ensure_control_ui_allowed_origins
+
+echo ""
+echo "==> Browser defaults"
+configure_docker_browser_defaults
+
+echo ""
+echo "==> Exec policy defaults"
+configure_docker_exec_policy
 
 echo ""
 echo "==> Provider setup (optional)"

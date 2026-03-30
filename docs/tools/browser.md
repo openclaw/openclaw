@@ -556,6 +556,11 @@ docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
+If you build with `OPENCLAW_INSTALL_BROWSER=1` and use
+`scripts/docker/setup.sh`, Docker setup now auto-configures
+`browser.executablePath` to the bundled
+`openclaw-playwright-chromium` launcher for you.
+
 To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
 `/home/node/.cache/ms-playwright`) and make sure `/home/node` is persisted via
 `OPENCLAW_HOME_VOLUME` or a bind mount. See [Docker](/install/docker).
