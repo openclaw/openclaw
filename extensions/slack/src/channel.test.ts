@@ -118,6 +118,24 @@ describe("slackPlugin actions", () => {
     expect(Type.Object(schema.properties).required).toBeUndefined();
   });
 
+  it("treats interactive reply payloads as structured Slack payloads", () => {
+    const hasStructuredReplyPayload = slackPlugin.messaging.hasStructuredReplyPayload;
+    if (!hasStructuredReplyPayload) {
+      throw new Error("slack messaging.hasStructuredReplyPayload unavailable");
+    }
+
+    expect(
+      hasStructuredReplyPayload({
+        payload: {
+          text: "Choose",
+          interactive: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("forwards read threadId to Slack action handler", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     const handleAction = requireSlackHandleAction();
