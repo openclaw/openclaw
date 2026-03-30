@@ -8,7 +8,7 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
-import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -134,9 +134,10 @@ export function getBlockedReasonForSourcePath(sourceNormalized: string): Blocked
 }
 
 export function getBlockedHostPaths(): string[] {
-  const homedir = normalizeHostPath(resolveRequiredHomeDir(process.env, os.homedir));
+  const effectiveHome = normalizeHostPath(resolveRequiredHomeDir(process.env, os.homedir));
+  const osHome = normalizeHostPath(resolveRequiredOsHomeDir(process.env, os.homedir));
   const stateDir = normalizeHostPath(resolveStateDir());
-  const cacheKey = `${homedir}\u0000${stateDir}`;
+  const cacheKey = `${effectiveHome}\u0000${osHome}\u0000${stateDir}`;
   if (cachedBlockedHostPaths?.key === cacheKey) {
     return cachedBlockedHostPaths.paths;
   }
@@ -145,9 +146,12 @@ export function getBlockedHostPaths(): string[] {
   for (const candidate of BLOCKED_HOST_PATHS) {
     addBlockedHostPath(blocked, candidate);
   }
-  if (homedir !== "/") {
+  for (const home of new Set([effectiveHome, osHome])) {
+    if (home === "/") {
+      continue;
+    }
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
-      addBlockedHostPath(blocked, path.posix.join(homedir, suffix));
+      addBlockedHostPath(blocked, path.posix.join(home, suffix));
     }
   }
   addBlockedHostPath(blocked, stateDir);

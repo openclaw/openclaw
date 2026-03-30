@@ -58,6 +58,17 @@ describe("getBlockedBindReason", () => {
     );
   });
 
+  it("still blocks OS-home sensitive paths when OPENCLAW_HOME is overridden", () => {
+    vi.stubEnv("HOME", "/home/tester");
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    expect(getBlockedBindReason("/home/tester/.aws:/mnt/aws:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "/home/tester/.aws",
+      }),
+    );
+  });
+
   it("blocks the resolved OpenClaw state directory override", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", "/srv/openclaw-state");
     expect(getBlockedBindReason("/srv/openclaw-state/credentials:/mnt/state:ro")).toEqual(
@@ -182,6 +193,13 @@ describe("validateBindMounts", () => {
     expect(() => validateBindMounts([`${join(realHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
       /blocked path/,
     );
+  });
+
+  it("blocks OS-home sensitive paths when OPENCLAW_HOME points elsewhere", () => {
+    vi.stubEnv("HOME", "/home/tester");
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+
+    expect(() => validateBindMounts(["/home/tester/.ssh:/mnt/ssh:ro"])).toThrow(/blocked path/);
   });
 
   it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
