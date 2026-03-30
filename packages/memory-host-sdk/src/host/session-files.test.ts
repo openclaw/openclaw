@@ -85,3 +85,39 @@ describe("buildSessionEntry", () => {
     expect(entry!.lineMap).toEqual([3, 5]);
   });
 });
+
+describe("listSessionFilesForAgent", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-files-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("includes active .jsonl files", async () => {
+    const { listSessionFilesForAgent } = await import("./session-files.js");
+    await fs.mkdir(path.join(tmpDir, "main"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "main", "abc123.jsonl"), "...");
+    const result = await listSessionFilesForAgent("main");
+    expect(result.some((f) => f.endsWith("abc123.jsonl"))).toBe(true);
+  });
+
+  it("includes .jsonl.reset.timestamp files from session compaction", async () => {
+    const { listSessionFilesForAgent } = await import("./session-files.js");
+    await fs.mkdir(path.join(tmpDir, "main"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "main", "abc123.jsonl.reset.1743300000000"), "...");
+    const result = await listSessionFilesForAgent("main");
+    expect(result.some((f) => f.includes(".jsonl.reset."))).toBe(true);
+  });
+
+  it("includes .jsonl.deleted.timestamp files", async () => {
+    const { listSessionFilesForAgent } = await import("./session-files.js");
+    await fs.mkdir(path.join(tmpDir, "main"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "main", "abc123.jsonl.deleted.1743300000000"), "...");
+    const result = await listSessionFilesForAgent("main");
+    expect(result.some((f) => f.includes(".jsonl.deleted."))).toBe(true);
+  });
+});

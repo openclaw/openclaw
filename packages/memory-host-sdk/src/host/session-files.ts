@@ -25,7 +25,12 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => name.endsWith(".jsonl"))
+      .filter(
+        (name) =>
+          name.endsWith(".jsonl") ||
+          name.includes(".jsonl.reset.") ||
+          name.includes(".jsonl.deleted."),
+      )
       .map((name) => path.join(dir, name));
   } catch {
     return [];
