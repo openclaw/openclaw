@@ -554,12 +554,14 @@ export function attachGatewayWsMessageHandler(params: {
           // When authOk is true via token/password, the client has proven identity
           // through a shared secret — preserve their scopes even if sharedAuthOk
           // is false (e.g. Tailscale-authenticated clients where the shared probe
-          // uses allowTailscale=false). Fixes #51396, #57331, #46997, #48229.
-          const hasProvenSharedIdentity =
+          // uses allowTailscale=false). We deliberately check authOk (primary auth)
+          // rather than sharedAuthOk (secondary probe) because the probe can
+          // diverge for Tailscale-routed clients. Fixes #51396, #57331, #46997, #48229.
+          const hasDirectTokenAuth =
             authOk && (authMethod === "token" || authMethod === "password");
           if (
             !device &&
-            !hasProvenSharedIdentity &&
+            !hasDirectTokenAuth &&
             shouldClearUnboundScopesForMissingDeviceIdentity({
               decision,
               controlUiAuthPolicy,
