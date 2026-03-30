@@ -293,6 +293,31 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(connectedCall[0].lastConnectedAt).toBeTypeOf("number");
   });
 
+  it("treats raw gateway socket traffic as liveness even without inbound Discord messages", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const socket = new EventEmitter();
+    const { emitter, gateway } = createGatewayHarness({ ws: socket });
+    gateway.isConnected = true;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+    waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+      socket.emit("message", Buffer.from('{"op":11}'));
+    });
+
+    const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastEventAt: expect.any(Number),
+      }),
+    );
+    const livenessCall = statusSink.mock.calls.find((call) => {
+      const patch = (call[0] ?? {}) as Record<string, unknown>;
+      return "lastEventAt" in patch && !("connected" in patch) && !("lastConnectedAt" in patch);
+    });
+    expect(livenessCall).toBeDefined();
+  });
+
   it("forces a fresh reconnect when startup never reaches READY, then recovers", async () => {
     vi.useFakeTimers();
     try {

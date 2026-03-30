@@ -8,9 +8,12 @@ export type DiscordGatewayHandle = Pick<GatewayPlugin, "disconnect"> & {
 type GatewaySocketListener = (...args: unknown[]) => void;
 
 export type DiscordGatewaySocket = {
-  on: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
-  listeners: (event: "close" | "error") => GatewaySocketListener[];
-  removeListener: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
+  on: (event: "close" | "error" | "message", listener: GatewaySocketListener) => unknown;
+  listeners: (event: "close" | "error" | "message") => GatewaySocketListener[];
+  removeListener: (
+    event: "close" | "error" | "message",
+    listener: GatewaySocketListener,
+  ) => unknown;
   terminate?: () => void;
 };
 

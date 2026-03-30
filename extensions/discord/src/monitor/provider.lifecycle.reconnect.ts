@@ -57,10 +57,33 @@ export function createDiscordGatewayReconnectController(params: {
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let reconnectInFlight: Promise<void> | undefined;
   let consecutiveHelloStalls = 0;
+  let trackedSocket: MutableDiscordGateway["ws"] | undefined;
 
   const shouldStop = () => params.isLifecycleStopping() || params.abortSignal?.aborted;
   const resetHelloStallCounter = () => {
     consecutiveHelloStalls = 0;
+  };
+  const onSocketMessage = () => {
+    if (shouldStop()) {
+      return;
+    }
+    params.pushStatus({ lastEventAt: Date.now() });
+  };
+  const detachSocketLivenessListener = () => {
+    if (!trackedSocket) {
+      return;
+    }
+    trackedSocket.removeListener("message", onSocketMessage);
+    trackedSocket = undefined;
+  };
+  const attachSocketLivenessListener = () => {
+    const nextSocket = params.gateway?.ws;
+    if (!nextSocket || nextSocket === trackedSocket) {
+      return;
+    }
+    detachSocketLivenessListener();
+    nextSocket.on("message", onSocketMessage);
+    trackedSocket = nextSocket;
   };
   const clearHelloWatch = () => {
     if (helloTimeoutId) {
@@ -303,6 +326,7 @@ export function createDiscordGatewayReconnectController(params: {
     const at = Date.now();
     params.pushStatus({ lastEventAt: at });
     if (message.includes("WebSocket connection closed")) {
+      detachSocketLivenessListener();
       if (params.gateway?.isConnected) {
         resetHelloStallCounter();
       }
@@ -320,6 +344,7 @@ export function createDiscordGatewayReconnectController(params: {
     if (!message.includes("WebSocket connection opened")) {
       return;
     }
+    attachSocketLivenessListener();
     reconnectStallWatchdog.disarm();
     clearHelloWatch();
 
@@ -474,6 +499,7 @@ export function createDiscordGatewayReconnectController(params: {
   } else {
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
+  attachSocketLivenessListener();
 
   return {
     ensureStartupReady,
@@ -491,6 +517,7 @@ export function createDiscordGatewayReconnectController(params: {
     dispose: () => {
       reconnectStallWatchdog.stop();
       clearHelloWatch();
+      detachSocketLivenessListener();
       params.abortSignal?.removeEventListener("abort", onAbort);
     },
   };
