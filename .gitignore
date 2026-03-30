@@ -141,3 +141,6 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+
+# OpenClaw local runtime state (machine-specific, ephemeral)
+.openclaw/workspace-state.json

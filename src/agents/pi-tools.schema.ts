@@ -32,7 +32,7 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
   return undefined;
 }
 
-function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
+export function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   if (!existing) {
     return incoming;
   }
@@ -50,7 +50,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
         continue;
       }
       const record = source as Record<string, unknown>;
-      for (const key of ["title", "description", "default"]) {
+      for (const key of ["title", "description", "default", "optional"]) {
         if (!(key in merged) && key in record) {
           merged[key] = record[key];
         }
@@ -64,7 +64,35 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
     return merged;
   }
 
-  return existing;
+  // Non-enum path: preserve all schema details from both sources
+  const ex = existing && typeof existing === "object" ? (existing as Record<string, unknown>) : {};
+  const inc = incoming && typeof incoming === "object" ? (incoming as Record<string, unknown>) : {};
+
+  const merged: Record<string, unknown> = {};
+
+  // Copy all properties from existing first
+  for (const [key, value] of Object.entries(ex)) {
+    merged[key] = value;
+  }
+
+  // Copy properties from incoming (don't overwrite existing)
+  for (const [key, value] of Object.entries(inc)) {
+    if (!(key in merged)) {
+      merged[key] = value;
+    }
+  }
+
+  // Special handling: optional is true if either is true
+  if (ex.optional === true || inc.optional === true) {
+    merged.optional = true;
+  }
+
+  // Special handling: prefer existing type, but use incoming if no existing
+  if (!merged.type && inc.type) {
+    merged.type = inc.type;
+  }
+
+  return merged;
 }
 
 export function normalizeToolParameters(
