@@ -686,12 +686,96 @@ export async function maybeDeliverTaskStateChangeUpdate(
   }
 }
 
-export function updateTaskRecordById(
-  taskId: string,
-  patch: Partial<TaskRecord>,
-): TaskRecord | null {
+export function setTaskProgressById(params: {
+  taskId: string;
+  progressSummary?: string | null;
+  lastEventAt?: number;
+}): TaskRecord | null {
   ensureTaskRegistryReady();
-  return updateTask(taskId, patch);
+  const patch: Partial<TaskRecord> = {};
+  if (params.progressSummary !== undefined) {
+    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  return updateTask(params.taskId, patch);
+}
+
+export function setTaskTimingById(params: {
+  taskId: string;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {};
+  if (params.startedAt != null) {
+    patch.startedAt = params.startedAt;
+  }
+  if (params.endedAt != null) {
+    patch.endedAt = params.endedAt;
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  return updateTask(params.taskId, patch);
+}
+
+export function setTaskCleanupAfterById(params: {
+  taskId: string;
+  cleanupAfter: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  return updateTask(params.taskId, {
+    cleanupAfter: params.cleanupAfter,
+  });
+}
+
+export function markTaskTerminalById(params: {
+  taskId: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  return updateTask(params.taskId, {
+    status: params.status,
+    endedAt: params.endedAt,
+    lastEventAt: params.lastEventAt ?? params.endedAt,
+    ...(params.error !== undefined ? { error: params.error } : {}),
+    ...(params.terminalSummary !== undefined
+      ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
+      : {}),
+    ...(params.terminalOutcome !== undefined
+      ? {
+          terminalOutcome: resolveTaskTerminalOutcome({
+            status: params.status,
+            terminalOutcome: params.terminalOutcome,
+          }),
+        }
+      : {}),
+  });
+}
+
+export function markTaskLostById(params: {
+  taskId: string;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  cleanupAfter?: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  return updateTask(params.taskId, {
+    status: "lost",
+    endedAt: params.endedAt,
+    lastEventAt: params.lastEventAt ?? params.endedAt,
+    ...(params.error !== undefined ? { error: params.error } : {}),
+    ...(params.cleanupAfter !== undefined ? { cleanupAfter: params.cleanupAfter } : {}),
+  });
 }
 
 function updateTasksByRunId(runId: string, patch: Partial<TaskRecord>): TaskRecord[] {
