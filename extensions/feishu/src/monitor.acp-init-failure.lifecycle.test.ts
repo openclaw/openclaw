@@ -11,7 +11,7 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
-} from "./test-support/lifecycle.js";
+} from "./test-support/lifecycle-test-support.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const {

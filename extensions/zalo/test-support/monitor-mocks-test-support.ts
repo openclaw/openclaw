@@ -1,7 +1,9 @@
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "../../../test/helpers/plugins/plugin-registry.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
