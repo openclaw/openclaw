@@ -101,7 +101,116 @@ class DeviceHandlerTest {
       val status = state.getValue("status").jsonPrimitive.content
       assertTrue(status == "granted" || status == "denied")
       state.getValue("promptable").jsonPrimitive.boolean
+      if (key == "sms") {
+        val capabilities = state.getValue("capabilities").jsonObject
+        for (capabilityKey in listOf("send", "read")) {
+          val capability = capabilities.getValue(capabilityKey).jsonObject
+          val capabilityStatus = capability.getValue("status").jsonPrimitive.content
+          assertTrue(capabilityStatus == "granted" || capabilityStatus == "denied")
+          capability.getValue("promptable").jsonPrimitive.boolean
+        }
+      }
     }
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsSendOnlyPartialGrantAsGranted() {
+    assertTrue(
+      DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = false,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsReadOnlyPartialGrantAsGranted() {
+    assertTrue(
+      DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = false,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsNoSmsGrantAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsDisabledSmsAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = false,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsMissingTelephonyAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = false,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelPromptableStaysTrueUntilBothSmsPermissionsAreGranted() {
+    assertTrue(
+      DeviceHandler.isSmsPromptable(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = false,
+      ),
+    )
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelPromptableIsFalseWhenSmsCannotExist() {
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = false,
+        telephonyAvailable = true,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = true,
+        telephonyAvailable = false,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
   }
 
   @Test

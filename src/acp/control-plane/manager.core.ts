@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
-import { createTaskRecord, updateTaskStateByRunId } from "../../tasks/task-registry.js";
+import {
+  createRunningTaskRun,
+  completeTaskRunByRunId,
+  failTaskRunByRunId,
+  startTaskRunByRunId,
+} from "../../tasks/task-executor.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -143,8 +148,6 @@ type BackgroundTaskContext = {
   label?: string;
   task: string;
 };
-
-type BackgroundTaskStatePatch = Omit<Parameters<typeof updateTaskStateByRunId>[0], "runId">;
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
@@ -786,8 +789,7 @@ export class AcpSessionManager {
                     );
                   }
                   if (taskContext) {
-                    this.updateBackgroundTaskState(taskContext.runId, {
-                      status: "running",
+                    this.markBackgroundTaskRunning(taskContext.runId, {
                       lastEventAt: Date.now(),
                       progressSummary: taskProgressSummary || null,
                     });
@@ -832,7 +834,7 @@ export class AcpSessionManager {
             });
             if (taskContext) {
               const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
-              this.updateBackgroundTaskState(taskContext.runId, {
+              this.markBackgroundTaskTerminal(taskContext.runId, {
                 status: "succeeded",
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
@@ -871,7 +873,7 @@ export class AcpSessionManager {
               errorCode: acpError.code,
             });
             if (taskContext) {
-              this.updateBackgroundTaskState(taskContext.runId, {
+              this.markBackgroundTaskTerminal(taskContext.runId, {
                 status: resolveBackgroundTaskFailureStatus(acpError),
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
@@ -1879,7 +1881,7 @@ export class AcpSessionManager {
 
   private createBackgroundTaskRecord(context: BackgroundTaskContext, startedAt: number): void {
     try {
-      createTaskRecord({
+      createRunningTaskRun({
         runtime: "acp",
         sourceId: context.runId,
         requesterSessionKey: context.requesterSessionKey,
@@ -1888,7 +1890,6 @@ export class AcpSessionManager {
         runId: context.runId,
         label: context.label,
         task: context.task,
-        status: "running",
         startedAt,
       });
     } catch (error) {
@@ -1898,11 +1899,56 @@ export class AcpSessionManager {
     }
   }
 
-  private updateBackgroundTaskState(runId: string, patch: BackgroundTaskStatePatch): void {
+  private markBackgroundTaskRunning(
+    runId: string,
+    params: {
+      lastEventAt?: number;
+      progressSummary?: string | null;
+    },
+  ): void {
     try {
-      updateTaskStateByRunId({
-        ...patch,
+      startTaskRunByRunId({
         runId,
+        lastEventAt: params.lastEventAt,
+        progressSummary: params.progressSummary,
+      });
+    } catch (error) {
+      logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
+    }
+  }
+
+  private markBackgroundTaskTerminal(
+    runId: string,
+    params: {
+      status: "succeeded" | "failed" | "timed_out";
+      endedAt: number;
+      lastEventAt?: number;
+      error?: string;
+      progressSummary?: string | null;
+      terminalSummary?: string | null;
+      terminalOutcome?: "succeeded" | "blocked" | null;
+    },
+  ): void {
+    try {
+      if (params.status === "succeeded") {
+        completeTaskRunByRunId({
+          runId,
+          endedAt: params.endedAt,
+          lastEventAt: params.lastEventAt,
+          progressSummary: params.progressSummary,
+          terminalSummary: params.terminalSummary,
+          terminalOutcome: params.terminalOutcome,
+        });
+        return;
+      }
+      failTaskRunByRunId({
+        runId,
+        status: params.status,
+        endedAt: params.endedAt,
+        lastEventAt: params.lastEventAt,
+        error: params.error,
+        progressSummary: params.progressSummary,
+        terminalSummary: params.terminalSummary,
       });
     } catch (error) {
       logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
