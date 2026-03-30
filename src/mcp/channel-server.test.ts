@@ -113,7 +113,7 @@ async function connectMcp(params: {
 
 describe("openclaw channel mcp server", () => {
   describe("gateway-backed flows", () => {
-    installGatewayTestHooks();
+    installGatewayTestHooks({ scope: "suite" });
 
     test("lists conversations, reads messages, and waits for events", async () => {
       const storePath = await createSessionStoreFile();

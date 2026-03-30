@@ -11,11 +11,17 @@ import {
   withSessionStoreLockForTest,
 } from "../config/sessions/store.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
-import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
+import {
+  cleanupSessionStateForTest,
+  resetSessionStateCleanupRuntimeForTests,
+  setSessionStateCleanupRuntimeForTests,
+} from "./session-state-cleanup.js";
 
 const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async () => ({ release: vi.fn(async () => {}) })),
 );
+const drainFileLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
+const drainSessionWriteLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -27,6 +33,12 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function flushMicrotasks(rounds = 3): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("cleanupSessionStateForTest", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -34,7 +46,13 @@ describe("cleanupSessionStateForTest", () => {
     resetFileLockStateForTest();
     resetSessionWriteLockStateForTest();
     acquireSessionWriteLockMock.mockClear();
+    drainFileLockStateMock.mockClear();
+    drainSessionWriteLockStateMock.mockClear();
     setSessionWriteLockAcquirerForTests(acquireSessionWriteLockMock);
+    setSessionStateCleanupRuntimeForTests({
+      drainFileLockStateForTest: drainFileLockStateMock,
+      drainSessionWriteLockStateForTest: drainSessionWriteLockStateMock,
+    });
   });
 
   afterEach(() => {
@@ -43,6 +61,7 @@ describe("cleanupSessionStateForTest", () => {
     resetFileLockStateForTest();
     resetSessionWriteLockStateForTest();
     resetSessionStoreLockRuntimeForTests();
+    resetSessionStateCleanupRuntimeForTests();
     vi.restoreAllMocks();
   });
 
@@ -66,14 +85,18 @@ describe("cleanupSessionStateForTest", () => {
         settled = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await flushMicrotasks();
       expect(settled).toBe(false);
+      expect(drainFileLockStateMock).not.toHaveBeenCalled();
+      expect(drainSessionWriteLockStateMock).not.toHaveBeenCalled();
 
       release.resolve();
       await running;
       await cleanupPromise;
 
       expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
+      expect(drainFileLockStateMock).toHaveBeenCalledTimes(1);
+      expect(drainSessionWriteLockStateMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
       await running?.catch(() => undefined);
