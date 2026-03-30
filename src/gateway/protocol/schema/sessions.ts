@@ -56,7 +56,8 @@ export const SessionsRecallParamsSchema = Type.Object(
     query: Type.String({ minLength: 1 }),
     maxTokens: Type.Optional(Type.Integer({ minimum: 256, maximum: 4000 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-    scope: Type.Optional(Type.Union([Type.Literal("recent"), Type.Literal("all")])),
+    /** Flat string enum for generated clients (avoid anyOf union drift). */
+    scope: Type.Optional(Type.String({ enum: ["recent", "all"] })),
     requesterSessionKey: Type.Optional(NonEmptyString),
     sandboxed: Type.Optional(Type.Boolean()),
   },

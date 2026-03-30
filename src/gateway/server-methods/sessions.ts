@@ -3,14 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import {
-  bm25RankToScore,
-  buildFtsQuery,
-} from "../../../extensions/memory-core/src/memory/hybrid.js";
-import {
-  searchKeyword,
-  type SearchRowResult,
-} from "../../../extensions/memory-core/src/memory/manager-search.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import {
@@ -37,6 +29,12 @@ import {
   type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import {
+  bm25RankToScore,
+  buildFtsQuery,
+  searchKeyword,
+  type SearchRowResult,
+} from "../../plugin-sdk/memory-core-host-session-fts.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,

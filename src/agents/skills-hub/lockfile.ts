@@ -36,12 +36,27 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** Single path segment under the managed skills root: no traversal or separators. */
+export function isSafeHubLockSkillNameSegment(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 200) {
+    return false;
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
+    return false;
+  }
+  if (trimmed === "." || trimmed === "..") {
+    return false;
+  }
+  return /^[a-zA-Z0-9._-]+$/.test(trimmed);
+}
+
 export function isValidHubLockSkillEntry(entry: unknown): entry is HubLockSkillEntry {
   if (!entry || typeof entry !== "object") {
     return false;
   }
   const row = entry as Record<string, unknown>;
-  if (!isNonEmptyString(row.name)) {
+  if (!isNonEmptyString(row.name) || !isSafeHubLockSkillNameSegment(row.name)) {
     return false;
   }
   if (row.source !== "clawhub" && row.source !== "github") {
