@@ -3,7 +3,7 @@ import {
   AIMLAPI_DEFAULT_MODEL_ID,
   AIMLAPI_DEFAULT_MODEL_REF,
   buildAimlapiModelDefinition,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/aimlapi";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,

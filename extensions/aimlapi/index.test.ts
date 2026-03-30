@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../../src/plugins/captured-registration.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import aimlapiPlugin from "./index.js";
 import { __testing as aimlapiWebSearchTesting } from "./src/aimlapi-web-search-provider.js";
 

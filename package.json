@@ -261,6 +261,10 @@
       "types": "./dist/plugin-sdk/amazon-bedrock.d.ts",
       "default": "./dist/plugin-sdk/amazon-bedrock.js"
     },
+    "./plugin-sdk/aimlapi": {
+      "types": "./dist/plugin-sdk/aimlapi.d.ts",
+      "default": "./dist/plugin-sdk/aimlapi.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -721,6 +725,10 @@
       "types": "./dist/plugin-sdk/provider-catalog-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-shared.js"
     },
+    "./plugin-sdk/provider-catalog": {
+      "types": "./dist/plugin-sdk/provider-catalog.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog.js"
+    },
     "./plugin-sdk/provider-entry": {
       "types": "./dist/plugin-sdk/provider-entry.d.ts",
       "default": "./dist/plugin-sdk/provider-entry.js"
@@ -736,6 +744,10 @@
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
+    },
+    "./plugin-sdk/provider-models": {
+      "types": "./dist/plugin-sdk/provider-models.d.ts",
+      "default": "./dist/plugin-sdk/provider-models.js"
     },
     "./plugin-sdk/provider-moonshot": {
       "types": "./dist/plugin-sdk/provider-moonshot.d.ts",

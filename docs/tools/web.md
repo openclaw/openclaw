@@ -57,6 +57,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 ## Choosing a provider
 
 <CardGroup cols={2}>
+  <Card title="AI/ML API" icon="cpu" href="/tools/web">
+    AI-synthesized answers with citations via Perplexity Sonar-compatible models.
+  </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters.
   </Card>
@@ -90,6 +93,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 | Provider                               | Result style               | Filters                                       | API key                                     |
 | -------------------------------------- | -------------------------- | --------------------------------------------- | ------------------------------------------- |
+| [AI/ML API](/tools/web)                | AI-synthesized + citations | `freshness`, date range, domains              | `AIMLAPI_API_KEY`                           |
 | [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode   | `BRAVE_API_KEY`                             |
 | [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                            | None (key-free)                             |
 | [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction | `EXA_API_KEY`                               |
@@ -109,12 +113,13 @@ If no `provider` is set, OpenClaw checks for API keys in this order and uses
 the first one found:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
-2. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
-3. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
-4. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
-5. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
-6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
-7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+2. **AI/ML API** -- `AIMLAPI_API_KEY` or `plugins.entries.aimlapi.config.webSearch.apiKey`
+3. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
+4. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
+6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
+7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
+8. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave and prompts you to configure one.
 
@@ -124,6 +129,15 @@ If no keys are found, it falls back to Brave and prompts you to configure one.
   inactive.
 </Note>
 
+### AI/ML API Search
+
+1. Create an account at [aimlapi.com](https://aimlapi.com)
+2. Generate an API key in the dashboard
+3. Run `openclaw configure --section web` or set `AIMLAPI_API_KEY`
+
+For the smoothest results, keep the default model (`perplexity/sonar-pro`) or
+use `perplexity/sonar`.
+
 ## web_search
 
 Search the web using your configured provider.
@@ -132,6 +146,7 @@ Search the web using your configured provider.
 
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
+  - **AI/ML API**: `AIMLAPI_API_KEY` or `plugins.entries.aimlapi.config.webSearch.apiKey`
   - **Brave**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
   - **Exa**: `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
   - **Firecrawl**: `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
@@ -162,6 +177,33 @@ Search the web using your configured provider.
 
 Provider-specific config lives under
 `plugins.entries.<plugin>.config.webSearch.*`.
+
+### AI/ML API example
+
+```json5
+{
+  plugins: {
+    entries: {
+      aimlapi: {
+        config: {
+          webSearch: {
+            apiKey: "aiml-...",
+            baseUrl: "https://api.aimlapi.com/v1",
+            model: "perplexity/sonar-pro",
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        provider: "aimlapi",
+      },
+    },
+  },
+}
+```
 
 For `x_search`, configure `tools.web.x_search.*` directly. It uses the same
 `XAI_API_KEY` fallback as Grok web search.

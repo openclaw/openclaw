@@ -267,9 +267,24 @@ function cleanAimlapiSchema(schema: unknown, depth = 0): unknown {
 }
 
 export function normalizeAimlapiToolParameters(tool: AnyAgentTool): AnyAgentTool {
+  const toolRecord = tool as unknown as Record<string, unknown>;
+  const functionValue = toolRecord.function;
+  const functionRecord =
+    functionValue && typeof functionValue === "object" && !Array.isArray(functionValue)
+      ? (functionValue as Record<string, unknown>)
+      : null;
+
   return {
     ...tool,
     parameters: cleanAimlapiSchema(tool.parameters),
+    ...(functionRecord
+      ? {
+          function: {
+            ...functionRecord,
+            parameters: cleanAimlapiSchema(functionRecord.parameters),
+          },
+        }
+      : {}),
   };
 }
 
@@ -277,7 +292,7 @@ export function normalizeAimlapiPayloadTools(tools: unknown): unknown {
   if (!Array.isArray(tools)) {
     return tools;
   }
-  return tools.map((tool) => normalizeAimlapiToolParameters(tool as AnyAgentTool));
+  return tools.map((tool) => normalizeAimlapiToolParameters(tool as unknown as AnyAgentTool));
 }
 
 export function normalizeAimlapiToolChoice(toolChoice: unknown): unknown {

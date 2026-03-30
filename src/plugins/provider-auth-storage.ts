@@ -148,6 +148,7 @@ export async function setMinimaxApiKey(
 ) {
   const provider = profileId.split(":")[0] ?? "minimax";
   upsertProviderApiKeyProfile({ provider, key, agentDir, options, profileId });
+}
 
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
@@ -157,7 +158,6 @@ export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 export const AIMLAPI_DEFAULT_MODEL_REF = "aimlapi/openai/gpt-5-nano-2025-08-07";
-}
 
 export async function setAimlapiApiKey(
   key: SecretInput,

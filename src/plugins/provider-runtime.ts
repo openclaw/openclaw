@@ -3,8 +3,8 @@ import path from "node:path";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ModelProviderConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveCatalogHookProviderPluginIds,
   resolveNonBundledProviderPluginIds,
