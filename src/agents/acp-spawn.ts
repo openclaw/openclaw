@@ -565,7 +565,7 @@ function resolveConversationIdForThreadBinding(params: {
   // Strip channel prefix from numeric DM targets (e.g. "telegram:12345678" → "12345678")
   if (channel && target.toLowerCase().startsWith(`${channel}:`)) {
     const stripped = target.slice(channel.length + 1).trim();
-    if (stripped && /^\d{6,}$/.test(stripped)) {
+    if (stripped && /^\d+$/.test(stripped)) {
       return stripped;
     }
   }
