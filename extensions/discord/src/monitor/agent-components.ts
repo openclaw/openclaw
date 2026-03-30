@@ -46,7 +46,6 @@ import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/rep
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
@@ -289,17 +288,15 @@ async function dispatchDiscordComponentEvent(params: {
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
   const runtime = ctx.runtime ?? createNonExitingRuntime();
-  const route = resolveAgentRoute({
-    cfg: ctx.cfg,
-    channel: "discord",
-    accountId: ctx.accountId,
-    guildId: interactionCtx.rawGuildId,
+  const route = resolveAgentComponentRoute({
+    ctx,
+    rawGuildId: interactionCtx.rawGuildId,
     memberRoleIds: interactionCtx.memberRoleIds,
-    peer: {
-      kind: interactionCtx.isDirectMessage ? "direct" : "channel",
-      id: interactionCtx.isDirectMessage ? interactionCtx.userId : interactionCtx.channelId,
-    },
-    parentPeer: channelCtx.parentId ? { kind: "channel", id: channelCtx.parentId } : undefined,
+    isDirectMessage: interactionCtx.isDirectMessage,
+    isGroupDm: interactionCtx.isGroupDm,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
+    parentId: channelCtx.parentId,
   });
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
@@ -870,6 +867,7 @@ export class AgentComponentButton extends Button {
       replyOpts,
       rawGuildId,
       isDirectMessage,
+      isGroupDm,
       memberRoleIds,
     } = interactionCtx;
 
@@ -896,6 +894,7 @@ export class AgentComponentButton extends Button {
       rawGuildId,
       memberRoleIds,
       isDirectMessage,
+      isGroupDm,
       userId,
       channelId,
       parentId,
@@ -960,6 +959,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       replyOpts,
       rawGuildId,
       isDirectMessage,
+      isGroupDm,
       memberRoleIds,
     } = interactionCtx;
 
@@ -989,6 +989,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       rawGuildId,
       memberRoleIds,
       isDirectMessage,
+      isGroupDm,
       userId,
       channelId,
       parentId,
