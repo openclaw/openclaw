@@ -473,6 +473,78 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
     expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-1", "sig-2"]);
   });
 
+  it("queues the final commentary suffix after a pending delivery completes", async () => {
+    const firstDelivery = createDeferred<void>();
+    const onCommentaryReply = vi
+      .fn()
+      .mockImplementationOnce(() => firstDelivery.promise)
+      .mockResolvedValueOnce(undefined);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    emit({
+      type: "message_update",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [
+          {
+            type: "text",
+            text: "Checking",
+            textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    emit({
+      type: "message_end",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "text",
+            text: "Checking the repo state now.",
+            textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+    });
+
+    firstDelivery.resolve();
+    await subscription.waitForCommentaryDelivery();
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(2);
+    expect(onCommentaryReply).toHaveBeenNthCalledWith(
+      1,
+      { text: "Checking" },
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+    expect(onCommentaryReply).toHaveBeenNthCalledWith(
+      2,
+      { text: " the repo state now." },
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+  });
+
   it("aborts stale commentary work on compaction retry and keeps delivered ids for replay suppression", async () => {
     const firstDelivery = createDeferred<void>();
     const onCommentaryReply = vi

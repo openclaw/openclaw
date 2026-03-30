@@ -18,3 +18,8 @@ Review follow-up for PR #57289 focused on three concrete fixes:
 - Re-throw `AbortError` from later WhatsApp media sends so truncated commentary is not marked as delivered.
 
 The remaining unresolved review thread about empty final replies after commentary filtering turned out to be a real regression once `assistantTexts` fallback was skipped, so this follow-up now includes that fix and regression coverage.
+
+Latest follow-up scope:
+
+- Preserve undelivered commentary suffixes in the final payload by passing delivered commentary text, not just delivered segment ids, into `buildEmbeddedRunPayloads`.
+- Queue one follow-up live commentary delivery after an in-flight send completes if the same commentary segment grew while it was pending, including the `message_end` case with no later events.

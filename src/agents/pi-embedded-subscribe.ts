@@ -15,7 +15,10 @@ import {
 } from "./pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import { consumePendingToolMediaIntoReply } from "./pi-embedded-subscribe.handlers.messages.js";
+import {
+  consumePendingToolMediaIntoReply,
+  resolveLiveCommentaryDeltaText,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
@@ -649,6 +652,33 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     commentaryDeliveryQueue = Promise.resolve();
   };
 
+  const queueLatestCommentaryDeltaIfNeeded = (segmentId: string) => {
+    const latestSegment = state.assistantOutputs.find((entry) => {
+      return entry.segmentId === segmentId && entry.phase === "commentary";
+    });
+    if (!latestSegment) {
+      return;
+    }
+    const deliveredText = state.deliveredCommentarySegmentTexts.get(segmentId);
+    const unsentText = resolveLiveCommentaryDeltaText({
+      currentText: latestSegment.text,
+      deliveredText,
+    });
+    if (!unsentText) {
+      return;
+    }
+    queueCommentaryDelivery(
+      {
+        ...latestSegment,
+        text: unsentText,
+      },
+      {
+        allowRedelivery: Boolean(deliveredText),
+        deliveredText: latestSegment.text,
+      },
+    );
+  };
+
   const queueCommentaryDelivery = (
     segment: AssistantOutputEntry,
     options?: { allowRedelivery?: boolean; deliveredText?: string },
@@ -681,6 +711,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingCommentarySegmentIds.add(segment.segmentId);
     state.commentaryAbortControllers.add(abortController);
     state.commentaryQueueVersion += 1;
+    let deliverySucceeded = false;
     commentaryDeliveryQueue = commentaryDeliveryQueue
       .then(async () => {
         if (generation !== state.commentaryGeneration || abortController.signal.aborted) {
@@ -701,6 +732,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           segment.segmentId,
           options?.deliveredText ?? segment.text,
         );
+        deliverySucceeded = true;
       })
       .catch((err) => {
         if (abortController.signal.aborted || generation !== state.commentaryGeneration) {
@@ -713,6 +745,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         state.commentaryAbortControllers.delete(abortController);
         if (generation === state.commentaryGeneration) {
           state.pendingCommentarySegmentIds.delete(segment.segmentId);
+          if (deliverySucceeded) {
+            queueLatestCommentaryDeltaIfNeeded(segment.segmentId);
+          }
         }
       });
   };
@@ -856,6 +891,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     deliveredCommentarySegmentIds: () => Array.from(state.deliveredCommentarySegmentIds),
+    getDeliveredCommentarySegmentTexts: () => new Map(state.deliveredCommentarySegmentTexts),
     getPendingCommentaryDeliveryCount: () => state.pendingCommentarySegmentIds.size,
     waitForCommentaryDeliveryRound,
     waitForCommentaryDelivery,

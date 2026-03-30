@@ -89,6 +89,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantOutputs?: AssistantOutputEntry[];
   deliveredCommentarySegmentIds?: string[];
+  deliveredCommentarySegmentTexts?: ReadonlyMap<string, string>;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -252,12 +253,23 @@ export function buildEmbeddedRunPayloads(params: {
   const resolvedAssistantTexts = (() => {
     if (params.assistantOutputs && params.assistantOutputs.length > 0) {
       const filteredAssistantOutputs = params.assistantOutputs
-        .filter((segment) => {
-          return !(
-            segment.phase === "commentary" && deliveredCommentarySegmentIds.has(segment.segmentId)
-          );
+        .map((segment) => {
+          if (segment.phase !== "commentary") {
+            return segment.text;
+          }
+          const deliveredText = params.deliveredCommentarySegmentTexts?.get(segment.segmentId);
+          if (deliveredText) {
+            if (segment.text === deliveredText) {
+              return null;
+            }
+            if (segment.text.startsWith(deliveredText)) {
+              const suffix = segment.text.slice(deliveredText.length);
+              return suffix.length > 0 ? suffix : null;
+            }
+          }
+          return deliveredCommentarySegmentIds.has(segment.segmentId) ? null : segment.text;
         })
-        .map((segment) => segment.text);
+        .filter((text): text is string => Boolean(text));
       if (filteredAssistantOutputs.length > 0) {
         return filteredAssistantOutputs;
       }

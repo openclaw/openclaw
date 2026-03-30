@@ -66,7 +66,7 @@ function extractAssistantOutputsForMessage(ctx: EmbeddedPiSubscribeContext, msg:
   return extractAssistantOutputCandidates(msg, { fallbackMessageStableId });
 }
 
-function resolveLiveCommentaryDeltaText(params: {
+export function resolveLiveCommentaryDeltaText(params: {
   currentText: string;
   deliveredText?: string;
 }): string | null {

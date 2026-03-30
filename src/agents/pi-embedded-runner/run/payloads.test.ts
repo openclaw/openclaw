@@ -123,14 +123,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     const payloads = buildPayloads({
       assistantOutputs: [
         { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+        { segmentId: "f1", text: "Lint passed cleanly.", phase: "final_answer" },
       ],
       deliveredCommentarySegmentIds: ["c1"],
       deliveredCommentarySegmentTexts: new Map([["c1", "Checking the "]]),
-      assistantTexts: [],
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("repo state now.");
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "repo state now.",
+      "Lint passed cleanly.",
+    ]);
   });
 
   it("falls back to assistantTexts when delivered commentary strips all assistant outputs", () => {
