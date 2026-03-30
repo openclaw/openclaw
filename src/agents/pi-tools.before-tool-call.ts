@@ -178,7 +178,12 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
-    return { blocked: false, params: args.params };
+    return (
+      checkTruncationGuards(toolName, params, args.toolCallId, args.ctx?.sessionKey) ?? {
+        blocked: false,
+        params: args.params,
+      }
+    );
   }
 
   try {
@@ -316,20 +321,36 @@ export async function runBeforeToolCallHook(args: {
           decision === PluginApprovalResolutions.ALLOW_ONCE ||
           decision === PluginApprovalResolutions.ALLOW_ALWAYS
         ) {
-          return {
-            blocked: false,
-            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
-          };
+          const effectiveParams = mergeParamsWithApprovalOverrides(params, hookResult.params);
+          return (
+            checkTruncationGuards(
+              toolName,
+              effectiveParams,
+              args.toolCallId,
+              args.ctx?.sessionKey,
+            ) ?? {
+              blocked: false,
+              params: effectiveParams,
+            }
+          );
         }
         if (decision === PluginApprovalResolutions.DENY) {
           return { blocked: true, reason: "Denied by user" };
         }
         const timeoutBehavior = approval.timeoutBehavior ?? "deny";
         if (timeoutBehavior === "allow") {
-          return {
-            blocked: false,
-            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
-          };
+          const effectiveParams = mergeParamsWithApprovalOverrides(params, hookResult.params);
+          return (
+            checkTruncationGuards(
+              toolName,
+              effectiveParams,
+              args.toolCallId,
+              args.ctx?.sessionKey,
+            ) ?? {
+              blocked: false,
+              params: effectiveParams,
+            }
+          );
         }
         return { blocked: true, reason: "Approval timed out" };
       } catch (err) {
@@ -350,21 +371,44 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.params) {
-      return {
-        blocked: false,
-        params: mergeParamsWithApprovalOverrides(params, hookResult.params),
-      };
+      const effectiveParams = mergeParamsWithApprovalOverrides(params, hookResult.params);
+      return (
+        checkTruncationGuards(toolName, effectiveParams, args.toolCallId, args.ctx?.sessionKey) ?? {
+          blocked: false,
+          params: effectiveParams,
+        }
+      );
     }
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
     log.warn(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(err)}`);
   }
 
-  // Block exec/bash calls with an empty or missing command (checked after hooks so that
-  // hook-based param normalization runs first and can supply a valid command).
+  return (
+    checkTruncationGuards(toolName, params, args.toolCallId, args.ctx?.sessionKey) ?? {
+      blocked: false,
+      params,
+    }
+  );
+}
+
+/**
+ * Guard against truncation-induced empty required parameters.
+ * Must be evaluated against the effective (post-hook-merge) params so that
+ * hooks which normalize params (e.g. rewrite legacy field names) are taken
+ * into account before blocking. Returns a blocked outcome, or null if the
+ * params pass validation.
+ */
+function checkTruncationGuards(
+  toolName: string,
+  effectiveParams: unknown,
+  toolCallId: string | undefined,
+  sessionKey: string | undefined,
+): HookOutcome | null {
   const toolNameNorm = toolName.trim().toLowerCase();
+  // Block exec/bash calls with an empty or missing command.
   if (toolNameNorm === "exec" || toolNameNorm === "bash") {
-    const record = isPlainObject(params) ? params : {};
+    const record = isPlainObject(effectiveParams) ? effectiveParams : {};
     const command = record.command;
     if (!command || typeof command !== "string" || !command.trim()) {
       const reason =
@@ -377,15 +421,14 @@ export async function runBeforeToolCallHook(args: {
         `then call exec with a short command such as: python3 /tmp/script.py\n` +
         `Do NOT call exec again without a non-empty "command" field.`;
       log.warn(
-        `exec blocked: empty command toolCallId=${args.toolCallId ?? "?"} sessionKey=${args.ctx?.sessionKey ?? "?"}`,
+        `exec blocked: empty command toolCallId=${toolCallId ?? "?"} sessionKey=${sessionKey ?? "?"}`,
       );
       return { blocked: true, reason };
     }
   }
-
-  // Block sessions_spawn calls with an empty or missing task (same truncation guard as exec/bash).
+  // Block sessions_spawn calls with an empty or missing task (same truncation guard).
   if (toolNameNorm === "sessions_spawn") {
-    const record = isPlainObject(params) ? params : {};
+    const record = isPlainObject(effectiveParams) ? effectiveParams : {};
     const task = record.task;
     if (!task || typeof task !== "string" || !task.trim()) {
       const reason =
@@ -394,13 +437,12 @@ export async function runBeforeToolCallHook(args: {
         `DO NOT retry sessions_spawn with empty arguments.\n` +
         `Instead: describe the task in a concise single sentence and pass it as the "task" field.`;
       log.warn(
-        `sessions_spawn blocked: empty task toolCallId=${args.toolCallId ?? "?"} sessionKey=${args.ctx?.sessionKey ?? "?"}`,
+        `sessions_spawn blocked: empty task toolCallId=${toolCallId ?? "?"} sessionKey=${sessionKey ?? "?"}`,
       );
       return { blocked: true, reason };
     }
   }
-
-  return { blocked: false, params };
+  return null;
 }
 
 export function wrapToolWithBeforeToolCallHook(
