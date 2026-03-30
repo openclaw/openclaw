@@ -150,10 +150,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   const hasExplicitApprovalAuthorization =
     (execApprovalAuthorization.explicit && execApprovalAuthorization.authorized) ||
     (pluginApprovalAuthorization.explicit && pluginApprovalAuthorization.authorized);
-  if (
-    !params.command.isAuthorizedSender &&
-    !hasExplicitApprovalAuthorization
-  ) {
+  if (!params.command.isAuthorizedSender && !hasExplicitApprovalAuthorization) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
@@ -247,9 +244,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       if (isApprovalNotFoundError(err)) {
         return {
           shouldContinue: false,
-          reply: {
-            text: pluginApprovalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
-          },
+          reply: { text: `❌ Failed to submit approval: ${String(err)}` },
         };
       }
       return {
@@ -261,7 +256,8 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: execApprovalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
+        text:
+          execApprovalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
       },
     };
   }

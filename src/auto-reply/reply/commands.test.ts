@@ -139,11 +139,8 @@ vi.mock("./commands-context-report.js", () => ({
 
 vi.resetModules();
 
-const {
-  addSubagentRunForTests,
-  listSubagentRunsForRequester,
-  resetSubagentRegistryForTests,
-} = await import("../../agents/subagent-registry.js");
+const { addSubagentRunForTests, listSubagentRunsForRequester, resetSubagentRegistryForTests } =
+  await import("../../agents/subagent-registry.js");
 const internalHooks = await import("../../hooks/internal-hooks.js");
 const { clearPluginCommands, registerPluginCommand } = await import("../../plugins/commands.js");
 const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
@@ -918,6 +915,55 @@ describe("/approve command", () => {
       }),
     );
   });
+
+  it("returns the underlying not-found error for plugin-only approval routing", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+            auth: {
+              authorizeActorAction: ({ approvalKind }: { approvalKind: "exec" | "plugin" }) =>
+                approvalKind === "plugin"
+                  ? { authorized: true }
+                  : {
+                      authorized: false,
+                      reason: "❌ You are not authorized to approve exec requests on Matrix.",
+                    },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    callGatewayMock.mockRejectedValueOnce(new Error("unknown or expired approval id"));
+    const params = buildParams(
+      "/approve abc123 allow-once",
+      {
+        commands: { text: true },
+        channels: { matrix: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "matrix",
+        Surface: "matrix",
+        SenderId: "123",
+      },
+    );
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Failed to submit approval");
+    expect(result.reply?.text).toContain("unknown or expired approval id");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "abc123", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("requires configured Discord approvers for plugin approvals", async () => {
     for (const testCase of [
       {
