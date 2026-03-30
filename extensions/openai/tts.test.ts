@@ -1,13 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isValidOpenAIModel,
   isValidOpenAIVoice,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  openaiTTS,
   resolveOpenAITtsInstructions,
 } from "./tts.js";
 
 describe("openai tts", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
   describe("isValidOpenAIVoice", () => {
     it("accepts all valid OpenAI voices including newer additions", () => {
       for (const voice of OPENAI_TTS_VOICES) {
@@ -68,6 +76,64 @@ describe("openai tts", () => {
       expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
       expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
       expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
+    });
+  });
+
+  describe("openaiTTS diagnostics", () => {
+    it("includes parsed provider detail and request id for JSON API errors", async () => {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "Invalid API key",
+                type: "invalid_request_error",
+                code: "invalid_api_key",
+              },
+            }),
+            {
+              status: 401,
+              headers: {
+                "Content-Type": "application/json",
+                "x-request-id": "req_123",
+              },
+            },
+          ),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "bad-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow(
+        "OpenAI TTS API error (401): Invalid API key [type=invalid_request_error, code=invalid_api_key] [request_id=req_123]",
+      );
+    });
+
+    it("falls back to raw body text when the error body is non-JSON", async () => {
+      const fetchMock = vi.fn(
+        async () => new Response("temporary upstream outage", { status: 503 }),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("OpenAI TTS API error (503): temporary upstream outage");
     });
   });
 });
