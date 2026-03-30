@@ -507,6 +507,7 @@ export async function runEmbeddedPiAgent(
             prompt,
             images: params.images,
             imageOrder: params.imageOrder,
+            suppressPromptImageDetection: params.suppressPromptImageDetection,
             clientTools: params.clientTools,
             disableTools: params.disableTools,
             provider,
