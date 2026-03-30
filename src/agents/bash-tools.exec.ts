@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { parseExecApprovalCommandText } from "../infra/exec-approval-reply.js";
-import { splitCommandChain } from "../infra/exec-approvals-analysis.js";
+import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -177,9 +177,15 @@ async function validateScriptFileForShellBleed(params: {
 
 function rejectExecApprovalShellCommand(command: string): void {
   const rawCommand = command.trim();
-  const chainParts = splitCommandChain(rawCommand) ?? [rawCommand];
-  for (const part of chainParts) {
-    if (!parseExecApprovalCommandText(part)) {
+  const analysis = analyzeShellCommand({ command: rawCommand });
+  const candidates = analysis.ok
+    ? analysis.segments.map((segment) => segment.raw.trim())
+    : rawCommand
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+  for (const candidate of candidates) {
+    if (!parseExecApprovalCommandText(candidate)) {
       continue;
     }
     throw new Error(

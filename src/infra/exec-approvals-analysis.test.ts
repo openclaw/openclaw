@@ -318,6 +318,28 @@ describe("exec approvals shell analysis", () => {
       expect(result.segmentSatisfiedBy).toEqual(["skillPrelude", "skillPrelude", "allowlist"]);
     });
 
+    it("does not treat arbitrary allowlisted binaries as trusted skill wrappers", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const skillRoot = makeTempDir();
+      const skillDir = path.join(skillRoot, "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(skillPath, "# gog\n");
+
+      const result = evaluateShellAllowlist({
+        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && /bin/echo calendar events primary --today --json`,
+        allowlist: [{ pattern: "/bin/echo" }],
+        safeBins: new Set(),
+        cwd: skillRoot,
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segmentSatisfiedBy).toEqual([null]);
+    });
+
     it("still rejects the skill display prelude when no trusted skill command follows", () => {
       if (process.platform === "win32") {
         return;
