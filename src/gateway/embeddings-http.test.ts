@@ -5,6 +5,8 @@ import { getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
+const WRITE_SCOPE_HEADER = { "x-openclaw-scopes": "operator.write" };
+
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
 let createEmbeddingProviderMock: ReturnType<
   typeof vi.fn<
@@ -81,6 +83,7 @@ async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
     headers: {
       authorization: "Bearer secret",
       "content-type": "application/json",
+      ...WRITE_SCOPE_HEADER,
       ...headers,
     },
     body: JSON.stringify(body),
@@ -162,6 +165,64 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(res.status).toBe(400);
     const json = (await res.json()) as { error?: { type?: string } };
     expect(json.error?.type).toBe("invalid_request_error");
+  });
+
+  it("rejects operator scopes that lack write access", async () => {
+    const res = await postEmbeddings(
+      {
+        model: "openclaw/default",
+        input: "hello",
+      },
+      { "x-openclaw-scopes": "operator.read" },
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.write",
+      },
+    });
+  });
+
+  it("rejects requests with no declared operator scopes", async () => {
+    const res = await postEmbeddings(
+      {
+        model: "openclaw/default",
+        input: "hello",
+      },
+      { "x-openclaw-scopes": "" },
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.write",
+      },
+    });
+  });
+
+  it("rejects requests when the operator scopes header is missing", async () => {
+    const res = await fetch(`http://127.0.0.1:${enabledPort}/v1/embeddings`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "openclaw/default",
+        input: "hello",
+      }),
+    });
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.write",
+      },
+    });
   });
 
   it("rejects invalid agent targets", async () => {
