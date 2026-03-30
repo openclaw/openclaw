@@ -114,13 +114,13 @@ export async function createChildAdapter(params: {
     });
   };
 
-  let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  type WaitResult = { code: number | null; signal: NodeJS.Signals | null };
+
+  let waitResult: WaitResult | null = null;
   let waitError: unknown;
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
+  let resolveWait: ((value: WaitResult) => void) | null = null;
   let rejectWait: ((reason?: unknown) => void) | null = null;
-  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
+  let waitPromise: Promise<WaitResult> | null = null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
 
   const clearForceKillWaitFallback = () => {
@@ -131,7 +131,7 @@ export async function createChildAdapter(params: {
     forceKillWaitFallbackTimer = null;
   };
 
-  const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
+  const settleWait = (value: WaitResult) => {
     if (waitResult || waitError !== undefined) {
       return;
     }
@@ -171,6 +171,11 @@ export async function createChildAdapter(params: {
   child.once("error", (error) => {
     rejectPendingWait(error);
   });
+  // On Windows a force-killed child can emit `exit` without ever reaching
+  // `close` if stdio handles stay stuck. Settle on the first terminal signal.
+  child.once("exit", (code, signal) => {
+    settleWait({ code, signal });
+  });
   child.once("close", (code, signal) => {
     settleWait({ code, signal });
   });
@@ -183,25 +188,23 @@ export async function createChildAdapter(params: {
       throw waitError;
     }
     if (!waitPromise) {
-      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve, reject) => {
-          resolveWait = resolve;
-          rejectWait = reject;
-          if (waitResult) {
-            const settled = waitResult;
-            resolveWait = null;
-            rejectWait = null;
-            resolve(settled);
-            return;
-          }
-          if (waitError !== undefined) {
-            const error = waitError;
-            resolveWait = null;
-            rejectWait = null;
-            reject(error);
-          }
-        },
-      );
+      waitPromise = new Promise<WaitResult>((resolve, reject) => {
+        resolveWait = resolve;
+        rejectWait = reject;
+        if (waitResult) {
+          const settled = waitResult;
+          resolveWait = null;
+          rejectWait = null;
+          resolve(settled);
+          return;
+        }
+        if (waitError !== undefined) {
+          const error = waitError;
+          resolveWait = null;
+          rejectWait = null;
+          reject(error);
+        }
+      });
     }
     return waitPromise;
   };

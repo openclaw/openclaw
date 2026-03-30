@@ -30,7 +30,10 @@ function createStubChild(pid = 1234) {
   const emitClose = (code: number | null, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
   };
-  return { child, killMock, emitClose };
+  const emitExit = (code: number | null, signal: NodeJS.Signals | null = null) => {
+    child.emit("exit", code, signal);
+  };
+  return { child, killMock, emitClose, emitExit };
 }
 
 async function createAdapterHarness(params?: {
@@ -151,6 +154,31 @@ describe("createChildAdapter", () => {
     await vi.advanceTimersByTimeAsync(4_001);
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: "SIGKILL" });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("settles wait on exit when close never arrives after SIGKILL", async () => {
+    vi.useFakeTimers();
+    const { adapter, emitExit } = await (async () => {
+      const stub = createStubChild(1357);
+      spawnWithFallbackMock.mockResolvedValue({
+        child: stub.child,
+        usedFallback: false,
+      });
+      const adapter = await createChildAdapter({
+        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        stdinMode: "pipe-open",
+      });
+      return { ...stub, adapter };
+    })();
+
+    const waitPromise = adapter.wait();
+    adapter.kill();
+    emitExit(null, "SIGKILL");
+
+    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+
+    await vi.advanceTimersByTimeAsync(4_001);
+    await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
   });
 
   it("disables detached mode in service-managed runtime", async () => {

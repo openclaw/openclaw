@@ -19,6 +19,8 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import {
   DEFAULT_AGENT_ID,
@@ -282,6 +284,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   );
   setTestConfigRoot(tempConfigRoot);
   resetConfigRuntimeState();
+  resetPluginRuntimeStateForTest();
+  resetGlobalHookRunner();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;
@@ -333,6 +337,9 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
+  resetGlobalHookRunner();
+  resetPluginRuntimeStateForTest();
+  resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
   resetLogger();
   if (options.restoreEnv) {
