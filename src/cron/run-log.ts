@@ -433,8 +433,8 @@ export async function readCronRunLogEntriesPageAll(
   await Promise.all(
     jsonlFiles.map((f) =>
       pruneIfNeeded(f, {
-        maxBytes: opts.pruneOptions?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
-        keepLines: opts.pruneOptions?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+        maxBytes: opts?.pruneOptions?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+        keepLines: opts?.pruneOptions?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
       }).catch(() => undefined),
     ),
   );

@@ -9,6 +9,7 @@ import {
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
   readCronRunLogEntriesPage,
+  readCronRunLogEntriesPageAll,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -435,4 +436,80 @@ describe("cron run log", () => {
       expect(page.entries.length).toBeLessThanOrEqual(10);
     });
   });
+
+  it("readCronRunLogEntriesPageAll succeeds even when prune would fail (read-only dir)", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-fail-all-", async (dir) => {
+      const storePath = path.join(dir, "jobs.json");
+      const logPath = path.join(dir, "runs", "job-fail-all.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      const lines: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 2000 + i,
+            jobId: "job-fail-all",
+            action: "finished",
+            status: "ok",
+            summary: "entry-all-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      const runsDir = path.dirname(logPath);
+      await fs.chmod(runsDir, 0o555);
+
+      try {
+        const page = await readCronRunLogEntriesPageAll({
+          storePath,
+          limit: 10,
+          offset: 0,
+          sortDir: "desc",
+        });
+
+        expect(page.entries.length).toBe(5);
+        expect(page.entries[0].summary).toBe("entry-all-4");
+      } finally {
+        await fs.chmod(runsDir, 0o755);
+      }
+    });
+  });
+
+  it("readCronRunLogEntriesPageAll respects custom pruneOptions", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-opts-all-", async (dir) => {
+      const storePath = path.join(dir, "jobs.json");
+      const logPath = path.join(dir, "runs", "job-opts-all.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      const lines: string[] = [];
+      for (let i = 0; i < 50; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 3000 + i,
+            jobId: "job-opts-all",
+            action: "finished",
+            status: "ok",
+            summary: "entry-all-" + i,
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      const sizeBefore = (await fs.stat(logPath)).size;
+      const page = await readCronRunLogEntriesPageAll({
+        storePath,
+        limit: 100,
+        offset: 0,
+        sortDir: "desc",
+        pruneOptions: { maxBytes: 500, keepLines: 10 },
+      });
+
+      const sizeAfter = (await fs.stat(logPath)).size;
+      expect(sizeAfter).toBeLessThan(sizeBefore);
+      expect(page.entries.length).toBeGreaterThan(0);
+      expect(page.entries.length).toBeLessThanOrEqual(10);
+    });
+  });
+
 });

@@ -72,6 +72,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled: p.enabled,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
+      pruneOptions: context.cronRunLogPrune,
     });
     respond(true, page, undefined);
   },
@@ -313,6 +314,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         query: p.query,
         sortDir: p.sortDir,
         jobNameById,
+        pruneOptions: context.cronRunLogPrune,
       });
       respond(true, page, undefined);
       return;
@@ -341,6 +343,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       deliveryStatus: p.deliveryStatus,
       query: p.query,
       sortDir: p.sortDir,
+      pruneOptions: context.cronRunLogPrune,
     });
     respond(true, page, undefined);
   },

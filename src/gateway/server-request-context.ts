@@ -72,6 +72,9 @@ export function createGatewayRequestContext(
     get cronStorePath() {
       return params.runtimeState.cronState.storePath;
     },
+    get cronRunLogPrune() {
+      return params.runtimeState.cronState.runLogPrune;
+    },
     execApprovalManager: params.execApprovalManager,
     pluginApprovalManager: params.pluginApprovalManager,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
