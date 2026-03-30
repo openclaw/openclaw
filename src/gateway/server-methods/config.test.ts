@@ -71,7 +71,7 @@ describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config $(touch pwned).json";
     vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
-      expect(["open", "xdg-open"]).toContain(args[0]);
+      expect(["open", "xdg-open", "powershell.exe"]).toContain(args[0]);
       expect(args[1]).toEqual(["/tmp/config $(touch pwned).json"]);
       invokeExecFileCallback(args, null);
       return {} as never;
