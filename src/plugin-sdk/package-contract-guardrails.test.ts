@@ -5,6 +5,7 @@ import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveNpmRunner } from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
 import { pluginSdkEntrypoints } from "./entrypoints.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -94,36 +95,23 @@ function createRootPackageRequire() {
   return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
 }
 
-function isNpmExecPath(value: string): boolean {
-  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(
-    value.split(/[\\/]/).at(-1)?.toLowerCase() ?? "",
-  );
-}
-
-function resolveNpmCommandInvocation(): { command: string; args: string[] } {
-  const npmExecPath = process.env.npm_execpath;
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-
-  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
-    return { command: process.execPath, args: [npmExecPath] };
-  }
-
-  return { command: npmCommand, args: [] };
-}
-
 function packOpenClawToTempDir(packDir: string): string {
-  const invocation = resolveNpmCommandInvocation();
-  const raw = execFileSync(
-    invocation.command,
-    [...invocation.args, "pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-      maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
-      stdio: ["ignore", "pipe", "pipe"],
+  const npmRunner = resolveNpmRunner({
+    npmArgs: ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+  });
+  const raw = execFileSync(npmRunner.command, npmRunner.args, {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...npmRunner.env,
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
     },
-  );
+    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
+    shell: npmRunner.shell,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+  });
   const parsed = JSON.parse(raw) as Array<{ filename?: string }>;
   const filename = parsed[0]?.filename?.trim();
   if (!filename) {
@@ -258,10 +246,12 @@ describe("plugin-sdk package contract guardrails", () => {
 
   it("resolves matrix crypto WASM from the root runtime surface", () => {
     const rootRequire = createRootPackageRequire();
+    // Normalize filesystem separators so the package assertion stays portable.
+    const resolvedPath = rootRequire
+      .resolve("@matrix-org/matrix-sdk-crypto-wasm")
+      .replaceAll("\\", "/");
 
-    expect(rootRequire.resolve("@matrix-org/matrix-sdk-crypto-wasm")).toContain(
-      "@matrix-org/matrix-sdk-crypto-wasm",
-    );
+    expect(resolvedPath).toContain("@matrix-org/matrix-sdk-crypto-wasm");
   });
 
   it("keeps matrix crypto WASM in the packed artifact manifest", () => {
