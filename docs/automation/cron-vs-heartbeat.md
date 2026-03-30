@@ -229,14 +229,14 @@ See [Lobster](/tools/lobster) for full usage and examples.
 
 Both heartbeat and cron can interact with the main session, but differently:
 
-|          | Heartbeat                       | Cron (main)              | Cron (isolated)                                 |
-| -------- | ------------------------------- | ------------------------ | ----------------------------------------------- |
-| Session  | Main                            | Main (via system event)  | `cron:<jobId>` or custom session                |
-| History  | Shared                          | Shared                   | Fresh each run (isolated) / Persistent (custom) |
-| Context  | Full                            | Full                     | None (isolated) / Cumulative (custom)           |
-| Model    | Main session model              | Main session model       | Can override                                    |
-| Output   | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default)                      |
-| [Tasks](/automation/tasks) | No task record | No task record | Tracked in `openclaw tasks` |
+|                            | Heartbeat                       | Cron (main)              | Cron (isolated)                                 |
+| -------------------------- | ------------------------------- | ------------------------ | ----------------------------------------------- |
+| Session                    | Main                            | Main (via system event)  | `cron:<jobId>` or custom session                |
+| History                    | Shared                          | Shared                   | Fresh each run (isolated) / Persistent (custom) |
+| Context                    | Full                            | Full                     | None (isolated) / Cumulative (custom)           |
+| Model                      | Main session model              | Main session model       | Can override                                    |
+| Output                     | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default)                      |
+| [Tasks](/automation/tasks) | No task record                  | No task record           | Tracked in `openclaw tasks`                     |
 
 ### When to use main session cron
 
