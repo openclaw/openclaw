@@ -13,6 +13,18 @@ import { findTaskByRunId, resetTaskRegistryForTests } from "./task-registry.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
+async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): Promise<void> {
+  await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetTaskRegistryForTests();
+    try {
+      await run(root);
+    } finally {
+      resetTaskRegistryForTests();
+    }
+  });
+}
+
 describe("task-executor", () => {
   afterEach(() => {
     if (ORIGINAL_STATE_DIR === undefined) {
@@ -24,10 +36,7 @@ describe("task-executor", () => {
   });
 
   it("advances a queued run through start and completion", async () => {
-    await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-
+    await withTaskExecutorStateDir(async () => {
       const created = createQueuedTaskRun({
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
@@ -63,10 +72,7 @@ describe("task-executor", () => {
   });
 
   it("records progress, failure, and delivery status through the executor", async () => {
-    await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-
+    await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({
         runtime: "subagent",
         requesterSessionKey: "agent:main:main",
