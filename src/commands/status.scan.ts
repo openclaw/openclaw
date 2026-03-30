@@ -17,6 +17,7 @@ import {
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
@@ -174,6 +175,7 @@ function buildColdStartStatusSummary(): Awaited<ReturnType<typeof getStatusSumma
     channelSummary: [],
     queuedSystemEvents: [],
     tasks: createEmptyTaskRegistrySummary(),
+    taskAudit: createEmptyTaskAuditSummary(),
     sessions: {
       paths: [],
       count: 0,

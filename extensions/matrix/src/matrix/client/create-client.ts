@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
@@ -22,6 +23,7 @@ export async function createMatrixClient(params: {
   autoBootstrapCrypto?: boolean;
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixClient> {
   ensureMatrixSdkLoggingConfigured();
   const env = process.env;
@@ -55,7 +57,7 @@ export async function createMatrixClient(params: {
 
   const cryptoDatabasePrefix = `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`;
 
-  return new MatrixClient(homeserver, params.accessToken, undefined, undefined, {
+  return new MatrixClient(homeserver, params.accessToken, {
     userId: matrixClientUserId,
     password: params.password,
     deviceId: params.deviceId,
@@ -68,5 +70,6 @@ export async function createMatrixClient(params: {
     cryptoDatabasePrefix,
     autoBootstrapCrypto: params.autoBootstrapCrypto,
     ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
   });
 }

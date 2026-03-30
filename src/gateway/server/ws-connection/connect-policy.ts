@@ -81,6 +81,26 @@ export type MissingDeviceIdentityDecision =
   | { kind: "reject-unauthorized" }
   | { kind: "reject-device-required" };
 
+export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
+  decision: MissingDeviceIdentityDecision;
+  controlUiAuthPolicy: ControlUiAuthPolicy;
+  preserveInsecureLocalControlUiScopes: boolean;
+  authMethod: string | undefined;
+  trustedProxyAuthOk?: boolean;
+}): boolean {
+  return (
+    params.decision.kind !== "allow" ||
+    (!params.controlUiAuthPolicy.allowBypass &&
+      !params.preserveInsecureLocalControlUiScopes &&
+      // trusted-proxy auth can bypass pairing for some clients, but those
+      // self-declared scopes are still unbound without device identity.
+      (params.authMethod === "token" ||
+        params.authMethod === "password" ||
+        params.authMethod === "trusted-proxy" ||
+        params.trustedProxyAuthOk === true))
+  );
+}
+
 export function evaluateMissingDeviceIdentity(params: {
   hasDeviceIdentity: boolean;
   role: GatewayRole;

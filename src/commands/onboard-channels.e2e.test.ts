@@ -3,16 +3,15 @@ import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
   reloadChannelSetupPluginRegistry,
 } from "./channel-setup/plugin-install.js";
-import {
-  patchChannelSetupWizardAdapter,
-  setDefaultChannelPluginRegistryForTests,
-} from "./channel-test-helpers.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import { setupChannels } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
@@ -113,6 +112,149 @@ function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
   };
 }
 
+function setMinimalOnboardingRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "telegram",
+            label: "Telegram",
+            capabilities: { chatTypes: ["direct", "group"] },
+          }),
+          setup: {
+            applyAccountConfig: ({
+              cfg,
+              input,
+            }: {
+              cfg: OpenClawConfig;
+              input: { token?: string };
+            }) =>
+              ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  telegram: {
+                    ...(cfg.channels?.telegram as Record<string, unknown> | undefined),
+                    ...(input.token ? { botToken: input.token } : {}),
+                  },
+                },
+              }) as OpenClawConfig,
+          },
+          setupWizard: {
+            channel: "telegram",
+            status: {
+              configuredLabel: "configured",
+              unconfiguredLabel: "not configured",
+              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+                Boolean(cfg.channels?.telegram?.botToken),
+            },
+            credentials: [
+              {
+                inputKey: "token",
+                providerHint: "BotFather",
+                credentialLabel: "Telegram bot token",
+                envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
+                keepPrompt: "Keep current Telegram bot token?",
+                inputPrompt: "Enter Telegram bot token",
+                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
+                  accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
+                  hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
+                }),
+              },
+            ],
+          },
+        },
+      },
+      {
+        pluginId: "whatsapp",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "whatsapp",
+            label: "WhatsApp",
+            capabilities: { chatTypes: ["direct", "group"] },
+          }),
+          setup: {
+            applyAccountConfig: ({
+              cfg,
+              input,
+            }: {
+              cfg: OpenClawConfig;
+              input: { account?: string; name?: string };
+            }) =>
+              ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  whatsapp: {
+                    ...(cfg.channels?.whatsapp as Record<string, unknown> | undefined),
+                    ...(input.account ? { account: input.account } : {}),
+                    ...(input.name ? { name: input.name } : {}),
+                    linked: false,
+                  },
+                },
+              }) as OpenClawConfig,
+          },
+          setupWizard: {
+            channel: "whatsapp",
+            status: {
+              configuredLabel: "configured",
+              unconfiguredLabel: "not linked",
+              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+                Boolean((cfg.channels?.whatsapp as { account?: string } | undefined)?.account),
+              resolveSelectionHint: async ({ cfg }: { cfg: OpenClawConfig }) =>
+                (cfg.channels?.whatsapp as { account?: string } | undefined)?.account
+                  ? "configured"
+                  : "not linked",
+            },
+            credentials: [],
+            textInputs: [
+              {
+                inputKey: "account",
+                message: "Your personal WhatsApp number",
+                required: true,
+                applySet: ({ cfg, value }: { cfg: OpenClawConfig; value: string }) =>
+                  ({
+                    ...cfg,
+                    channels: {
+                      ...cfg.channels,
+                      whatsapp: {
+                        ...(cfg.channels?.whatsapp as Record<string, unknown> | undefined),
+                        account: value,
+                      },
+                    },
+                  }) as OpenClawConfig,
+              },
+            ],
+          },
+        },
+      },
+    ]),
+  );
+}
+
+type ChannelSetupWizardAdapterPatch = Partial<
+  Pick<
+    ChannelSetupWizardAdapter,
+    | "afterConfigWritten"
+    | "configure"
+    | "configureInteractive"
+    | "configureWhenConfigured"
+    | "getStatus"
+  >
+>;
+
+type PatchedSetupAdapterFields = {
+  afterConfigWritten?: ChannelSetupWizardAdapter["afterConfigWritten"];
+  configure?: ChannelSetupWizardAdapter["configure"];
+  configureInteractive?: ChannelSetupWizardAdapter["configureInteractive"];
+  configureWhenConfigured?: ChannelSetupWizardAdapter["configureWhenConfigured"];
+  getStatus?: ChannelSetupWizardAdapter["getStatus"];
+};
+
 function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
   return {
     pluginId: "@openclaw/msteams-plugin",
@@ -161,8 +303,13 @@ function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) 
   );
 }
 
-function patchTelegramAdapter(overrides: Parameters<typeof patchChannelSetupWizardAdapter>[1]) {
-  return patchChannelSetupWizardAdapter("telegram", {
+function patchTelegramAdapter(overrides: ChannelSetupWizardAdapterPatch) {
+  const adapter = getChannelSetupWizardAdapter("telegram");
+  if (!adapter) {
+    throw new Error("missing setup adapter for telegram");
+  }
+
+  const patch = {
     ...overrides,
     getStatus:
       overrides.getStatus ??
@@ -171,7 +318,47 @@ function patchTelegramAdapter(overrides: Parameters<typeof patchChannelSetupWiza
         configured: Boolean(cfg.channels?.telegram?.botToken),
         statusLines: [],
       })),
-  });
+  };
+  const previous: PatchedSetupAdapterFields = {};
+
+  if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+    previous.getStatus = adapter.getStatus;
+    adapter.getStatus = patch.getStatus ?? adapter.getStatus;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+    previous.afterConfigWritten = adapter.afterConfigWritten;
+    adapter.afterConfigWritten = patch.afterConfigWritten;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+    previous.configure = adapter.configure;
+    adapter.configure = patch.configure ?? adapter.configure;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+    previous.configureInteractive = adapter.configureInteractive;
+    adapter.configureInteractive = patch.configureInteractive;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+    previous.configureWhenConfigured = adapter.configureWhenConfigured;
+    adapter.configureWhenConfigured = patch.configureWhenConfigured;
+  }
+
+  return () => {
+    if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+      adapter.getStatus = previous.getStatus!;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+      adapter.afterConfigWritten = previous.afterConfigWritten;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+      adapter.configure = previous.configure!;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+      adapter.configureInteractive = previous.configureInteractive;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+      adapter.configureWhenConfigured = previous.configureWhenConfigured;
+    }
+  };
 }
 
 function createUnexpectedConfigureCall(message: string) {
@@ -321,7 +508,7 @@ vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
 
 describe("setupChannels", () => {
   beforeEach(() => {
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
     manifestRegistryMocks.loadPluginManifestRegistry.mockReset();
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
@@ -410,7 +597,12 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        pluginId: "telegram",
+      }),
+    );
     expect(reloadChannelSetupPluginRegistry).not.toHaveBeenCalled();
   });
 

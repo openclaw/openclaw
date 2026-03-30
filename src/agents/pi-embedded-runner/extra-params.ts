@@ -36,8 +36,10 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
 } from "./openai-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -99,6 +101,16 @@ export function resolveExtraParams(params: {
   if (resolvedParallelToolCalls !== undefined) {
     merged.parallel_tool_calls = resolvedParallelToolCalls;
     delete merged.parallelToolCalls;
+  }
+
+  const resolvedTextVerbosity = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "text_verbosity",
+    "textVerbosity",
+  );
+  if (resolvedTextVerbosity !== undefined) {
+    merged.text_verbosity = resolvedTextVerbosity;
+    delete merged.textVerbosity;
   }
 
   return merged;
@@ -266,7 +278,11 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
+    if (
+      model.api !== "openai-completions" &&
+      model.api !== "openai-responses" &&
+      model.api !== "azure-openai-responses"
+    ) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -410,6 +426,28 @@ function applyPostPluginStreamWrappers(
         `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
       );
       ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    }
+
+    const rawTextVerbosity = resolveAliasedParamValue(
+      [ctx.resolvedExtraParams, ctx.override],
+      "text_verbosity",
+      "textVerbosity",
+    );
+    if (rawTextVerbosity === null) {
+      log.debug("text verbosity suppressed by null override, skipping injection");
+    } else if (rawTextVerbosity !== undefined) {
+      const openAITextVerbosity = resolveOpenAITextVerbosity({
+        text_verbosity: rawTextVerbosity,
+      });
+      if (openAITextVerbosity) {
+        log.debug(
+          `applying OpenAI text verbosity=${openAITextVerbosity} for ${ctx.provider}/${ctx.modelId}`,
+        );
+        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(
+          ctx.agent.streamFn,
+          openAITextVerbosity,
+        );
+      }
     }
   }
 
