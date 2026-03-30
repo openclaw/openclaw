@@ -1155,7 +1155,7 @@ describe("/acp command", () => {
 
   it("persists ACP spawn labels to the spawned session store instead of the requester store", async () => {
     const commandParams = createConversationParams(
-      "/acp spawn codex --bind here --label codex-a2ui",
+      "/acp spawn codex --bind here --label spawned-label",
       {
         channel: "telegram",
         originatingTo: "telegram:-1003841603622",
@@ -1192,12 +1192,14 @@ describe("/acp command", () => {
     const updateFn = hoisted.updateSessionStoreMock.mock.calls[0]?.[1] as
       | ((store: Record<string, { label?: string; updatedAt: number }>) => unknown)
       | undefined;
-    const updated = updateFn?.({
+    const store: Record<string, { label?: string; updatedAt: number }> = {
       [spawnedSessionKey ?? "missing"]: {
         updatedAt: 1,
       },
-    }) as { label?: string; updatedAt?: number } | undefined;
-    expect(updated?.label).toBe("codex-a2ui");
+    };
+    updateFn?.(store);
+    const updated = store[spawnedSessionKey ?? "missing"];
+    expect(updated?.label).toBe("spawned-label");
     expect(updated?.updatedAt).toBeTypeOf("number");
   });
 
