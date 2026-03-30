@@ -389,11 +389,16 @@ function resolveTargetAcpAgentId(params: {
     const defaultProfile = listAgentEntries(params.cfg).find(
       (a) => normalizeAgentId(a.id) === configuredDefault,
     );
+    let defaultAgentId = configuredDefault;
     const defaultProfileCwd =
       defaultProfile?.runtime?.type === "acp"
         ? defaultProfile.runtime.acp?.cwd || defaultProfile.workspace
         : defaultProfile?.workspace;
-    return { ok: true, agentId: configuredDefault, profileCwd: defaultProfileCwd };
+    if (defaultProfile?.runtime?.type === "acp" && defaultProfile.runtime.acp?.agent) {
+      defaultAgentId =
+        normalizeOptionalAgentId(defaultProfile.runtime.acp.agent) || configuredDefault;
+    }
+    return { ok: true, agentId: defaultAgentId, profileCwd: defaultProfileCwd };
   }
 
   return {
