@@ -255,14 +255,15 @@ export function createExecTool(
       // Executing it via exec triggers a new approval-pending, causing an infinite loop.
       // See: https://github.com/openclaw/openclaw/issues/57432
       //
-      // Only the first line is tested — the actual command the shell executes.
-      // Subsequent lines may be heredoc/stdin data containing "/approve" literals
-      // and must not trigger a false positive (see codex review feedback).
+      // We test the first non-empty line — the actual command the shell executes.
+      // Leading blank lines are skipped so "\n/approve ..." cannot bypass the guard.
+      // Subsequent non-empty lines may be heredoc/stdin data containing "/approve"
+      // literals and must not trigger a false positive (see codex review feedback).
       // Flag: i (case-insensitive) matches /APPROVE, /Approve, etc. aligned with
       //       the slash-command parser in commands-approve.ts.
       // The optional @mention group covers `/approve@botname ...` foreign-mention syntax.
-      const firstLine = params.command.split("\n", 1)[0];
-      if (/^\s*\/approve(?:@[^\s]*)?(\s|$)/i.test(firstLine)) {
+      const firstNonEmptyLine = params.command.split("\n").find((l) => l.trim() !== "") ?? "";
+      if (/^\s*\/approve(?:@[^\s]*)?(\s|$)/i.test(firstNonEmptyLine)) {
         throw new Error(
           "/approve is a chat slash command, not a shell command. " +
             "Show the /approve command to the user as a chat message instead of executing it via exec.",

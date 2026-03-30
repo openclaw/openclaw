@@ -533,6 +533,12 @@ describe("exec /approve guard", () => {
       executeExecCommand(execTool, "/approve@mybot abc123 allow-always"),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
+
+  it("rejects /approve preceded by leading blank lines", async () => {
+    await expect(
+      executeExecCommand(execTool, "\n\n/approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
 });
 
 describe("exec exit codes", () => {
