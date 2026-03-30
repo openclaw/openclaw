@@ -302,6 +302,11 @@ function setResolvedWebSearchApiKey(params: {
     return;
   }
   const providerConfig = ensureObject(search, params.provider);
+  if (params.provider === "searxng") {
+    // SearXNG stores a base URL, not an API key.
+    providerConfig.baseUrl = params.value;
+    return;
+  }
   providerConfig.apiKey = params.value;
 }
 
