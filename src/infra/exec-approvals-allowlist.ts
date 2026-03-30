@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDispatchWrapperExecutable } from "./dispatch-wrapper-resolution.js";
 import {
   analyzeShellCommand,
   isWindowsPlatform,
@@ -26,11 +25,9 @@ import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
-  normalizeExecutableToken,
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
 
 function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
@@ -235,18 +232,6 @@ function evaluateSegments(
         : executableResolution;
     const executableMatch = matchAllowlist(params.allowlist, candidateResolution);
     const inlineCommand = extractShellWrapperInlineCommand(allowlistSegment.argv);
-    const shellPositionalArgvCandidatePath = resolveShellWrapperPositionalArgvCandidatePath({
-      segment: allowlistSegment,
-      cwd: params.cwd,
-      env: params.env,
-    });
-    const shellPositionalArgvMatch = shellPositionalArgvCandidatePath
-      ? matchAllowlist(params.allowlist, {
-          rawExecutable: shellPositionalArgvCandidatePath,
-          resolvedPath: shellPositionalArgvCandidatePath,
-          executableName: path.basename(shellPositionalArgvCandidatePath),
-        })
-      : null;
     const shellScriptCandidatePath =
       inlineCommand === null
         ? resolveShellWrapperScriptCandidatePath({
@@ -261,7 +246,7 @@ function evaluateSegments(
           executableName: path.basename(shellScriptCandidatePath),
         })
       : null;
-    const match = executableMatch ?? shellPositionalArgvMatch ?? shellScriptMatch;
+    const match = executableMatch ?? shellScriptMatch;
     if (match) {
       matches.push(match);
     }
@@ -428,71 +413,6 @@ function resolveShellWrapperScriptCandidatePath(params: {
   return path.resolve(base, expanded);
 }
 
-function resolveShellWrapperPositionalArgvCandidatePath(params: {
-  segment: ExecCommandSegment;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
-  if (!isShellWrapperSegment(params.segment)) {
-    return undefined;
-  }
-
-  const argv = params.segment.argv;
-  if (!Array.isArray(argv) || argv.length < 4) {
-    return undefined;
-  }
-
-  const wrapper = normalizeExecutableToken(argv[0] ?? "");
-  if (!["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(wrapper)) {
-    return undefined;
-  }
-
-  const inlineMatch = resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, {
-    allowCombinedC: true,
-  });
-  if (inlineMatch.valueTokenIndex === null || !inlineMatch.command) {
-    return undefined;
-  }
-  if (!isDirectShellPositionalCarrierInvocation(inlineMatch.command)) {
-    return undefined;
-  }
-
-  const carriedExecutable = argv
-    .slice(inlineMatch.valueTokenIndex + 1)
-    .map((token) => token.trim())
-    .find((token) => token.length > 0);
-  if (!carriedExecutable) {
-    return undefined;
-  }
-
-  // Reject wrapper targets carried through `$0 "$@"` because their trailing argv can
-  // widen execution semantics beyond the original approved command.
-  const carriedName = normalizeExecutableToken(carriedExecutable);
-  if (isDispatchWrapperExecutable(carriedName) || isShellWrapperExecutable(carriedName)) {
-    return undefined;
-  }
-
-  const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env);
-  return resolveExecutionTargetCandidatePath(resolution, params.cwd);
-}
-
-function isDirectShellPositionalCarrierInvocation(command: string): boolean {
-  const trimmed = command.trim();
-  if (trimmed.length === 0) {
-    return false;
-  }
-
-  // Keep carrier matching strict: only allow direct `$0` execution with positional arguments.
-  // This prevents payloads like `echo blocked; $0 "$1"` from satisfying allowlist checks.
-  const shellWhitespace = String.raw`[^\S\r\n]+`;
-  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
-  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
-  return new RegExp(
-    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
-    "u",
-  ).test(trimmed);
-}
-
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -527,18 +447,6 @@ function collectAllowAlwaysPatterns(params: {
   }
   if (!trustPlan.shellWrapperExecutable) {
     params.out.add(candidatePath);
-    return;
-  }
-  const positionalArgvPath = resolveShellWrapperPositionalArgvCandidatePath({
-    segment,
-    cwd: params.cwd,
-    env: params.env,
-  });
-  if (positionalArgvPath) {
-    if (isInterpreterLikeAllowlistPattern(positionalArgvPath)) {
-      return;
-    }
-    params.out.add(positionalArgvPath);
     return;
   }
   const inlineCommand =
