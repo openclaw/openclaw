@@ -39,14 +39,19 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
 const gatewayRuntimeHoisted = vi.hoisted(() => {
   const requestSpy = vi.fn(async () => ({ ok: true }));
   const connectSpy = vi.fn(async () => {});
-  const startSpy = vi.fn();
+  const startSpy = vi.fn<(params?: { onHelloOk?: () => void }) => void>();
   const stopSpy = vi.fn(async () => {});
-  const createOperatorApprovalsGatewayClient = vi.fn(async () => ({
-    connect: connectSpy,
-    request: requestSpy,
-    start: startSpy,
-    stop: stopSpy,
-  }));
+  const createOperatorApprovalsGatewayClient = vi.fn(async (params?: { onHelloOk?: () => void }) => {
+    startSpy.mockImplementationOnce(() => {
+      params?.onHelloOk?.();
+    });
+    return {
+      connect: connectSpy,
+      request: requestSpy,
+      start: startSpy,
+      stop: stopSpy,
+    };
+  });
   return {
     connectSpy,
     createOperatorApprovalsGatewayClient,

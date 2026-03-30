@@ -14,3 +14,4 @@ Maintainer follow-up:
 - keep the existing exec approval coverage in place
 - widen the shared session-target helper to the minimal request shape so the Telegram handler no longer needs a cast for plugin approvals
 - preserve explicit `resolvedBy` identities through the direct gateway approval resolve path so Telegram callback approvals keep the real approver in audit/result flows
+- wait for an actual gateway hello before the first direct callback resolve instead of sleeping a fixed 500ms, and reset the cached callback client on close/error so first-click approvals do not race slow connections

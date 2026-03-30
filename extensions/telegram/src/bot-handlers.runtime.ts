@@ -143,6 +143,64 @@ function parseApprovalCallbackDecision(
 }
 
 let approvalGatewayClient: GatewayClient | null = null;
+let approvalGatewayReady: Promise<void> | null = null;
+
+function resetApprovalGatewayClient() {
+  approvalGatewayClient = null;
+  approvalGatewayReady = null;
+}
+
+function createApprovalGatewayReadyPromise() {
+  let resolved = false;
+  let resolveReady!: () => void;
+  let rejectReady!: (err: Error) => void;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolveReady = () => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      resolve();
+    };
+    rejectReady = (err: Error) => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      reject(err);
+    };
+  });
+  return { promise, resolveReady, rejectReady };
+}
+
+async function ensureApprovalGatewayClient(
+  config: Parameters<typeof createOperatorApprovalsGatewayClient>[0]["config"],
+): Promise<GatewayClient> {
+  if (!approvalGatewayClient || !approvalGatewayReady) {
+    const ready = createApprovalGatewayReadyPromise();
+    approvalGatewayReady = ready.promise;
+    approvalGatewayClient = await createOperatorApprovalsGatewayClient({
+      config,
+      clientDisplayName: "Telegram Approval Callback Resolver",
+      onHelloOk: () => {
+        ready.resolveReady();
+      },
+      onConnectError: (err) => {
+        logVerbose(`telegram approval resolver: connect error: ${err.message}`);
+        ready.rejectReady(err);
+        resetApprovalGatewayClient();
+      },
+      onClose: (_code, reason) => {
+        logVerbose(`telegram approval resolver: closed: ${reason || "no reason"}`);
+        resetApprovalGatewayClient();
+      },
+    });
+    approvalGatewayClient.start();
+  }
+
+  await approvalGatewayReady;
+  return approvalGatewayClient;
+}
 
 async function resolveApprovalDirect(
   config: Parameters<typeof createOperatorApprovalsGatewayClient>[0]["config"],
@@ -150,32 +208,31 @@ async function resolveApprovalDirect(
   decision: string,
   senderId?: string,
 ): Promise<boolean> {
-  if (!approvalGatewayClient) {
-    approvalGatewayClient = await createOperatorApprovalsGatewayClient({
-      config,
-      clientDisplayName: "Telegram Approval Callback Resolver",
-      onConnectError: (err) => {
-        logVerbose(`telegram approval resolver: connect error: ${err.message}`);
-      },
-    });
-    approvalGatewayClient.start();
-    // Wait briefly for connection to establish
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
   const method = approvalId.startsWith("plugin:")
     ? "plugin.approval.resolve"
     : "exec.approval.resolve";
-  try {
-    await approvalGatewayClient.request(method, {
-      id: approvalId,
-      decision,
-      ...(senderId ? { resolvedBy: `telegram:${senderId}` } : {}),
-    });
-    return true;
-  } catch (err) {
-    logVerbose(`telegram approval resolver: failed to resolve ${approvalId}: ${String(err)}`);
-    return false;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const client = await ensureApprovalGatewayClient(config);
+      await client.request(method, {
+        id: approvalId,
+        decision,
+        ...(senderId ? { resolvedBy: `telegram:${senderId}` } : {}),
+      });
+      return true;
+    } catch (err) {
+      logVerbose(
+        `telegram approval resolver: failed to resolve ${approvalId} (attempt ${attempt + 1}): ${String(err)}`,
+      );
+      if (!String(err).includes("gateway not connected")) {
+        return false;
+      }
+      resetApprovalGatewayClient();
+    }
   }
+
+  return false;
 }
 
 export const registerTelegramHandlers = ({
