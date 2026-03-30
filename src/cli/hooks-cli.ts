@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/io.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -417,7 +417,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
 }
 
 export async function enableHook(hookName: string): Promise<void> {
-  const config = loadConfig();
+  const snapshot = await readConfigFileSnapshot();
+  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
   const nextConfig = buildConfigWithHookEnabled({
     config,
@@ -426,18 +427,25 @@ export async function enableHook(hookName: string): Promise<void> {
     ensureHooksEnabled: true,
   });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+  });
   defaultRuntime.log(
     `${theme.success("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
   );
 }
 
 export async function disableHook(hookName: string): Promise<void> {
-  const config = loadConfig();
+  const snapshot = await readConfigFileSnapshot();
+  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(buildHooksReport(config), hookName);
   const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+  });
   defaultRuntime.log(
     `${theme.warn("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
   );

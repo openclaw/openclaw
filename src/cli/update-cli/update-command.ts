@@ -7,8 +7,8 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   resolveGatewayPort,
-  writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
@@ -550,7 +550,10 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginConfig = npmResult.config;
 
   if (syncResult.changed || npmResult.changed) {
-    await writeConfigFile(pluginConfig);
+    await replaceConfigFile({
+      nextConfig: pluginConfig,
+      baseHash: params.configSnapshot.hash,
+    });
   }
 
   if (params.opts.json) {
@@ -1020,9 +1023,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         channel: requestedChannel,
       },
     };
-    await writeConfigFile(next);
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: configSnapshot.hash,
+    });
     postUpdateConfigSnapshot = {
       ...configSnapshot,
+      hash: undefined,
       parsed: next,
       sourceConfig: asResolvedSourceConfig(next),
       resolved: asResolvedSourceConfig(next),
