@@ -1877,7 +1877,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               ? (payload: ReplyPayload) => {
                   const rawText = payload.text ?? "";
                   const fullText = core.channel.text.convertMarkdownTables(rawText, tableMode);
-                  if (fullText) {
+                  if (fullText.trim()) {
                     schedulePatch(fullText);
                   }
                 }
