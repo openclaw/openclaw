@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -172,6 +173,88 @@ describe("resolveEffectiveEnableState", () => {
     ],
   ] as const)("resolves bundled telegram state for %o", (config, expected) => {
     expect(resolveBundledTelegramState(config)).toEqual(expected);
+  });
+
+  it("rescues bundled channel when excluded by allowlist but enabled in channels config", () => {
+    // This tests the fix for #57219 / #56426
+    // Setting plugins.allow should not silently disable bundled channels that are explicitly configured
+    const state = resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "bundled",
+      config: normalizePluginsConfig({
+        allow: ["acpx"], // telegram not in allowlist
+      }),
+      rootConfig: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    });
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("does not rescue bundled channel when disabled in channels config", () => {
+    // Even with the allowlist rescue, channels config should still take precedence
+    const state = resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "bundled",
+      config: normalizePluginsConfig({
+        allow: ["acpx"],
+      }),
+      rootConfig: {
+        channels: {
+          telegram: {
+            enabled: false, // explicitly disabled
+          },
+        },
+      },
+    });
+    expect(state.enabled).toBe(false);
+  });
+
+  it("does NOT rescue workspace plugin via channels config (security boundary)", () => {
+    // This tests the security boundary: origin === "bundled" guard
+    // Workspace plugins should NOT be able to bypass allowlist via channels config
+    const rootConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["acpx"], // telegram not in allowlist
+      },
+    };
+
+    const result = resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "workspace", // NOT bundled - this is a hypothetical workspace plugin
+      config: normalizePluginsConfig(rootConfig.plugins),
+      rootConfig: rootConfig as OpenClawConfig,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.reason).toBe("workspace plugin (disabled by default)");
+  });
+
+  it("does not rescue bundled channel when not configured in channels", () => {
+    // Bundled channels still need explicit channels.*.enabled: true to be rescued
+    const state = resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "bundled",
+      config: normalizePluginsConfig({
+        allow: ["acpx"],
+      }),
+      rootConfig: {
+        channels: {
+          // telegram not configured
+        },
+      },
+    });
+    expect(state.enabled).toBe(false);
+    expect(state.reason).toBe("not in allowlist");
   });
 });
 
