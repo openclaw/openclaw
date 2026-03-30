@@ -63,10 +63,18 @@ export function markdownTableToSlackTableBlock(table: MarkdownTableData): SlackT
       text: cells[index] ?? "",
     }));
 
+  const truncatedCount = Math.max(0, table.rows.length - SLACK_MAX_TABLE_ROWS);
+
   const rows = [
     ...(hasVisibleHeaders(table.headers) ? [makeRow(table.headers)] : []),
     ...table.rows.slice(0, SLACK_MAX_TABLE_ROWS).map(makeRow),
   ].slice(0, SLACK_MAX_TABLE_ROWS);
+
+  if (truncatedCount > 0) {
+    const indicatorCells = Array.from({ length: columnCount }, () => "");
+    indicatorCells[0] = `+${truncatedCount} more rows`;
+    rows.push(makeRow(indicatorCells));
+  }
 
   return {
     type: "table",
@@ -128,6 +136,11 @@ export function renderSlackTableFallbackText(table: MarkdownTableData): string {
       lines.push(separator);
       totalLength += separator.length + 1;
     }
+  }
+
+  if (lines.length > 0 && table.rows.length > SLACK_MAX_TABLE_ROWS) {
+    const truncatedCount = table.rows.length - SLACK_MAX_TABLE_ROWS;
+    lines.push(`+${truncatedCount} more rows`);
   }
 
   return lines.length > 0 ? lines.join("\n") : "Table";

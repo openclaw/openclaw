@@ -8,14 +8,40 @@ describe("markdownTableToSlackTableBlock", () => {
   it("caps rows and columns to Slack's limits", () => {
     const table = {
       headers: Array.from({ length: 25 }, (_, index) => `H${index}`),
-      rows: Array.from({ length: 120 }, () => Array.from({ length: 25 }, (_, index) => `V${index}`)),
+      rows: Array.from({ length: 120 }, () =>
+        Array.from({ length: 25 }, (_, index) => `V${index}`),
+      ),
     };
 
     const block = markdownTableToSlackTableBlock(table);
 
     expect(block.column_settings).toHaveLength(20);
-    expect(block.rows).toHaveLength(100);
+    // 100 data rows + 1 header (from visible headers) capped to 100,
+    // plus 1 truncation indicator row = 101
+    expect(block.rows).toHaveLength(101);
     expect(block.rows[0]).toHaveLength(20);
+
+    // Last row should be the truncation indicator
+    const lastRow = block.rows[block.rows.length - 1];
+    expect(lastRow?.[0]?.text).toBe("+20 more rows");
+    expect(lastRow?.[1]?.text).toBe("");
+  });
+
+  it("does not add truncation indicator when rows fit within limit", () => {
+    const table = {
+      headers: ["A", "B"],
+      rows: [
+        ["1", "2"],
+        ["3", "4"],
+      ],
+    };
+
+    const block = markdownTableToSlackTableBlock(table);
+
+    // 1 header + 2 data rows = 3
+    expect(block.rows).toHaveLength(3);
+    // No truncation indicator
+    expect(block.rows[block.rows.length - 1]?.[0]?.text).toBe("3");
   });
 });
 
@@ -33,7 +59,9 @@ describe("renderSlackTableFallbackText", () => {
   it("applies the same row and column caps as the block helper", () => {
     const rendered = renderSlackTableFallbackText({
       headers: Array.from({ length: 25 }, (_, index) => `H${index}`),
-      rows: Array.from({ length: 120 }, () => Array.from({ length: 25 }, (_, index) => `V${index}`)),
+      rows: Array.from({ length: 120 }, () =>
+        Array.from({ length: 25 }, (_, index) => `V${index}`),
+      ),
     });
 
     const lines = rendered.split("\n");
@@ -60,5 +88,14 @@ describe("renderSlackTableFallbackText", () => {
 
     expect(rendered.length).toBeLessThanOrEqual(4000);
     expect(rendered).toContain("row-0");
+  });
+
+  it("includes truncation indicator when rows exceed limit", () => {
+    const rendered = renderSlackTableFallbackText({
+      headers: ["Name", "Value"],
+      rows: Array.from({ length: 110 }, (_, index) => [`item-${index}`, `${index}`]),
+    });
+
+    expect(rendered).toContain("+10 more rows");
   });
 });
