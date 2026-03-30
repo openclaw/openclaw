@@ -1,6 +1,10 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  loadConfig,
+  type MarkdownTableMode,
+  type OpenClawConfig,
+  resolveMarkdownTableMode,
+} from "openclaw/plugin-sdk/config-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -11,6 +15,7 @@ import {
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -58,7 +63,7 @@ type SlackSendOpts = {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
   /** Override the markdown table mode (useful for testing without plugin registry). */
-  tableMode?: import("openclaw/plugin-sdk/config-runtime").MarkdownTableMode;
+  tableMode?: MarkdownTableMode;
 };
 
 function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
@@ -364,7 +369,7 @@ export async function sendMessageSlack(
   // When tableMode is "block", extract table data alongside text chunks
   // so we can send Block Kit table blocks as attachments.
   let tableAttachments: Record<string, unknown>[] | undefined;
-  let allTables: import("openclaw/plugin-sdk/text-runtime").MarkdownTableData[] = [];
+  let allTables: MarkdownTableData[] = [];
   const chunks: string[] = [];
 
   if (tableMode === "block") {
