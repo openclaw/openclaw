@@ -168,22 +168,17 @@ async function syncOAuthCredentialToStore(params: {
     agentDir: params.agentDir,
     updater: (store) => {
       const current = store.profiles[params.profileId];
-      if (current && current.type !== "oauth") {
-        return false;
-      }
-      if (current?.type === "oauth" && current.provider !== params.provider) {
+      if (!current || current.type !== "oauth" || current.provider !== params.provider) {
         return false;
       }
       const nextCredential = {
-        ...(current?.type === "oauth" ? current : {}),
+        ...current,
         ...params.newCredentials,
         type: "oauth" as const,
         provider: params.provider,
-        email: params.email ?? (current?.type === "oauth" ? current.email : undefined),
+        email: params.email ?? current.email,
       };
       if (
-        current?.type === "oauth" &&
-        current.provider === nextCredential.provider &&
         current.access === nextCredential.access &&
         current.refresh === nextCredential.refresh &&
         current.expires === nextCredential.expires &&
