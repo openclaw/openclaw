@@ -4,10 +4,7 @@ import { inboundCtxCapture } from "../../../src/channels/plugins/contracts/inbou
 import { expectChannelInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ResolvedSlackAccount } from "../../../src/plugin-sdk/slack.js";
-import {
-  loadBundledPluginTestApiSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withTempHome } from "../temp-home.js";
 
 type SlackMessageEvent = {
@@ -36,34 +33,17 @@ const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPlugin
     opts: { source: string };
   }) => Promise<SlackPrepareResult>;
 }>("slack");
-const { telegramHarnessModuleId, signalApiModuleId, whatsAppTestApiModuleId } = vi.hoisted(() => ({
-  telegramHarnessModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "telegram",
-    artifactBasename: "src/bot-message-context.test-harness.js",
-  }),
-  signalApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "signal",
-    artifactBasename: "api.js",
-  }),
-  whatsAppTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "whatsapp",
-    artifactBasename: "test-api.js",
-  }),
-}));
-
 async function buildTelegramMessageContextForTest(params: {
   cfg: OpenClawConfig;
   message: Record<string, unknown>;
 }): Promise<{ ctxPayload: MsgContext } | null | undefined> {
-  const telegramHarnessModule = (await import(telegramHarnessModuleId)) as {
-    buildTelegramMessageContextForTest: (params: {
-      cfg: OpenClawConfig;
-      message: Record<string, unknown>;
-    }) => Promise<{ ctxPayload: MsgContext } | null | undefined>;
-  };
+  const telegramHarnessModule =
+    (await import("../../../extensions/telegram/src/bot-message-context.test-harness.js")) as {
+      buildTelegramMessageContextForTest: (params: {
+        cfg: OpenClawConfig;
+        message: Record<string, unknown>;
+      }) => Promise<{ ctxPayload: MsgContext } | null | undefined>;
+    };
   return await telegramHarnessModule.buildTelegramMessageContextForTest(params);
 }
 
@@ -108,7 +88,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock(signalApiModuleId, () => ({
+vi.mock("../../../extensions/signal/api.js", () => ({
   sendMessageSignal: vi.fn(),
   sendTypingSignal: vi.fn(async () => true),
   sendReadReceiptSignal: vi.fn(async () => true),
@@ -119,7 +99,7 @@ vi.mock("../../../src/pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-vi.mock(whatsAppTestApiModuleId, async (importOriginal) => {
+vi.mock("../../../extensions/whatsapp/test-api.js", async (importOriginal) => {
   const actual = await importOriginal<object>();
   return {
     ...actual,
