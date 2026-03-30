@@ -596,6 +596,7 @@ export async function runSubagentAnnounceFlow(params: {
       steerMessage: triggerMessage,
       internalEvents,
       summaryLine: taskLabel,
+      requesterSessionOrigin: targetRequesterOrigin,
       requesterOrigin:
         expectsCompletionMessage && !requesterIsSubagent
           ? completionDirectOrigin
