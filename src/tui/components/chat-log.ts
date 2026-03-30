@@ -57,9 +57,15 @@ export class ChatLog extends Container {
     this.btwMessage = null;
   }
 
+  private createSystemMessage(text: string): Container {
+    const entry = new Container();
+    entry.addChild(new Spacer(1));
+    entry.addChild(new Text(theme.system(text), 1, 0));
+    return entry;
+  }
+
   addSystem(text: string) {
-    this.append(new Spacer(1));
-    this.append(new Text(theme.system(text), 1, 0));
+    this.append(this.createSystemMessage(text));
   }
 
   addUser(text: string) {

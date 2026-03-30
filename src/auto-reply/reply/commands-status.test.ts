@@ -7,6 +7,37 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { buildStatusReply } from "./commands-status.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
+const baseCfg = {
+  commands: { text: true },
+  channels: { whatsapp: { allowFrom: ["*"] } },
+  session: { mainKey: "main", scope: "per-sender" },
+} as OpenClawConfig;
+
+async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
+  const commandParams = buildCommandTestParams("/status", baseCfg);
+  const sessionKey = params.sessionKey ?? commandParams.sessionKey;
+  return await buildStatusReply({
+    cfg: baseCfg,
+    command: commandParams.command,
+    sessionEntry: commandParams.sessionEntry,
+    sessionKey,
+    parentSessionKey: sessionKey,
+    sessionScope: commandParams.sessionScope,
+    storePath: commandParams.storePath,
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+    contextTokens: 0,
+    resolvedThinkLevel: commandParams.resolvedThinkLevel,
+    resolvedFastMode: false,
+    resolvedVerboseLevel: params.verbose ? "on" : commandParams.resolvedVerboseLevel,
+    resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+    resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
+    resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
+    isGroup: commandParams.isGroup,
+    defaultGroupActivation: commandParams.defaultGroupActivation,
+  });
+}
+
 describe("buildStatusReply subagent summary", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
@@ -41,32 +72,7 @@ describe("buildStatusReply subagent summary", () => {
       startedAt: Date.now() - 60_000,
     });
 
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
-    const params = buildCommandTestParams("/status", cfg);
-    const reply = await buildStatusReply({
-      cfg,
-      command: params.command,
-      sessionEntry: params.sessionEntry,
-      sessionKey: params.sessionKey,
-      parentSessionKey: params.sessionKey,
-      sessionScope: params.sessionScope,
-      storePath: params.storePath,
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      contextTokens: 0,
-      resolvedThinkLevel: params.resolvedThinkLevel,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: params.resolvedVerboseLevel,
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
-      resolvedElevatedLevel: params.resolvedElevatedLevel,
-      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-      isGroup: params.isGroup,
-      defaultGroupActivation: params.defaultGroupActivation,
-    });
+    const reply = await buildStatusReplyForTest({});
 
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
   });
@@ -96,32 +102,7 @@ describe("buildStatusReply subagent summary", () => {
       outcome: { status: "ok" },
     });
 
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
-    const params = buildCommandTestParams("/status", cfg);
-    const reply = await buildStatusReply({
-      cfg,
-      command: params.command,
-      sessionEntry: params.sessionEntry,
-      sessionKey: params.sessionKey,
-      parentSessionKey: params.sessionKey,
-      sessionScope: params.sessionScope,
-      storePath: params.storePath,
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      contextTokens: 0,
-      resolvedThinkLevel: params.resolvedThinkLevel,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "on",
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
-      resolvedElevatedLevel: params.resolvedElevatedLevel,
-      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-      isGroup: params.isGroup,
-      defaultGroupActivation: params.defaultGroupActivation,
-    });
+    const reply = await buildStatusReplyForTest({ verbose: true });
 
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
     expect(reply?.text).not.toContain("· 1 done");
@@ -174,34 +155,27 @@ describe("buildStatusReply subagent summary", () => {
       startedAt: Date.now() - 30_000,
     });
 
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
-    const params = buildCommandTestParams("/status", cfg);
-    const reply = await buildStatusReply({
-      cfg,
-      command: params.command,
-      sessionEntry: params.sessionEntry,
-      sessionKey: oldParentKey,
-      parentSessionKey: oldParentKey,
-      sessionScope: params.sessionScope,
-      storePath: params.storePath,
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      contextTokens: 0,
-      resolvedThinkLevel: params.resolvedThinkLevel,
-      resolvedFastMode: false,
-      resolvedVerboseLevel: "on",
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
-      resolvedElevatedLevel: params.resolvedElevatedLevel,
-      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-      isGroup: params.isGroup,
-      defaultGroupActivation: params.defaultGroupActivation,
-    });
+    const reply = await buildStatusReplyForTest({ sessionKey: oldParentKey, verbose: true });
 
     expect(reply?.text).not.toContain("🤖 Subagents: 1 active");
     expect(reply?.text).not.toContain("stale old parent child");
+  });
+
+  it("counts controller-owned runs even when the latest child requester differs", async () => {
+    addSubagentRunForTests({
+      runId: "run-status-controller-owned",
+      childSessionKey: "agent:main:subagent:status-controller-owned",
+      requesterSessionKey: "agent:main:requester-only",
+      requesterDisplayKey: "requester-only",
+      controllerSessionKey: "agent:main:main",
+      task: "controller-owned status worker",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("🤖 Subagents: 1 active");
   });
 });

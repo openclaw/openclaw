@@ -2,19 +2,14 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
-  mockedCoerceToFailoverError,
   mockedCompactDirect,
   mockedContextEngine,
-  mockedDescribeFailoverError,
   mockedGetApiKeyForModel,
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
-  mockedResolveFailoverStatus,
   mockedRunEmbeddedAttempt,
   mockedRunPostCompactionSideEffects,
-  mockedSessionLikelyHasOversizedToolResults,
-  mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -38,47 +33,6 @@ describe("timeout-triggered compaction", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedCoerceToFailoverError.mockReset();
-    mockedDescribeFailoverError.mockReset();
-    mockedResolveFailoverStatus.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
-    mockedGlobalHookRunner.runBeforeCompaction.mockReset();
-    mockedGlobalHookRunner.runAfterCompaction.mockReset();
-    mockedPickFallbackThinkingLevel.mockReset();
-    mockedRunPostCompactionSideEffects.mockReset();
-    mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedCoerceToFailoverError.mockReturnValue(null);
-    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
-      message: err instanceof Error ? err.message : String(err),
-      reason: undefined,
-      status: undefined,
-      code: undefined,
-    }));
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
-    });
-    mockedPickFallbackThinkingLevel.mockReturnValue(null);
-    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
-    mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
-      apiKey: "test-key",
-      profileId: profileId ?? "test-profile",
-      source: "test",
-      mode: "api-key",
-    }));
-    mockedResolveAuthProfileOrder.mockReturnValue([]);
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {

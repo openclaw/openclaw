@@ -30,8 +30,12 @@ describe("pi-tools.policy", () => {
     expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
   });
 
-  it("keeps apply_patch when exec is allowlisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(true);
+  it("keeps apply_patch when write is allowlisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
+  });
+
+  it("blocks apply_patch when write is denylisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
   });
 });
 
@@ -95,6 +99,22 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
   });
 
+  it("applies configured deny to memory tools even though they are allowed by default", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: {
+        subagents: {
+          tools: {
+            deny: ["memory_search", "memory_get"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
+  });
+
   it("does not create a restrictive allowlist when only alsoAllow is configured", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
@@ -125,12 +145,12 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(true);
   });
 
-  it("depth-1 orchestrator still denies gateway, cron, memory", () => {
+  it("depth-1 orchestrator still denies gateway and cron but allows memory tools", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 1);
     expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("cron", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
   it("depth-2 leaf denies sessions_spawn", () => {
@@ -202,6 +222,8 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
   it("defaults to leaf behavior when no depth is provided", () => {
