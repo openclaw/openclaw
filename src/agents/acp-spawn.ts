@@ -762,7 +762,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requestThreadBinding = params.thread === true;
+  let requestThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -820,6 +820,14 @@ export async function spawnAcpDirect(
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
+
+  const isTelegramForumTopic =
+    ctx.agentChannel?.toLowerCase() === "telegram" &&
+    ctx.agentGroupId?.trim() &&
+    ctx.agentThreadId != null;
+  if (isTelegramForumTopic) {
+    requestThreadBinding = false;
+  }
 
   let preparedBinding: PreparedAcpThreadBinding | null = null;
   if (requestThreadBinding) {
