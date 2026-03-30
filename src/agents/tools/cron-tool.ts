@@ -35,10 +35,12 @@ const CronToolSchema = Type.Object(
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
     includeDisabled: Type.Optional(Type.Boolean()),
-    job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    // Use permissive types for job/patch: LLMs may send null, a string wrapper,
+    // or omit nesting entirely (flat-params recovery handles all these at runtime).
+    job: Type.Optional(Type.Unsafe<Record<string, unknown>>({})),
     jobId: Type.Optional(Type.String()),
     id: Type.Optional(Type.String()),
-    patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    patch: Type.Optional(Type.Unsafe<Record<string, unknown>>({})),
     text: Type.Optional(Type.String()),
     mode: optionalStringEnum(CRON_WAKE_MODES),
     runMode: optionalStringEnum(CRON_RUN_MODES),
@@ -305,6 +307,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }),
           );
         case "add": {
+          // Coerce non-object job values (null, string) to undefined so flat-params
+          // recovery triggers instead of failing schema validation (#56996).
+          if (params.job != null && typeof params.job !== "object") {
+            params.job = undefined;
+          }
+
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
           // them inside `job`. When `params.job` is missing or empty, reconstruct
@@ -334,6 +342,16 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "thinking",
               "timeoutSeconds",
               "allowUnsafeExternalContent",
+              "failureAlert",
+              // Schedule shorthand keys (LLMs often flatten these)
+              "every",
+              "everyMs",
+              "cron",
+              "at",
+              "tz",
+              "stagger",
+              "staggerMs",
+              "exact",
             ]);
             const synthetic: Record<string, unknown> = {};
             let found = false;
@@ -343,6 +361,46 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 found = true;
               }
             }
+
+            // Reconstruct schedule from shorthand keys when not already present.
+            if (!synthetic.schedule) {
+              const everyMs =
+                typeof synthetic.everyMs === "number"
+                  ? synthetic.everyMs
+                  : typeof synthetic.every === "number"
+                    ? synthetic.every
+                    : undefined;
+              if (typeof everyMs === "number" && everyMs > 0) {
+                synthetic.schedule = { kind: "every", everyMs };
+              } else if (typeof synthetic.cron === "string" && synthetic.cron.trim()) {
+                synthetic.schedule = {
+                  kind: "cron",
+                  expr: synthetic.cron.trim(),
+                  ...(typeof synthetic.tz === "string" && synthetic.tz.trim()
+                    ? { tz: synthetic.tz.trim() }
+                    : {}),
+                };
+              } else if (synthetic.at !== undefined) {
+                const atValue =
+                  typeof synthetic.at === "string" ? synthetic.at : JSON.stringify(synthetic.at);
+                synthetic.schedule = { kind: "at", at: atValue };
+              }
+            }
+
+            // Clean up shorthand keys that are now folded into schedule.
+            for (const key of [
+              "every",
+              "everyMs",
+              "cron",
+              "at",
+              "tz",
+              "stagger",
+              "staggerMs",
+              "exact",
+            ]) {
+              delete synthetic[key];
+            }
+
             // Only use the synthetic job if at least one meaningful field is present
             // (schedule, payload, message, or text are the minimum signals that the
             // LLM intended to create a job).
@@ -456,6 +514,11 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
 
+          // Coerce non-object patch values to undefined (#56996).
+          if (params.patch != null && typeof params.patch !== "object") {
+            params.patch = undefined;
+          }
+
           // Flat-params recovery for patch
           if (
             !params.patch ||
@@ -477,6 +540,15 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "wakeMode",
               "failureAlert",
               "allowUnsafeExternalContent",
+              // Schedule shorthand keys
+              "every",
+              "everyMs",
+              "cron",
+              "at",
+              "tz",
+              "stagger",
+              "staggerMs",
+              "exact",
             ]);
             const synthetic: Record<string, unknown> = {};
             let found = false;
@@ -486,6 +558,46 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 found = true;
               }
             }
+
+            // Reconstruct schedule from shorthand keys when not already present.
+            if (!synthetic.schedule) {
+              const everyMs =
+                typeof synthetic.everyMs === "number"
+                  ? synthetic.everyMs
+                  : typeof synthetic.every === "number"
+                    ? synthetic.every
+                    : undefined;
+              if (typeof everyMs === "number" && everyMs > 0) {
+                synthetic.schedule = { kind: "every", everyMs };
+              } else if (typeof synthetic.cron === "string" && synthetic.cron.trim()) {
+                synthetic.schedule = {
+                  kind: "cron",
+                  expr: synthetic.cron.trim(),
+                  ...(typeof synthetic.tz === "string" && synthetic.tz.trim()
+                    ? { tz: synthetic.tz.trim() }
+                    : {}),
+                };
+              } else if (synthetic.at !== undefined) {
+                const atValue =
+                  typeof synthetic.at === "string" ? synthetic.at : JSON.stringify(synthetic.at);
+                synthetic.schedule = { kind: "at", at: atValue };
+              }
+            }
+
+            // Clean up shorthand keys folded into schedule.
+            for (const key of [
+              "every",
+              "everyMs",
+              "cron",
+              "at",
+              "tz",
+              "stagger",
+              "staggerMs",
+              "exact",
+            ]) {
+              delete synthetic[key];
+            }
+
             if (found) {
               params.patch = synthetic;
             }
