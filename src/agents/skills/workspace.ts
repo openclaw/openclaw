@@ -232,6 +232,65 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
+function loadSkillDirectory(params: {
+  skillDir: string;
+  skillName: string;
+  source: string;
+  rootDir: string;
+  rootRealPath: string;
+  maxSkillFileBytes: number;
+}): Skill[] {
+  const skillDirRealPath = resolveContainedSkillPath({
+    source: params.source,
+    rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
+    candidatePath: params.skillDir,
+  });
+  if (!skillDirRealPath) {
+    return [];
+  }
+
+  const skillMd = path.join(params.skillDir, "SKILL.md");
+  if (!fs.existsSync(skillMd)) {
+    return [];
+  }
+  const skillMdRealPath = resolveContainedSkillPath({
+    source: params.source,
+    rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
+    candidatePath: skillMd,
+  });
+  if (!skillMdRealPath) {
+    return [];
+  }
+  try {
+    const size = fs.statSync(skillMdRealPath).size;
+    if (size > params.maxSkillFileBytes) {
+      skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
+        skill: params.skillName,
+        filePath: skillMd,
+        size,
+        maxSkillFileBytes: params.maxSkillFileBytes,
+      });
+      return [];
+    }
+  } catch {
+    return [];
+  }
+
+  const loaded = loadSkillsFromDirSafe({
+    dir: params.skillDir,
+    source: params.source,
+    maxBytes: params.maxSkillFileBytes,
+  });
+  return filterLoadedSkillsInsideRoot({
+    skills: unwrapLoadedSkills(loaded),
+    source: params.source,
+    rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
+  });
+}
+
 function unwrapLoadedSkills(loaded: unknown): Skill[] {
   if (Array.isArray(loaded)) {
     return loaded as Skill[];
@@ -337,59 +396,68 @@ function loadSkillEntries(
 
     const loadedSkills: Skill[] = [];
 
-    // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
+    // Support the bounded set of layouts we intentionally document:
+    // - <skillsRoot>/<skill>/SKILL.md
+    // - <skillsRoot>/<group>/<skill>/SKILL.md
     for (const name of limitedChildren) {
       const skillDir = path.join(baseDir, name);
-      const skillDirRealPath = resolveContainedSkillPath({
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
-        candidatePath: skillDir,
-      });
-      if (!skillDirRealPath) {
-        continue;
-      }
-      const skillMd = path.join(skillDir, "SKILL.md");
-      if (!fs.existsSync(skillMd)) {
-        continue;
-      }
-      const skillMdRealPath = resolveContainedSkillPath({
-        source: params.source,
-        rootDir,
-        rootRealPath: baseDirRealPath,
-        candidatePath: skillMd,
-      });
-      if (!skillMdRealPath) {
-        continue;
-      }
-      try {
-        const size = fs.statSync(skillMdRealPath).size;
-        if (size > limits.maxSkillFileBytes) {
-          skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-            skill: name,
-            filePath: skillMd,
-            size,
-            maxSkillFileBytes: limits.maxSkillFileBytes,
-          });
-          continue;
-        }
-      } catch {
-        continue;
-      }
-
-      const loaded = loadSkillsFromDirSafe({
-        dir: skillDir,
-        source: params.source,
-        maxBytes: limits.maxSkillFileBytes,
-      });
-      loadedSkills.push(
-        ...filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+      if (
+        !resolveContainedSkillPath({
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
-        }),
-      );
+          candidatePath: skillDir,
+        })
+      ) {
+        continue;
+      }
+
+      const hasDirectSkillFile = fs.existsSync(path.join(skillDir, "SKILL.md"));
+      const directSkills = loadSkillDirectory({
+        skillDir,
+        skillName: name,
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        maxSkillFileBytes: limits.maxSkillFileBytes,
+      });
+      if (directSkills.length > 0) {
+        loadedSkills.push(...directSkills);
+      } else if (!hasDirectSkillFile) {
+        const rawGroupedChildren = listChildDirectories(skillDir);
+        if (rawGroupedChildren.length > limits.maxCandidatesPerRoot) {
+          skillsLogger.warn(
+            "Grouped skills directory looks suspiciously large, truncating discovery.",
+            {
+              dir: skillDir,
+              childDirCount: rawGroupedChildren.length,
+              maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+              maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+            },
+          );
+        }
+
+        const remainingBudget = Math.max(0, limits.maxSkillsLoadedPerSource - loadedSkills.length);
+        const groupedChildren = rawGroupedChildren
+          .slice()
+          .sort()
+          .slice(0, Math.min(maxCandidates, remainingBudget));
+        for (const groupedName of groupedChildren) {
+          loadedSkills.push(
+            ...loadSkillDirectory({
+              skillDir: path.join(skillDir, groupedName),
+              skillName: groupedName,
+              source: params.source,
+              rootDir,
+              rootRealPath: baseDirRealPath,
+              maxSkillFileBytes: limits.maxSkillFileBytes,
+            }),
+          );
+          if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
+            break;
+          }
+        }
+      }
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;

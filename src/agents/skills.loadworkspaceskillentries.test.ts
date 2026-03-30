@@ -263,6 +263,24 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
   });
 
+  it("loads grouped managed skills under <group>/<skill>/SKILL.md", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    await writeSkill({
+      dir: path.join(managedDir, "coze", "koze-retrieval"),
+      name: "koze-retrieval",
+      description: "Grouped managed skill",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("koze-retrieval");
+  });
+
   it.runIf(process.platform !== "win32")(
     "skips workspace skill directories that resolve outside the workspace root",
     async () => {
@@ -279,6 +297,30 @@ describe("loadWorkspaceSkillEntries", () => {
 
       const entries = loadWorkspaceSkillEntries(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "skips grouped managed skill directories that resolve outside the managed skills root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const managedDir = path.join(workspaceDir, ".managed");
+      const outsideDir = await createTempWorkspaceDir();
+      const escapedSkillDir = path.join(outsideDir, "outside-skill");
+      await writeSkill({
+        dir: escapedSkillDir,
+        name: "outside-skill",
+        description: "Outside grouped managed skill",
+      });
+      await fs.mkdir(path.join(managedDir, "coze"), { recursive: true });
+      await fs.symlink(escapedSkillDir, path.join(managedDir, "coze", "escaped-skill"), "dir");
+
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: managedDir,
         bundledSkillsDir: path.join(workspaceDir, ".bundled"),
       });
 
