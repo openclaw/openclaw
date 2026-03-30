@@ -69,16 +69,26 @@ function resolveBoundTelegramAccountId(params: {
   request: ApprovalRequest;
 }): string | null {
   const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase();
+  const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || undefined;
   if (turnSourceChannel === "telegram") {
-    return params.request.request.turnSourceAccountId?.trim() || null;
+    if (turnSourceAccountId) {
+      return turnSourceAccountId;
+    }
   }
+  const allowSessionAccountFallback = turnSourceChannel === "telegram" && !turnSourceAccountId;
   const sessionTarget = resolveExecApprovalSessionTarget({
     cfg: params.cfg,
     request: toExecLikeRequest(params.request),
-    turnSourceChannel: params.request.request.turnSourceChannel ?? undefined,
-    turnSourceTo: params.request.request.turnSourceTo ?? undefined,
-    turnSourceAccountId: params.request.request.turnSourceAccountId ?? undefined,
-    turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
+    turnSourceChannel: allowSessionAccountFallback
+      ? undefined
+      : (params.request.request.turnSourceChannel ?? undefined),
+    turnSourceTo: allowSessionAccountFallback
+      ? undefined
+      : (params.request.request.turnSourceTo ?? undefined),
+    turnSourceAccountId: allowSessionAccountFallback ? undefined : turnSourceAccountId,
+    turnSourceThreadId: allowSessionAccountFallback
+      ? undefined
+      : (params.request.request.turnSourceThreadId ?? undefined),
   });
   if (!sessionTarget || sessionTarget.channel !== "telegram") {
     return null;

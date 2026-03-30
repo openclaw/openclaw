@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { updateSessionStore } from "../../../src/config/sessions.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
 
 const baseRequest = {
@@ -34,7 +38,7 @@ const pluginRequest = {
   expiresAtMs: 61_000,
 };
 
-function createHandler(cfg: OpenClawConfig) {
+function createHandler(cfg: OpenClawConfig, accountId = "default") {
   const sendTyping = vi.fn().mockResolvedValue({ ok: true });
   const sendMessage = vi
     .fn()
@@ -44,7 +48,7 @@ function createHandler(cfg: OpenClawConfig) {
   const handler = new TelegramExecApprovalHandler(
     {
       token: "tg-token",
-      accountId: "default",
+      accountId,
       cfg,
     },
     {
@@ -237,5 +241,70 @@ describe("TelegramExecApprovalHandler", () => {
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the session-bound Telegram account when turn source account is missing", async () => {
+    const sessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-approvals-"));
+    const storePath = path.join(sessionStoreDir, "sessions.json");
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store[baseRequest.request.sessionKey] = {
+          sessionId: "session-secondary",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "-1003841603622",
+            accountId: "secondary",
+            threadId: 928,
+          },
+        };
+      });
+
+      const cfg = {
+        session: { store: storePath },
+        channels: {
+          telegram: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["8460800771"],
+              target: "channel",
+            },
+            accounts: {
+              secondary: {
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["999"],
+                  target: "channel",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const defaultHandler = createHandler(cfg, "default");
+      const secondaryHandler = createHandler(cfg, "secondary");
+      const request = {
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          turnSourceAccountId: null,
+        },
+      };
+
+      await defaultHandler.handler.handleRequested(request);
+      await secondaryHandler.handler.handleRequested(request);
+
+      expect(defaultHandler.sendMessage).not.toHaveBeenCalled();
+      expect(secondaryHandler.sendMessage).toHaveBeenCalledWith(
+        "-1003841603622",
+        expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
+        expect.objectContaining({
+          accountId: "secondary",
+          messageThreadId: 928,
+        }),
+      );
+    } finally {
+      await fs.rm(sessionStoreDir, { recursive: true, force: true });
+    }
   });
 });
