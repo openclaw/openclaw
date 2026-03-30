@@ -53,17 +53,26 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 /**
- * Matches the `/approve <hash> <mode>` pattern used by the approval system.
+ * Matches the `/approve <id> <decision>` pattern used by the approval system.
  * Case-insensitive, supports optional @mention suffix.
+ *
+ * - `id` is either a short hex slug (`[a-f0-9]{1,}`) or a full UUID
+ *   (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), so we match `[a-f0-9-]+`.
+ * - `decision` covers every alias accepted by the slash-command parser in
+ *   `commands-approve.ts`: allow-once, allow-always, deny, reject, block,
+ *   once, always, allow, allowonce, allowalways.
  */
 const APPROVE_FULL_RE =
-  /\/approve(?:@[^\s]*)?\s+[a-f0-9]+\s+allow-(?:once|always)/i;
+  /\/approve(?:@[^\s]*)?\s+[a-f0-9-]+\s+(?:allow-?(?:once|always)|allowonce|allowalways|deny|reject|block|once|always|allow)(?=[\s;)"'`}|&]|$)/i;
 
 /**
- * Matches a bare `/approve` at end-of-line or end-of-string (no args),
- * which would also trigger the approval loop.
+ * Matches a bare `/approve` at a command-start position (beginning of line
+ * or after a shell separator) with no arguments or only whitespace after it.
+ *
+ * The `(?:^|[;|&(])` anchor ensures we don't match `/approve` when it
+ * appears as an argument to another command (e.g. `echo /approve`).
  */
-const APPROVE_BARE_RE = /\/approve(?:@[^\s]*)?\s*$/im;
+const APPROVE_BARE_RE = /(?:^|[;|&(])\s*\/approve(?:@[^\s]*)?\s*$/im;
 
 /**
  * Strip inline comments from a shell line, respecting single and double
@@ -125,8 +134,9 @@ function detectHeredocDelimiter(line: string): string | null {
  *
  * 1. Strips heredoc bodies — they are data, not executable commands.
  * 2. Strips inline comments — they are not executed.
- * 3. Matches the specific `/approve <hash> allow-once|allow-always` pattern
- *    (or bare `/approve`) anywhere in the remaining text.
+ * 3. Matches the specific `/approve <id> <decision>` pattern (covering all
+ *    decision aliases from `commands-approve.ts` and UUID-format ids) or a
+ *    bare `/approve` at a command-start position in the remaining text.
  *
  * This catches every realistic attack vector (direct call, after `&&`/`;`/`|`,
  * inside subshells, after env assignments, inside `eval`/`bash -c`, etc.)
