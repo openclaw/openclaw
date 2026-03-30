@@ -556,6 +556,13 @@ describe("statusCommand", () => {
       count: 0,
       warnings: [],
     });
+    expect(payload.tasks).toEqual(
+      expect.objectContaining({
+        total: 0,
+        active: 0,
+        byStatus: expect.objectContaining({ queued: 0, running: 0 }),
+      }),
+    );
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         includeFilesystem: true,
@@ -601,6 +608,7 @@ describe("statusCommand", () => {
       "Channels",
       "WhatsApp",
       "bootstrap files",
+      "Tasks",
       "Sessions",
       "+1000",
       "50%",

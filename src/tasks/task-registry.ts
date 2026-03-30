@@ -15,12 +15,14 @@ import {
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryHookEvent,
 } from "./task-registry.store.js";
+import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryStatus,
   TaskEventKind,
   TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
+  TaskRegistrySummary,
   TaskRegistrySnapshot,
   TaskRuntime,
   TaskStatus,
@@ -1047,6 +1049,11 @@ export function listTaskRecords(): TaskRecord[] {
   return [...tasks.values()]
     .map((task) => cloneTaskRecord(task))
     .toSorted((a, b) => b.createdAt - a.createdAt);
+}
+
+export function getTaskRegistrySummary(): TaskRegistrySummary {
+  ensureTaskRegistryReady();
+  return summarizeTaskRecords(tasks.values());
 }
 
 export function getTaskRegistrySnapshot(): TaskRegistrySnapshot {

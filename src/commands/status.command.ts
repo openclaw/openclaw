@@ -385,6 +385,18 @@ export async function statusCommand(
     : "";
   const eventsValue =
     summary.queuedSystemEvents.length > 0 ? `${summary.queuedSystemEvents.length} queued` : "none";
+  const tasksValue =
+    summary.tasks.total > 0
+      ? [
+          `${summary.tasks.active} active`,
+          `${summary.tasks.byStatus.queued} queued`,
+          `${summary.tasks.byStatus.running} running`,
+          summary.tasks.failures > 0
+            ? warn(`${summary.tasks.failures} issue${summary.tasks.failures === 1 ? "" : "s"}`)
+            : muted("no issues"),
+          `${summary.tasks.total} tracked`,
+        ].join(" · ")
+      : muted("none");
 
   const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
 
@@ -502,6 +514,7 @@ export async function statusCommand(
     { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
+    { Item: "Tasks", Value: tasksValue },
     { Item: "Heartbeat", Value: heartbeatValue },
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {

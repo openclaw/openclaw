@@ -23,6 +23,18 @@ export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
 export type TaskTerminalOutcome = "succeeded" | "blocked";
 
+export type TaskStatusCounts = Record<TaskStatus, number>;
+export type TaskRuntimeCounts = Record<TaskRuntime, number>;
+
+export type TaskRegistrySummary = {
+  total: number;
+  active: number;
+  terminal: number;
+  failures: number;
+  byStatus: TaskStatusCounts;
+  byRuntime: TaskRuntimeCounts;
+};
+
 export type TaskEventKind = TaskStatus | "progress";
 
 export type TaskEventRecord = {
