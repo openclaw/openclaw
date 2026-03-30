@@ -13,7 +13,10 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
   const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1, Math.floor(timeoutMsRaw)) : 1;
 
   let timedOut = false;
-  const waitPromise = params.waitForCompactionRetry().then(() => "done" as const);
+  const waitPromise = params
+    .waitForCompactionRetry()
+    .then(() => "done" as const)
+    .catch(() => "cancelled" as const);
 
   while (true) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -27,7 +30,7 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
         ]),
       );
 
-      if (result === "done") {
+      if (result === "done" || result === "cancelled") {
         break;
       }
 
