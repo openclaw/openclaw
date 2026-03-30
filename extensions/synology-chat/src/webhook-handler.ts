@@ -132,11 +132,12 @@ function getSynologyWebhookInvalidTokenRateLimitKey(req: IncomingMessage): strin
   return req.socket?.remoteAddress ?? "unknown";
 }
 
-function getSynologyWebhookInFlightKey(
-  account: ResolvedSynologyChatAccount,
-  req: IncomingMessage,
-): string {
-  return `${account.accountId}:${getSynologyWebhookInvalidTokenRateLimitKey(req)}`;
+function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): string {
+  // Synology webhook ingress is typically a single upstream per account, and this
+  // handler does not have a trusted-proxy-aware client IP config. Keep the shared
+  // pre-auth concurrency budget scoped per account instead of keying on a fragile
+  // remoteAddress value that can collapse behind proxies or to "unknown".
+  return account.accountId;
 }
 
 /** Read the full request body as a string. */
@@ -579,7 +580,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       req,
       res,
       inFlightLimiter: webhookInFlightLimiter,
-      inFlightKey: getSynologyWebhookInFlightKey(account, req),
+      inFlightKey: getSynologyWebhookInFlightKey(account),
     });
     if (!requestLifecycle.ok) {
       return;
