@@ -1354,8 +1354,13 @@ export function listSessionsFromStore(params: {
       : undefined;
 
   let sessions = Object.entries(store)
-    .filter(([key]) => {
+    .filter(([key, entry]) => {
       if (isCronRunSessionKey(key)) {
+        return false;
+      }
+      // Filter out store-level placeholder keys (e.g. "agent:sean:sessions")
+      // that leak into the session store. These have no real session data.
+      if (key.endsWith(":sessions") && entry?.updatedAt == null) {
         return false;
       }
       if (!includeGlobal && key === "global") {
