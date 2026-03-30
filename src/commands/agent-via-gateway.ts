@@ -7,6 +7,7 @@ import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { resolveUserPath } from "../utils.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -51,6 +52,7 @@ export type AgentCliOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  cwd?: string;
   local?: boolean;
 };
 
@@ -63,6 +65,14 @@ function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout
     throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }
   return raw;
+}
+
+function normalizeCliWorkspaceDir(raw?: string): string | undefined {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  return resolveUserPath(trimmed);
 }
 
 function formatPayloadForLog(payload: {
@@ -120,6 +130,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
+  const workspaceDir = normalizeCliWorkspaceDir(opts.cwd);
 
   const response = await withProgress(
     {
@@ -146,6 +157,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
+          workspaceDir,
           idempotencyKey,
         },
         expectFinal: true,
@@ -179,10 +191,12 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  const workspaceDir = normalizeCliWorkspaceDir(opts.cwd);
   const localOpts = {
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    workspaceDir,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

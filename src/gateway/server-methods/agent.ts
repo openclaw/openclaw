@@ -88,6 +88,22 @@ function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["
   return resolveSenderIsOwnerFromClient(client);
 }
 
+function resolveTrustedWorkspaceOverrideFromClient(
+  client: GatewayRequestHandlerOptions["client"],
+  workspaceDir?: string,
+): string | undefined {
+  const trimmed = typeof workspaceDir === "string" ? workspaceDir.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!resolveSenderIsOwnerFromClient(client)) {
+    throw new Error(
+      "invalid agent params: workspaceDir override requires trusted owner authorization",
+    );
+  }
+  return trimmed;
+}
+
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
@@ -298,6 +314,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupSpace?: string;
       lane?: string;
       extraSystemPrompt?: string;
+      workspaceDir?: string;
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
       timeout?: number;
@@ -322,6 +339,16 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const providerOverride = allowModelOverride ? request.provider : undefined;
     const modelOverride = allowModelOverride ? request.model : undefined;
+    let trustedWorkspaceOverride: string | undefined;
+    try {
+      trustedWorkspaceOverride = resolveTrustedWorkspaceOverrideFromClient(
+        client,
+        request.workspaceDir,
+      );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+      return;
+    }
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
@@ -797,11 +824,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
         inputProvenance,
-        // Internal-only: allow workspace override for spawned subagent runs.
-        workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
-          spawnedBy: spawnedByValue,
-          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-        }),
+        // Internal-only: allow explicit workspace override only for trusted
+        // owner-authorized callers; otherwise keep the existing spawned-session
+        // inheritance path.
+        workspaceDir:
+          trustedWorkspaceOverride ??
+          resolveIngressWorkspaceOverrideForSpawnedRun({
+            spawnedBy: spawnedByValue,
+            workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+          }),
         senderIsOwner,
         allowModelOverride,
       },
