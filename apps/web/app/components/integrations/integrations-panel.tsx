@@ -2,9 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
-import type { DenchIntegrationState, IntegrationsState } from "@/lib/integrations";
+import { Switch } from "../ui/switch";
+import type {
+  DenchIntegrationId,
+  DenchIntegrationState,
+  IntegrationRuntimeRefresh,
+  IntegrationsState,
+} from "@/lib/integrations";
 
 type IntegrationStatus = "healthy" | "degraded" | "disabled";
+type ActionNotice = {
+  tone: "success" | "warning";
+  message: string;
+};
+type IntegrationToggleResponse = IntegrationsState & {
+  integration: DenchIntegrationId;
+  changed: boolean;
+  refresh: IntegrationRuntimeRefresh;
+};
 
 function statusCopy(status: IntegrationStatus): string {
   switch (status) {
@@ -79,6 +94,18 @@ function SearchOwnershipCard({ state }: { state: IntegrationsState }) {
   );
 }
 
+function RefreshNoticeBanner({ notice }: { notice: ActionNotice }) {
+  const toneClass = notice.tone === "success"
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-100"
+    : "border-amber-500/30 bg-amber-500/10 text-amber-100";
+
+  return (
+    <div className={`rounded-xl border px-4 py-3 text-sm ${toneClass}`}>
+      {notice.message}
+    </div>
+  );
+}
+
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-border/70 bg-background/30 p-4">
@@ -88,7 +115,17 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function IntegrationCard({ integration, state }: { integration: DenchIntegrationState; state: IntegrationsState }) {
+function IntegrationCard({
+  integration,
+  state,
+  isSaving,
+  onToggle,
+}: {
+  integration: DenchIntegrationState;
+  state: IntegrationsState;
+  isSaving: boolean;
+  onToggle: (integration: DenchIntegrationState, enabled: boolean) => void;
+}) {
   const exaOwnsSearch = integration.id === "exa" && state.search.effectiveOwner === "exa";
   const status = integration.health.status;
 
@@ -106,9 +143,22 @@ function IntegrationCard({ integration, state }: { integration: DenchIntegration
                   : "Dench-managed ElevenLabs gateway override for TTS requests."}
             </CardDescription>
           </div>
-          <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${toneClasses(status)}`}>
-            {statusCopy(status)}
-          </span>
+          <div className="flex flex-col items-end gap-2">
+            <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${toneClasses(status)}`}>
+              {statusCopy(status)}
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {isSaving ? "Saving..." : integration.enabled ? "On" : "Off"}
+              </span>
+              <Switch
+                aria-label={`Toggle ${integration.label}`}
+                checked={integration.enabled}
+                disabled={isSaving}
+                onCheckedChange={(checked) => onToggle(integration, checked)}
+              />
+            </div>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -161,6 +211,8 @@ export function IntegrationsPanel() {
   const [data, setData] = useState<IntegrationsState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<DenchIntegrationId | null>(null);
+  const [notice, setNotice] = useState<ActionNotice | null>(null);
 
   const fetchIntegrations = useCallback(async () => {
     setLoading(true);
@@ -184,6 +236,51 @@ export function IntegrationsPanel() {
   }, [fetchIntegrations]);
 
   const integrations = useMemo(() => data?.integrations ?? [], [data]);
+
+  const applyState = useCallback((nextState: IntegrationsState) => {
+    setData(nextState);
+  }, []);
+
+  const handleToggle = useCallback(async (integration: DenchIntegrationState, enabled: boolean) => {
+    setSavingId(integration.id);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/integrations/${integration.id}/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const payload = (await response.json()) as IntegrationToggleResponse | { error?: string };
+      if (!response.ok) {
+        throw new Error("error" in payload && payload.error ? payload.error : `Failed to update ${integration.label}`);
+      }
+
+      applyState(payload);
+      if (payload.refresh.restarted) {
+        setNotice({
+          tone: "success",
+          message: `${integration.label} updated and the ${payload.refresh.profile} gateway restarted successfully.`,
+        });
+      } else if (payload.changed) {
+        setNotice({
+          tone: "warning",
+          message: `${integration.label} updated, but the gateway restart did not complete: ${payload.refresh.error ?? "unknown error"}.`,
+        });
+      } else {
+        setNotice({
+          tone: "success",
+          message: `${integration.label} was already in the requested state.`,
+        });
+      }
+    } catch (err) {
+      setNotice({
+        tone: "warning",
+        message: err instanceof Error ? err.message : `Failed to update ${integration.label}.`,
+      });
+    } finally {
+      setSavingId(null);
+    }
+  }, [applyState]);
 
   return (
     <div className="mx-auto max-w-5xl p-6">
@@ -222,6 +319,8 @@ export function IntegrationsPanel() {
 
       {!loading && !error && data && (
         <div className="space-y-6">
+          {notice && <RefreshNoticeBanner notice={notice} />}
+
           <SearchOwnershipCard state={data} />
 
           <div className="grid gap-6 lg:grid-cols-3">
@@ -230,6 +329,8 @@ export function IntegrationsPanel() {
                 key={integration.id}
                 integration={integration}
                 state={data}
+                isSaving={savingId === integration.id}
+                onToggle={handleToggle}
               />
             ))}
           </div>

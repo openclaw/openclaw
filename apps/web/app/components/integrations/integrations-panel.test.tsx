@@ -2,6 +2,7 @@
 import React from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { IntegrationsPanel } from "./integrations-panel";
 
 describe("IntegrationsPanel", () => {
@@ -10,7 +11,8 @@ describe("IntegrationsPanel", () => {
   });
 
   it("renders integrations data from the backend API", async () => {
-    global.fetch = vi.fn(async () => new Response(JSON.stringify({
+    const user = userEvent.setup();
+    const initialPayload = {
       metadata: {
         schemaVersion: 1,
         exa: {
@@ -106,7 +108,44 @@ describe("IntegrationsPanel", () => {
           overrideActive: true,
         },
       ],
-    }))) as typeof fetch;
+    };
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : (input as URL).href;
+      const method = init?.method ?? "GET";
+      if (url === "/api/integrations" && method === "GET") {
+        return new Response(JSON.stringify(initialPayload));
+      }
+      if (url === "/api/integrations/apollo/toggle" && method === "POST") {
+        return new Response(JSON.stringify({
+          integration: "apollo",
+          changed: true,
+          refresh: {
+            attempted: true,
+            restarted: true,
+            error: null,
+            profile: "dench",
+          },
+          ...initialPayload,
+          integrations: initialPayload.integrations.map((integration) =>
+            integration.id === "apollo"
+              ? {
+                ...integration,
+                enabled: true,
+                available: true,
+                healthIssues: [],
+                health: {
+                  ...integration.health,
+                  status: "healthy",
+                  pluginInstalledButDisabled: false,
+                },
+              }
+              : integration
+          ),
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    }) as typeof fetch;
 
     render(<IntegrationsPanel />);
 
@@ -121,5 +160,11 @@ describe("IntegrationsPanel", () => {
     expect(screen.getByText("ElevenLabs")).toBeInTheDocument();
     expect(screen.getByText("Dench Exa")).toBeInTheDocument();
     expect(screen.getByText("Plugin is installed but disabled")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Toggle Apollo Enrichment"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Apollo Enrichment updated and the dench gateway restarted successfully.")).toBeInTheDocument();
+    });
   });
 });
