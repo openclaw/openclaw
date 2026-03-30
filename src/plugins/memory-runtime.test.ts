@@ -46,6 +46,9 @@ function createMemoryRuntimeFixture() {
 function expectMemoryRuntimeLoaded(autoEnabledConfig: unknown) {
   expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
     config: autoEnabledConfig,
+    runtimeOptions: {
+      allowGatewaySubagentBinding: true,
+    },
   });
 }
 

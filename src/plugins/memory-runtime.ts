@@ -9,7 +9,12 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
     return current;
   }
   const resolvedConfig = applyPluginAutoEnable({ config: cfg, env: process.env }).config;
-  resolveRuntimePluginRegistry({ config: resolvedConfig });
+  resolveRuntimePluginRegistry({
+    config: resolvedConfig,
+    runtimeOptions: {
+      allowGatewaySubagentBinding: true,
+    },
+  });
   return getMemoryRuntime();
 }
 
