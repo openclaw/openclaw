@@ -181,11 +181,13 @@ export async function processDiscordMessage(
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
         rest: discordRest,
+        accountId,
       });
     },
     removeReaction: async (emoji) => {
       await removeReactionDiscord(messageChannelId, message.id, emoji, {
         rest: discordRest,
+        accountId,
       });
     },
   };
