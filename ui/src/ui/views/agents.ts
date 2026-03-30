@@ -159,7 +159,8 @@ export function renderAgents(props: AgentsProps) {
                 : agents.map(
                     (agent) => html`
                       <option value=${agent.id} ?selected=${agent.id === selectedId}>
-                        ${normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId)
+                        ${props.agentIdentityById[agent.id]?.name?.trim() ||
+                        normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId)
                           ? ` (${agentBadgeText(agent.id, defaultId)})`
                           : ""}
                       </option>
