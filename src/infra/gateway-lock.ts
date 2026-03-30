@@ -57,7 +57,7 @@ function readLinuxCmdline(pid: number): string[] | null {
   }
 }
 
-function readLinuxStartTime(pid: number): number | null {
+export function readLinuxStartTime(pid: number): number | null {
   try {
     const raw = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8").trim();
     const closeParen = raw.lastIndexOf(")");
@@ -157,6 +157,7 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
     const port =
       typeof parsed.port === "number" &&
       Number.isFinite(parsed.port) &&
+      Number.isInteger(parsed.port) &&
       parsed.port > 0 &&
       parsed.port <= 65535
         ? parsed.port

@@ -306,13 +306,22 @@ export async function applyGatewayRuntimePortEnvOverride(
   }
 
   // Dynamic import to avoid circular dependency
-  const { readGatewayLockPayload } = await import("../infra/gateway-lock.js");
+  const { readGatewayLockPayload, readLinuxStartTime } = await import("../infra/gateway-lock.js");
   const { isPidAlive } = await import("../shared/pid-alive.js");
   const payload = await readGatewayLockPayload(env);
 
-  // Verify the PID is still alive before using the port
+  // Verify the PID is still alive and the lock startTime matches (to guard
+  // against PID reuse by an unrelated process) before using the port.
   if (payload?.pid && payload.port && Number.isFinite(payload.port) && payload.port > 0) {
     if (isPidAlive(payload.pid)) {
+      // If the lock carries a startTime, verify it matches the current process
+      // start time to confirm this lock is still owned by the same process.
+      if (payload.startTime !== undefined) {
+        const currentStartTime = readLinuxStartTime(payload.pid);
+        if (currentStartTime !== payload.startTime) {
+          return; // Stale lock — PID was recycled
+        }
+      }
       env.OPENCLAW_GATEWAY_PORT = String(payload.port);
     }
   }
