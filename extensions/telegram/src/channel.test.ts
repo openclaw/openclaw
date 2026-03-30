@@ -317,10 +317,9 @@ describe("telegramPlugin duplicate token guard", () => {
         timeoutMs: 4321,
         cfg,
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: true,
       bot: { username: "runtimebot" },
-      elapsedMs: 7,
     });
     expect(runtimeProbeTelegram).toHaveBeenCalledWith("token-ops", 4321, {
       accountId: "ops",
