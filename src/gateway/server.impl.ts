@@ -295,6 +295,7 @@ async function prepareGatewayStartupConfig(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
     persist: true,
+    baseHash: params.configSnapshot.hash,
   });
   const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
     auth: params.authOverride,
