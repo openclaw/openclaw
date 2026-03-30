@@ -63,6 +63,14 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (!route) {
     return false;
   }
-  await prepareRoutedCommand({ argv, commandPath: path, loadPlugins: route.loadPlugins });
-  return route.run(argv);
+  const prevForceConsoleToStderr = loggingState.forceConsoleToStderr;
+  if (hasFlag(argv, "--json")) {
+    loggingState.forceConsoleToStderr = true;
+  }
+  try {
+    await prepareRoutedCommand({ argv, commandPath: path, loadPlugins: route.loadPlugins });
+    return route.run(argv);
+  } finally {
+    loggingState.forceConsoleToStderr = prevForceConsoleToStderr;
+  }
 }

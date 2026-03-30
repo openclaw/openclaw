@@ -6,6 +6,7 @@ const loadDotEnvMock = vi.hoisted(() => vi.fn());
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
+const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
@@ -41,6 +42,10 @@ vi.mock("../infra/path-env.js", () => ({
 
 vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: assertRuntimeMock,
+}));
+
+vi.mock("../logging.js", () => ({
+  enableConsoleCapture: enableConsoleCaptureMock,
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
@@ -84,6 +89,9 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "status"]);
 
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    expect(enableConsoleCaptureMock.mock.invocationCallOrder[0]).toBeLessThan(
+      tryRouteCliMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();

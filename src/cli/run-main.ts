@@ -164,12 +164,13 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    // Routed commands can still trigger config/plugin diagnostics. Capture
+    // console output before the fast path so JSON stdout routing works there too.
+    enableConsoleCapture();
+
     if (await tryRouteCli(normalizedArgv)) {
       return;
     }
-
-    // Capture all console output into structured logs while keeping stdout/stderr behavior.
-    enableConsoleCapture();
 
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();

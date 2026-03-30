@@ -103,6 +103,32 @@ describe("tryRouteCli", () => {
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
+  it("keeps routed sessions --json diagnostics off stdout for the full command run", async () => {
+    findRoutedCommandMock.mockReturnValue({
+      loadPlugins: false,
+      run: vi.fn(async () => {
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        return true;
+      }),
+    });
+
+    await expect(tryRouteCli(["node", "openclaw", "sessions", "--json"])).resolves.toBe(true);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("leaves routed sessions diagnostics on their normal streams without --json", async () => {
+    findRoutedCommandMock.mockReturnValue({
+      loadPlugins: false,
+      run: vi.fn(async () => {
+        expect(loggingState.forceConsoleToStderr).toBe(false);
+        return true;
+      }),
+    });
+
+    await expect(tryRouteCli(["node", "openclaw", "sessions"])).resolves.toBe(true);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
   it("does not route logs to stderr during plugin loading without --json", async () => {
     findRoutedCommandMock.mockReturnValue({
       loadPlugins: true,
