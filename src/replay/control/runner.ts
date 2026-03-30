@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { isNotFoundPathError } from "../../infra/path-guards.js";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import {
   TrajectoryV1Schema,
@@ -25,8 +26,33 @@ function resolveLimits(request: ReplayRunsCreateRequest): ReplayLimits {
 }
 
 async function loadTrajectory(trajectoryPath: string): Promise<TrajectoryV1> {
-  const raw = await fs.readFile(trajectoryPath, "utf8");
-  const value = JSON.parse(raw) as unknown;
+  let raw: string;
+  try {
+    raw = await fs.readFile(trajectoryPath, "utf8");
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      throw new ReplayControlError({
+        code: "not_found",
+        status: 404,
+        message: `Trajectory file not found: ${trajectoryPath}`,
+      });
+    }
+    throw new ReplayControlError({
+      code: "invalid_request",
+      status: 400,
+      message: `Cannot read trajectory file: ${trajectoryPath}`,
+    });
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    throw new ReplayControlError({
+      code: "invalid_request",
+      status: 400,
+      message: "Trajectory file is not valid JSON",
+    });
+  }
   const validated = validateJsonSchemaValue({
     schema: TrajectoryV1Schema,
     cacheKey: "replay.control.trajectory.v1",
