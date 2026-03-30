@@ -5,7 +5,7 @@ import {
   normalizePluginDiscoveryResult,
   runProviderCatalog,
 } from "./provider-discovery.js";
-import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
   id: string;
@@ -38,11 +38,13 @@ function expectGroupedProviderIds(
   expected: Record<ProviderDiscoveryOrder | "late", readonly string[]>,
 ) {
   const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
-
-  expect(grouped.simple.map((provider) => provider.id)).toEqual(expected.simple);
-  expect(grouped.profile.map((provider) => provider.id)).toEqual(expected.profile);
-  expect(grouped.paired.map((provider) => provider.id)).toEqual(expected.paired);
-  expect(grouped.late.map((provider) => provider.id)).toEqual(expected.late);
+  const actual = {
+    simple: grouped.simple.map((provider) => provider.id),
+    profile: grouped.profile.map((provider) => provider.id),
+    paired: grouped.paired.map((provider) => provider.id),
+    late: grouped.late.map((provider) => provider.id),
+  };
+  expect(actual).toEqual(expected);
 }
 
 function createCatalogRuntimeContext() {
@@ -57,6 +59,45 @@ function createCatalogRuntimeContext() {
       source: "none" as const,
     }),
   };
+}
+
+function createCatalogProvider(params: {
+  id?: string;
+  catalogRun?: () => Promise<ProviderCatalogResult>;
+  discoveryRun?: () => Promise<ProviderCatalogResult>;
+}) {
+  return {
+    id: params.id ?? "demo",
+    label: "Demo",
+    auth: [],
+    ...(params.catalogRun ? { catalog: { run: params.catalogRun } } : {}),
+    ...(params.discoveryRun ? { discovery: { run: params.discoveryRun } } : {}),
+  };
+}
+
+function expectNormalizedDiscoveryResult(params: {
+  provider: ProviderPlugin;
+  result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
+  expected: Record<string, unknown>;
+}) {
+  expect(
+    normalizePluginDiscoveryResult({
+      provider: params.provider,
+      result: params.result,
+    }),
+  ).toEqual(params.expected);
+}
+
+async function expectProviderCatalogResult(params: {
+  provider: ProviderPlugin;
+  expected: Record<string, unknown>;
+}) {
+  await expect(
+    runProviderCatalog({
+      provider: params.provider,
+      ...createCatalogRuntimeContext(),
+    }),
+  ).resolves.toEqual(params.expected);
 }
 
 describe("groupPluginDiscoveryProvidersByOrder", () => {
@@ -130,8 +171,7 @@ describe("normalizePluginDiscoveryResult", () => {
       },
     },
   ] as const)("$name", ({ provider, result, expected }) => {
-    const normalized = normalizePluginDiscoveryResult({ provider, result });
-    expect(normalized).toEqual(expected);
+    expectNormalizedDiscoveryResult({ provider, result, expected });
   });
 });
 
@@ -144,21 +184,16 @@ describe("runProviderCatalog", () => {
       provider: makeModelProviderConfig({ baseUrl: "http://discovery.example/v1" }),
     });
 
-    const result = await runProviderCatalog({
-      provider: {
-        id: "demo",
-        label: "Demo",
-        auth: [],
-        catalog: { run: catalogRun },
-        discovery: { run: discoveryRun },
-      },
-      ...createCatalogRuntimeContext(),
-    });
-
-    expect(result).toEqual({
-      provider: {
-        baseUrl: "http://catalog.example/v1",
-        models: [],
+    await expectProviderCatalogResult({
+      provider: createCatalogProvider({
+        catalogRun,
+        discoveryRun,
+      }),
+      expected: {
+        provider: {
+          baseUrl: "http://catalog.example/v1",
+          models: [],
+        },
       },
     });
   });

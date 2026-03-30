@@ -1,9 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
-import {
-  listBundledWebSearchProviders,
-  resolveBundledWebSearchPluginIds,
-} from "./bundled-web-search.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 function resolveManifestBundledWebSearchPluginIds() {
@@ -16,7 +13,8 @@ function resolveManifestBundledWebSearchPluginIds() {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveRegistryBundledWebSearchPluginIds() {
+async function resolveRegistryBundledWebSearchPluginIds() {
+  const { listBundledWebSearchProviders } = await import("./bundled-web-search.js");
   return listBundledWebSearchProviders()
     .map(({ pluginId }) => pluginId)
     .filter((value, index, values) => values.indexOf(value) === index)
@@ -27,19 +25,85 @@ function expectBundledWebSearchIds(actual: readonly string[], expected: readonly
   expect(actual).toEqual(expected);
 }
 
+function expectBundledWebSearchAlignment(params: {
+  actual: readonly string[];
+  expected: readonly string[];
+}) {
+  expectBundledWebSearchIds(params.actual, params.expected);
+}
+
 describe("bundled web search metadata", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("keeps bundled web search compat ids aligned with bundled manifests", async () => {
+    const { resolveBundledWebSearchPluginIds } = await import("./bundled-web-search.js");
+    expectBundledWebSearchAlignment({
+      actual: resolveBundledWebSearchPluginIds({}),
+      expected: resolveManifestBundledWebSearchPluginIds(),
+    });
+  });
+
+  it("keeps bundled web search fast-path ids aligned with the registry", async () => {
+    expectBundledWebSearchAlignment({
+      actual: [...BUNDLED_WEB_SEARCH_PLUGIN_IDS],
+      expected: await resolveRegistryBundledWebSearchPluginIds(),
+    });
+  });
+});
+
+describe("hasBundledWebSearchCredential", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const baseCfg = {
+    agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+    browser: { enabled: false },
+    tools: { web: { fetch: { enabled: false } } },
+  } satisfies OpenClawConfig;
+
   it.each([
-    [
-      "keeps bundled web search compat ids aligned with bundled manifests",
-      resolveBundledWebSearchPluginIds({}),
-      resolveManifestBundledWebSearchPluginIds(),
-    ],
-    [
-      "keeps bundled web search fast-path ids aligned with the registry",
-      [...BUNDLED_WEB_SEARCH_PLUGIN_IDS],
-      resolveRegistryBundledWebSearchPluginIds(),
-    ],
-  ] as const)("%s", (_name, actual, expected) => {
-    expectBundledWebSearchIds(actual, expected);
+    {
+      name: "detects google plugin web search credentials",
+      config: {
+        ...baseCfg,
+        plugins: {
+          entries: {
+            google: { enabled: true, config: { webSearch: { apiKey: "AIza-test" } } },
+          },
+        },
+      } satisfies OpenClawConfig,
+      env: {},
+    },
+    {
+      name: "detects gemini env credentials",
+      config: baseCfg,
+      env: { GEMINI_API_KEY: "AIza-test" },
+    },
+    {
+      name: "detects xai env credentials",
+      config: baseCfg,
+      env: { XAI_API_KEY: "xai-test" },
+    },
+    {
+      name: "detects kimi env credentials",
+      config: baseCfg,
+      env: { KIMI_API_KEY: "sk-kimi-test" },
+    },
+    {
+      name: "detects moonshot env credentials",
+      config: baseCfg,
+      env: { MOONSHOT_API_KEY: "sk-moonshot-test" },
+    },
+    {
+      name: "detects openrouter env credentials through bundled web search providers",
+      config: baseCfg,
+      env: { OPENROUTER_API_KEY: "sk-or-v1-test" },
+    },
+  ] as const)("$name", async ({ config, env }) => {
+    const { hasBundledWebSearchCredential } = await import("./bundled-web-search-registry.js");
+    expect(hasBundledWebSearchCredential({ config, env })).toBe(true);
   });
 });

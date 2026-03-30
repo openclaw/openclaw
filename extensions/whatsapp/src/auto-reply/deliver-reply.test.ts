@@ -1,11 +1,11 @@
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { logVerbose } from "../../../../src/globals.js";
-import { sleep } from "../../../../src/utils.js";
 import { loadWebMedia } from "../media.js";
 import type { WebInboundMsg } from "./types.js";
 
-vi.mock("../../../../src/globals.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/globals.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
     shouldLogVerbose: vi.fn(() => true),
@@ -17,8 +17,8 @@ vi.mock("../media.js", () => ({
   loadWebMedia: vi.fn(),
 }));
 
-vi.mock("../../../../src/utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/utils.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
     sleep: vi.fn(async () => {}),

@@ -1,3 +1,4 @@
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   withBundledPluginAllowlistCompat,
@@ -27,10 +28,17 @@ export function resolvePluginProviders(params: {
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const autoEnabledConfig =
+    params.config !== undefined
+      ? applyPluginAutoEnable({
+          config: params.config,
+          env,
+        }).config
+      : undefined;
   const bundledProviderCompatPluginIds =
     params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
       ? resolveBundledProviderCompatPluginIds({
-          config: params.config,
+          config: autoEnabledConfig,
           workspaceDir: params.workspaceDir,
           env,
           onlyPluginIds: params.onlyPluginIds,
@@ -38,10 +46,10 @@ export function resolvePluginProviders(params: {
       : [];
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
     ? withBundledPluginAllowlistCompat({
-        config: params.config,
+        config: autoEnabledConfig,
         pluginIds: bundledProviderCompatPluginIds,
       })
-    : params.config;
+    : autoEnabledConfig;
   const allowlistCompatConfig = params.bundledProviderAllowlistCompat
     ? withBundledPluginEnablementCompat({
         config: maybeAllowlistCompat,
@@ -52,7 +60,7 @@ export function resolvePluginProviders(params: {
     ? withBundledProviderVitestCompat({
         config: allowlistCompatConfig,
         pluginIds: bundledProviderCompatPluginIds,
-        env: params.env,
+        env,
       })
     : allowlistCompatConfig;
   const providerPluginIds = resolveEnabledProviderPluginIds({

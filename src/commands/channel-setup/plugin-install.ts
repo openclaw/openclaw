@@ -17,7 +17,7 @@ import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plug
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
@@ -265,7 +265,7 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   pluginId?: string;
   workspaceDir?: string;
 }): void {
-  const activeRegistry = getActivePluginRegistry();
+  const activeRegistry = getActivePluginChannelRegistry();
   // On low-memory hosts, the empty-registry fallback should only recover the selected
   // plugin instead of importing every bundled extension during setup.
   const onlyPluginIds = activeRegistry?.plugins.length

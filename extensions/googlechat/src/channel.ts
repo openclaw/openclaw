@@ -46,6 +46,7 @@ import {
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
 import { googlechatMessageActions } from "./actions.js";
+import { googleChatApprovalAuth } from "./approval-auth.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
@@ -163,6 +164,7 @@ export const googlechatPlugin = createChatChannelPlugin({
           },
         }),
     },
+    auth: googleChatApprovalAuth,
     groups: {
       resolveRequireMention: resolveGoogleChatGroupRequireMention,
     },
@@ -317,8 +319,8 @@ export const googlechatPlugin = createChatChannelPlugin({
       idLabel: "googlechatUserId",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: (entry) => formatAllowFromEntry(entry),
-      notify: async ({ cfg, id, message }) => {
-        const account = resolveGoogleChatAccount({ cfg: cfg });
+      notify: async ({ cfg, id, message, accountId }) => {
+        const account = resolveGoogleChatAccount({ cfg: cfg, accountId });
         if (account.credentialSource === "none") {
           return;
         }

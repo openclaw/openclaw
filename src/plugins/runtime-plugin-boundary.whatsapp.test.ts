@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { loadPluginBoundaryModuleWithJiti } from "./runtime/runtime-plugin-boundary.js";
 
 type LightModule = {
@@ -18,15 +19,16 @@ type HeavyModule = {
 
 const tempDirs: string[] = [];
 
+function writeRuntimeFixtureText(rootDir: string, relativePath: string, value: string) {
+  fs.mkdirSync(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, relativePath), value, "utf8");
+}
+
 function createBundledWhatsAppRuntimeFixture() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-whatsapp-boundary-"));
   tempDirs.push(rootDir);
-  const distRoot = path.join(rootDir, "dist");
-  const whatsappDistDir = path.join(distRoot, "extensions", "whatsapp");
-  fs.mkdirSync(whatsappDistDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    JSON.stringify(
+  for (const [relativePath, value] of Object.entries({
+    "package.json": JSON.stringify(
       {
         name: "openclaw",
         type: "module",
@@ -42,23 +44,13 @@ function createBundledWhatsAppRuntimeFixture() {
       null,
       2,
     ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(rootDir, "openclaw.mjs"), "export {};\n", "utf8");
-  fs.writeFileSync(path.join(whatsappDistDir, "index.js"), "export default {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(whatsappDistDir, "light-runtime-api.js"),
-    'export { getActiveWebListener } from "../../active-listener.js";\n',
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(whatsappDistDir, "runtime-api.js"),
-    'export { getActiveWebListener, setActiveWebListener } from "../../active-listener.js";\n',
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(distRoot, "active-listener.js"),
-    [
+    "openclaw.mjs": "export {};\n",
+    [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
+    [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]:
+      'export { getActiveWebListener } from "../../active-listener.js";\n',
+    [bundledDistPluginFile("whatsapp", "runtime-api.js")]:
+      'export { getActiveWebListener, setActiveWebListener } from "../../active-listener.js";\n',
+    "dist/active-listener.js": [
       'const key = Symbol.for("openclaw.whatsapp.activeListenerState");',
       "const g = globalThis;",
       "if (!g[key]) {",
@@ -77,8 +69,9 @@ function createBundledWhatsAppRuntimeFixture() {
       "}",
       "",
     ].join("\n"),
-    "utf8",
-  );
+  })) {
+    writeRuntimeFixtureText(rootDir, relativePath, value);
+  }
   stageBundledPluginRuntime({ repoRoot: rootDir });
 
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");
@@ -98,6 +91,21 @@ function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
   };
 }
 
+function createListener(messageId = "msg-1") {
+  return {
+    sendMessage: async () => ({ messageId }),
+  };
+}
+
+function expectSharedWhatsAppListenerState(runtimePluginDir: string, accountId: string) {
+  const { light, heavy } = loadWhatsAppBoundaryModules(runtimePluginDir);
+  const listener = createListener();
+
+  heavy.setActiveWebListener(accountId, listener);
+  expect(light.getActiveWebListener(accountId)).toBe(listener);
+  heavy.setActiveWebListener(accountId, null);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -106,16 +114,6 @@ afterEach(() => {
 
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
-    const runtimePluginDir = createBundledWhatsAppRuntimeFixture();
-    const { light, heavy } = loadWhatsAppBoundaryModules(runtimePluginDir);
-    const listener = {
-      sendMessage: async () => ({ messageId: "msg-1" }),
-    };
-
-    heavy.setActiveWebListener("work", listener);
-
-    expect(light.getActiveWebListener("work")).toBe(listener);
-
-    heavy.setActiveWebListener("work", null);
+    expectSharedWhatsAppListenerState(createBundledWhatsAppRuntimeFixture(), "work");
   });
 });

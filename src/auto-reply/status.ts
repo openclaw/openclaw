@@ -28,14 +28,7 @@ import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  getTtsMaxLength,
-  getTtsProvider,
-  isSummarizationEnabled,
-  resolveTtsAutoMode,
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-} from "../tts/tts.js";
+import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
   formatTokenCount as formatTokenCountShared,
@@ -398,20 +391,14 @@ const formatVoiceModeLine = (
   if (!config) {
     return null;
   }
-  const ttsConfig = resolveTtsConfig(config);
-  const prefsPath = resolveTtsPrefsPath(ttsConfig);
-  const autoMode = resolveTtsAutoMode({
-    config: ttsConfig,
-    prefsPath,
+  const snapshot = resolveStatusTtsSnapshot({
+    cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
   });
-  if (autoMode === "off") {
+  if (!snapshot) {
     return null;
   }
-  const provider = getTtsProvider(ttsConfig, prefsPath);
-  const maxLength = getTtsMaxLength(prefsPath);
-  const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
-  return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
+  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -442,6 +429,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: selectionConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
@@ -550,11 +538,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: contextConfig,
     provider: selectedProvider,
     model: selectedModel,
+    allowAsyncLoad: false,
   });
   const activeContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
     model: contextLookupModel,
+    allowAsyncLoad: false,
   });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
@@ -623,6 +613,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         model: contextLookupModel,
         contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+        allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
@@ -713,6 +704,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         provider: activeProvider,
         model: activeModel,
         config: args.config,
+        allowPluginNormalization: false,
       })
     : undefined;
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
@@ -750,11 +742,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     const aliasIndex = buildModelAliasIndex({
       cfg: args.config,
       defaultProvider: DEFAULT_PROVIDER,
+      allowPluginNormalization: false,
     });
     const resolvedOverride = resolveModelRefFromString({
       raw: channelOverride.model,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
+      allowPluginNormalization: false,
     });
     if (!resolvedOverride) {
       return undefined;
@@ -848,7 +842,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
+  const optionParts = ["/think <level>", "/model <id>", "/fast status|on|off", "/verbose on|off"];
   if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }

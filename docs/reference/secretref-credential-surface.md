@@ -43,6 +43,7 @@ Scope intent:
 - `tools.web.search.grok.apiKey`
 - `tools.web.search.kimi.apiKey`
 - `tools.web.search.perplexity.apiKey`
+- `tools.web.x_search.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
 - `gateway.remote.token`
@@ -81,7 +82,9 @@ Scope intent:
 - `channels.msteams.appPassword`
 - `channels.mattermost.botToken`
 - `channels.mattermost.accounts.*.botToken`
+- `channels.matrix.accessToken`
 - `channels.matrix.password`
+- `channels.matrix.accounts.*.accessToken`
 - `channels.matrix.accounts.*.password`
 - `channels.nextcloud-talk.botSecret`
 - `channels.nextcloud-talk.apiPassword`
@@ -121,8 +124,6 @@ Out-of-scope credentials include:
 [//]: # "secretref-unsupported-list-start"
 
 - `commands.ownerDisplaySecret`
-- `channels.matrix.accessToken`
-- `channels.matrix.accounts.*.accessToken`
 - `hooks.token`
 - `hooks.gmail.pushToken`
 - `hooks.mappings[].sessionKey`

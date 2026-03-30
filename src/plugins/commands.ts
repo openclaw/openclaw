@@ -8,7 +8,6 @@
 import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
-import { parseTelegramTarget } from "../plugin-sdk/telegram-runtime.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -168,15 +167,14 @@ function resolveBindingConversationFromCommand(params: {
       return null;
     }
     const target = parseExplicitTargetForChannel("telegram", rawTarget);
-    const fallbackTarget = target ? null : parseTelegramTarget(rawTarget);
-    if (!target && !fallbackTarget) {
+    if (!target) {
       return null;
     }
     return {
       channel: "telegram",
       accountId,
-      conversationId: target?.to ?? fallbackTarget?.chatId ?? "",
-      threadId: params.messageThreadId ?? target?.threadId ?? fallbackTarget?.messageThreadId,
+      conversationId: target.to,
+      threadId: params.messageThreadId ?? target.threadId,
     };
   }
   if (params.channel === "discord") {

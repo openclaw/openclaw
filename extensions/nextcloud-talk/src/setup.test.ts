@@ -7,19 +7,24 @@ import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
   expectRuntimeCfgFallback,
-} from "../../../test/helpers/extensions/send-config.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+} from "../../../test/helpers/plugins/send-config.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
   getBundledChannelConfigSchemaMap: () => new Map(),
+}));
+
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
 }));
 
 const hoisted = vi.hoisted(() => ({
@@ -68,7 +73,7 @@ vi.mock("./signature.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const original = (await importOriginal()) as Record<string, unknown>;
   return {
     ...original,

@@ -75,9 +75,14 @@ function setSinglePluginLoadResult(
   });
 }
 
-function expectInspectReport(pluginId: string) {
+function expectInspectReport(
+  pluginId: string,
+): NonNullable<ReturnType<typeof buildPluginInspectReport>> {
   const inspect = buildPluginInspectReport({ id: pluginId });
   expect(inspect).not.toBeNull();
+  if (!inspect) {
+    throw new Error(`expected inspect report for ${pluginId}`);
+  }
   return inspect;
 }
 
@@ -95,9 +100,78 @@ function expectPluginLoaderCall(params: {
   );
 }
 
+function expectAutoEnabledStatusLoad(params: { rawConfig: unknown; autoEnabledConfig: unknown }) {
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+    config: params.rawConfig,
+    env: process.env,
+  });
+  expectPluginLoaderCall({
+    config: params.autoEnabledConfig,
+  });
+}
+
+function createCompatChainFixture() {
+  const config = { plugins: { allow: ["telegram"] } };
+  const pluginIds = ["anthropic", "openai"];
+  const compatConfig = { plugins: { allow: ["telegram", ...pluginIds] } };
+  const enabledConfig = {
+    plugins: {
+      allow: ["telegram", ...pluginIds],
+      entries: {
+        anthropic: { enabled: true },
+        openai: { enabled: true },
+      },
+    },
+  };
+  return { config, pluginIds, compatConfig, enabledConfig };
+}
+
+function expectBundledCompatChainApplied(params: {
+  config: unknown;
+  pluginIds: string[];
+  compatConfig: unknown;
+  enabledConfig: unknown;
+}) {
+  expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
+    config: params.config,
+    pluginIds: params.pluginIds,
+  });
+  expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
+    config: params.compatConfig,
+    pluginIds: params.pluginIds,
+  });
+  expectPluginLoaderCall({ config: params.enabledConfig });
+}
+
+function createAutoEnabledStatusConfig(
+  entries: Record<string, unknown>,
+  rawConfigOverrides?: Record<string, unknown>,
+) {
+  const rawConfig = {
+    plugins: {},
+    ...rawConfigOverrides,
+  };
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries,
+    },
+  };
+  return { rawConfig, autoEnabledConfig };
+}
+
 function expectNoCompatibilityWarnings() {
   expect(buildPluginCompatibilityNotices()).toEqual([]);
   expect(buildPluginCompatibilityWarnings()).toEqual([]);
+}
+
+function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
+  if (params.notices) {
+    expect(buildPluginCompatibilityNotices()).toEqual(params.notices);
+  }
+  if (params.warnings) {
+    expect(buildPluginCompatibilityWarnings()).toEqual(params.warnings);
+  }
 }
 
 function expectCapabilityKinds(
@@ -105,6 +179,38 @@ function expectCapabilityKinds(
   kinds: readonly string[],
 ) {
   expect(inspect.capabilities.map((entry) => entry.kind)).toEqual(kinds);
+}
+
+function expectInspectShape(
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
+  params: {
+    shape: string;
+    capabilityMode: string;
+    capabilityKinds: readonly string[];
+  },
+) {
+  expect(inspect.shape).toBe(params.shape);
+  expect(inspect.capabilityMode).toBe(params.capabilityMode);
+  expectCapabilityKinds(inspect, params.capabilityKinds);
+}
+
+function expectInspectPolicy(
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
+  expected: Record<string, unknown>,
+) {
+  expect(inspect.policy).toEqual(expected);
+}
+
+function expectBundleInspectState(
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
+  params: {
+    bundleCapabilities: readonly string[];
+    shape: string;
+  },
+) {
+  expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
+  expect(inspect.mcpServers).toEqual([]);
+  expect(inspect.shape).toBe(params.shape);
 }
 
 describe("buildPluginStatusReport", () => {
@@ -157,51 +263,36 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("loads plugin status from the auto-enabled config snapshot", () => {
-    const rawConfig = {
-      plugins: {},
-      channels: { demo: { enabled: true } },
-    };
-    const autoEnabledConfig = {
-      ...rawConfig,
-      plugins: {
-        entries: {
-          demo: { enabled: true },
-        },
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+      {
+        demo: { enabled: true },
       },
-    };
+      { channels: { demo: { enabled: true } } },
+    );
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
 
     buildPluginStatusReport({ config: rawConfig });
 
-    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-      config: rawConfig,
-      env: process.env,
+    expectAutoEnabledStatusLoad({
+      rawConfig,
+      autoEnabledConfig,
     });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ config: autoEnabledConfig }),
-    );
   });
 
   it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
-    const rawConfig = {
-      plugins: {},
-      channels: { demo: { enabled: true } },
-    };
-    const autoEnabledConfig = {
-      ...rawConfig,
-      plugins: {
-        entries: {
-          demo: {
-            enabled: true,
-            subagent: {
-              allowModelOverride: true,
-              allowedModels: ["openai/gpt-5.4"],
-              hasAllowedModelsConfig: true,
-            },
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+      {
+        demo: {
+          enabled: true,
+          subagent: {
+            allowModelOverride: true,
+            allowedModels: ["openai/gpt-5.4"],
+            hasAllowedModelsConfig: true,
           },
         },
       },
-    };
+      { channels: { demo: { enabled: true } } },
+    );
     applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     setSinglePluginLoadResult(
       createPluginRecord({
@@ -216,7 +307,7 @@ describe("buildPluginStatusReport", () => {
     const inspect = buildPluginInspectReport({ id: "demo", config: rawConfig });
 
     expect(inspect).not.toBeNull();
-    expect(inspect?.policy).toEqual({
+    expectInspectPolicy(inspect!, {
       allowPromptInjection: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.4"],
@@ -225,35 +316,20 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
-    const config = { plugins: { allow: ["telegram"] } };
+    const { config, pluginIds, compatConfig, enabledConfig } = createCompatChainFixture();
     loadConfigMock.mockReturnValue(config);
-    resolveBundledProviderCompatPluginIdsMock.mockReturnValue(["anthropic", "openai"]);
-    const compatConfig = { plugins: { allow: ["telegram", "anthropic", "openai"] } };
-    const enabledConfig = {
-      plugins: {
-        allow: ["telegram", "anthropic", "openai"],
-        entries: {
-          anthropic: { enabled: true },
-          openai: { enabled: true },
-        },
-      },
-    };
+    resolveBundledProviderCompatPluginIdsMock.mockReturnValue(pluginIds);
     withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
     withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
 
     buildPluginStatusReport({ config });
 
-    expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
+    expectBundledCompatChainApplied({
       config,
-      pluginIds: ["anthropic", "openai"],
+      pluginIds,
+      compatConfig,
+      enabledConfig,
     });
-    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
-      config: compatConfig,
-      pluginIds: ["anthropic", "openai"],
-    });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ config: enabledConfig }),
-    );
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {
@@ -313,20 +389,22 @@ describe("buildPluginStatusReport", () => {
     const inspect = buildPluginInspectReport({ id: "google" });
 
     expect(inspect).not.toBeNull();
-    expect(inspect?.shape).toBe("hybrid-capability");
-    expect(inspect?.capabilityMode).toBe("hybrid");
-    expectCapabilityKinds(inspect!, [
-      "cli-backend",
-      "text-inference",
-      "media-understanding",
-      "image-generation",
-      "web-search",
-    ]);
+    expectInspectShape(inspect!, {
+      shape: "hybrid-capability",
+      capabilityMode: "hybrid",
+      capabilityKinds: [
+        "cli-backend",
+        "text-inference",
+        "media-understanding",
+        "image-generation",
+        "web-search",
+      ],
+    });
     expect(inspect?.usesLegacyBeforeAgentStart).toBe(true);
     expect(inspect?.compatibility).toEqual([
       createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
     ]);
-    expect(inspect?.policy).toEqual({
+    expectInspectPolicy(inspect!, {
       allowPromptInjection: false,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.4"],
@@ -378,10 +456,12 @@ describe("buildPluginStatusReport", () => {
 
     const inspect = expectInspectReport("anthropic");
 
-    expect(inspect?.shape).toBe("plain-capability");
-    expect(inspect?.capabilityMode).toBe("plain");
-    expectCapabilityKinds(inspect!, ["cli-backend"]);
-    expect(inspect?.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["cli-backend"],
+    });
+    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
 
   it("builds compatibility warnings for legacy compatibility paths", () => {
@@ -397,10 +477,9 @@ describe("buildPluginStatusReport", () => {
       typedHooks: [createTypedHook({ pluginId: "lca", hookName: "before_agent_start" })],
     });
 
-    expect(buildPluginCompatibilityWarnings()).toEqual([
-      `lca ${LEGACY_BEFORE_AGENT_START_MESSAGE}`,
-      `lca ${HOOK_ONLY_MESSAGE}`,
-    ]);
+    expectCompatibilityOutput({
+      warnings: [`lca ${LEGACY_BEFORE_AGENT_START_MESSAGE}`, `lca ${HOOK_ONLY_MESSAGE}`],
+    });
   });
 
   it("builds structured compatibility notices with deterministic ordering", () => {
@@ -422,10 +501,12 @@ describe("buildPluginStatusReport", () => {
       typedHooks: [createTypedHook({ pluginId: "legacy-only", hookName: "before_agent_start" })],
     });
 
-    expect(buildPluginCompatibilityNotices()).toEqual([
-      createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" }),
-      createCompatibilityNotice({ pluginId: "legacy-only", code: "legacy-before-agent-start" }),
-    ]);
+    expectCompatibilityOutput({
+      notices: [
+        createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" }),
+        createCompatibilityNotice({ pluginId: "legacy-only", code: "legacy-before-agent-start" }),
+      ],
+    });
   });
 
   it("returns no compatibility warnings for modern capability plugins", () => {
@@ -474,9 +555,10 @@ describe("buildPluginStatusReport", () => {
 
     const inspect = expectInspectReport(expectedId);
 
-    expect(inspect?.bundleCapabilities).toEqual(expectedBundleCapabilities);
-    expect(inspect?.mcpServers).toEqual([]);
-    expect(inspect?.shape).toBe(expectedShape);
+    expectBundleInspectState(inspect, {
+      bundleCapabilities: expectedBundleCapabilities,
+      shape: expectedShape,
+    });
   });
 
   it("formats and summarizes compatibility notices", () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.ts";
+} from "../../../test/helpers/plugins/directory.ts";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
@@ -290,6 +290,51 @@ describe("googlechatPlugin outbound resolveTarget", () => {
 });
 
 describe("googlechatPlugin outbound cfg threading", () => {
+  it("preserves accountId when sending pairing approvals", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          enabled: true,
+          accounts: {
+            work: {
+              serviceAccount: {
+                type: "service_account",
+              },
+            },
+          },
+        },
+      },
+    };
+    const account = {
+      accountId: "work",
+      config: {},
+      credentialSource: "inline",
+    };
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/WORK");
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/WORK/messages/msg-1",
+    });
+
+    await googlechatPlugin.pairing?.notifyApproval?.({
+      cfg: cfg as never,
+      id: "user@example.com",
+      accountId: "work",
+    });
+
+    expect(resolveGoogleChatAccountMock).toHaveBeenCalledWith({
+      cfg,
+      accountId: "work",
+    });
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account,
+        space: "spaces/WORK",
+        text: expect.any(String),
+      }),
+    );
+  });
+
   it("threads resolved cfg into sendText account resolution", async () => {
     const cfg = {
       channels: {

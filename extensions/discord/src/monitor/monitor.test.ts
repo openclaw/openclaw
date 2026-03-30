@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import {
   buildPluginBindingResolvedTextMock,
   readAllowFromStoreMock,
@@ -18,8 +19,7 @@ import {
   resetDiscordComponentRuntimeMocks,
   resolvePluginConversationBindingApprovalMock,
   upsertPairingRequestMock,
-} from "../../../../test/helpers/extensions/discord-component-runtime.js";
-import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
+} from "../test-support/component-runtime.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
@@ -64,19 +64,6 @@ const resolveStorePathMock = vi.hoisted(() => vi.fn());
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
-async function createInfraRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/infra-runtime")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-  };
-}
-
-vi.mock("openclaw/plugin-sdk/infra-runtime", createInfraRuntimeMock);
-vi.mock("openclaw/plugin-sdk/infra-runtime.js", createInfraRuntimeMock);
-
 async function createChannelRuntimeMock(
   importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
 ) {
@@ -100,11 +87,8 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
 
 // agent-components.ts can bind the core dispatcher via reply-runtime re-exports,
 // so keep this direct mock to avoid hitting real embedded-agent dispatch in tests.
-vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../../../src/auto-reply/reply/provider-dispatcher.js")
-    >();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),

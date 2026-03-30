@@ -28,6 +28,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
@@ -356,6 +357,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         threads: true,
         media: true,
       },
+      streaming: {
+        blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+      },
       agentPrompt: {
         messageToolHints: () => [
           "- Adaptive Cards supported. Use `action=send` with `card={type,version,body}` to send rich cards.",
@@ -376,6 +380,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             configured: account.configured,
           }),
       },
+      auth: msTeamsApprovalAuth,
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,

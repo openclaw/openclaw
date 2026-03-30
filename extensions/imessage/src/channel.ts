@@ -134,6 +134,14 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
       },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+        createManager: ({ cfg, accountId }) =>
+          createIMessageConversationBindingManager({
+            cfg,
+            accountId: accountId ?? undefined,
+          }),
+      },
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
           normalizeIMessageAcpConversationId(conversationId),

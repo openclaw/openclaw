@@ -3,11 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import {
+  __testing as sessionMcpTesting,
+  getOrCreateSessionMcpRuntime,
+} from "../../agents/pi-bundle-mcp-tools.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,
+  getSessionBindingService,
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -61,6 +67,12 @@ async function writeSessionStoreFast(
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
 
+beforeEach(() => {
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+});
+afterEach(async () => {
+  await sessionMcpTesting.resetSessionMcpRuntimeManager();
+});
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -515,7 +527,7 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(false);
   });
 
-  it("does not rotate local session state for ACP /new when conversation IDs are unavailable", async () => {
+  it("rotates local session state for ACP /new when no matching conversation binding exists", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-no-conversation-");
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
@@ -555,9 +567,9 @@ describe("initSessionState RawBody", () => {
       commandAuthorized: true,
     });
 
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(result.isNewSession).toBe(false);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(true);
   });
 
   it("keeps custom reset triggers working on bound ACP sessions", async () => {
@@ -845,6 +857,84 @@ describe("initSessionState RawBody", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it.each([
+    {
+      name: "Slack DM",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        From: "slack:user:U123",
+        To: "user:U123",
+        OriginatingTo: "user:U123",
+        SenderId: "U123",
+        ChatType: "direct",
+      },
+    },
+    {
+      name: "Signal DM",
+      conversation: {
+        channel: "signal",
+        accountId: "default",
+        conversationId: "+15550001111",
+      },
+      ctx: {
+        Provider: "signal",
+        Surface: "signal",
+        From: "signal:+15550001111",
+        To: "+15550001111",
+        OriginatingTo: "signal:+15550001111",
+        SenderId: "+15550001111",
+        ChatType: "direct",
+      },
+    },
+    {
+      name: "Google Chat room",
+      conversation: {
+        channel: "googlechat",
+        accountId: "default",
+        conversationId: "spaces/AAAAAAA",
+      },
+      ctx: {
+        Provider: "googlechat",
+        Surface: "googlechat",
+        From: "googlechat:users/123",
+        To: "spaces/AAAAAAA",
+        OriginatingTo: "googlechat:spaces/AAAAAAA",
+        SenderId: "users/123",
+        ChatType: "group",
+      },
+    },
+  ])("routes generic current-conversation bindings for $name", async ({ conversation, ctx }) => {
+    setDefaultChannelPluginRegistryForTests();
+    const storePath = await createStorePath("openclaw-generic-current-binding-");
+    const boundSessionKey = `agent:codex:acp:binding:${conversation.channel}:default:test`;
+
+    await getSessionBindingService().bind({
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation,
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello",
+        SessionKey: `agent:main:${conversation.channel}:seed`,
+        ...ctx,
+      },
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe(boundSessionKey);
   });
 });
 
@@ -1160,7 +1250,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
         senderName: "Other",
         senderE164: "+1555123456",
         senderId: "123@lid",
-        expectedIsNewSession: false,
+        expectedIsNewSession: true,
       },
     ] as const;
 
@@ -1587,6 +1677,52 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("disposes the previous bundle MCP runtime on session rollover", async () => {
+    const storePath = await createStorePath("openclaw-stale-runtime-dispose-");
+    const sessionKey = "agent:main:telegram:dm:runtime-stale-user";
+    const existingSessionId = "stale-runtime-session";
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 1 },
+      },
+    } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now() - 5 * 60_000,
+      },
+    });
+
+    await getOrCreateSessionMcpRuntime({
+      sessionId: existingSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(existingSessionId);
+
+    await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "user-stale-runtime",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(existingSessionId);
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {

@@ -3,6 +3,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import {
   collectTypeScriptInventory,
   normalizeRepoPath,
@@ -52,7 +53,7 @@ function scanPluginSdkExtensionFacadeSmells(sourceFile, filePath) {
       return;
     }
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
-    if (!resolvedPath?.startsWith("extensions/")) {
+    if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       return;
     }
     pushEntry(entries, {

@@ -3,11 +3,12 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
-  "extensions/discord/runtime-api.ts": [
+  [bundledPluginFile("discord", "runtime-api.ts")]: [
     'export * from "./src/audit.js";',
     'export * from "./src/actions/runtime.js";',
     'export * from "./src/actions/runtime.moderation-shared.js";',
@@ -27,17 +28,27 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/outbound-session-route.js";',
     'export * from "./src/send.js";',
   ],
-  "extensions/imessage/runtime-api.ts": [
-    'export { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE, buildComputedAccountStatusSnapshot, buildChannelConfigSchema, chunkTextForOutbound, collectStatusIssuesFromLastError, formatTrimmedAllowFromEntries, getChatChannelMeta, looksLikeIMessageTargetId, normalizeIMessageMessagingTarget, resolveChannelMediaMaxBytes, resolveIMessageConfigAllowFrom, resolveIMessageConfigDefaultTo, IMessageConfigSchema, type ChannelPlugin, type IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";',
+  [bundledPluginFile("imessage", "runtime-api.ts")]: [
+    'export { DEFAULT_ACCOUNT_ID, buildChannelConfigSchema, getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "openclaw/plugin-sdk/core";',
+    'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
+    'export { buildComputedAccountStatusSnapshot, collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";',
+    'export { formatTrimmedAllowFromEntries, resolveIMessageConfigAllowFrom, resolveIMessageConfigDefaultTo } from "openclaw/plugin-sdk/channel-config-helpers";',
+    'export { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./src/normalize.js";',
+    'export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";',
+    'export { IMessageConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";',
     'export { resolveIMessageGroupRequireMention, resolveIMessageGroupToolPolicy } from "./src/group-policy.js";',
     'export { monitorIMessageProvider } from "./src/monitor.js";',
     'export type { MonitorIMessageOpts } from "./src/monitor.js";',
     'export { probeIMessage } from "./src/probe.js";',
     'export type { IMessageProbe } from "./src/probe.js";',
     'export { sendMessageIMessage } from "./src/send.js";',
+    'export type IMessageAccountConfig = Omit< NonNullable<NonNullable<RuntimeApiOpenClawConfig["channels"]>["imessage"]>, "accounts" | "defaultAccount" >;',
+    'export function chunkTextForOutbound(text: string, limit: number): string[] { const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0 || text.length === 0) { chunks.push(remaining); } return chunks; }',
   ],
-  "extensions/googlechat/runtime-api.ts": ['export * from "openclaw/plugin-sdk/googlechat";'],
-  "extensions/matrix/runtime-api.ts": [
+  [bundledPluginFile("googlechat", "runtime-api.ts")]: [
+    'export * from "openclaw/plugin-sdk/googlechat";',
+  ],
+  [bundledPluginFile("matrix", "runtime-api.ts")]: [
     'export * from "./src/auth-precedence.js";',
     'export { requiresExplicitMatrixDefaultAccount, resolveMatrixDefaultOrOnlyAccountId } from "./src/account-selection.js";',
     'export * from "./src/account-selection.js";',
@@ -47,22 +58,22 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./src/matrix/thread-bindings-shared.js";',
     'export { setMatrixRuntime } from "./src/runtime.js";',
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
-    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";',
-    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";',
-    'export { chunkTextForOutbound } from "openclaw/plugin-sdk/matrix";',
+    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";',
+    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";',
+    'export function chunkTextForOutbound(text: string, limit: number): string[] { const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0 || text.length === 0) { chunks.push(remaining); } return chunks; }',
   ],
-  "extensions/nextcloud-talk/runtime-api.ts": [
+  [bundledPluginFile("nextcloud-talk", "runtime-api.ts")]: [
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',
   ],
-  "extensions/signal/runtime-api.ts": ['export * from "./src/runtime-api.js";'],
-  "extensions/slack/runtime-api.ts": [
+  [bundledPluginFile("signal", "runtime-api.ts")]: ['export * from "./src/runtime-api.js";'],
+  [bundledPluginFile("slack", "runtime-api.ts")]: [
     'export * from "./src/action-runtime.js";',
     'export * from "./src/directory-live.js";',
     'export * from "./src/index.js";',
     'export * from "./src/resolve-channels.js";',
     'export * from "./src/resolve-users.js";',
   ],
-  "extensions/telegram/runtime-api.ts": [
+  [bundledPluginFile("telegram", "runtime-api.ts")]: [
     'export type { ChannelMessageActionAdapter, ChannelPlugin, OpenClawConfig, OpenClawPluginApi, PluginRuntime, TelegramAccountConfig, TelegramActionConfig, TelegramNetworkConfig } from "openclaw/plugin-sdk/telegram-core";',
     'export type { TelegramApiOverride } from "./src/send.js";',
     'export type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from "openclaw/plugin-sdk/core";',
@@ -83,7 +94,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { createTelegramThreadBindingManager, getTelegramThreadBindingManager, resetTelegramThreadBindingsForTests, setTelegramThreadBindingIdleTimeoutBySessionKey, setTelegramThreadBindingMaxAgeBySessionKey } from "./src/thread-bindings.js";',
     'export { resolveTelegramToken } from "./src/token.js";',
   ],
-  "extensions/whatsapp/runtime-api.ts": [
+  [bundledPluginFile("whatsapp", "runtime-api.ts")]: [
     'export * from "./src/active-listener.js";',
     'export * from "./src/action-runtime.js";',
     'export * from "./src/agent-tools-login.js";',

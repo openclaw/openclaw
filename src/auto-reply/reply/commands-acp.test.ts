@@ -373,6 +373,21 @@ async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig 
   );
 }
 
+async function runSlackDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "slack",
+        originatingTo: "user:U123",
+        senderId: "U123",
+      },
+      cfg,
+    ),
+    true,
+  );
+}
+
 function createMatrixThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   const params = createConversationParams(
     commandBody,
@@ -412,6 +427,21 @@ async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = 
         channel: "feishu",
         originatingTo: "user:ou_sender_1",
         senderId: "ou_sender_1",
+      },
+      cfg,
+    ),
+    true,
+  );
+}
+
+async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "line",
+        originatingTo: "U1234567890abcdef1234567890abcdef",
+        senderId: "U1234567890abcdef1234567890abcdef",
       },
       cfg,
     ),
@@ -732,7 +762,7 @@ describe("/acp command", () => {
       }),
     );
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
-    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.patch",
       }),
@@ -754,6 +784,19 @@ describe("/acp command", () => {
     const seededWithoutEntry = upsertArgs?.mutate(undefined, undefined);
     expect(seededWithoutEntry?.backend).toBe("acpx");
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
+  });
+
+  it("persists ACP spawn labels without a nested gateway self-call", async () => {
+    const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.patch",
+      }),
+    );
   });
 
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {
@@ -802,7 +845,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "discord",
           accountId: "default",
-          conversationId: "parent-1",
+          conversationId: "channel:parent-1",
         }),
       }),
     );
@@ -819,6 +862,22 @@ describe("/acp command", () => {
           channel: "bluebubbles",
           accountId: "default",
           conversationId: "+15555550123",
+        }),
+      }),
+    );
+  });
+
+  it("binds Slack DMs with --bind here through the generic conversation path", async () => {
+    const result = await runSlackDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "slack",
+          accountId: "default",
+          conversationId: "user:U123",
         }),
       }),
     );
@@ -871,6 +930,34 @@ describe("/acp command", () => {
           channel: "telegram",
           accountId: "default",
           conversationId: "123456789",
+        }),
+      }),
+    );
+  });
+
+  it("binds Matrix rooms with --bind here without requiring thread spawn", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: false,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runMatrixAcpCommand("/acp spawn codex --bind here", cfg);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -945,6 +1032,23 @@ describe("/acp command", () => {
           channel: "feishu",
           accountId: "default",
           conversationId: "ou_sender_1",
+        }),
+      }),
+    );
+  });
+
+  it("binds LINE DM ACP spawns to the current conversation", async () => {
+    const result = await runLineDmAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "line",
+          accountId: "default",
+          conversationId: "U1234567890abcdef1234567890abcdef",
         }),
       }),
     );

@@ -416,6 +416,7 @@ export async function handleOpenAiHttpRequest(
   const limits = resolveOpenAiChatCompletionsLimits(opts.config);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/chat/completions",
+    requiredOperatorMethod: "chat.send",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,

@@ -42,6 +42,7 @@ import {
   listEnabledFeishuAccounts,
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
+import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuConfigSchema } from "./config-schema.js";
@@ -612,6 +613,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             },
           }),
       },
+      auth: feishuApprovalAuth,
       actions: {
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
@@ -1161,12 +1163,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         idLabel: "feishuUserId",
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: createPairingPrefixStripper(/^(feishu|user|open_id):/i),
-        notify: async ({ cfg, id, message }) => {
+        notify: async ({ cfg, id, message, accountId }) => {
           const { sendMessageFeishu } = await loadFeishuChannelRuntime();
           await sendMessageFeishu({
             cfg,
             to: id,
             text: message,
+            accountId,
           });
         },
       },

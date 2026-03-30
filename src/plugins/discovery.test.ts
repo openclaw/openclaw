@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 import {
   cleanupTrackedTempDirs,
@@ -172,6 +173,90 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
   );
 }
 
+function expectCandidatePresence(
+  result: Awaited<ReturnType<typeof discoverOpenClawPlugins>>,
+  params: { present?: readonly string[]; absent?: readonly string[] },
+) {
+  const ids = result.candidates.map((candidate) => candidate.idHint);
+  params.present?.forEach((pluginId) => {
+    expect(ids).toContain(pluginId);
+  });
+  params.absent?.forEach((pluginId) => {
+    expect(ids).not.toContain(pluginId);
+  });
+}
+
+function expectCandidateOrder(
+  candidates: Array<{ idHint: string }>,
+  expectedIds: readonly string[],
+) {
+  expect(candidates.map((candidate) => candidate.idHint)).toEqual(expectedIds);
+}
+
+function expectBundleCandidateMatch(params: {
+  candidates: Array<{
+    idHint?: string;
+    format?: string;
+    bundleFormat?: string;
+    source?: string;
+    rootDir?: string;
+  }>;
+  idHint: string;
+  bundleFormat: string;
+  source: string;
+  expectRootDir?: boolean;
+}) {
+  const bundle = findCandidateById(params.candidates, params.idHint);
+  expect(bundle).toBeDefined();
+  expect(bundle).toEqual(
+    expect.objectContaining({
+      idHint: params.idHint,
+      format: "bundle",
+      bundleFormat: params.bundleFormat,
+      source: params.source,
+    }),
+  );
+  if (params.expectRootDir) {
+    expect(normalizePathForAssertion(bundle?.rootDir)).toBe(
+      normalizePathForAssertion(fs.realpathSync(params.source)),
+    );
+  }
+}
+
+function expectCachedDiscoveryPair(params: {
+  first: ReturnType<typeof discoverWithCachedEnv>;
+  second: ReturnType<typeof discoverWithCachedEnv>;
+  assert: (
+    first: ReturnType<typeof discoverWithCachedEnv>,
+    second: ReturnType<typeof discoverWithCachedEnv>,
+  ) => void;
+}) {
+  params.assert(params.first, params.second);
+}
+
+async function expectRejectedPackageExtensionEntry(params: {
+  stateDir: string;
+  setup: (stateDir: string) => boolean | void;
+  expectedDiagnostic?: "escapes" | "none";
+  expectedId?: string;
+}) {
+  if (params.setup(params.stateDir) === false) {
+    return;
+  }
+  const result = await discoverWithStateDir(params.stateDir, {});
+
+  if (params.expectedId) {
+    expectCandidatePresence(result, { absent: [params.expectedId] });
+  } else {
+    expect(result.candidates).toHaveLength(0);
+  }
+  if (params.expectedDiagnostic === "escapes") {
+    expectEscapesPackageDiagnostic(result.diagnostics);
+    return;
+  }
+  expect(result.diagnostics).toEqual([]);
+}
+
 afterEach(() => {
   clearPluginDiscoveryCache();
   cleanupTrackedTempDirs(tempDirs);
@@ -191,10 +276,7 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
-
-    const ids = candidates.map((c) => c.idHint);
-    expect(ids).toContain("alpha");
-    expect(ids).toContain("beta");
+    expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
   });
 
   it("resolves tilde workspace dirs against the provided env", () => {
@@ -213,9 +295,7 @@ describe("discoverOpenClawPlugins", () => {
       },
     });
 
-    expect(result.candidates.some((candidate) => candidate.idHint === "tilde-workspace")).toBe(
-      true,
-    );
+    expectCandidatePresence(result, { present: ["tilde-workspace"] });
   });
 
   it("ignores backup and disabled plugin directories in scanned roots", async () => {
@@ -240,12 +320,10 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
-
-    const ids = candidates.map((candidate) => candidate.idHint);
-    expect(ids).toContain("live");
-    expect(ids).not.toContain("feishu.backup-20260222");
-    expect(ids).not.toContain("telegram.disabled.20260222");
-    expect(ids).not.toContain("discord.bak");
+    expectCandidateIds(candidates, {
+      includes: ["live"],
+      excludes: ["feishu.backup-20260222", "telegram.disabled.20260222", "discord.bak"],
+    });
   });
 
   it("loads package extension packs", async () => {
@@ -294,7 +372,7 @@ describe("discoverOpenClawPlugins", () => {
     writePluginPackageManifest({
       packageDir: path.join(pluginDir, "node_modules", "openclaw"),
       packageName: "openclaw",
-      extensions: ["./dist/extensions/diffs/index.js"],
+      extensions: [`./${bundledDistPluginFile("diffs", "index.js")}`],
     });
     writePluginManifest({ pluginDir: nestedDiffsDir, id: "diffs" });
     fs.writeFileSync(
@@ -304,8 +382,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
-
-    expect(candidates.map((candidate) => candidate.idHint)).toEqual(["opik-openclaw"]);
+    expectCandidateOrder(candidates, ["opik-openclaw"]);
   });
 
   it.each([
@@ -425,22 +502,14 @@ describe("discoverOpenClawPlugins", () => {
     const stateDir = makeTempDir();
     const bundleDir = setup(stateDir);
     const { candidates } = await discoverWithStateDir(stateDir, {});
-    const bundle = findCandidateById(candidates, idHint);
 
-    expect(bundle).toBeDefined();
-    expect(bundle).toEqual(
-      expect.objectContaining({
-        idHint,
-        format: "bundle",
-        bundleFormat,
-        source: bundleDir,
-      }),
-    );
-    if (expectRootDir) {
-      expect(normalizePathForAssertion(bundle?.rootDir)).toBe(
-        normalizePathForAssertion(fs.realpathSync(bundleDir)),
-      );
-    }
+    expectBundleCandidateMatch({
+      candidates,
+      idHint,
+      bundleFormat,
+      source: bundleDir,
+      expectRootDir,
+    });
   });
 
   it.each([
@@ -475,99 +544,96 @@ describe("discoverOpenClawPlugins", () => {
     expect(hasDiagnosticSourceSuffix(result.diagnostics, bundleMarker)).toBe(true);
   });
 
-  it("blocks extension entries that escape package directory", async () => {
+  it.each([
+    {
+      name: "blocks extension entries that escape package directory",
+      expectedDiagnostic: "escapes" as const,
+      setup: (stateDir: string) => {
+        const globalExt = path.join(stateDir, "extensions", "escape-pack");
+        const outside = path.join(stateDir, "outside.js");
+        mkdirSafe(globalExt);
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/escape-pack",
+          extensions: ["../../outside.js"],
+        });
+        fs.writeFileSync(outside, "export default function () {}", "utf-8");
+      },
+    },
+    {
+      name: "skips missing package extension entries without escape diagnostics",
+      expectedDiagnostic: "none" as const,
+      setup: (stateDir: string) => {
+        const globalExt = path.join(stateDir, "extensions", "missing-entry-pack");
+        mkdirSafe(globalExt);
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/missing-entry-pack",
+          extensions: ["./missing.ts"],
+        });
+      },
+    },
+    {
+      name: "rejects package extension entries that escape via symlink",
+      expectedDiagnostic: "escapes" as const,
+      expectedId: "pack",
+      setup: (stateDir: string) => {
+        const globalExt = path.join(stateDir, "extensions", "pack");
+        const outsideDir = path.join(stateDir, "outside");
+        const linkedDir = path.join(globalExt, "linked");
+        mkdirSafe(globalExt);
+        mkdirSafe(outsideDir);
+        fs.writeFileSync(path.join(outsideDir, "escape.ts"), "export default {}", "utf-8");
+        try {
+          fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+        } catch {
+          return false;
+        }
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/pack",
+          extensions: ["./linked/escape.ts"],
+        });
+      },
+    },
+    {
+      name: "rejects package extension entries that are hardlinked aliases",
+      expectedDiagnostic: "escapes" as const,
+      expectedId: "pack",
+      setup: (stateDir: string) => {
+        if (process.platform === "win32") {
+          return false;
+        }
+        const globalExt = path.join(stateDir, "extensions", "pack");
+        const outsideDir = path.join(stateDir, "outside");
+        const outsideFile = path.join(outsideDir, "escape.ts");
+        const linkedFile = path.join(globalExt, "escape.ts");
+        mkdirSafe(globalExt);
+        mkdirSafe(outsideDir);
+        fs.writeFileSync(outsideFile, "export default {}", "utf-8");
+        try {
+          fs.linkSync(outsideFile, linkedFile);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return false;
+          }
+          throw err;
+        }
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/pack",
+          extensions: ["./escape.ts"],
+        });
+      },
+    },
+  ] as const)("$name", async ({ setup, expectedDiagnostic, expectedId }) => {
     const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions", "escape-pack");
-    const outside = path.join(stateDir, "outside.js");
-    mkdirSafe(globalExt);
-
-    writePluginPackageManifest({
-      packageDir: globalExt,
-      packageName: "@openclaw/escape-pack",
-      extensions: ["../../outside.js"],
+    await expectRejectedPackageExtensionEntry({
+      stateDir,
+      setup,
+      expectedDiagnostic,
+      ...(expectedId ? { expectedId } : {}),
     });
-    fs.writeFileSync(outside, "export default function () {}", "utf-8");
-
-    const result = await discoverWithStateDir(stateDir, {});
-
-    expect(result.candidates).toHaveLength(0);
-    expectEscapesPackageDiagnostic(result.diagnostics);
-  });
-
-  it("skips missing package extension entries without escape diagnostics", async () => {
-    const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions", "missing-entry-pack");
-    mkdirSafe(globalExt);
-
-    writePluginPackageManifest({
-      packageDir: globalExt,
-      packageName: "@openclaw/missing-entry-pack",
-      extensions: ["./missing.ts"],
-    });
-
-    const result = await discoverWithStateDir(stateDir, {});
-
-    expect(result.candidates).toHaveLength(0);
-    expect(result.diagnostics).toEqual([]);
-  });
-
-  it("rejects package extension entries that escape via symlink", async () => {
-    const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions", "pack");
-    const outsideDir = path.join(stateDir, "outside");
-    const linkedDir = path.join(globalExt, "linked");
-    mkdirSafe(globalExt);
-    mkdirSafe(outsideDir);
-    fs.writeFileSync(path.join(outsideDir, "escape.ts"), "export default {}", "utf-8");
-    try {
-      fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
-    } catch {
-      return;
-    }
-
-    writePluginPackageManifest({
-      packageDir: globalExt,
-      packageName: "@openclaw/pack",
-      extensions: ["./linked/escape.ts"],
-    });
-
-    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
-
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
-    expectEscapesPackageDiagnostic(diagnostics);
-  });
-
-  it("rejects package extension entries that are hardlinked aliases", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions", "pack");
-    const outsideDir = path.join(stateDir, "outside");
-    const outsideFile = path.join(outsideDir, "escape.ts");
-    const linkedFile = path.join(globalExt, "escape.ts");
-    mkdirSafe(globalExt);
-    mkdirSafe(outsideDir);
-    fs.writeFileSync(outsideFile, "export default {}", "utf-8");
-    try {
-      fs.linkSync(outsideFile, linkedFile);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
-    }
-
-    writePluginPackageManifest({
-      packageDir: globalExt,
-      packageName: "@openclaw/pack",
-      extensions: ["./escape.ts"],
-    });
-
-    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
-
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
-    expectEscapesPackageDiagnostic(diagnostics);
   });
 
   it("ignores package manifests that are hardlinked aliases", async () => {
@@ -692,41 +758,59 @@ describe("discoverOpenClawPlugins", () => {
     expect(third.candidates.some((candidate) => candidate.idHint === "cached")).toBe(false);
   });
 
-  it("does not reuse discovery results across env root changes", () => {
-    const stateDirA = makeTempDir();
-    const stateDirB = makeTempDir();
-    writeStandalonePlugin(path.join(stateDirA, "extensions", "alpha.ts"));
-    writeStandalonePlugin(path.join(stateDirB, "extensions", "beta.ts"));
-
-    const first = discoverWithCachedEnv({ env: buildCachedDiscoveryEnv(stateDirA) });
-    const second = discoverWithCachedEnv({ env: buildCachedDiscoveryEnv(stateDirB) });
-
-    expect(first.candidates.some((candidate) => candidate.idHint === "alpha")).toBe(true);
-    expect(first.candidates.some((candidate) => candidate.idHint === "beta")).toBe(false);
-    expect(second.candidates.some((candidate) => candidate.idHint === "alpha")).toBe(false);
-    expect(second.candidates.some((candidate) => candidate.idHint === "beta")).toBe(true);
-  });
-
-  it("does not reuse extra-path discovery across env home changes", () => {
-    const stateDir = makeTempDir();
-    const homeA = makeTempDir();
-    const homeB = makeTempDir();
-    const pluginA = path.join(homeA, "plugins", "demo.ts");
-    const pluginB = path.join(homeB, "plugins", "demo.ts");
-    writeStandalonePlugin(pluginA, "export default {}");
-    writeStandalonePlugin(pluginB, "export default {}");
-
-    const first = discoverWithCachedEnv({
-      extraPaths: ["~/plugins/demo.ts"],
-      env: buildCachedDiscoveryEnv(stateDir, { HOME: homeA }),
-    });
-    const second = discoverWithCachedEnv({
-      extraPaths: ["~/plugins/demo.ts"],
-      env: buildCachedDiscoveryEnv(stateDir, { HOME: homeB }),
-    });
-
-    expectCandidateSource(first.candidates, "demo", pluginA);
-    expectCandidateSource(second.candidates, "demo", pluginB);
+  it.each([
+    {
+      name: "does not reuse discovery results across env root changes",
+      setup: () => {
+        const stateDirA = makeTempDir();
+        const stateDirB = makeTempDir();
+        writeStandalonePlugin(path.join(stateDirA, "extensions", "alpha.ts"));
+        writeStandalonePlugin(path.join(stateDirB, "extensions", "beta.ts"));
+        return {
+          first: discoverWithCachedEnv({ env: buildCachedDiscoveryEnv(stateDirA) }),
+          second: discoverWithCachedEnv({ env: buildCachedDiscoveryEnv(stateDirB) }),
+          assert: (
+            first: ReturnType<typeof discoverWithCachedEnv>,
+            second: ReturnType<typeof discoverWithCachedEnv>,
+          ) => {
+            expectCandidatePresence(first, { present: ["alpha"], absent: ["beta"] });
+            expectCandidatePresence(second, { present: ["beta"], absent: ["alpha"] });
+          },
+        };
+      },
+    },
+    {
+      name: "does not reuse extra-path discovery across env home changes",
+      setup: () => {
+        const stateDir = makeTempDir();
+        const homeA = makeTempDir();
+        const homeB = makeTempDir();
+        const pluginA = path.join(homeA, "plugins", "demo.ts");
+        const pluginB = path.join(homeB, "plugins", "demo.ts");
+        writeStandalonePlugin(pluginA, "export default {}");
+        writeStandalonePlugin(pluginB, "export default {}");
+        return {
+          first: discoverWithCachedEnv({
+            extraPaths: ["~/plugins/demo.ts"],
+            env: buildCachedDiscoveryEnv(stateDir, { HOME: homeA }),
+          }),
+          second: discoverWithCachedEnv({
+            extraPaths: ["~/plugins/demo.ts"],
+            env: buildCachedDiscoveryEnv(stateDir, { HOME: homeB }),
+          }),
+          assert: (
+            first: ReturnType<typeof discoverWithCachedEnv>,
+            second: ReturnType<typeof discoverWithCachedEnv>,
+          ) => {
+            expectCandidateSource(first.candidates, "demo", pluginA);
+            expectCandidateSource(second.candidates, "demo", pluginB);
+          },
+        };
+      },
+    },
+  ] as const)("$name", ({ setup }) => {
+    const { first, second, assert } = setup();
+    expectCachedDiscoveryPair({ first, second, assert });
   });
 
   it("treats configured load-path order as cache-significant", () => {
@@ -747,7 +831,7 @@ describe("discoverOpenClawPlugins", () => {
       env,
     });
 
-    expect(first.candidates.map((candidate) => candidate.idHint)).toEqual(["alpha", "beta"]);
-    expect(second.candidates.map((candidate) => candidate.idHint)).toEqual(["beta", "alpha"]);
+    expectCandidateOrder(first.candidates, ["alpha", "beta"]);
+    expectCandidateOrder(second.candidates, ["beta", "alpha"]);
   });
 });

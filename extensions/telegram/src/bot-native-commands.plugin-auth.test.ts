@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.js";
 
 let createNativeCommandsHarness: typeof import("./bot-native-commands.test-helpers.js").createNativeCommandsHarness;
 let deliverReplies: typeof import("./bot-native-commands.test-helpers.js").deliverReplies;

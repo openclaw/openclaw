@@ -49,227 +49,129 @@ describe("channel plugin registry", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
+  function expectListedChannelPluginIds(expectedIds: string[]) {
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(expectedIds);
+  }
+
+  function expectRegistryActivationCase(run: () => void) {
+    run();
+  }
+
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
     clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
   });
 
-  it("sorts channel plugins by configured order", () => {
-    const orderedPlugins: Array<[string, number]> = [
-      ["demo-middle", 20],
-      ["demo-first", 10],
-      ["demo-last", 30],
-    ];
-    const registry = createTestRegistry(
-      orderedPlugins.map(([id, order]) => ({
-        pluginId: id,
-        plugin: createPlugin(id, order),
-        source: "test",
-      })),
-    );
-    setActivePluginRegistry(registry);
-    const pluginIds = listChannelPlugins().map((plugin) => plugin.id);
-    expect(pluginIds).toEqual(["demo-first", "demo-middle", "demo-last"]);
-  });
-
-  it("refreshes cached channel lookups when the same registry instance is re-activated", () => {
-    const registry = createTestRegistry([
-      {
-        pluginId: "demo-alpha",
-        plugin: createPlugin("demo-alpha"),
-        source: "test",
+  it.each([
+    {
+      name: "sorts channel plugins by configured order",
+      run: () => {
+        const orderedPlugins: Array<[string, number]> = [
+          ["demo-middle", 20],
+          ["demo-first", 10],
+          ["demo-last", 30],
+        ];
+        const registry = createTestRegistry(
+          orderedPlugins.map(([id, order]) => ({
+            pluginId: id,
+            plugin: createPlugin(id, order),
+            source: "test",
+          })),
+        );
+        setActivePluginRegistry(registry);
+        expectListedChannelPluginIds(["demo-first", "demo-middle", "demo-last"]);
       },
-    ]);
-    setActivePluginRegistry(registry, "registry-test");
-    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["demo-alpha"]);
+    },
+    {
+      name: "refreshes cached channel lookups when the same registry instance is re-activated",
+      run: () => {
+        const registry = createTestRegistry([
+          {
+            pluginId: "demo-alpha",
+            plugin: createPlugin("demo-alpha"),
+            source: "test",
+          },
+        ]);
+        setActivePluginRegistry(registry, "registry-test");
+        expectListedChannelPluginIds(["demo-alpha"]);
 
-    registry.channels = [
-      {
-        pluginId: "demo-beta",
-        plugin: createPlugin("demo-beta"),
-        source: "test",
+        registry.channels = [
+          {
+            pluginId: "demo-beta",
+            plugin: createPlugin("demo-beta"),
+            source: "test",
+          },
+        ] as typeof registry.channels;
+        setActivePluginRegistry(registry, "registry-test");
+
+        expectListedChannelPluginIds(["demo-beta"]);
       },
-    ] as typeof registry.channels;
-    setActivePluginRegistry(registry, "registry-test");
-
-    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["demo-beta"]);
+    },
+  ] as const)("$name", ({ run }) => {
+    expectRegistryActivationCase(run);
   });
 });
 
 describe("channel plugin catalog", () => {
-  it("includes external catalog entries", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-"));
-    const catalogPath = path.join(dir, "catalog.json");
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        entries: [
-          {
-            name: "@openclaw/demo-channel",
-            openclaw: {
-              channel: {
-                id: "demo-channel",
-                label: "Demo Channel",
-                selectionLabel: "Demo Channel",
-                docsPath: "/channels/demo-channel",
-                blurb: "Demo entry",
-                order: 999,
-              },
-              install: {
-                npmSpec: "@openclaw/demo-channel",
-              },
-            },
-          },
-        ],
-      }),
-    );
-
-    const ids = listChannelPluginCatalogEntries({ catalogPaths: [catalogPath] }).map(
-      (entry) => entry.id,
-    );
-    expect(ids).toContain("demo-channel");
-  });
-
-  it("preserves plugin ids when they differ from channel ids", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-state-"));
-    const pluginDir = path.join(stateDir, "extensions", "demo-channel-plugin");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@vendor/demo-channel-plugin",
-        openclaw: {
-          extensions: ["./index.js"],
-          channel: {
-            id: "demo-channel",
-            label: "Demo Channel",
-            selectionLabel: "Demo Channel",
-            docsPath: "/channels/demo-channel",
-            blurb: "Demo channel",
-          },
-          install: {
-            npmSpec: "@vendor/demo-channel-plugin",
-          },
+  function createCatalogEntry(params: {
+    packageName: string;
+    channelId: string;
+    label: string;
+    blurb: string;
+    order?: number;
+  }) {
+    return {
+      name: params.packageName,
+      openclaw: {
+        channel: {
+          id: params.channelId,
+          label: params.label,
+          selectionLabel: params.label,
+          docsPath: `/channels/${params.channelId}`,
+          blurb: params.blurb,
+          ...(params.order === undefined ? {} : { order: params.order }),
         },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "@vendor/demo-runtime",
-        configSchema: {},
-      }),
-    );
-    fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {}", "utf-8");
-
-    const entry = listChannelPluginCatalogEntries({
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        install: {
+          npmSpec: params.packageName,
+        },
       },
-    }).find((item) => item.id === "demo-channel");
+    };
+  }
 
-    expect(entry?.pluginId).toBe("@vendor/demo-runtime");
-  });
-
-  it("uses the provided env for external catalog path resolution", () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
-    const catalogPath = path.join(home, "catalog.json");
+  function writeCatalogFile(catalogPath: string, entry: Record<string, unknown>) {
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
-        entries: [
-          {
-            name: "@openclaw/env-demo-channel",
-            openclaw: {
-              channel: {
-                id: "env-demo-channel",
-                label: "Env Demo Channel",
-                selectionLabel: "Env Demo Channel",
-                docsPath: "/channels/env-demo-channel",
-                blurb: "Env demo entry",
-                order: 1000,
-              },
-              install: {
-                npmSpec: "@openclaw/env-demo-channel",
-              },
-            },
-          },
-        ],
+        entries: [entry],
       }),
     );
+  }
 
-    const ids = listChannelPluginCatalogEntries({
-      env: {
-        ...process.env,
-        OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
-        OPENCLAW_HOME: home,
-        HOME: home,
-      },
-    }).map((entry) => entry.id);
-
-    expect(ids).toContain("env-demo-channel");
-  });
-
-  it("uses the provided env for default catalog paths", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
-    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        entries: [
-          {
-            name: "@openclaw/default-env-demo",
-            openclaw: {
-              channel: {
-                id: "default-env-demo",
-                label: "Default Env Demo",
-                selectionLabel: "Default Env Demo",
-                docsPath: "/channels/default-env-demo",
-                blurb: "Default env demo entry",
-              },
-              install: {
-                npmSpec: "@openclaw/default-env-demo",
-              },
-            },
-          },
-        ],
-      }),
-    );
-
-    const ids = listChannelPluginCatalogEntries({
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-      },
-    }).map((entry) => entry.id);
-
-    expect(ids).toContain("default-env-demo");
-  });
-
-  it("keeps discovered plugins ahead of external catalog overrides", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
-    const pluginDir = path.join(stateDir, "extensions", "demo-channel-plugin");
-    const catalogPath = path.join(stateDir, "catalog.json");
+  function writeDiscoveredChannelPlugin(params: {
+    stateDir: string;
+    packageName: string;
+    channelLabel: string;
+    pluginId: string;
+    blurb: string;
+  }) {
+    const pluginDir = path.join(params.stateDir, "extensions", "demo-channel-plugin");
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
-        name: "@vendor/demo-channel-plugin",
+        name: params.packageName,
         openclaw: {
           extensions: ["./index.js"],
           channel: {
             id: "demo-channel",
-            label: "Demo Channel Runtime",
-            selectionLabel: "Demo Channel Runtime",
+            label: params.channelLabel,
+            selectionLabel: params.channelLabel,
             docsPath: "/channels/demo-channel",
-            blurb: "discovered plugin",
+            blurb: params.blurb,
           },
           install: {
-            npmSpec: "@vendor/demo-channel-plugin",
+            npmSpec: params.packageName,
           },
         },
       }),
@@ -278,49 +180,201 @@ describe("channel plugin catalog", () => {
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
-        id: "@vendor/demo-channel-runtime",
+        id: params.pluginId,
         configSchema: {},
       }),
       "utf8",
     );
     fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {}", "utf8");
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        entries: [
-          {
-            name: "@vendor/demo-channel-catalog",
-            openclaw: {
-              channel: {
-                id: "demo-channel",
-                label: "Demo Channel Catalog",
-                selectionLabel: "Demo Channel Catalog",
-                docsPath: "/channels/demo-channel",
-                blurb: "external catalog",
-              },
-              install: {
-                npmSpec: "@vendor/demo-channel-catalog",
-              },
-            },
-          },
-        ],
+    return pluginDir;
+  }
+
+  function expectCatalogIdsContain(params: {
+    expectedId: string;
+    catalogPaths?: string[];
+    env?: NodeJS.ProcessEnv;
+  }) {
+    const ids = listChannelPluginCatalogEntries({
+      ...(params.catalogPaths ? { catalogPaths: params.catalogPaths } : {}),
+      ...(params.env ? { env: params.env } : {}),
+    }).map((entry) => entry.id);
+    expect(ids).toContain(params.expectedId);
+  }
+
+  function findCatalogEntry(params: {
+    channelId: string;
+    catalogPaths?: string[];
+    env?: NodeJS.ProcessEnv;
+  }) {
+    return listChannelPluginCatalogEntries({
+      ...(params.catalogPaths ? { catalogPaths: params.catalogPaths } : {}),
+      ...(params.env ? { env: params.env } : {}),
+    }).find((entry) => entry.id === params.channelId);
+  }
+
+  function expectCatalogEntryMatch(params: {
+    channelId: string;
+    expected: Record<string, unknown>;
+    catalogPaths?: string[];
+    env?: NodeJS.ProcessEnv;
+  }) {
+    expect(
+      findCatalogEntry({
+        channelId: params.channelId,
+        ...(params.catalogPaths ? { catalogPaths: params.catalogPaths } : {}),
+        ...(params.env ? { env: params.env } : {}),
       }),
-      "utf8",
-    );
+    ).toMatchObject(params.expected);
+  }
 
-    const entry = listChannelPluginCatalogEntries({
-      catalogPaths: [catalogPath],
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+  it.each([
+    {
+      name: "includes external catalog entries",
+      setup: () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-"));
+        const catalogPath = path.join(dir, "catalog.json");
+        writeCatalogFile(
+          catalogPath,
+          createCatalogEntry({
+            packageName: "@openclaw/demo-channel",
+            channelId: "demo-channel",
+            label: "Demo Channel",
+            blurb: "Demo entry",
+            order: 999,
+          }),
+        );
+        return {
+          channelId: "demo-channel",
+          catalogPaths: [catalogPath],
+          expected: { id: "demo-channel" },
+        };
       },
-    }).find((item) => item.id === "demo-channel");
+    },
+    {
+      name: "preserves plugin ids when they differ from channel ids",
+      setup: () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-state-"));
+        writeDiscoveredChannelPlugin({
+          stateDir,
+          packageName: "@vendor/demo-channel-plugin",
+          channelLabel: "Demo Channel",
+          pluginId: "@vendor/demo-runtime",
+          blurb: "Demo channel",
+        });
+        return {
+          channelId: "demo-channel",
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+          },
+          expected: { pluginId: "@vendor/demo-runtime" },
+        };
+      },
+    },
+    {
+      name: "keeps discovered plugins ahead of external catalog overrides",
+      setup: () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
+        const catalogPath = path.join(stateDir, "catalog.json");
+        writeDiscoveredChannelPlugin({
+          stateDir,
+          packageName: "@vendor/demo-channel-plugin",
+          channelLabel: "Demo Channel Runtime",
+          pluginId: "@vendor/demo-channel-runtime",
+          blurb: "discovered plugin",
+        });
+        writeCatalogFile(
+          catalogPath,
+          createCatalogEntry({
+            packageName: "@vendor/demo-channel-catalog",
+            channelId: "demo-channel",
+            label: "Demo Channel Catalog",
+            blurb: "external catalog",
+          }),
+        );
+        return {
+          channelId: "demo-channel",
+          catalogPaths: [catalogPath],
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            CLAWDBOT_STATE_DIR: undefined,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+          },
+          expected: {
+            install: { npmSpec: "@vendor/demo-channel-plugin" },
+            meta: { label: "Demo Channel Runtime" },
+            pluginId: "@vendor/demo-channel-runtime",
+          },
+        };
+      },
+    },
+  ] as const)("$name", ({ setup }) => {
+    const setupResult = setup();
+    const { channelId, expected } = setupResult;
+    expectCatalogEntryMatch({
+      channelId,
+      expected,
+      ...("catalogPaths" in setupResult ? { catalogPaths: setupResult.catalogPaths } : {}),
+      ...("env" in setupResult ? { env: setupResult.env } : {}),
+    });
+  });
 
-    expect(entry?.install.npmSpec).toBe("@vendor/demo-channel-plugin");
-    expect(entry?.meta.label).toBe("Demo Channel Runtime");
-    expect(entry?.pluginId).toBe("@vendor/demo-channel-runtime");
+  it.each([
+    {
+      name: "uses the provided env for external catalog path resolution",
+      setup: () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
+        const catalogPath = path.join(home, "catalog.json");
+        writeCatalogFile(
+          catalogPath,
+          createCatalogEntry({
+            packageName: "@openclaw/env-demo-channel",
+            channelId: "env-demo-channel",
+            label: "Env Demo Channel",
+            blurb: "Env demo entry",
+            order: 1000,
+          }),
+        );
+        return {
+          env: {
+            ...process.env,
+            OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
+            OPENCLAW_HOME: home,
+            HOME: home,
+          },
+          expectedId: "env-demo-channel",
+        };
+      },
+    },
+    {
+      name: "uses the provided env for default catalog paths",
+      setup: () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
+        const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+        fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+        writeCatalogFile(
+          catalogPath,
+          createCatalogEntry({
+            packageName: "@openclaw/default-env-demo",
+            channelId: "default-env-demo",
+            label: "Default Env Demo",
+            blurb: "Default env demo entry",
+          }),
+        );
+        return {
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+          },
+          expectedId: "default-env-demo",
+        };
+      },
+    },
+  ] as const)("$name", ({ setup }) => {
+    const { env, expectedId } = setup();
+    expectCatalogIdsContain({ env, expectedId });
   });
 });
 
@@ -393,6 +447,42 @@ function makeDemoConfigWritesCfg(accountIdKey: string) {
 }
 
 describe("channel plugin loader", () => {
+  async function expectLoadedPluginCase(params: {
+    registry: Parameters<typeof setActivePluginRegistry>[0];
+    expectedPlugin: ChannelPlugin;
+  }) {
+    setActivePluginRegistry(params.registry);
+    expect(await loadChannelPlugin("demo-loader")).toBe(params.expectedPlugin);
+  }
+
+  async function expectLoadedOutboundCase(params: {
+    registry: Parameters<typeof setActivePluginRegistry>[0];
+    expectedOutbound: ChannelOutboundAdapter | undefined;
+  }) {
+    setActivePluginRegistry(params.registry);
+    expect(await loadChannelOutboundAdapter("demo-loader")).toBe(params.expectedOutbound);
+  }
+
+  async function expectReloadedLoaderCase(params: {
+    load: typeof loadChannelPlugin | typeof loadChannelOutboundAdapter;
+    firstRegistry: Parameters<typeof setActivePluginRegistry>[0];
+    secondRegistry: Parameters<typeof setActivePluginRegistry>[0];
+    firstExpected: ChannelPlugin | ChannelOutboundAdapter | undefined;
+    secondExpected: ChannelPlugin | ChannelOutboundAdapter | undefined;
+  }) {
+    setActivePluginRegistry(params.firstRegistry);
+    expect(await params.load("demo-loader")).toBe(params.firstExpected);
+    setActivePluginRegistry(params.secondRegistry);
+    expect(await params.load("demo-loader")).toBe(params.secondExpected);
+  }
+
+  async function expectOutboundAdapterMissingCase(
+    registry: Parameters<typeof setActivePluginRegistry>[0],
+  ) {
+    setActivePluginRegistry(registry);
+    expect(await loadChannelOutboundAdapter("demo-loader")).toBeUndefined();
+  }
+
   beforeEach(() => {
     setActivePluginRegistry(emptyRegistry);
   });
@@ -403,61 +493,124 @@ describe("channel plugin loader", () => {
     clearPluginManifestRegistryCache();
   });
 
-  it("loads channel plugins from the active registry", async () => {
-    setActivePluginRegistry(registryWithDemoLoader);
-    const plugin = await loadChannelPlugin("demo-loader");
-    expect(plugin).toBe(demoLoaderPlugin);
-  });
-
-  it("loads outbound adapters from registered plugins", async () => {
-    setActivePluginRegistry(registryWithDemoLoader);
-    const outbound = await loadChannelOutboundAdapter("demo-loader");
-    expect(outbound).toBe(demoOutbound);
-  });
-
-  it("refreshes cached plugin values when registry changes", async () => {
-    setActivePluginRegistry(registryWithDemoLoader);
-    expect(await loadChannelPlugin("demo-loader")).toBe(demoLoaderPlugin);
-    setActivePluginRegistry(registryWithDemoLoaderV2);
-    expect(await loadChannelPlugin("demo-loader")).toBe(demoLoaderPluginV2);
-  });
-
-  it("refreshes cached outbound values when registry changes", async () => {
-    setActivePluginRegistry(registryWithDemoLoader);
-    expect(await loadChannelOutboundAdapter("demo-loader")).toBe(demoOutbound);
-    setActivePluginRegistry(registryWithDemoLoaderV2);
-    expect(await loadChannelOutboundAdapter("demo-loader")).toBe(demoOutboundV2);
-  });
-
-  it("returns undefined when plugin has no outbound adapter", async () => {
-    setActivePluginRegistry(registryWithDemoLoaderNoOutbound);
-    expect(await loadChannelOutboundAdapter("demo-loader")).toBeUndefined();
+  it.each([
+    {
+      name: "loads channel plugins from the active registry",
+      kind: "plugin" as const,
+      registry: registryWithDemoLoader,
+      expectedPlugin: demoLoaderPlugin,
+    },
+    {
+      name: "loads outbound adapters from registered plugins",
+      kind: "outbound" as const,
+      registry: registryWithDemoLoader,
+      expectedOutbound: demoOutbound,
+    },
+    {
+      name: "refreshes cached plugin values when registry changes",
+      kind: "reload-plugin" as const,
+      firstRegistry: registryWithDemoLoader,
+      secondRegistry: registryWithDemoLoaderV2,
+      firstExpected: demoLoaderPlugin,
+      secondExpected: demoLoaderPluginV2,
+    },
+    {
+      name: "refreshes cached outbound values when registry changes",
+      kind: "reload-outbound" as const,
+      firstRegistry: registryWithDemoLoader,
+      secondRegistry: registryWithDemoLoaderV2,
+      firstExpected: demoOutbound,
+      secondExpected: demoOutboundV2,
+    },
+    {
+      name: "returns undefined when plugin has no outbound adapter",
+      kind: "missing-outbound" as const,
+      registry: registryWithDemoLoaderNoOutbound,
+    },
+  ] as const)("$name", async (testCase) => {
+    switch (testCase.kind) {
+      case "plugin":
+        await expectLoadedPluginCase({
+          registry: testCase.registry,
+          expectedPlugin: testCase.expectedPlugin,
+        });
+        return;
+      case "outbound":
+        await expectLoadedOutboundCase({
+          registry: testCase.registry,
+          expectedOutbound: testCase.expectedOutbound,
+        });
+        return;
+      case "reload-plugin":
+        await expectReloadedLoaderCase({
+          load: loadChannelPlugin,
+          firstRegistry: testCase.firstRegistry,
+          secondRegistry: testCase.secondRegistry,
+          firstExpected: testCase.firstExpected,
+          secondExpected: testCase.secondExpected,
+        });
+        return;
+      case "reload-outbound":
+        await expectReloadedLoaderCase({
+          load: loadChannelOutboundAdapter,
+          firstRegistry: testCase.firstRegistry,
+          secondRegistry: testCase.secondRegistry,
+          firstExpected: testCase.firstExpected,
+          secondExpected: testCase.secondExpected,
+        });
+        return;
+      case "missing-outbound":
+        await expectOutboundAdapterMissingCase(testCase.registry);
+        return;
+    }
   });
 });
 
 describe("resolveChannelConfigWrites", () => {
-  it("defaults to allow when unset", () => {
-    const cfg = {};
-    expect(resolveChannelConfigWrites({ cfg, channelId: demoOriginChannelId })).toBe(true);
-  });
-
-  it("blocks when channel config disables writes", () => {
-    const cfg = { channels: { [demoOriginChannelId]: { configWrites: false } } };
-    expect(resolveChannelConfigWrites({ cfg, channelId: demoOriginChannelId })).toBe(false);
-  });
-
-  it("account override wins over channel default", () => {
-    const cfg = makeDemoConfigWritesCfg("work");
+  function expectResolvedChannelConfigWrites(params: {
+    cfg: Record<string, unknown>;
+    channelId: string;
+    accountId?: string;
+    expected: boolean;
+  }) {
     expect(
-      resolveChannelConfigWrites({ cfg, channelId: demoOriginChannelId, accountId: "work" }),
-    ).toBe(false);
-  });
+      resolveChannelConfigWrites({
+        cfg: params.cfg,
+        channelId: params.channelId,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+      }),
+    ).toBe(params.expected);
+  }
 
-  it("matches account ids case-insensitively", () => {
-    const cfg = makeDemoConfigWritesCfg("Work");
-    expect(
-      resolveChannelConfigWrites({ cfg, channelId: demoOriginChannelId, accountId: "work" }),
-    ).toBe(false);
+  it.each([
+    {
+      name: "defaults to allow when unset",
+      cfg: {},
+      channelId: demoOriginChannelId,
+      expected: true,
+    },
+    {
+      name: "blocks when channel config disables writes",
+      cfg: { channels: { [demoOriginChannelId]: { configWrites: false } } },
+      channelId: demoOriginChannelId,
+      expected: false,
+    },
+    {
+      name: "account override wins over channel default",
+      cfg: makeDemoConfigWritesCfg("work"),
+      channelId: demoOriginChannelId,
+      accountId: "work",
+      expected: false,
+    },
+    {
+      name: "matches account ids case-insensitively",
+      cfg: makeDemoConfigWritesCfg("Work"),
+      channelId: demoOriginChannelId,
+      accountId: "work",
+      expected: false,
+    },
+  ] as const)("$name", (testCase) => {
+    expectResolvedChannelConfigWrites(testCase);
   });
 });
 
@@ -489,27 +642,56 @@ describe("authorizeConfigWrite", () => {
     });
   }
 
-  it("blocks when a target account disables writes", () => {
-    expectConfigWriteBlocked({
+  function expectAuthorizedConfigWriteCase(
+    input: Parameters<typeof authorizeConfigWrite>[0],
+    expected: ReturnType<typeof authorizeConfigWrite>,
+  ) {
+    expect(authorizeConfigWrite(input)).toEqual(expected);
+  }
+
+  function expectResolvedConfigWriteTargetCase(pathSegments: readonly string[], expected: unknown) {
+    expect(resolveConfigWriteTargetFromPath([...pathSegments])).toEqual(expected);
+  }
+
+  function expectExplicitConfigWriteTargetCase(
+    input: Parameters<typeof resolveExplicitConfigWriteTarget>[0],
+    expected: ReturnType<typeof resolveExplicitConfigWriteTarget>,
+  ) {
+    expect(resolveExplicitConfigWriteTarget(input)).toEqual(expected);
+  }
+
+  function expectFormattedDeniedMessage(
+    result: Exclude<ReturnType<typeof authorizeConfigWrite>, { allowed: true }>,
+  ) {
+    expect(
+      formatConfigWriteDeniedMessage({
+        result,
+      }),
+    ).toContain(`channels.${demoTargetChannelId}.accounts.work.configWrites=true`);
+  }
+
+  it.each([
+    {
+      name: "blocks when a target account disables writes",
       disabledAccountId: "work",
       reason: "target-disabled",
       blockedScope: "target",
-    });
-  });
-
-  it("blocks when the origin account disables writes", () => {
-    expectConfigWriteBlocked({
+    },
+    {
+      name: "blocks when the origin account disables writes",
       disabledAccountId: "default",
       reason: "origin-disabled",
       blockedScope: "origin",
-    });
+    },
+  ] as const)("$name", (testCase) => {
+    expectConfigWriteBlocked(testCase);
   });
 
-  it("allows bypass for internal operator.admin writes", () => {
-    const cfg = makeDemoConfigWritesCfg("work");
-    expect(
-      authorizeConfigWrite({
-        cfg,
+  it.each([
+    {
+      name: "allows bypass for internal operator.admin writes",
+      input: {
+        cfg: makeDemoConfigWritesCfg("work"),
         origin: { channelId: demoOriginChannelId, accountId: "default" },
         target: resolveExplicitConfigWriteTarget({
           channelId: demoTargetChannelId,
@@ -519,57 +701,71 @@ describe("authorizeConfigWrite", () => {
           channel: INTERNAL_MESSAGE_CHANNEL,
           gatewayClientScopes: ["operator.admin"],
         }),
-      }),
-    ).toEqual({ allowed: true });
-  });
-
-  it("treats non-channel config paths as global writes", () => {
-    const cfg = makeDemoConfigWritesCfg("work");
-    expect(
-      authorizeConfigWrite({
-        cfg,
+      },
+      expected: { allowed: true },
+    },
+    {
+      name: "treats non-channel config paths as global writes",
+      input: {
+        cfg: makeDemoConfigWritesCfg("work"),
         origin: { channelId: demoOriginChannelId, accountId: "default" },
         target: resolveConfigWriteTargetFromPath(["messages", "ackReaction"]),
-      }),
-    ).toEqual({ allowed: true });
+      },
+      expected: { allowed: true },
+    },
+  ] as const)("$name", ({ input, expected }) => {
+    expectAuthorizedConfigWriteCase(input, expected);
   });
 
-  it("rejects ambiguous channel collection writes", () => {
-    expect(resolveConfigWriteTargetFromPath(["channels", "demo-channel"])).toEqual({
-      kind: "ambiguous",
-      scopes: [{ channelId: "demo-channel" }],
-    });
-    expect(resolveConfigWriteTargetFromPath(["channels", "demo-channel", "accounts"])).toEqual({
-      kind: "ambiguous",
-      scopes: [{ channelId: "demo-channel" }],
-    });
+  it.each([
+    {
+      name: "rejects bare channel collection writes",
+      pathSegments: ["channels", "demo-channel"],
+      expected: { kind: "ambiguous", scopes: [{ channelId: "demo-channel" }] },
+    },
+    {
+      name: "rejects account collection writes",
+      pathSegments: ["channels", "demo-channel", "accounts"],
+      expected: { kind: "ambiguous", scopes: [{ channelId: "demo-channel" }] },
+    },
+  ] as const)("$name", ({ pathSegments, expected }) => {
+    expectResolvedConfigWriteTargetCase(pathSegments, expected);
   });
 
-  it("resolves explicit channel and account targets", () => {
-    expect(resolveExplicitConfigWriteTarget({ channelId: demoOriginChannelId })).toEqual({
-      kind: "channel",
-      scope: { channelId: demoOriginChannelId },
-    });
-    expect(
-      resolveExplicitConfigWriteTarget({ channelId: demoTargetChannelId, accountId: "work" }),
-    ).toEqual({
-      kind: "account",
-      scope: { channelId: demoTargetChannelId, accountId: "work" },
-    });
+  it.each([
+    {
+      name: "resolves explicit channel target",
+      input: { channelId: demoOriginChannelId },
+      expected: {
+        kind: "channel",
+        scope: { channelId: demoOriginChannelId },
+      },
+    },
+    {
+      name: "resolves explicit account target",
+      input: { channelId: demoTargetChannelId, accountId: "work" },
+      expected: {
+        kind: "account",
+        scope: { channelId: demoTargetChannelId, accountId: "work" },
+      },
+    },
+  ] as const)("$name", ({ input, expected }) => {
+    expectExplicitConfigWriteTargetCase(input, expected);
   });
 
-  it("formats denied messages consistently", () => {
-    expect(
-      formatConfigWriteDeniedMessage({
-        result: {
-          allowed: false,
-          reason: "target-disabled",
-          blockedScope: {
-            kind: "target",
-            scope: { channelId: demoTargetChannelId, accountId: "work" },
-          },
+  it.each([
+    {
+      name: "formats denied messages consistently",
+      result: {
+        allowed: false,
+        reason: "target-disabled",
+        blockedScope: {
+          kind: "target",
+          scope: { channelId: demoTargetChannelId, accountId: "work" },
         },
-      }),
-    ).toContain(`channels.${demoTargetChannelId}.accounts.work.configWrites=true`);
+      } as const,
+    },
+  ] as const)("$name", ({ result }) => {
+    expectFormattedDeniedMessage(result);
   });
 });

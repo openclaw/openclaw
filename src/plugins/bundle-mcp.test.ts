@@ -2,10 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { captureEnv } from "../test-utils/env.js";
 import { isRecord } from "../utils.js";
 import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
-import { createBundleMcpTempHarness, createBundleProbePlugin } from "./bundle-mcp.test-support.js";
+import {
+  createEnabledPluginEntries,
+  createBundleMcpTempHarness,
+  createBundleProbePlugin,
+  withBundleHomeEnv,
+  writeClaudeBundleManifest,
+} from "./bundle-mcp.test-support.js";
 
 function getServerArgs(value: unknown): unknown[] | undefined {
   return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
@@ -38,135 +43,145 @@ afterEach(async () => {
   await tempHarness.cleanup();
 });
 
-async function withBundleHomeEnv<T>(
-  prefix: string,
-  run: (params: { homeDir: string; workspaceDir: string }) => Promise<T>,
-): Promise<T> {
-  const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
-  try {
-    const homeDir = await tempHarness.createTempDir(`${prefix}-home-`);
-    const workspaceDir = await tempHarness.createTempDir(`${prefix}-workspace-`);
-    process.env.HOME = homeDir;
-    process.env.USERPROFILE = homeDir;
-    delete process.env.OPENCLAW_HOME;
-    delete process.env.OPENCLAW_STATE_DIR;
-    return await run({ homeDir, workspaceDir });
-  } finally {
-    env.restore();
-  }
-}
-
 function createEnabledBundleConfig(pluginIds: string[]): OpenClawConfig {
   return {
     plugins: {
-      entries: Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }])),
+      entries: createEnabledPluginEntries(pluginIds),
     },
   };
 }
 
-async function writeInlineClaudeBundleManifest(params: {
-  homeDir: string;
-  pluginId: string;
-  manifest: Record<string, unknown>;
+async function expectInlineBundleMcpServer(params: {
+  loadedServer: unknown;
+  pluginRoot: string;
+  commandRelativePath: string;
+  argRelativePaths: readonly string[];
 }) {
-  const pluginRoot = path.join(params.homeDir, ".openclaw", "extensions", params.pluginId);
-  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-  await fs.writeFile(
-    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-    `${JSON.stringify(params.manifest, null, 2)}\n`,
-    "utf-8",
+  const loadedArgs = getServerArgs(params.loadedServer);
+  const loadedCommand = isRecord(params.loadedServer) ? params.loadedServer.command : undefined;
+  const loadedCwd = isRecord(params.loadedServer) ? params.loadedServer.cwd : undefined;
+  const loadedEnv =
+    isRecord(params.loadedServer) && isRecord(params.loadedServer.env)
+      ? params.loadedServer.env
+      : {};
+
+  await expectResolvedPathEqual(loadedCwd, params.pluginRoot);
+  expect(typeof loadedCommand).toBe("string");
+  expect(loadedArgs).toHaveLength(params.argRelativePaths.length);
+  expect(typeof loadedEnv.PLUGIN_ROOT).toBe("string");
+  if (typeof loadedCommand !== "string" || typeof loadedCwd !== "string") {
+    throw new Error("expected inline bundled MCP server to expose command and cwd");
+  }
+  expect(normalizePathForAssertion(path.relative(loadedCwd, loadedCommand))).toBe(
+    normalizePathForAssertion(params.commandRelativePath),
   );
-  return pluginRoot;
+  expect(
+    loadedArgs?.map((entry) =>
+      typeof entry === "string"
+        ? normalizePathForAssertion(path.relative(loadedCwd, entry))
+        : entry,
+    ),
+  ).toEqual([...params.argRelativePaths]);
+  await expectResolvedPathEqual(loadedEnv.PLUGIN_ROOT, params.pluginRoot);
 }
 
 describe("loadEnabledBundleMcpConfig", () => {
   it("loads enabled Claude bundle MCP config and absolutizes relative args", async () => {
-    await withBundleHomeEnv("openclaw-bundle-mcp", async ({ homeDir, workspaceDir }) => {
-      const { pluginRoot, serverPath } = await createBundleProbePlugin(homeDir);
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-mcp",
+      async ({ homeDir, workspaceDir }) => {
+        const { pluginRoot, serverPath } = await createBundleProbePlugin(homeDir);
 
-      const config: OpenClawConfig = {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
+        const config: OpenClawConfig = {
+          plugins: {
+            entries: {
+              "bundle-probe": { enabled: true },
+            },
           },
-        },
-      };
+        };
 
-      const loaded = loadEnabledBundleMcpConfig({
-        workspaceDir,
-        cfg: config,
-      });
-      const resolvedServerPath = await fs.realpath(serverPath);
-      const loadedServer = loaded.config.mcpServers.bundleProbe;
-      const loadedArgs = getServerArgs(loadedServer);
-      const loadedServerPath = typeof loadedArgs?.[0] === "string" ? loadedArgs[0] : undefined;
-      const resolvedPluginRoot = await fs.realpath(pluginRoot);
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: config,
+        });
+        const resolvedServerPath = await fs.realpath(serverPath);
+        const loadedServer = loaded.config.mcpServers.bundleProbe;
+        const loadedArgs = getServerArgs(loadedServer);
+        const loadedServerPath = typeof loadedArgs?.[0] === "string" ? loadedArgs[0] : undefined;
+        const resolvedPluginRoot = await fs.realpath(pluginRoot);
 
-      expectNoDiagnostics(loaded.diagnostics);
-      expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("node");
-      expect(loadedArgs).toHaveLength(1);
-      expect(loadedServerPath).toBeDefined();
-      if (!loadedServerPath) {
-        throw new Error("expected bundled MCP args to include the server path");
-      }
-      expect(normalizePathForAssertion(await fs.realpath(loadedServerPath))).toBe(
-        normalizePathForAssertion(resolvedServerPath),
-      );
-      await expectResolvedPathEqual(loadedServer.cwd, resolvedPluginRoot);
-    });
+        expectNoDiagnostics(loaded.diagnostics);
+        expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("node");
+        expect(loadedArgs).toHaveLength(1);
+        expect(loadedServerPath).toBeDefined();
+        if (!loadedServerPath) {
+          throw new Error("expected bundled MCP args to include the server path");
+        }
+        expect(normalizePathForAssertion(await fs.realpath(loadedServerPath))).toBe(
+          normalizePathForAssertion(resolvedServerPath),
+        );
+        await expectResolvedPathEqual(loadedServer.cwd, resolvedPluginRoot);
+      },
+    );
   });
 
   it("merges inline bundle MCP servers and skips disabled bundles", async () => {
-    await withBundleHomeEnv("openclaw-bundle-inline", async ({ homeDir, workspaceDir }) => {
-      await writeInlineClaudeBundleManifest({
-        homeDir,
-        pluginId: "inline-enabled",
-        manifest: {
-          name: "inline-enabled",
-          mcpServers: {
-            enabledProbe: {
-              command: "node",
-              args: ["./enabled.mjs"],
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-inline",
+      async ({ homeDir, workspaceDir }) => {
+        await writeClaudeBundleManifest({
+          homeDir,
+          pluginId: "inline-enabled",
+          manifest: {
+            name: "inline-enabled",
+            mcpServers: {
+              enabledProbe: {
+                command: "node",
+                args: ["./enabled.mjs"],
+              },
             },
           },
-        },
-      });
-      await writeInlineClaudeBundleManifest({
-        homeDir,
-        pluginId: "inline-disabled",
-        manifest: {
-          name: "inline-disabled",
-          mcpServers: {
-            disabledProbe: {
-              command: "node",
-              args: ["./disabled.mjs"],
+        });
+        await writeClaudeBundleManifest({
+          homeDir,
+          pluginId: "inline-disabled",
+          manifest: {
+            name: "inline-disabled",
+            mcpServers: {
+              disabledProbe: {
+                command: "node",
+                args: ["./disabled.mjs"],
+              },
             },
           },
-        },
-      });
+        });
 
-      const loaded = loadEnabledBundleMcpConfig({
-        workspaceDir,
-        cfg: {
-          plugins: {
-            entries: {
-              ...createEnabledBundleConfig(["inline-enabled"]).plugins?.entries,
-              "inline-disabled": { enabled: false },
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: {
+            plugins: {
+              entries: {
+                ...createEnabledPluginEntries(["inline-enabled"]),
+                "inline-disabled": { enabled: false },
+              },
             },
           },
-        },
-      });
+        });
 
-      expect(loaded.config.mcpServers.enabledProbe).toBeDefined();
-      expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
-    });
+        expect(loaded.config.mcpServers.enabledProbe).toBeDefined();
+        expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
+      },
+    );
   });
 
   it("resolves inline Claude MCP paths from the plugin root and expands CLAUDE_PLUGIN_ROOT", async () => {
     await withBundleHomeEnv(
+      tempHarness,
       "openclaw-bundle-inline-placeholder",
       async ({ homeDir, workspaceDir }) => {
-        const pluginRoot = await writeInlineClaudeBundleManifest({
+        const pluginRoot = await writeClaudeBundleManifest({
           homeDir,
           pluginId: "inline-claude",
           manifest: {
@@ -189,34 +204,17 @@ describe("loadEnabledBundleMcpConfig", () => {
           cfg: createEnabledBundleConfig(["inline-claude"]),
         });
         const loadedServer = loaded.config.mcpServers.inlineProbe;
-        const loadedArgs = getServerArgs(loadedServer);
-        const loadedCommand = isRecord(loadedServer) ? loadedServer.command : undefined;
-        const loadedCwd = isRecord(loadedServer) ? loadedServer.cwd : undefined;
-        const loadedEnv =
-          isRecord(loadedServer) && isRecord(loadedServer.env) ? loadedServer.env : {};
 
         expectNoDiagnostics(loaded.diagnostics);
-        await expectResolvedPathEqual(loadedCwd, pluginRoot);
-        expect(typeof loadedCommand).toBe("string");
-        expect(loadedArgs).toHaveLength(2);
-        expect(typeof loadedEnv.PLUGIN_ROOT).toBe("string");
-        if (typeof loadedCommand !== "string" || typeof loadedCwd !== "string") {
-          throw new Error("expected inline bundled MCP server to expose command and cwd");
-        }
-        expect(normalizePathForAssertion(path.relative(loadedCwd, loadedCommand))).toBe(
-          normalizePathForAssertion(path.join("bin", "server.sh")),
-        );
-        expect(
-          loadedArgs?.map((entry) =>
-            typeof entry === "string"
-              ? normalizePathForAssertion(path.relative(loadedCwd, entry))
-              : entry,
-          ),
-        ).toEqual([
-          normalizePathForAssertion(path.join("servers", "probe.mjs")),
-          normalizePathForAssertion("local-probe.mjs"),
-        ]);
-        await expectResolvedPathEqual(loadedEnv.PLUGIN_ROOT, pluginRoot);
+        await expectInlineBundleMcpServer({
+          loadedServer,
+          pluginRoot,
+          commandRelativePath: path.join("bin", "server.sh"),
+          argRelativePaths: [
+            normalizePathForAssertion(path.join("servers", "probe.mjs"))!,
+            normalizePathForAssertion("local-probe.mjs")!,
+          ],
+        });
       },
     );
   });

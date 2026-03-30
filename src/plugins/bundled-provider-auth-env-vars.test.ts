@@ -29,6 +29,33 @@ function expectGeneratedAuthEnvVarModuleState(params: {
   expect(result.wrote).toBe(params.expectedWrote);
 }
 
+function expectGeneratedAuthEnvVarCheckMode(tempRoot: string) {
+  expectGeneratedAuthEnvVarModuleState({
+    tempRoot,
+    expectedChanged: false,
+    expectedWrote: false,
+  });
+}
+
+function expectBundledProviderEnvVars(expected: Record<string, readonly string[]>) {
+  expect(
+    Object.fromEntries(
+      Object.keys(expected).map((providerId) => [
+        providerId,
+        BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES[
+          providerId as keyof typeof BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES
+        ],
+      ]),
+    ),
+  ).toEqual(expected);
+}
+
+function expectMissingBundledProviderEnvVars(providerIds: readonly string[]) {
+  providerIds.forEach((providerId) => {
+    expect(providerId in BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES).toBe(false);
+  });
+}
+
 describe("bundled provider auth env vars", () => {
   it("matches the generated manifest snapshot", () => {
     expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES).toEqual(
@@ -37,25 +64,7 @@ describe("bundled provider auth env vars", () => {
   });
 
   it("reads bundled provider auth env vars from plugin manifests", () => {
-    expect(
-      Object.fromEntries(
-        [
-          ["brave", ["BRAVE_API_KEY"]],
-          ["firecrawl", ["FIRECRAWL_API_KEY"]],
-          ["github-copilot", ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]],
-          ["perplexity", ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]],
-          ["tavily", ["TAVILY_API_KEY"]],
-          ["minimax-portal", ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]],
-          ["openai", ["OPENAI_API_KEY"]],
-          ["fal", ["FAL_KEY"]],
-        ].map(([providerId]) => [
-          providerId,
-          BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES[
-            providerId as keyof typeof BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES
-          ],
-        ]),
-      ),
-    ).toEqual({
+    expectBundledProviderEnvVars({
       brave: ["BRAVE_API_KEY"],
       firecrawl: ["FIRECRAWL_API_KEY"],
       "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
@@ -65,7 +74,7 @@ describe("bundled provider auth env vars", () => {
       openai: ["OPENAI_API_KEY"],
       fal: ["FAL_KEY"],
     });
-    expect("openai-codex" in BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES).toBe(false);
+    expectMissingBundledProviderEnvVars(["openai-codex"]);
   });
 
   it("supports check mode for stale generated artifacts", () => {
@@ -84,11 +93,7 @@ describe("bundled provider auth env vars", () => {
     });
     expect(initial.wrote).toBe(true);
 
-    expectGeneratedAuthEnvVarModuleState({
-      tempRoot,
-      expectedChanged: false,
-      expectedWrote: false,
-    });
+    expectGeneratedAuthEnvVarCheckMode(tempRoot);
 
     fs.writeFileSync(
       path.join(tempRoot, "src/plugins/bundled-provider-auth-env-vars.generated.ts"),

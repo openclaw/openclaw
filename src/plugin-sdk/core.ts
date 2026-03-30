@@ -218,6 +218,7 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   plugin: TPlugin;
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   setRuntime?: (runtime: PluginRuntime) => void;
+  registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
 
@@ -281,6 +282,7 @@ export function defineChannelPluginEntry<TPlugin>({
   plugin,
   configSchema = emptyPluginConfigSchema,
   setRuntime,
+  registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
   const resolvedConfigSchema = typeof configSchema === "function" ? configSchema() : configSchema;
@@ -290,11 +292,16 @@ export function defineChannelPluginEntry<TPlugin>({
     description,
     configSchema: resolvedConfigSchema,
     register(api: OpenClawPluginApi) {
+      if (api.registrationMode === "cli-metadata") {
+        registerCliMetadata?.(api);
+        return;
+      }
       setRuntime?.(api.runtime);
       api.registerChannel({ plugin: plugin as ChannelPlugin });
       if (api.registrationMode !== "full") {
         return;
       }
+      registerCliMetadata?.(api);
       registerFull?.(api);
     },
   };
@@ -519,6 +526,10 @@ export function createChatChannelPlugin<
 }): ChannelPlugin<TResolvedAccount, Probe, Audit> {
   return {
     ...params.base,
+    conversationBindings: {
+      supportsCurrentConversationBinding: true,
+      ...params.base.conversationBindings,
+    },
     ...(params.security ? { security: resolveChatChannelSecurity(params.security) } : {}),
     ...(params.pairing ? { pairing: resolveChatChannelPairing(params.pairing) } : {}),
     ...(params.threading ? { threading: resolveChatChannelThreading(params.threading) } : {}),

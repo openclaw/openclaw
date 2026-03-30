@@ -3,7 +3,7 @@ summary: "Use ACP runtime sessions for Codex, Claude Code, Cursor, Gemini CLI, O
 read_when:
   - Running coding harnesses through ACP
   - Setting up conversation-bound ACP sessions on messaging channels
-  - Binding Discord channels, Telegram topics, BlueBubbles chats, or iMessage chats to persistent ACP sessions
+  - Binding a message channel conversation to a persistent ACP session
   - Troubleshooting ACP backend and plugin wiring
   - Operating /acp commands from chat
 title: "ACP Agents"
@@ -104,12 +104,12 @@ Examples:
 - `/acp spawn codex --thread auto`: OpenClaw may create a child thread/topic and bind the ACP session there
 - `/acp spawn codex --bind here --cwd /workspace/repo`: same chat binding as above, but Codex runs in `/workspace/repo`
 
-Built-in current-conversation binding support:
+Current-conversation binding support:
 
-- Discord current channel or current thread
-- Telegram current chat or current topic
-- BlueBubbles DM or group chat
-- iMessage DM or group chat
+- Chat/message channels that advertise current-conversation binding support can use `--bind here` through the shared conversation-binding path.
+- Channels with custom thread/topic semantics can still provide channel-specific canonicalization behind the same shared interface.
+- `--bind here` always means "bind the current conversation in place".
+- Generic current-conversation binds use the shared OpenClaw binding store and survive normal gateway restarts.
 
 Notes:
 
@@ -437,7 +437,7 @@ Notes:
 
 - `--bind here` is the simplest operator path for "make this channel or chat Codex-backed."
 - `--bind here` does not create a child thread.
-- `--bind here` is only available on adapters that expose current-conversation ACP bindings.
+- `--bind here` is only available on channels that expose current-conversation binding support.
 - `--bind` and `--thread` cannot be combined in the same `/acp spawn` call.
 
 ## Spawn thread modes
@@ -624,7 +624,7 @@ openclaw config set plugins.entries.acpx.enabled true
 Local workspace install during development:
 
 ```bash
-openclaw plugins install ./extensions/acpx
+openclaw plugins install ./path/to/local/acpx-plugin
 ```
 
 Then verify backend health:
@@ -637,7 +637,7 @@ Then verify backend health:
 
 By default, the bundled acpx backend plugin (`acpx`) uses the plugin-local pinned binary:
 
-1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
+1. Command defaults to the plugin-local `node_modules/.bin/acpx` inside the ACPX plugin package.
 2. Expected version defaults to the extension pin.
 3. Startup registers ACP backend immediately as not-ready.
 4. A background ensure job verifies `acpx --version`.
@@ -671,6 +671,44 @@ Notes:
 - OpenClaw startup remains non-blocking while the backend health check runs.
 
 See [Plugins](/tools/plugin).
+
+### Automatic dependency install
+
+When you install OpenClaw globally with `npm install -g openclaw`, the acpx
+runtime dependencies (platform-specific binaries) are installed automatically
+via a postinstall hook. If the automatic install fails, the gateway still starts
+normally and reports the missing dependency through `openclaw acp doctor`.
+
+### Plugin tools MCP bridge
+
+By default, ACPX sessions do **not** expose OpenClaw plugin-registered tools to
+the ACP harness.
+
+If you want ACP agents such as Codex or Claude Code to call installed
+OpenClaw plugin tools such as memory recall/store, enable the dedicated bridge:
+
+```bash
+openclaw config set plugins.entries.acpx.config.pluginToolsMcpBridge true
+```
+
+What this does:
+
+- Injects a built-in MCP server named `openclaw-plugin-tools` into ACPX session
+  bootstrap.
+- Exposes plugin tools already registered by installed and enabled OpenClaw
+  plugins.
+- Keeps the feature explicit and default-off.
+
+Security and trust notes:
+
+- This expands the ACP harness tool surface.
+- ACP agents get access only to plugin tools already active in the gateway.
+- Treat this as the same trust boundary as letting those plugins execute in
+  OpenClaw itself.
+- Review installed plugins before enabling it.
+
+Custom `mcpServers` still work as before. The built-in plugin-tools bridge is an
+additional opt-in convenience, not a replacement for generic MCP server config.
 
 ## Permission configuration
 

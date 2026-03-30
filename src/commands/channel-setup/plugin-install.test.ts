@@ -1,5 +1,9 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  bundledPluginRoot,
+  bundledPluginRootAt,
+} from "../../../test/helpers/bundled-plugin-paths.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -64,7 +68,11 @@ import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.j
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
@@ -88,7 +96,7 @@ const baseEntry: ChannelPluginCatalogEntry = {
   },
   install: {
     npmSpec: "@openclaw/zalo",
-    localPath: "extensions/zalo",
+    localPath: bundledPluginRoot("zalo"),
   },
 };
 
@@ -130,7 +138,7 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
 function expectPluginLoadedFromLocalPath(
   result: Awaited<ReturnType<typeof ensureChannelSetupPluginInstalled>>,
 ) {
-  const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
+  const expectedPath = path.resolve(process.cwd(), bundledPluginRoot("zalo"));
   expect(result.installed).toBe(true);
   expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
 }
@@ -231,7 +239,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
           "zalo",
           {
             pluginId: "zalo",
-            localPath: "/opt/openclaw/extensions/zalo",
+            localPath: bundledPluginRootAt("/opt/openclaw", "zalo"),
             npmSpec: "@openclaw/zalo",
           },
         ],
@@ -251,7 +259,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         options: expect.arrayContaining([
           expect.objectContaining({
             value: "local",
-            hint: "/opt/openclaw/extensions/zalo",
+            hint: bundledPluginRootAt("/opt/openclaw", "zalo"),
           }),
         ]),
       }),
@@ -270,7 +278,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
           "whatsapp",
           {
             pluginId: "whatsapp",
-            localPath: "/opt/openclaw/extensions/whatsapp",
+            localPath: bundledPluginRootAt("/opt/openclaw", "whatsapp"),
             npmSpec: "@openclaw/whatsapp",
           },
         ],
@@ -444,6 +452,40 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.not.objectContaining({
         onlyPluginIds: expect.anything(),
+      }),
+    );
+  });
+
+  it("scopes channel reloads when the global registry is populated but the pinned channel registry is empty", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push(
+      createPluginRecord({
+        id: "loaded-tools",
+        name: "loaded-tools",
+        source: "/tmp/loaded-tools.cjs",
+        origin: "bundled",
+      }),
+    );
+    setActivePluginRegistry(activeRegistry);
+    const pinnedChannelRegistry = createEmptyPluginRegistry();
+    pinActivePluginChannelRegistry(pinnedChannelRegistry);
+
+    try {
+      reloadChannelSetupPluginRegistryForChannel({
+        cfg,
+        runtime,
+        channel: "telegram",
+        workspaceDir: "/tmp/openclaw-workspace",
+      });
+    } finally {
+      releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
+    }
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["telegram"],
       }),
     );
   });

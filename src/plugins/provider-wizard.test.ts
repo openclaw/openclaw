@@ -22,21 +22,6 @@ function makeProvider(overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, 
   } satisfies ProviderPlugin;
 }
 
-function createSglangSetupProvider() {
-  return makeProvider({
-    id: "sglang",
-    label: "SGLang",
-    auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
-    wizard: {
-      setup: {
-        choiceLabel: "SGLang setup",
-        groupId: "sglang",
-        groupLabel: "SGLang",
-      },
-    },
-  });
-}
-
 function createSglangWizardProvider(params?: {
   includeSetup?: boolean;
   includeModelPicker?: boolean;
@@ -94,11 +79,71 @@ function createWizardRuntimeParams(params?: {
   };
 }
 
+function expectWizardResolutionCount(params: {
+  provider: ProviderPlugin;
+  config?: object;
+  env?: NodeJS.ProcessEnv;
+  expectedCount: number;
+}) {
+  setResolvedProviders(params.provider);
+  resolveProviderWizardOptions(
+    createWizardRuntimeParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+  resolveProviderWizardOptions(
+    createWizardRuntimeParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+  expectProviderResolutionCall({
+    config: params.config,
+    env: params.env,
+    count: params.expectedCount,
+  });
+}
+
+function expectWizardCacheInvalidationCount(params: {
+  provider: ProviderPlugin;
+  config: { [key: string]: unknown };
+  env: NodeJS.ProcessEnv;
+  mutate: () => void;
+  expectedCount?: number;
+}) {
+  setResolvedProviders(params.provider);
+
+  resolveProviderWizardOptions(
+    createWizardRuntimeParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+
+  params.mutate();
+
+  resolveProviderWizardOptions(
+    createWizardRuntimeParams({
+      config: params.config,
+      env: params.env,
+    }),
+  );
+
+  expectProviderResolutionCall({
+    config: params.config,
+    env: params.env,
+    count: params.expectedCount ?? 2,
+  });
+}
+
 function expectProviderResolutionCall(params?: {
   config?: object;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  count?: number;
 }) {
+  expect(resolvePluginProviders).toHaveBeenCalledTimes(params?.count ?? 1);
   expect(resolvePluginProviders).toHaveBeenCalledWith({
     ...createWizardRuntimeParams(params),
     bundledProviderAllowlistCompat: true,
@@ -106,19 +151,8 @@ function expectProviderResolutionCall(params?: {
   });
 }
 
-function resolveWizardOptionsTwice(params: {
-  config?: object;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}) {
-  const runtimeParams = createWizardRuntimeParams(params);
-  resolveProviderWizardOptions(runtimeParams);
-  resolveProviderWizardOptions(runtimeParams);
-}
-
-function expectWizardProviderCacheMiss(params: { config?: object; env: NodeJS.ProcessEnv }) {
-  resolveWizardOptionsTwice(params);
-  expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+function setResolvedProviders(...providers: ProviderPlugin[]) {
+  resolvePluginProviders.mockReturnValue(providers);
 }
 
 function expectSingleWizardChoice(params: {
@@ -127,7 +161,7 @@ function expectSingleWizardChoice(params: {
   expectedOption: Record<string, unknown>;
   expectedWizard: unknown;
 }) {
-  resolvePluginProviders.mockReturnValue([params.provider]);
+  setResolvedProviders(params.provider);
   expect(resolveProviderWizardOptions({})).toEqual([params.expectedOption]);
   expect(
     resolveProviderPluginChoice({
@@ -139,6 +173,18 @@ function expectSingleWizardChoice(params: {
     method: params.provider.auth[0],
     wizard: params.expectedWizard,
   });
+}
+
+function expectModelPickerEntries(
+  provider: ProviderPlugin,
+  expected: Array<{
+    value: string;
+    label: string;
+    hint?: string;
+  }>,
+) {
+  setResolvedProviders(provider);
+  expect(resolveProviderModelPickerEntries({})).toEqual(expected);
 }
 
 describe("provider wizard boundaries", () => {
@@ -207,79 +253,76 @@ describe("provider wizard boundaries", () => {
       },
       resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
     },
-  ] as const)("$name", ({ provider, choice, expectedOption, resolveWizard }) => {
-    expectSingleWizardChoice({
-      provider,
-      choice,
-      expectedOption,
-      expectedWizard: resolveWizard(provider),
-    });
-  });
-
-  it("preserves onboarding scopes on wizard options", () => {
-    const provider = makeProvider({
-      id: "fal",
-      label: "fal",
-      auth: [
-        {
-          id: "api-key",
-          label: "fal API key",
-          kind: "api_key",
-          wizard: {
-            choiceId: "fal-api-key",
-            choiceLabel: "fal API key",
-            groupId: "fal",
-            groupLabel: "fal",
-            onboardingScopes: ["image-generation"],
+    {
+      name: "preserves onboarding scopes on wizard options",
+      provider: makeProvider({
+        id: "fal",
+        label: "fal",
+        auth: [
+          {
+            id: "api-key",
+            label: "fal API key",
+            kind: "api_key",
+            wizard: {
+              choiceId: "fal-api-key",
+              choiceLabel: "fal API key",
+              groupId: "fal",
+              groupLabel: "fal",
+              onboardingScopes: ["image-generation"],
+            },
+            run: vi.fn(),
           },
-          run: vi.fn(),
-        },
-      ],
-    });
-    resolvePluginProviders.mockReturnValue([provider]);
-
-    expect(resolveProviderWizardOptions({})).toEqual([
-      {
+        ],
+      }),
+      choice: "fal-api-key",
+      expectedOption: {
         value: "fal-api-key",
         label: "fal API key",
         groupId: "fal",
         groupLabel: "fal",
         onboardingScopes: ["image-generation"],
       },
-    ]);
-  });
-
-  it("returns method wizard metadata for canonical choices", () => {
-    const provider = makeProvider({
-      id: "anthropic",
-      label: "Anthropic",
-      auth: [
-        {
-          id: "setup-token",
-          label: "setup-token",
-          kind: "token",
-          wizard: {
-            choiceId: "token",
-            modelAllowlist: {
-              allowedKeys: ["anthropic/claude-sonnet-4-6"],
-              initialSelections: ["anthropic/claude-sonnet-4-6"],
-              message: "Anthropic OAuth models",
+      resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
+    },
+    {
+      name: "returns method wizard metadata for canonical choices",
+      provider: makeProvider({
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            wizard: {
+              choiceId: "token",
+              modelAllowlist: {
+                allowedKeys: ["anthropic/claude-sonnet-4-6"],
+                initialSelections: ["anthropic/claude-sonnet-4-6"],
+                message: "Anthropic OAuth models",
+              },
             },
+            run: vi.fn(),
           },
-          run: vi.fn(),
-        },
-      ],
-    });
-
-    expect(
-      resolveProviderPluginChoice({
-        providers: [provider],
-        choice: "token",
+        ],
       }),
-    ).toEqual({
+      choice: "token",
+      expectedOption: {
+        value: "token",
+        label: "Anthropic",
+        groupId: "anthropic",
+        groupLabel: "Anthropic",
+        groupHint: undefined,
+        hint: undefined,
+      },
+      resolveWizard: (provider: ProviderPlugin) => provider.auth[0]?.wizard,
+    },
+  ] as const)("$name", ({ provider, choice, expectedOption, resolveWizard }) => {
+    expectSingleWizardChoice({
       provider,
-      method: provider.auth[0],
-      wizard: provider.auth[0]?.wizard,
+      choice,
+      expectedOption,
+      expectedWizard: resolveWizard(provider),
     });
   });
 
@@ -299,9 +342,7 @@ describe("provider wizard boundaries", () => {
         },
       },
     });
-    resolvePluginProviders.mockReturnValue([provider]);
-
-    expect(resolveProviderModelPickerEntries({})).toEqual([
+    expectModelPickerEntries(provider, [
       {
         value: buildProviderPluginMethodChoice("sglang", "server"),
         label: "SGLang server",
@@ -314,34 +355,28 @@ describe("provider wizard boundaries", () => {
     const provider = createSglangWizardProvider({ includeModelPicker: true });
     const config = {};
     const env = createHomeEnv();
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
 
     const runtimeParams = createWizardRuntimeParams({ config, env });
     expect(resolveProviderWizardOptions(runtimeParams)).toHaveLength(1);
     expect(resolveProviderModelPickerEntries(runtimeParams)).toHaveLength(1);
 
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
     expectProviderResolutionCall({ config, env });
   });
 
   it("invalidates the wizard cache when config or env contents change in place", () => {
-    const provider = createSglangSetupProvider();
     const config = createSglangConfig();
     const env = createHomeEnv("-a");
-    resolvePluginProviders.mockReturnValue([provider]);
 
-    expect(resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }))).toHaveLength(
-      1,
-    );
-
-    config.plugins.allow = ["vllm"];
-    env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
-
-    expect(resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }))).toHaveLength(
-      1,
-    );
-
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expectWizardCacheInvalidationCount({
+      provider: createSglangWizardProvider(),
+      config,
+      env,
+      mutate: () => {
+        config.plugins.allow = ["vllm"];
+        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
+      },
+    });
   });
 
   it.each([
@@ -358,22 +393,23 @@ describe("provider wizard boundaries", () => {
       }),
     },
   ] as const)("$name", ({ env }) => {
-    const provider = createSglangSetupProvider();
-    const config = createSglangConfig();
-    resolvePluginProviders.mockReturnValue([provider]);
-
-    expectWizardProviderCacheMiss({ config, env });
+    expectWizardResolutionCount({
+      provider: createSglangWizardProvider(),
+      config: createSglangConfig(),
+      env,
+      expectedCount: 2,
+    });
   });
 
   it("expires provider-wizard memoization after the shortest plugin cache ttl", () => {
     vi.useFakeTimers();
-    const provider = createSglangSetupProvider();
+    const provider = createSglangWizardProvider();
     const config = {};
     const env = createHomeEnv("", {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
     });
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
     const runtimeParams = createWizardRuntimeParams({ config, env });
 
     resolveProviderWizardOptions(runtimeParams);
@@ -382,30 +418,29 @@ describe("provider wizard boundaries", () => {
     vi.advanceTimersByTime(2);
     resolveProviderWizardOptions(runtimeParams);
 
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expectProviderResolutionCall({ config, env, count: 2 });
   });
 
   it("invalidates provider-wizard snapshots when cache-control env values change in place", () => {
-    const provider = createSglangSetupProvider();
     const config = {};
     const env = createHomeEnv("", {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
     });
-    resolvePluginProviders.mockReturnValue([provider]);
 
-    resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }));
-
-    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
-
-    resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }));
-
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expectWizardCacheInvalidationCount({
+      provider: createSglangWizardProvider(),
+      config,
+      env,
+      mutate: () => {
+        env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
+      },
+    });
   });
 
   it("routes model-selected hooks only to the matching provider", async () => {
     const matchingHook = vi.fn(async () => {});
     const otherHook = vi.fn(async () => {});
-    resolvePluginProviders.mockReturnValue([
+    setResolvedProviders(
       makeProvider({
         id: "ollama",
         label: "Ollama",
@@ -416,7 +451,7 @@ describe("provider wizard boundaries", () => {
         label: "vLLM",
         onModelSelected: matchingHook,
       }),
-    ]);
+    );
 
     const env = createHomeEnv();
     await runProviderModelSelectedHook({

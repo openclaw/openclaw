@@ -9,7 +9,13 @@ import {
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
-import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./api.js";
+import {
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+  applyGoogleGeminiModelDefault,
+  normalizeGoogleProviderConfig,
+  resolveGoogleGenerativeAiTransport,
+  normalizeGoogleModelId,
+} from "./api.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
@@ -131,6 +137,7 @@ function createLazyGoogleGeminiCliProvider(): ProviderPlugin {
         methodId: "oauth",
       },
     },
+    normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
     resolveDynamicModel: (ctx) =>
       resolveGoogle31ForwardCompatModel({ providerId: GOOGLE_GEMINI_CLI_PROVIDER_ID, ctx }),
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
@@ -204,6 +211,7 @@ export default definePluginEntry({
       id: "google",
       label: "Google AI Studio",
       docsPath: "/providers/models",
+      hookAliases: ["google-antigravity", "google-vertex"],
       envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
@@ -227,8 +235,17 @@ export default definePluginEntry({
           },
         }),
       ],
+      normalizeTransport: ({ api, baseUrl }) =>
+        resolveGoogleGenerativeAiTransport({ api, baseUrl }),
+      normalizeConfig: ({ provider, providerConfig }) =>
+        normalizeGoogleProviderConfig(provider, providerConfig),
+      normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
       resolveDynamicModel: (ctx) =>
-        resolveGoogle31ForwardCompatModel({ providerId: "google", ctx }),
+        resolveGoogle31ForwardCompatModel({
+          providerId: ctx.provider,
+          templateProviderId: GOOGLE_GEMINI_CLI_PROVIDER_ID,
+          ctx,
+        }),
       wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });

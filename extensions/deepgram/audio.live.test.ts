@@ -1,5 +1,5 @@
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import { transcribeDeepgramAudio } from "./audio.js";
 
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY ?? "";
