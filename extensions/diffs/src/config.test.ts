@@ -287,7 +287,8 @@ describe("renderDiffDocument", () => {
       },
     );
 
-    const loaderSrc = rendered.html.match(/<script type="module" src="([^"]+)"><\/script>/)?.[1];
+    const html = rendered.html ?? "";
+    const loaderSrc = html.match(/<script type="module" src="([^"]+)"><\/script>/)?.[1];
     expect(loaderSrc).toBe("../../assets/viewer.js");
     expect(
       new URL(loaderSrc ?? "", "https://example.com/openclaw/plugins/diffs/view/id/token").pathname,
