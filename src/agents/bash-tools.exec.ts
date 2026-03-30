@@ -62,24 +62,28 @@ const APPROVE_COMMAND_RE = /^\s*\/approve(?:@[^\s]*)?(\s|$)/i;
 
 /**
  * Split a single shell line into command segments separated by
- * `&&`, `||`, `;`, or `|`. This is a best-effort heuristic — it does
- * not handle quoted strings containing these operators, but that is
- * acceptable for a safety guard (false positives are safe, false
- * negatives are the risk).
+ * `&&`, `||`, `;`, `|`, or `&` (background operator). This is a best-effort
+ * heuristic — it does not handle quoted strings containing these operators,
+ * but that is acceptable for a safety guard (false positives are safe,
+ * false negatives are the risk).
  */
 function splitShellSegments(line: string): string[] {
-  return line.split(/\s*(?:&&|\|\||[;|])\s*/);
+  return line.split(/\s*(?:&&|\|\||[;&|])\s*/);
 }
 
 /**
  * Detect a heredoc opening on a line. Returns the delimiter word or null.
  * Supports: <<EOF  <<'EOF'  <<"EOF"  <<-EOF  <<-'EOF-1'  <<"EOF_2"
  * Uses [\w-]+ to cover delimiters with hyphens (e.g. END-OF-DATA).
- * Only matches `<<` that is preceded by start-of-string or whitespace
- * to avoid false positives on strings like `echo "<<EOF"`.
+ *
+ * To avoid false positives on quoted text like `echo " <<EOF"`, we first
+ * strip content inside single and double quotes before testing for `<<`.
  */
 function detectHeredocDelimiter(line: string): string | null {
-  const m = line.match(/(?:^|\s)<<-?\s*['"]?([\w-]+)['"]?/);
+  // Remove quoted strings so that `echo " <<EOF"` does not match,
+  // but preserve quotes that are part of heredoc syntax (e.g. <<'EOF').
+  const stripped = line.replace(/(?<!<<-?\s*)(['"])(?:(?!\1).)*\1/g, "");
+  const m = stripped.match(/(?:^|\s)<<-?\s*['"]?([\w-]+)['"]?/);
   return m ? m[1] : null;
 }
 
@@ -93,7 +97,7 @@ function detectHeredocDelimiter(line: string): string | null {
  * by LLM-generated commands.
  *
  * - Lines inside heredoc bodies are skipped (no false positives on data).
- * - Each executable line is split on shell separators (`&&`, `||`, `;`, `|`)
+ * - Each executable line is split on shell separators (`&&`, `||`, `;`, `|`, `&`)
  *   so that `/approve` after a separator is detected.
  */
 export function containsApproveCommand(command: string): boolean {

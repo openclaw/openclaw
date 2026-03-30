@@ -584,6 +584,19 @@ describe("exec /approve guard", () => {
     );
     expect(readTextContent(result.content)).toBeDefined();
   });
+
+  it("rejects /approve after & background operator on same line", async () => {
+    await expect(
+      executeExecCommand(execTool, "true & /approve abc123 allow-once"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("does not false-trigger heredoc on quoted <<EOF inside echo", async () => {
+    // echo " <<EOF" should NOT start a heredoc; the next line /approve must be caught.
+    await expect(
+      executeExecCommand(execTool, 'echo " <<EOF"\n/approve abc123 allow-always'),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
 });
 
 describe("exec exit codes", () => {
