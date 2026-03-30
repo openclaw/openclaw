@@ -55,7 +55,9 @@ export function buildMediaUnderstandingRegistry(
   if (configuredProviders && typeof configuredProviders === "object") {
     for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
       const normalizedKey = normalizeMediaProviderId(providerId);
-      if (registry.has(normalizedKey)) continue;
+      if (registry.has(normalizedKey)) {
+        continue;
+      }
       const api = (providerConfig as Record<string, unknown> | undefined)?.api;
       if (api === "anthropic-messages" || api === "openai-responses" || api === "openai-completions") {
         const models = Array.isArray(
@@ -72,7 +74,7 @@ export function buildMediaUnderstandingRegistry(
             capabilities: ["image"],
             describeImage: describeImageWithModel,
             describeImages: describeImagesWithModel,
-          } as MediaUnderstandingProvider);
+          });
         }
       }
     }
