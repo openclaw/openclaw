@@ -25,7 +25,22 @@ export const CLAUDE_PARAM_GROUPS = {
       keys: ["edits", "oldText", "old_string", "old_text", "oldString"],
       label: "edits or oldText/newText aliases",
       validate: (record: Record<string, unknown>) => {
-        if (Array.isArray(record.edits) && record.edits.length > 0) {
+        const hasCanonicalEdit = Array.isArray(record.edits)
+          ? record.edits.some((entry) => {
+              if (!entry || typeof entry !== "object") {
+                return false;
+              }
+              const edit = entry as Record<string, unknown>;
+              const oldText = edit.oldText;
+              const newText = edit.newText;
+              return (
+                typeof oldText === "string" &&
+                oldText.trim().length > 0 &&
+                typeof newText === "string"
+              );
+            })
+          : false;
+        if (hasCanonicalEdit) {
           return true;
         }
         const readNonEmptyString = (...keys: string[]) =>

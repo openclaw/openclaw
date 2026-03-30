@@ -138,6 +138,26 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("rejects malformed canonical edits[] entries missing newText", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canonical-edit-invalid-"));
+    try {
+      const filePath = path.join(tmpDir, "canonical-invalid.js");
+      await fs.writeFile(filePath, "const value = 'old';\n", "utf8");
+
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { editTool } = expectReadWriteEditTools(tools);
+
+      await expect(
+        editTool.execute("tool-canonical-edit-invalid", {
+          path: "canonical-invalid.js",
+          edits: [{ oldText: "old" }],
+        }),
+      ).rejects.toThrow(/edits|oldText|newText/i);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts legacy old/newText when edits[] is present but empty", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-edit-empty-edits-"));
     try {
