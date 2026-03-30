@@ -779,14 +779,22 @@ class NodeRuntime(
     val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
-    operatorSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildOperatorConnectOptions(),
-      tls,
-    )
+    val bootstrapOnly = isBootstrapOnlyGatewayAuth(token, bootstrapToken, password)
+    if (bootstrapOnly) {
+      operatorConnected = false
+      operatorStatusText = "Offline"
+      operatorSession.disconnect()
+      updateStatus()
+    } else {
+      operatorSession.connect(
+        endpoint,
+        token,
+        bootstrapToken,
+        password,
+        connectionManager.buildOperatorConnectOptions(),
+        tls,
+      )
+    }
     nodeSession.connect(
       endpoint,
       token,
@@ -795,7 +803,9 @@ class NodeRuntime(
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    operatorSession.reconnect()
+    if (!bootstrapOnly) {
+      operatorSession.reconnect()
+    }
     nodeSession.reconnect()
   }
 
@@ -821,14 +831,22 @@ class NodeRuntime(
     val token = prefs.loadGatewayToken()
     val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
-    operatorSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildOperatorConnectOptions(),
-      tls,
-    )
+    val bootstrapOnly = isBootstrapOnlyGatewayAuth(token, bootstrapToken, password)
+    if (bootstrapOnly) {
+      operatorConnected = false
+      operatorStatusText = "Offline"
+      operatorSession.disconnect()
+      updateStatus()
+    } else {
+      operatorSession.connect(
+        endpoint,
+        token,
+        bootstrapToken,
+        password,
+        connectionManager.buildOperatorConnectOptions(),
+        tls,
+      )
+    }
     nodeSession.connect(
       endpoint,
       token,
@@ -1195,6 +1213,14 @@ class NodeRuntime(
     }
   }
 
+}
+
+internal fun isBootstrapOnlyGatewayAuth(
+  token: String?,
+  bootstrapToken: String?,
+  password: String?,
+): Boolean {
+  return !bootstrapToken.isNullOrBlank() && token.isNullOrBlank() && password.isNullOrBlank()
 }
 
 private enum class HomeCanvasGatewayState {
