@@ -11,6 +11,7 @@ describe("runDoctorContributionWithTimeout", () => {
   const originalTimeout = process.env.OPENCLAW_DOCTOR_CONTRIBUTION_TIMEOUT_MS;
 
   afterEach(() => {
+    vi.useRealTimers();
     noteMock.mockReset();
     if (originalTimeout === undefined) {
       delete process.env.OPENCLAW_DOCTOR_CONTRIBUTION_TIMEOUT_MS;
@@ -20,6 +21,9 @@ describe("runDoctorContributionWithTimeout", () => {
   });
 
   it("notes owned timeout failures without swallowing generic errors", async () => {
+    // This suite runs in non-isolated workers in CI; force real timers so
+    // leftover fake-timer state from earlier files cannot suppress the timeout.
+    vi.useRealTimers();
     process.env.OPENCLAW_DOCTOR_CONTRIBUTION_TIMEOUT_MS = "10";
 
     await expect(
@@ -42,6 +46,7 @@ describe("runDoctorContributionWithTimeout", () => {
   });
 
   it("rethrows non-timeout contribution failures", async () => {
+    vi.useRealTimers();
     process.env.OPENCLAW_DOCTOR_CONTRIBUTION_TIMEOUT_MS = "50";
 
     await expect(
