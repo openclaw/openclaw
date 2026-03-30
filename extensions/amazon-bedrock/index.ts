@@ -46,7 +46,7 @@ function createGuardrailWrapStreamFn(
 
 const PROVIDER_ID = "amazon-bedrock";
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-const BEDROCK_RUNTIME_REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com/;
+const BEDROCK_RUNTIME_REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\./;
 
 /**
  * Resolve the AWS region for Bedrock API calls.

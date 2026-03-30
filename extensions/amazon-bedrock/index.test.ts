@@ -345,6 +345,20 @@ describe("amazon-bedrock provider plugin", () => {
       expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-central-1" });
     });
 
+    it("extracts region from China (.amazonaws.com.cn) baseUrl", () => {
+      const modelId = "anthropic.claude-sonnet-4-6";
+      const wrapped = wrapStream(modelId, {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.cn-north-1.amazonaws.com.cn",
+            },
+          },
+        },
+      });
+      expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "cn-north-1" });
+    });
+
     it("prefers provider baseUrl region over bedrockDiscovery region", () => {
       const modelId = "eu.anthropic.claude-sonnet-4-6";
       const wrapped = wrapStream(modelId, {
