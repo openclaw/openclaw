@@ -310,7 +310,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     remember {
       mutableStateOf(
         ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
-          PackageManager.PERMISSION_GRANTED &&
+          PackageManager.PERMISSION_GRANTED ||
           ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
           PackageManager.PERMISSION_GRANTED,
       )
@@ -319,7 +319,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
       smsPermissionGranted =
         ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
-          PackageManager.PERMISSION_GRANTED &&
+          PackageManager.PERMISSION_GRANTED
+        ||
           ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
           PackageManager.PERMISSION_GRANTED
       viewModel.refreshGatewayConnection()
@@ -357,7 +358,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
-              PackageManager.PERMISSION_GRANTED &&
+              PackageManager.PERMISSION_GRANTED
+            ||
               ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
               PackageManager.PERMISSION_GRANTED
         }
