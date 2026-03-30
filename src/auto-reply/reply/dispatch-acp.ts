@@ -98,8 +98,8 @@ async function resolveAcpAttachments(
         data: buffer.toString("base64"),
       });
     } catch (error) {
-      if (isMediaUnderstandingSkipError(error) && error.reason === "maxBytes") {
-        logVerbose(`dispatch-acp: skipping attachment #${attachment.index + 1} (maxBytes)`);
+      if (isMediaUnderstandingSkipError(error)) {
+        logVerbose(`dispatch-acp: skipping attachment #${attachment.index + 1} (${error.reason})`);
       } else {
         const errorName = error instanceof Error ? error.name : typeof error;
         logVerbose(
