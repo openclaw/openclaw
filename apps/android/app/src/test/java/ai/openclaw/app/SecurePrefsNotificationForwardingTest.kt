@@ -4,7 +4,6 @@ import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -62,6 +61,34 @@ class SecurePrefsNotificationForwardingTest {
     )
 
     assertTrue(prefs.notificationForwardingQuietHoursEnabled.value)
+    assertEquals("22:30", prefs.notificationForwardingQuietStart.value)
+    assertEquals("06:45", prefs.notificationForwardingQuietEnd.value)
+  }
+
+  @Test
+  fun setNotificationForwardingQuietHours_disablesWithoutRevalidatingDrafts() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+
+    val prefs = SecurePrefs(context)
+    assertTrue(
+      prefs.setNotificationForwardingQuietHours(
+        enabled = true,
+        start = "22:30",
+        end = "06:45",
+      ),
+    )
+
+    assertTrue(
+      prefs.setNotificationForwardingQuietHours(
+        enabled = false,
+        start = "7:00",
+        end = "06:45",
+      ),
+    )
+
+    assertFalse(prefs.notificationForwardingQuietHoursEnabled.value)
     assertEquals("22:30", prefs.notificationForwardingQuietStart.value)
     assertEquals("06:45", prefs.notificationForwardingQuietEnd.value)
   }

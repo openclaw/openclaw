@@ -319,6 +319,11 @@ class SecurePrefs(
     start: String,
     end: String,
   ): Boolean {
+    if (!enabled) {
+      plainPrefs.edit { putBoolean(notificationsForwardingQuietHoursEnabledKey, false) }
+      _notificationForwardingQuietHoursEnabled.value = false
+      return true
+    }
     val normalizedStart = normalizeLocalHourMinute(start) ?: return false
     val normalizedEnd = normalizeLocalHourMinute(end) ?: return false
     plainPrefs.edit {

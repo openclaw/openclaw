@@ -56,17 +56,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
   val discoveryStatusText: StateFlow<String> = runtimeState(initial = "Searching…") { it.discoveryStatusText }
-  val notificationForwardingEnabled: StateFlow<Boolean> = runtime.notificationForwardingEnabled
+  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
   val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
-    runtime.notificationForwardingMode
-  val notificationForwardingPackages: StateFlow<Set<String>> = runtime.notificationForwardingPackages
+    prefs.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
   val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
-    runtime.notificationForwardingQuietHoursEnabled
-  val notificationForwardingQuietStart: StateFlow<String> = runtime.notificationForwardingQuietStart
-  val notificationForwardingQuietEnd: StateFlow<String> = runtime.notificationForwardingQuietEnd
+    prefs.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
-    runtime.notificationForwardingMaxEventsPerMinute
-  val notificationForwardingSessionKey: StateFlow<String?> = runtime.notificationForwardingSessionKey
+    prefs.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }

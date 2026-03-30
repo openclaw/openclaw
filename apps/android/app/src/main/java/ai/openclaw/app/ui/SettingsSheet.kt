@@ -233,8 +233,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   var notificationAppSearch by remember { mutableStateOf("") }
   var notificationShowSystemApps by remember { mutableStateOf(false) }
   var installedNotificationApps by
-    remember(context) {
-      mutableStateOf(queryInstalledApps(context))
+    remember(context, notificationForwardingPackages) {
+      mutableStateOf(queryInstalledApps(context, notificationForwardingPackages))
     }
 
   var photosPermissionGranted by
@@ -332,7 +332,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           notificationsPermissionGranted = hasNotificationsPermission(context)
           notificationListenerEnabled = isNotificationListenerEnabled(context)
-          installedNotificationApps = queryInstalledApps(context)
+          installedNotificationApps = queryInstalledApps(context, notificationForwardingPackages)
           photosPermissionGranted =
             ContextCompat.checkSelfPermission(context, photosPermission) ==
               PackageManager.PERMISSION_GRANTED
@@ -1150,7 +1150,10 @@ data class InstalledApp(
   val isSystemApp: Boolean,
 )
 
-private fun queryInstalledApps(context: Context): List<InstalledApp> {
+private fun queryInstalledApps(
+  context: Context,
+  configuredPackages: Set<String>,
+): List<InstalledApp> {
   val packageManager = context.packageManager
   val launcherIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
 
@@ -1167,10 +1170,15 @@ private fun queryInstalledApps(context: Context): List<InstalledApp> {
       .asSequence()
       .map { it.trim() }
       .filter { it.isNotEmpty() }
-      .toSet()
+      .toList()
 
-  val candidatePackages = (launcherPackages + recentNotificationPackages)
-    .filter { it != context.packageName }
+  val candidatePackages =
+    resolveNotificationCandidatePackages(
+      launcherPackages = launcherPackages,
+      recentPackages = recentNotificationPackages,
+      configuredPackages = configuredPackages,
+      appPackageName = context.packageName,
+    )
 
   return candidatePackages
     .asSequence()
@@ -1187,6 +1195,24 @@ private fun queryInstalledApps(context: Context): List<InstalledApp> {
     }
     .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
     .toList()
+}
+
+internal fun resolveNotificationCandidatePackages(
+  launcherPackages: Set<String>,
+  recentPackages: List<String>,
+  configuredPackages: Set<String>,
+  appPackageName: String,
+): Set<String> {
+  val blockedPackage = appPackageName.trim()
+  return sequenceOf(
+      configuredPackages.asSequence(),
+      launcherPackages.asSequence(),
+      recentPackages.asSequence(),
+    )
+    .flatten()
+    .map { it.trim() }
+    .filter { it.isNotEmpty() && it != blockedPackage }
+    .toSet()
 }
 
 
