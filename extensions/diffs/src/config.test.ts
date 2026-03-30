@@ -5,6 +5,7 @@ import {
   ResolvedThemes,
   ResolvingThemes,
 } from "@pierre/diffs";
+import AjvPkg from "ajv";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
@@ -164,6 +165,41 @@ describe("resolveDiffsPluginDefaults", () => {
       fileMaxWidth: 1024,
     });
   });
+
+  it("keeps loader-applied schema defaults from shadowing aliases and quality-derived defaults", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema: Record<string, unknown> };
+    const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
+    const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
+    const validate = ajv.compile(manifest.configSchema);
+
+    const aliasOnly = {
+      defaults: {
+        format: "pdf",
+        imageQuality: "hq",
+      },
+    };
+    expect(validate(aliasOnly)).toBe(true);
+    expect(resolveDiffsPluginDefaults(aliasOnly)).toMatchObject({
+      fileFormat: "pdf",
+      fileQuality: "hq",
+      fileScale: 2.5,
+      fileMaxWidth: 1200,
+    });
+
+    const qualityOnly = {
+      defaults: {
+        fileQuality: "hq",
+      },
+    };
+    expect(validate(qualityOnly)).toBe(true);
+    expect(resolveDiffsPluginDefaults(qualityOnly)).toMatchObject({
+      fileQuality: "hq",
+      fileScale: 2.5,
+      fileMaxWidth: 1200,
+    });
+  });
 });
 
 describe("resolveDiffsPluginSecurity", () => {
@@ -210,6 +246,27 @@ describe("diffs plugin schema surfaces", () => {
         },
         security: {
           allowRemoteViewer: true,
+        },
+      },
+    });
+  });
+
+  it("canonicalizes alias-driven defaults for direct safeParse callers", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        defaults: {
+          format: "pdf",
+          imageQuality: "hq",
+        },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        defaults: {
+          fileFormat: "pdf",
+          fileQuality: "hq",
+          fileScale: 2.5,
+          fileMaxWidth: 1200,
         },
       },
     });
