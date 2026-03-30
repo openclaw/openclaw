@@ -18,6 +18,11 @@ export async function withTempDir<T>(
   try {
     return await run(dir);
   } finally {
-    await fs.rm(base, { recursive: true, force: true });
+    await fs.rm(base, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
   }
 }
