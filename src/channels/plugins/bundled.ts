@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { createJiti } from "jiti";
+import { loadConfig } from "../../config/io.js";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
@@ -116,7 +117,9 @@ function loadBundledModule(modulePath: string, rootDir: string): unknown {
   return loadModule(safePath)(safePath);
 }
 
-function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelEntry[] {
+function loadGeneratedBundledChannelEntries(
+  enabledChannelIds?: ReadonlySet<string>,
+): readonly GeneratedBundledChannelEntry[] {
   const discovery = discoverOpenClawPlugins({ cache: false });
   const manifestRegistry = loadPluginManifestRegistry({
     cache: false,
@@ -139,6 +142,15 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
       continue;
     }
     seenIds.add(manifest.id);
+
+    // Skip loading channels that are not in the enabled set.
+    // This avoids jiti-loading every bundled extension at startup,
+    // which is critical on low-power ARM64 hosts (e.g. Raspberry Pi)
+    // where parsing dozens of unused module trees causes multi-minute
+    // startup delays and can trigger circular-dependency stack overflows.
+    if (enabledChannelIds && !enabledChannelIds.has(manifest.id)) {
+      continue;
+    }
 
     try {
       const entry = resolveChannelPluginModuleEntry(
@@ -192,12 +204,31 @@ type BundledChannelState = {
 
 let cachedBundledChannelState: BundledChannelState | null = null;
 
+/**
+ * Build the set of channel IDs that should be loaded based on config.
+ * When `plugins.allow` is set, only load channels whose plugin id is in the
+ * allowlist. Returns `undefined` when no filtering should be applied (load all).
+ */
+function resolveEnabledChannelIds(): ReadonlySet<string> | undefined {
+  try {
+    const config = loadConfig();
+    const allow = config.plugins?.allow;
+    if (Array.isArray(allow) && allow.length > 0) {
+      return new Set(allow);
+    }
+  } catch {
+    // Config not available yet (e.g. during early bootstrap); load all channels.
+  }
+  return undefined;
+}
+
 function getBundledChannelState(): BundledChannelState {
   if (cachedBundledChannelState) {
     return cachedBundledChannelState;
   }
 
-  const entries = loadGeneratedBundledChannelEntries();
+  const enabledChannelIds = resolveEnabledChannelIds();
+  const entries = loadGeneratedBundledChannelEntries(enabledChannelIds);
   const plugins = entries.map(({ entry }) => entry.channelPlugin);
   const setupPlugins = entries.flatMap(({ setupEntry }) => {
     const plugin = setupEntry?.plugin;
