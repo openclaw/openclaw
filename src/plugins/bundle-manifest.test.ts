@@ -331,4 +331,69 @@ describe("bundle manifest parsing", () => {
 
     expect(detectBundleManifestFormat(rootDir)).toBeNull();
   });
+
+  it("tolerates trailing commas in bundle manifest (JSON5 fallback)", () => {
+    const rootDir = makeTempDir();
+    mkdirSafe(path.join(rootDir, ".codex-plugin"));
+    mkdirSafe(path.join(rootDir, "skills"));
+    // Write raw JSON5 content with trailing commas
+    fs.writeFileSync(
+      path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH),
+      `{
+  "name": "Trailing Comma Plugin",
+  "description": "Test trailing commas",
+  "skills": "skills",
+}`,
+      "utf-8",
+    );
+    const result = loadBundleManifest({ rootDir, bundleFormat: "codex" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.name).toBe("Trailing Comma Plugin");
+    }
+  });
+
+  it("tolerates comments in bundle manifest (JSON5 fallback)", () => {
+    const rootDir = makeTempDir();
+    mkdirSafe(path.join(rootDir, ".codex-plugin"));
+    mkdirSafe(path.join(rootDir, "skills"));
+    // Write raw JSON5 content with comments
+    fs.writeFileSync(
+      path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH),
+      `{
+  // Plugin name
+  "name": "Comment Plugin",
+  /* Description */
+  "description": "Test comments in manifest",
+  "skills": "skills"
+}`,
+      "utf-8",
+    );
+    const result = loadBundleManifest({ rootDir, bundleFormat: "codex" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.name).toBe("Comment Plugin");
+    }
+  });
+
+  it("tolerates unquoted keys in bundle manifest (JSON5 fallback)", () => {
+    const rootDir = makeTempDir();
+    mkdirSafe(path.join(rootDir, ".codex-plugin"));
+    mkdirSafe(path.join(rootDir, "skills"));
+    // Write raw JSON5 content with unquoted keys
+    fs.writeFileSync(
+      path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH),
+      `{
+  name: "Unquoted Keys Plugin",
+  description: "Test unquoted property names",
+  skills: "skills"
+}`,
+      "utf-8",
+    );
+    const result = loadBundleManifest({ rootDir, bundleFormat: "codex" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.name).toBe("Unquoted Keys Plugin");
+    }
+  });
 });
