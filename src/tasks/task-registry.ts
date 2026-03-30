@@ -1240,5 +1240,8 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   listenerStarted = false;
   if (opts?.persist !== false) {
     persistTaskRegistry();
+    // Close the sqlite handle after persisting the empty snapshot so Windows temp-dir
+    // cleanup can remove the state directory without hitting runs.sqlite EBUSY errors.
+    getTaskRegistryStore().close?.();
   }
 }
