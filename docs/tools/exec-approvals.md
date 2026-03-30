@@ -315,6 +315,15 @@ When approvals are required, the exec tool returns immediately with an approval 
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
 timeout, the request is treated as an approval timeout and surfaced as a denial reason.
 
+### Followup delivery behavior
+
+After an approved async exec finishes, OpenClaw sends a followup `agent` turn to the same session.
+
+- If a valid external delivery target exists (deliverable channel plus target `to`), followup delivery uses that channel.
+- In webchat-only or internal-session flows with no external target, followup delivery stays session-only (`deliver: false`).
+- If a caller explicitly requests strict external delivery with no resolvable external channel, the request fails with `INVALID_REQUEST`.
+- If `bestEffortDeliver` is enabled and no external channel can be resolved, delivery is downgraded to session-only instead of failing.
+
 The confirmation dialog includes:
 
 - command + args

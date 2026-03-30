@@ -14,6 +14,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { logWarn } from "../logger.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
@@ -24,6 +25,23 @@ import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
+export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
+const loggedExecApprovalFollowupFailures = new Set<string>();
+
+function rememberExecApprovalFollowupFailureKey(key: string): boolean {
+  if (loggedExecApprovalFollowupFailures.has(key)) {
+    return false;
+  }
+  loggedExecApprovalFollowupFailures.add(key);
+  // Bound memory growth for long-lived processes that see many unique approval failures.
+  if (loggedExecApprovalFollowupFailures.size > MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS) {
+    const oldestKey = loggedExecApprovalFollowupFailures.values().next().value;
+    if (typeof oldestKey === "string") {
+      loggedExecApprovalFollowupFailures.delete(oldestKey);
+    }
+  }
+  return true;
+}
 
 export type ExecHostApprovalContext = {
   approvals: ResolvedExecApprovals;
@@ -334,7 +352,14 @@ export async function sendExecApprovalFollowupResult(
     turnSourceAccountId: target.turnSourceAccountId,
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
-  }).catch(() => {});
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const key = `${target.approvalId}:${message}`;
+    if (!rememberExecApprovalFollowupFailureKey(key)) {
+      return;
+    }
+    logWarn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
+  });
 }
 
 export function buildExecApprovalPendingToolResult(params: {
