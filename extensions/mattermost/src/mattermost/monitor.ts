@@ -449,9 +449,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           kind,
           postId: post.id || undefined,
           replyToMode,
-          // Don't thread if channel lookup failed — we might be in a DM masquerading
-          // as "channel" via the mapMattermostChannelTypeToChatType fallback.
-          threadRootId: channelInfo != null ? post.root_id : undefined,
+          threadRootId: post.root_id,
         }).sessionKey;
       },
       dispatchButtonClick: async (opts) => {
@@ -483,9 +481,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           kind,
           postId: opts.post.id || opts.postId,
           replyToMode,
-          // Don't thread if channel lookup failed — we might be in a DM masquerading
-          // as "channel" via the mapMattermostChannelTypeToChatType fallback.
-          threadRootId: channelInfo != null ? opts.post.root_id : undefined,
+          threadRootId: opts.post.root_id,
         });
         const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
         const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
