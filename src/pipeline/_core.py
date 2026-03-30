@@ -992,25 +992,13 @@ class PipelineExecutor:
                         {"role": "user", "content": retry_prompt}
                     ]
                     try:
-                            new_response = await call_openrouter(
-                                openrouter_config=self.openrouter_config,
-                                model=model,
-                                fallback_model=role_config.get("fallback_model", model),
-                                system_prompt=system_prompt,
-                                user_prompt=step_prompt + "\n\n" + retry_prompt,
-                                role_name=role_name,
-                                role_config=role_config,
-                                mcp_client=active_mcp,
-                                config=self.config,
-                            )
-                        else:
-                            new_response = await route_llm(
-                                step_prompt + "\n\n" + retry_prompt,
-                                system=system_prompt,
-                                model=model,
-                                messages=retry_messages,
-                                max_tokens=2048,
-                            )
+                        new_response = await route_llm(
+                            step_prompt + "\n\n" + retry_prompt,
+                            system=system_prompt,
+                            model=model,
+                            messages=retry_messages,
+                            max_tokens=2048,
+                        )
                         new_response = re.sub(r"<think>.*?</think>", "", (new_response or ""), flags=re.DOTALL)
                         new_response = re.sub(r"<think>.*$", "", new_response, flags=re.DOTALL).strip()
                         if new_response:
