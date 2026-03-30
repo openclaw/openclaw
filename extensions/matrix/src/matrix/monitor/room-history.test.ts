@@ -91,6 +91,41 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     expect(room1History).toHaveLength(1);
     expect(room1History[0]?.body).toBe("new msg in room1");
   });
+
+  it("refreshes prepared-trigger recency before capped eviction on retry hits", () => {
+    const tracker = createRoomHistoryTracker(200, 10, 5000, 2);
+    const room1 = "!room1:test";
+
+    tracker.prepareTrigger(AGENT, room1, 100, {
+      sender: "user",
+      body: "trigger1",
+      messageId: "$trigger1",
+    });
+    tracker.prepareTrigger(AGENT, room1, 100, {
+      sender: "user",
+      body: "trigger2",
+      messageId: "$trigger2",
+    });
+
+    // Retry hit should refresh trigger1 so trigger2 becomes the stale entry.
+    const retried = tracker.prepareTrigger(AGENT, room1, 100, {
+      sender: "user",
+      body: "trigger1",
+      messageId: "$trigger1",
+    });
+    tracker.prepareTrigger(AGENT, room1, 100, {
+      sender: "user",
+      body: "trigger3",
+      messageId: "$trigger3",
+    });
+
+    const reused = tracker.prepareTrigger(AGENT, room1, 100, {
+      sender: "user",
+      body: "trigger1",
+      messageId: "$trigger1",
+    });
+    expect(reused.snapshotIdx).toBe(retried.snapshotIdx);
+  });
 });
 
 describe("createRoomHistoryTracker — roomQueues eviction", () => {

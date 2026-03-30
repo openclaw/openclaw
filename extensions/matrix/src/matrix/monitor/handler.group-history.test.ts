@@ -60,6 +60,14 @@ beforeEach(() => {
   installMatrixMonitorTestRuntime();
 });
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("matrix group chat history — scenario 1: basic accumulation", () => {
   it("pending messages appear in InboundHistory; trigger itself does not", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
@@ -183,6 +191,39 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
     const history = ctx["InboundHistory"] as Array<unknown> | undefined;
     expect(history ?? []).toHaveLength(0);
+  });
+
+  it("historyLimit=0 does not serialize same-room ingress", async () => {
+    const firstUserId = deferred<string>();
+    let getUserIdCalls = 0;
+    const { handler } = createMatrixHandlerTestHarness({
+      historyLimit: 0,
+      groupPolicy: "open",
+      isDirectMessage: false,
+      client: {
+        getUserId: async () => {
+          getUserIdCalls += 1;
+          if (getUserIdCalls === 1) {
+            return await firstUserId.promise;
+          }
+          return "@bot:example.org";
+        },
+      },
+      dispatchReplyFromConfig: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
+    });
+
+    const first = handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$a", body: "first" }));
+    await Promise.resolve();
+    const second = handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$b", body: "second" }));
+    await Promise.resolve();
+
+    expect(getUserIdCalls).toBe(2);
+
+    firstUserId.resolve("@bot:example.org");
+    await Promise.all([first, second]);
   });
 
   it("DMs do not accumulate history (group chat only)", async () => {

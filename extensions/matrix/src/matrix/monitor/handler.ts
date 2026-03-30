@@ -287,6 +287,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     }
   };
 
+  const runHistoryAwareRoomIngress = async <T>(
+    roomId: string,
+    task: () => Promise<T>,
+  ): Promise<T> => (historyLimit > 0 ? runRoomIngress(roomId, task) : task());
+
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let claimedInboundEvent = false;
@@ -331,7 +336,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         await inboundDeduper.commitEvent({ roomId, eventId });
         claimedInboundEvent = false;
       };
-      const ingressResult = await runRoomIngress(roomId, async () => {
+      const ingressResult = await runHistoryAwareRoomIngress(roomId, async () => {
         const selfUserId = await client.getUserId();
         if (senderId === selfUserId) {
           return;

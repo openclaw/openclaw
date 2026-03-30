@@ -86,6 +86,7 @@ export function createRoomHistoryTracker(
   maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
   maxRoomQueues = DEFAULT_MAX_ROOM_QUEUES,
   maxWatermarkEntries = MAX_WATERMARK_ENTRIES,
+  maxPreparedTriggerEntries = MAX_PREPARED_TRIGGER_ENTRIES,
 ): RoomHistoryTracker {
   const roomQueues = new Map<string, RoomQueue>();
   /** Maps `${agentId}:${roomId}` → absolute consumed-up-to index */
@@ -153,6 +154,25 @@ export function createRoomHistoryTracker(
     }
   }
 
+  function rememberPreparedTrigger(
+    queue: RoomQueue,
+    retryKey: string,
+    prepared: PreparedTriggerResult,
+  ): PreparedTriggerResult {
+    if (queue.preparedTriggers.has(retryKey)) {
+      // Refresh insertion order so capped eviction keeps actively retried events hot.
+      queue.preparedTriggers.delete(retryKey);
+    }
+    queue.preparedTriggers.set(retryKey, prepared);
+    if (queue.preparedTriggers.size > maxPreparedTriggerEntries) {
+      const oldest = queue.preparedTriggers.keys().next().value;
+      if (oldest !== undefined) {
+        queue.preparedTriggers.delete(oldest);
+      }
+    }
+    return prepared;
+  }
+
   function computePendingHistory(
     queue: RoomQueue,
     agentId: string,
@@ -193,7 +213,7 @@ export function createRoomHistoryTracker(
       if (retryKey) {
         const prepared = queue.preparedTriggers.get(retryKey);
         if (prepared) {
-          return prepared;
+          return rememberPreparedTrigger(queue, retryKey, prepared);
         }
       }
       const prepared = {
@@ -201,13 +221,7 @@ export function createRoomHistoryTracker(
         snapshotIdx: appendToQueue(queue, entry),
       };
       if (retryKey) {
-        queue.preparedTriggers.set(retryKey, prepared);
-        if (queue.preparedTriggers.size > MAX_PREPARED_TRIGGER_ENTRIES) {
-          const oldest = queue.preparedTriggers.keys().next().value;
-          if (oldest !== undefined) {
-            queue.preparedTriggers.delete(oldest);
-          }
-        }
+        return rememberPreparedTrigger(queue, retryKey, prepared);
       }
       return prepared;
     },
