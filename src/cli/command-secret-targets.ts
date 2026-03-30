@@ -13,10 +13,6 @@ function idsByPrefix(prefixes: readonly string[]): string[] {
 }
 
 const COMMAND_SECRET_TARGETS = {
-  memory: [
-    "agents.defaults.memorySearch.remote.apiKey",
-    "agents.list[].memorySearch.remote.apiKey",
-  ],
   qrRemote: ["gateway.remote.token", "gateway.remote.password"],
   channels: idsByPrefix(["channels."]),
   models: idsByPrefix(["models.providers."]),
@@ -29,6 +25,7 @@ const COMMAND_SECRET_TARGETS = {
     "messages.tts.",
     "tools.web.search",
     "tools.web.fetch.firecrawl.",
+    "tools.web.x_search",
   ]),
   status: idsByPrefix([
     "channels.",
@@ -99,10 +96,6 @@ export function getScopedChannelsCommandSecretTargets(params: {
     }
   }
   return { targetIds, allowedPaths };
-}
-
-export function getMemoryCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.memory);
 }
 
 export function getQrRemoteCommandSecretTargetIds(): Set<string> {

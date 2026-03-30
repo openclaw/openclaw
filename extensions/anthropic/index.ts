@@ -10,7 +10,6 @@ import {
   CLAUDE_CLI_PROFILE_ID,
   applyAuthProfileConfig,
   buildTokenProfileId,
-  createProviderApiKeyAuthMethod,
   ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
   normalizeApiKeyInput,
@@ -25,9 +24,11 @@ import {
   validateAnthropicSetupToken,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "anthropic";
@@ -52,29 +53,6 @@ const ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-haiku-4-5",
 ] as const;
-
-function cloneFirstTemplateModel(params: {
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      PROVIDER_ID,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
-}
 
 function resolveAnthropic46ForwardCompatModel(params: {
   ctx: ProviderResolveDynamicModelContext;
@@ -105,6 +83,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
   templateIds.push(...params.fallbackTemplateIds);
 
   return cloneFirstTemplateModel({
+    providerId: PROVIDER_ID,
     modelId: trimmedModelId,
     templateIds,
     ctx: params.ctx,
@@ -312,6 +291,59 @@ async function runAnthropicSetupTokenNonInteractive(ctx: {
   });
 }
 
+async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
+  if (!hasClaudeCliAuth()) {
+    throw new Error(
+      [
+        "Claude CLI is not authenticated on this host.",
+        `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
+      ].join("\n"),
+    );
+  }
+  return buildAnthropicCliMigrationResult(ctx.config);
+}
+
+async function runAnthropicCliMigrationNonInteractive(ctx: {
+  config: ProviderAuthContext["config"];
+  runtime: ProviderAuthContext["runtime"];
+}): Promise<ProviderAuthContext["config"] | null> {
+  if (!hasClaudeCliAuth()) {
+    ctx.runtime.error(
+      [
+        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
+        `Run ${formatCliCommand("claude auth login")} first.`,
+      ].join("\n"),
+    );
+    ctx.runtime.exit(1);
+    return null;
+  }
+
+  const result = buildAnthropicCliMigrationResult(ctx.config);
+  const currentDefaults = ctx.config.agents?.defaults;
+  const currentModel = currentDefaults?.model;
+  const currentFallbacks =
+    currentModel && typeof currentModel === "object" && "fallbacks" in currentModel
+      ? currentModel.fallbacks
+      : undefined;
+
+  return {
+    ...ctx.config,
+    ...result.configPatch,
+    agents: {
+      ...ctx.config.agents,
+      ...result.configPatch?.agents,
+      defaults: {
+        ...currentDefaults,
+        ...result.configPatch?.agents?.defaults,
+        model: {
+          ...(Array.isArray(currentFallbacks) ? { fallbacks: currentFallbacks } : {}),
+          primary: result.defaultModel,
+        },
+      },
+    },
+  };
+}
+
 export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Anthropic Provider",
@@ -324,7 +356,40 @@ export default definePluginEntry({
       docsPath: "/providers/models",
       envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
       deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
+      oauthProfileIdRepairs: [
+        {
+          legacyProfileId: "anthropic:default",
+          promptLabel: "Anthropic",
+        },
+      ],
       auth: [
+        {
+          id: "cli",
+          label: "Claude CLI",
+          hint: "Reuse a local Claude CLI login and switch model selection to claude-cli/*",
+          kind: "custom",
+          wizard: {
+            choiceId: "anthropic-cli",
+            choiceLabel: "Anthropic Claude CLI",
+            choiceHint: "Reuse a local Claude CLI login on this host",
+            groupId: "anthropic",
+            groupLabel: "Anthropic",
+            groupHint: "Claude CLI + setup-token + API key",
+            modelAllowlist: {
+              allowedKeys: [...ANTHROPIC_OAUTH_ALLOWLIST].map((model) =>
+                model.replace(/^anthropic\//, "claude-cli/"),
+              ),
+              initialSelections: ["claude-cli/claude-sonnet-4-6"],
+              message: "Claude CLI models",
+            },
+          },
+          run: async (ctx: ProviderAuthContext) => await runAnthropicCliMigration(ctx),
+          runNonInteractive: async (ctx) =>
+            await runAnthropicCliMigrationNonInteractive({
+              config: ctx.config,
+              runtime: ctx.runtime,
+            }),
+        },
         {
           id: "setup-token",
           label: "setup-token (claude)",
@@ -336,7 +401,7 @@ export default definePluginEntry({
             choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
             groupId: "anthropic",
             groupLabel: "Anthropic",
-            groupHint: "setup-token + API key",
+            groupHint: "Claude CLI + setup-token + API key",
             modelAllowlist: {
               allowedKeys: [...ANTHROPIC_OAUTH_ALLOWLIST],
               initialSelections: ["anthropic/claude-sonnet-4-6"],
@@ -368,7 +433,7 @@ export default definePluginEntry({
             choiceLabel: "Anthropic API key",
             groupId: "anthropic",
             groupLabel: "Anthropic",
-            groupHint: "setup-token + API key",
+            groupHint: "Claude CLI + setup-token + API key",
           },
         }),
       ],

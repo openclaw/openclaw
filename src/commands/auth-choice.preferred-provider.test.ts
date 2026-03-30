@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn());
+const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn());
+const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn(() => []));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
+  resolveManifestDeprecatedProviderAuthChoice,
+  resolveManifestProviderAuthChoices,
 }));
 
 vi.mock("../plugins/provider-wizard.js", () => ({
@@ -22,6 +26,8 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue(undefined);
+    resolveManifestProviderAuthChoices.mockReturnValue([]);
     resolvePluginProviders.mockReturnValue([]);
     resolveProviderPluginChoice.mockReturnValue(null);
   });
@@ -42,30 +48,57 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   });
 
   it("normalizes legacy auth choices before plugin lookup", async () => {
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "anthropic", label: "Anthropic", auth: [] },
-      method: { id: "setup-token", label: "setup-token", kind: "token" },
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
+      choiceId: "anthropic-cli",
+      choiceLabel: "Anthropic Claude CLI",
+    });
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "anthropic",
+      providerId: "anthropic",
+      methodId: "cli",
+      choiceId: "anthropic-cli",
+      choiceLabel: "Anthropic Claude CLI",
     });
 
     await expect(resolvePreferredProviderForAuthChoice({ choice: "claude-cli" })).resolves.toBe(
       "anthropic",
     );
-    expect(resolveProviderPluginChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        choice: "setup-token",
-      }),
-    );
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledProviderAllowlistCompat: true,
-        bundledProviderVitestCompat: true,
-      }),
-    );
+    expect(resolveProviderPluginChoice).not.toHaveBeenCalled();
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 
-  it("falls back to static core choices when no provider plugin claims the choice", async () => {
+  it("passes explicit env through legacy auth normalization", async () => {
+    const env = { OPENCLAW_AUTH_CHOICE_TEST: "1" } as NodeJS.ProcessEnv;
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
+      choiceId: "anthropic-cli",
+      choiceLabel: "Anthropic Claude CLI",
+    });
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "anthropic",
+      providerId: "anthropic",
+      methodId: "cli",
+      choiceId: "anthropic-cli",
+      choiceLabel: "Anthropic Claude CLI",
+    });
+
+    await expect(
+      resolvePreferredProviderForAuthChoice({ choice: "claude-cli", env }),
+    ).resolves.toBe("anthropic");
+    expect(resolveManifestDeprecatedProviderAuthChoice).toHaveBeenCalledWith("claude-cli", { env });
+  });
+
+  it("uses manifest metadata for plugin-owned choices", async () => {
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "chutes",
+      providerId: "chutes",
+      methodId: "oauth",
+      choiceId: "chutes",
+      choiceLabel: "Chutes OAuth",
+    });
+
     await expect(resolvePreferredProviderForAuthChoice({ choice: "chutes" })).resolves.toBe(
       "chutes",
     );
+    expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
 });

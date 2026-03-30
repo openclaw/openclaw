@@ -19,7 +19,11 @@ export type {
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "../channels/plugins/types.adapters.js";
-export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type {
+  ChannelConfigSchema,
+  ChannelConfigUiHint,
+  ChannelPlugin,
+} from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
 export type {
   ConfiguredBindingConversation,

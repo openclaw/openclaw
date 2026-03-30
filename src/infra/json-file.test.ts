@@ -4,22 +4,35 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { loadJsonFile, saveJsonFile } from "./json-file.js";
 
+async function withJsonPath<T>(
+  run: (params: { root: string; pathname: string }) => Promise<T> | T,
+): Promise<T> {
+  return withTempDir({ prefix: "openclaw-json-file-" }, async (root) =>
+    run({ root, pathname: path.join(root, "config.json") }),
+  );
+}
+
 describe("json-file helpers", () => {
-  it("returns undefined for missing and invalid JSON files", async () => {
-    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
-      const pathname = path.join(root, "config.json");
-      expect(loadJsonFile(pathname)).toBeUndefined();
-
-      fs.writeFileSync(pathname, "{", "utf8");
-      expect(loadJsonFile(pathname)).toBeUndefined();
-    });
-  });
-
-  it("returns undefined when the target path is a directory", async () => {
-    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
-      const pathname = path.join(root, "config-dir");
-      fs.mkdirSync(pathname);
-
+  it.each([
+    {
+      name: "missing files",
+      setup: () => {},
+    },
+    {
+      name: "invalid JSON files",
+      setup: (pathname: string) => {
+        fs.writeFileSync(pathname, "{", "utf8");
+      },
+    },
+    {
+      name: "directory targets",
+      setup: (pathname: string) => {
+        fs.mkdirSync(pathname);
+      },
+    },
+  ])("returns undefined for $name", async ({ setup }) => {
+    await withJsonPath(({ pathname }) => {
+      setup(pathname);
       expect(loadJsonFile(pathname)).toBeUndefined();
     });
   });
@@ -44,13 +57,21 @@ describe("json-file helpers", () => {
     });
   });
 
-  it("overwrites existing JSON files with the latest payload", async () => {
-    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
-      const pathname = path.join(root, "config.json");
-      fs.writeFileSync(pathname, '{"enabled":false}\n', "utf8");
-
+  it.each([
+    {
+      name: "new files",
+      setup: () => {},
+    },
+    {
+      name: "existing JSON files",
+      setup: (pathname: string) => {
+        fs.writeFileSync(pathname, '{"enabled":false}\n', "utf8");
+      },
+    },
+  ])("writes the latest payload for $name", async ({ setup }) => {
+    await withJsonPath(({ pathname }) => {
+      setup(pathname);
       saveJsonFile(pathname, { enabled: true, count: 2 });
-
       expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
     });
   });

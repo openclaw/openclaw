@@ -692,6 +692,28 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
 
+    it("can skip plugin-backed model normalization for display-only callers", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "google-vertex/gemini-3.1-flash-lite" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        allowPluginNormalization: false,
+      });
+
+      expect(result).toEqual({
+        provider: "google-vertex",
+        model: "gemini-3.1-flash-lite",
+      });
+    });
+
     it("should fall back to hardcoded default when no custom providers have models", () => {
       const cfg = createProviderWithModelsConfig("empty-provider", []);
       const result = resolveConfiguredRefForTest(cfg);

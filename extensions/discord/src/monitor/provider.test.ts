@@ -1,14 +1,15 @@
 import { EventEmitter } from "node:events";
+import { RateLimitError } from "@buape/carbon";
+import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../../../../src/acp/runtime/errors.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 import {
   baseConfig,
   baseRuntime,
   getFirstDiscordMessageHandlerParams,
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
-} from "../../../../test/helpers/extensions/discord-provider.test-support.js";
+} from "../test-support/provider.test-support.js";
 
 const {
   clientConstructorOptionsMock,
@@ -38,6 +39,24 @@ const {
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let providerTesting: typeof import("./provider.js").__testing;
+
+function createCompatRateLimitError(
+  response: Response,
+  body: { message: string; retry_after: number; global: boolean },
+  request?: Request,
+): RateLimitError {
+  const compatRequest =
+    request ??
+    new Request("https://discord.com/api/v10/applications/commands", {
+      method: "PUT",
+    });
+  const RateLimitErrorCtor = RateLimitError as unknown as new (
+    response: Response,
+    body: { message: string; retry_after: number; global: boolean },
+    request?: Request,
+  ) => RateLimitError;
+  return new RateLimitErrorCtor(response, body, compatRequest);
+}
 
 function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -223,6 +242,35 @@ describe("monitorDiscordProvider", () => {
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("disconnects the shared gateway and suppresses late gateway errors when startup fails before lifecycle begins", async () => {
+    const disconnect = vi.fn();
+    const emitter = new EventEmitter();
+    const gateway = { emitter, disconnect, isConnected: false };
+    const runtime = baseRuntime();
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? gateway : undefined,
+    );
+    createDiscordMessageHandlerMock.mockImplementationOnce(() => {
+      throw new Error("handler init failed");
+    });
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      }),
+    ).rejects.toThrow("handler init failed");
+
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(() =>
+      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
+    ).not.toThrow();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    );
   });
 
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
@@ -556,14 +604,19 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("registers plugin commands from the real registry as native Discord commands", async () => {
-    const { clearPluginCommands, getPluginCommandSpecs, registerPluginCommand } =
-      await import("../../../../src/plugins/commands.js");
+    const {
+      clearPluginCommands,
+      getPluginCommandSpecs: getRealPluginCommandSpecs,
+      registerPluginCommand,
+    } = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+      "openclaw/plugin-sdk/plugin-runtime",
+    );
     clearPluginCommands();
     listNativeCommandSpecsForConfigMock.mockReturnValue([
       { name: "status", description: "Status", acceptsArgs: false },
     ]);
     getPluginCommandSpecsMock.mockImplementation((provider?: string) =>
-      getPluginCommandSpecs(provider),
+      getRealPluginCommandSpecs(provider),
     );
 
     expect(
@@ -594,7 +647,10 @@ describe("monitorDiscordProvider", () => {
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
     const { RateLimitError } = await import("@buape/carbon");
     const runtime = baseRuntime();
-    const rateLimitError = new RateLimitError(
+    const request = new Request("https://discord.com/api/v10/applications/commands", {
+      method: "PUT",
+    });
+    const rateLimitError = createCompatRateLimitError(
       new Response(null, {
         status: 429,
         headers: {
@@ -607,6 +663,7 @@ describe("monitorDiscordProvider", () => {
         retry_after: 193.632,
         global: false,
       },
+      request,
     );
     rateLimitError.discordCode = 30034;
     clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);

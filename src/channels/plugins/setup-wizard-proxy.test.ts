@@ -5,7 +5,7 @@ import {
   resolveSetupWizardGroupAllowlist,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedFinalize,

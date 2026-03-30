@@ -37,13 +37,80 @@ async function runGitLsRemote(gitPath: string, target: string, env: NodeJS.Proce
   });
 }
 
+async function runGitCommand(
+  gitPath: string,
+  args: string[],
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+) {
+  await new Promise<void>((resolve) => {
+    const child = spawn(gitPath, args, {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: "ignore",
+    });
+    child.once("error", () => resolve());
+    child.once("close", () => resolve());
+  });
+}
+
+async function runGitClone(
+  gitPath: string,
+  source: string,
+  destination: string,
+  env: NodeJS.ProcessEnv,
+) {
+  await runGitCommand(gitPath, ["clone", source, destination], { env });
+}
+
+async function initGitRepoWithCommits(gitPath: string, repoDir: string, commitCount: number) {
+  await runGitCommand(gitPath, ["init", repoDir]);
+  for (let index = 1; index <= commitCount; index += 1) {
+    fs.writeFileSync(path.join(repoDir, `commit-${index}.txt`), `commit ${index}\n`, "utf8");
+    await runGitCommand(gitPath, ["-C", repoDir, "add", "."], {
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+      },
+    });
+    await runGitCommand(
+      gitPath,
+      [
+        "-C",
+        repoDir,
+        "-c",
+        "user.name=OpenClaw Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        `commit ${index}`,
+      ],
+      {
+        env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+        },
+      },
+    );
+  }
+}
+
 describe("isDangerousHostEnvVarName", () => {
   it("matches dangerous keys and prefixes case-insensitively", () => {
     expect(isDangerousHostEnvVarName("BASH_ENV")).toBe(true);
     expect(isDangerousHostEnvVarName("bash_env")).toBe(true);
+    expect(isDangerousHostEnvVarName("BROWSER")).toBe(true);
+    expect(isDangerousHostEnvVarName("browser")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELL")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_EDITOR")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EXTERNAL_DIFF")).toBe(true);
     expect(isDangerousHostEnvVarName("git_exec_path")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_SEQUENCE_EDITOR")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_sequence_editor")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_TEMPLATE_DIR")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_template_dir")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
@@ -71,6 +138,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
+    expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
@@ -83,7 +152,12 @@ describe("sanitizeHostExecEnv", () => {
       baseEnv: {
         PATH: "/usr/bin:/bin",
         BASH_ENV: "/tmp/pwn.sh",
+        BROWSER: "/tmp/pwn-browser",
+        GIT_EDITOR: "/tmp/pwn-editor",
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
+        GIT_TEMPLATE_DIR: "/tmp/git-template",
+        GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
+        AWS_CONFIG_FILE: "/tmp/aws-config",
         LD_PRELOAD: "/tmp/pwn.so",
         OK: "1",
       },
@@ -92,6 +166,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env).toEqual({
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
+      AWS_CONFIG_FILE: "/tmp/aws-config",
       OK: "1",
     });
   });
@@ -108,11 +183,15 @@ describe("sanitizeHostExecEnv", () => {
         HOME: "/tmp/evil-home",
         ZDOTDIR: "/tmp/evil-zdotdir",
         BASH_ENV: "/tmp/pwn.sh",
+        BROWSER: "/tmp/browser",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
+        GIT_EDITOR: "/tmp/git-editor",
         GIT_EXEC_PATH: "/tmp/git-exec-path",
+        GIT_SEQUENCE_EDITOR: "/tmp/git-sequence-editor",
         EDITOR: "/tmp/editor",
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+        AWS_CONFIG_FILE: "/tmp/override-aws-config",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
         CLASSPATH: "/tmp/evil-classpath",
@@ -126,6 +205,11 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.PATH).toBe("/usr/bin:/bin");
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.BASH_ENV).toBeUndefined();
+    expect(env.BROWSER).toBeUndefined();
+    expect(env.GIT_EDITOR).toBeUndefined();
+    expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
+    expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
+    expect(env.AWS_CONFIG_FILE).toBeUndefined();
     expect(env.GIT_SSH_COMMAND).toBeUndefined();
     expect(env.GIT_EXEC_PATH).toBeUndefined();
     expect(env.EDITOR).toBeUndefined();
@@ -232,6 +316,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("AWS_CONFIG_FILE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("aws_config_file")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
@@ -382,6 +468,67 @@ describe("shell wrapper exploit regression", () => {
 });
 
 describe("git env exploit regression", () => {
+  it("blocks inherited GIT_SEQUENCE_EDITOR so git rebase -i cannot execute helper payloads", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const repoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-sequence-editor-${process.pid}-${Date.now()}-`),
+    );
+    const safeRepoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-sequence-editor-safe-${process.pid}-${Date.now()}-`),
+    );
+    const editorPath = path.join(repoDir, "sequence-editor.sh");
+    const safeEditorPath = path.join(safeRepoDir, "sequence-editor.sh");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-sequence-editor-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      await initGitRepoWithCommits(gitPath, repoDir, 2);
+      await initGitRepoWithCommits(gitPath, safeRepoDir, 2);
+      clearMarker(marker);
+      fs.writeFileSync(editorPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, "utf8");
+      fs.chmodSync(editorPath, 0o755);
+      fs.writeFileSync(safeEditorPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, "utf8");
+      fs.chmodSync(safeEditorPath, 0o755);
+
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_SEQUENCE_EDITOR: editorPath,
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await runGitCommand(gitPath, ["-C", repoDir, "rebase", "-i", "HEAD~1"], {
+        env: unsafeEnv,
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          GIT_SEQUENCE_EDITOR: safeEditorPath,
+          GIT_TERMINAL_PROMPT: "0",
+        },
+      });
+
+      await runGitCommand(gitPath, ["-C", safeRepoDir, "rebase", "-i", "HEAD~1"], {
+        env: safeEnv,
+      });
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(safeRepoDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
   it("blocks inherited GIT_EXEC_PATH so git cannot execute helper payloads", async () => {
     const gitPath = getSystemGitPath();
     if (!gitPath) {
@@ -422,6 +569,91 @@ describe("git env exploit regression", () => {
       expect(fs.existsSync(marker)).toBe(false);
     } finally {
       fs.rmSync(helperDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("blocks inherited GIT_TEMPLATE_DIR so git clone cannot install hook payloads", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const repoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-template-source-${process.pid}-${Date.now()}-`),
+    );
+    const cloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-template-clone-${process.pid}-${Date.now()}`,
+    );
+    const safeCloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-template-safe-clone-${process.pid}-${Date.now()}`,
+    );
+    const templateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-template-dir-${process.pid}-${Date.now()}-`),
+    );
+    const hooksDir = path.join(templateDir, "hooks");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-template-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      fs.mkdirSync(hooksDir, { recursive: true });
+      clearMarker(marker);
+      fs.writeFileSync(
+        path.join(hooksDir, "post-checkout"),
+        `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`,
+        "utf8",
+      );
+      fs.chmodSync(path.join(hooksDir, "post-checkout"), 0o755);
+
+      await runGitCommand(gitPath, ["init", repoDir]);
+      await runGitCommand(
+        gitPath,
+        [
+          "-C",
+          repoDir,
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        {
+          env: {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+          },
+        },
+      );
+
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_TEMPLATE_DIR: templateDir,
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await runGitClone(gitPath, repoDir, cloneDir, unsafeEnv);
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: unsafeEnv,
+      });
+
+      await runGitClone(gitPath, repoDir, safeCloneDir, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(cloneDir, { recursive: true, force: true });
+      fs.rmSync(safeCloneDir, { recursive: true, force: true });
+      fs.rmSync(templateDir, { recursive: true, force: true });
       fs.rmSync(marker, { force: true });
     }
   });

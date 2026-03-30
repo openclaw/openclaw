@@ -43,6 +43,10 @@ import {
   shouldEnforceGatewayAuthForPluginPath,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import {
+  createPreauthConnectionBudget,
+  type PreauthConnectionBudget,
+} from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -83,6 +87,7 @@ export async function createGatewayRuntimeState(params: {
   httpServers: HttpServer[];
   httpBindHosts: string[];
   wss: WebSocketServer;
+  preauthConnectionBudget: PreauthConnectionBudget;
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -213,12 +218,14 @@ export async function createGatewayRuntimeState(params: {
       noServer: true,
       maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
     });
+    const preauthConnectionBudget = createPreauthConnectionBudget();
     for (const server of httpServers) {
       attachGatewayUpgradeHandler({
         httpServer: server,
         wss,
         canvasHost,
         clients,
+        preauthConnectionBudget,
         resolvedAuth: params.resolvedAuth,
         rateLimiter: params.rateLimiter,
       });
@@ -251,6 +258,7 @@ export async function createGatewayRuntimeState(params: {
       httpServers,
       httpBindHosts,
       wss,
+      preauthConnectionBudget,
       clients,
       broadcast,
       broadcastToConnIds,

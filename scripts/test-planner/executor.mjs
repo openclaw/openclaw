@@ -67,6 +67,78 @@ const formatMemoryKb = (rssKb) =>
 const formatMemoryDeltaKb = (rssKb) =>
   `${rssKb >= 0 ? "+" : "-"}${formatMemoryKb(Math.abs(rssKb))}`;
 
+const extractFailedTestFiles = (output) => {
+  const failureFiles = new Set();
+  const pattern = /^\s*❯\s+([^\s(][^(]*?\.(?:test|spec)\.[cm]?[jt]sx?)/gmu;
+  for (const match of output.matchAll(pattern)) {
+    const file = match[1]?.trim();
+    if (file) {
+      failureFiles.add(file);
+    }
+  }
+  return [...failureFiles];
+};
+
+const classifyRunResult = ({ resolvedCode, signal, fatalSeen, childError, failedTestFiles }) => {
+  if (resolvedCode === 0) {
+    return "pass";
+  }
+  if (childError || signal || fatalSeen || failedTestFiles.length === 0) {
+    return "infra-failure";
+  }
+  return "test-failure";
+};
+
+const formatRunLabel = (result) =>
+  `unit=${result.unitId}${result.shardLabel ? ` shard=${result.shardLabel}` : ""}`;
+
+const buildFinalRunReport = (results) => {
+  const failedResults = results.filter((result) => result.exitCode !== 0);
+  const failedUnits = new Set(failedResults.map((result) => result.unitId));
+  const failedTestFiles = new Set(failedResults.flatMap((result) => result.failedTestFiles ?? []));
+  const infraFailures = failedResults.filter((result) => result.classification === "infra-failure");
+  return {
+    exitCode: failedResults.length > 0 ? 1 : 0,
+    results,
+    summary: {
+      failedRunCount: failedResults.length,
+      failedUnitCount: failedUnits.size,
+      failedTestFileCount: failedTestFiles.size,
+      infraFailureCount: infraFailures.length,
+    },
+  };
+};
+
+const printFinalRunSummary = (plan, report, reportArtifactPath) => {
+  console.log(
+    `[test-parallel] summary failurePolicy=${plan.failurePolicy} failedUnits=${String(
+      report.summary.failedUnitCount,
+    )} failedTestFiles=${String(report.summary.failedTestFileCount)} infraFailures=${String(
+      report.summary.infraFailureCount,
+    )}`,
+  );
+  if (report.summary.failedTestFileCount > 0) {
+    console.error("[test-parallel] failing tests");
+    const failedTestFiles = report.results
+      .flatMap((result) => (result.classification === "test-failure" ? result.failedTestFiles : []))
+      .filter((file) => typeof file === "string");
+    for (const file of new Set(failedTestFiles)) {
+      console.error(`- ${String(file)}`);
+    }
+  }
+  if (report.summary.infraFailureCount > 0) {
+    console.error("[test-parallel] infrastructure failures");
+    for (const result of report.results.filter(
+      (entry) => entry.classification === "infra-failure",
+    )) {
+      console.error(
+        `- ${formatRunLabel(result)} code=${String(result.exitCode)} signal=${result.signal ?? "none"} log=${result.logPath}${result.failureArtifactPath ? ` meta=${result.failureArtifactPath}` : ""}`,
+      );
+    }
+  }
+  console.error(`[test-parallel] summary artifact ${reportArtifactPath}`);
+};
+
 export function createExecutionArtifacts(env = process.env) {
   let tempArtifactDir = null;
   const ensureTempArtifactDir = () => {
@@ -94,8 +166,29 @@ export function createExecutionArtifacts(env = process.env) {
   return { ensureTempArtifactDir, writeTempJsonArtifact, cleanupTempArtifacts };
 }
 
+export function createTempArtifactWriteStream(filePath) {
+  const fd = fs.openSync(filePath, "w");
+  return fs.createWriteStream(filePath, {
+    fd,
+    autoClose: true,
+  });
+}
+
 const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
   nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
+
+const ensureNodeOptionFilePathFlag = (nodeOptions, flag, filePath) => {
+  const normalized = nodeOptions.trim();
+  const emptyAssignmentPattern = new RegExp(`(^|\\s)${flag}=(?=\\s|$)`, "u");
+  if (emptyAssignmentPattern.test(normalized)) {
+    return normalized.replace(emptyAssignmentPattern, `$1${flag}=${filePath}`);
+  }
+  const bareFlagPattern = new RegExp(`(^|\\s)${flag}(?=\\s|$)`, "u");
+  if (bareFlagPattern.test(normalized)) {
+    return normalized.replace(bareFlagPattern, `$1${flag}=${filePath}`);
+  }
+  return ensureNodeOptionFlag(normalized, `${flag}=`, `${flag}=${filePath}`);
+};
 
 const isNodeLikeProcess = (command) => /(?:^|\/)node(?:$|\.exe$)/iu.test(command);
 
@@ -107,9 +200,57 @@ const getShardLabel = (args) => {
   return typeof args[shardIndex + 1] === "string" ? args[shardIndex + 1] : "";
 };
 
+const normalizeEnvFlag = (value) => value?.trim().toLowerCase();
+
+const isEnvFlagEnabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "1" || normalized === "true";
+};
+
+const isEnvFlagDisabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "0" || normalized === "false";
+};
+
+const isWindowsEnv = (env, platform = process.platform) => {
+  if (platform === "win32") {
+    return true;
+  }
+  return normalizeEnvFlag(env.RUNNER_OS) === "windows";
+};
+
+const isFsModuleCacheEnabled = (env, platform = process.platform) => {
+  if (isWindowsEnv(env, platform)) {
+    return isEnvFlagEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+  }
+  return !isEnvFlagDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+};
+
+export const resolveVitestFsModuleCachePath = ({
+  cwd = process.cwd(),
+  env = process.env,
+  platform = process.platform,
+  unitId = "",
+} = {}) => {
+  const explicitPath = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim();
+  if (!isFsModuleCacheEnabled(env, platform)) {
+    return undefined;
+  }
+  if (explicitPath) {
+    return explicitPath;
+  }
+  const pathImpl = isWindowsEnv(env, platform) ? path.win32 : path.posix;
+  return pathImpl.join(
+    cwd,
+    "node_modules",
+    ".experimental-vitest-cache",
+    sanitizeArtifactName(unitId || "default"),
+  );
+};
+
 export function formatPlanOutput(plan) {
   return [
-    `runtime=${plan.runtimeCapabilities.runtimeProfileName} mode=${plan.runtimeCapabilities.mode} intent=${plan.runtimeCapabilities.intentProfile} memoryBand=${plan.runtimeCapabilities.memoryBand} loadBand=${plan.runtimeCapabilities.loadBand} vitestMaxWorkers=${String(plan.executionBudget.vitestMaxWorkers ?? "default")} topLevelParallel=${plan.topLevelParallelEnabled ? String(plan.topLevelParallelLimit) : "off"}`,
+    `runtime=${plan.runtimeCapabilities.runtimeProfileName} mode=${plan.runtimeCapabilities.mode} intent=${plan.runtimeCapabilities.intentProfile} memoryBand=${plan.runtimeCapabilities.memoryBand} loadBand=${plan.runtimeCapabilities.loadBand} failurePolicy=${plan.failurePolicy} vitestMaxWorkers=${String(plan.executionBudget.vitestMaxWorkers ?? "default")} topLevelParallel=${plan.topLevelParallelEnabled ? String(plan.topLevelParallelLimit) : "off"}`,
     ...plan.selectedUnits.map(
       (unit) =>
         `${unit.id} filters=${String(countExplicitEntryFilters(unit.args) ?? "all")} maxWorkers=${String(
@@ -232,6 +373,7 @@ export async function executePlan(plan, options = {}) {
   const heapSnapshotEnabled =
     process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
   const heapSnapshotSignal = env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
+  const closeGraceMs = Math.max(100, parseEnvNumber("OPENCLAW_TEST_CLOSE_GRACE_MS", 2000));
   const heapSnapshotBaseDir = heapSnapshotEnabled
     ? path.resolve(
         env.OPENCLAW_TEST_HEAPSNAPSHOT_DIR?.trim() ||
@@ -259,6 +401,8 @@ export async function executePlan(plan, options = {}) {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("exit", artifacts.cleanupTempArtifacts);
 
+  const shouldCollectAllFailures = plan.failurePolicy === "collect-all";
+
   const runOnce = (unit, extraArgs = []) =>
     new Promise((resolve) => {
       const startedAt = Date.now();
@@ -284,7 +428,7 @@ export async function executePlan(plan, options = {}) {
         .filter(Boolean)
         .join("-");
       const laneLogPath = path.join(artifacts.ensureTempArtifactDir(), `${artifactStem}.log`);
-      const laneLogStream = fs.createWriteStream(laneLogPath, { flags: "w" });
+      const laneLogStream = createTempArtifactWriteStream(laneLogPath);
       laneLogStream.write(`[test-parallel] entry=${unit.id}\n`);
       laneLogStream.write(`[test-parallel] cwd=${process.cwd()}\n`);
       laneLogStream.write(
@@ -306,6 +450,15 @@ export async function executePlan(plan, options = {}) {
         maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
           ? `${nextNodeOptions} --max-old-space-size=${maxOldSpaceSizeMb}`.trim()
           : nextNodeOptions;
+      const localStorageFilePath = path.join(
+        artifacts.ensureTempArtifactDir(),
+        `${artifactStem}.localstorage.json`,
+      );
+      resolvedNodeOptions = ensureNodeOptionFilePathFlag(
+        resolvedNodeOptions,
+        "--localstorage-file",
+        localStorageFilePath,
+      );
       if (heapSnapshotEnabled && heapSnapshotDir) {
         try {
           fs.mkdirSync(heapSnapshotDir, { recursive: true });
@@ -313,7 +466,19 @@ export async function executePlan(plan, options = {}) {
           console.error(
             `[test-parallel] failed to create heap snapshot dir ${heapSnapshotDir}: ${String(err)}`,
           );
-          resolve(1);
+          resolve({
+            unitId: unit.id,
+            shardLabel,
+            classification: "infra-failure",
+            exitCode: 1,
+            signal: null,
+            elapsedMs: Date.now() - startedAt,
+            failedTestFiles: [...explicitEntryFilters],
+            explicitEntryFilters,
+            failureArtifactPath: null,
+            logPath: laneLogPath,
+            outputTail: "",
+          });
           return;
         }
         resolvedNodeOptions = ensureNodeOptionFlag(
@@ -334,11 +499,16 @@ export async function executePlan(plan, options = {}) {
       let pendingLine = "";
       let memoryPollTimer = null;
       let heapSnapshotTimer = null;
+      let closeFallbackTimer = null;
+      let failureArtifactPath = null;
+      let failureTail = "";
       const memoryFileRecords = [];
       let initialTreeSample = null;
       let latestTreeSample = null;
       let peakTreeSample = null;
       let heapSnapshotSequence = 0;
+      let childExitState = null;
+      let settled = false;
       const updatePeakTreeSample = (sample, reason) => {
         if (!sample) {
           return;
@@ -457,15 +627,111 @@ export async function executePlan(plan, options = {}) {
           } top=${topGrowthFiles.length > 0 ? topGrowthFiles.join(", ") : "none"}`,
         );
       };
+      const clearChildTimers = () => {
+        if (memoryPollTimer) {
+          clearInterval(memoryPollTimer);
+          memoryPollTimer = null;
+        }
+        if (heapSnapshotTimer) {
+          clearInterval(heapSnapshotTimer);
+          heapSnapshotTimer = null;
+        }
+        if (closeFallbackTimer) {
+          clearTimeout(closeFallbackTimer);
+          closeFallbackTimer = null;
+        }
+      };
+      const finalizeRun = (code, signal, source = "close") => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearChildTimers();
+        children.delete(child);
+        const resolvedCode = resolveTestRunExitCode({
+          code,
+          signal,
+          output,
+          fatalSeen,
+          childError,
+        });
+        const elapsedMs = Date.now() - startedAt;
+        logMemoryTraceSummary();
+        if (resolvedCode !== 0) {
+          failureTail = formatCapturedOutputTail(output);
+          failureArtifactPath = artifacts.writeTempJsonArtifact(`${artifactStem}-failure`, {
+            entry: unit.id,
+            command: [pnpmInvocation.command, ...spawnArgs],
+            elapsedMs,
+            error: childError ? String(childError) : null,
+            exitCode: resolvedCode,
+            fatalSeen,
+            logPath: laneLogPath,
+            outputTail: failureTail,
+            signal: signal ?? null,
+          });
+          if (failureTail) {
+            console.error(`[test-parallel] failure tail ${unit.id}\n${failureTail}`);
+          }
+          console.error(
+            `[test-parallel] failure artifacts ${unit.id} log=${laneLogPath} meta=${failureArtifactPath}`,
+          );
+        }
+        if (source !== "close") {
+          laneLogStream.write(
+            `\n[test-parallel] finalize source=${source} after child exit without close\n`,
+          );
+        }
+        laneLogStream.write(
+          `\n[test-parallel] done ${unit.id} code=${String(resolvedCode)} signal=${
+            signal ?? "none"
+          } elapsed=${formatElapsedMs(elapsedMs)}\n`,
+        );
+        laneLogStream.end();
+        console.log(
+          `[test-parallel] done ${unit.id} code=${String(resolvedCode)} elapsed=${formatElapsedMs(elapsedMs)}`,
+        );
+        const failedTestFiles = extractFailedTestFiles(output);
+        const classification = classifyRunResult({
+          resolvedCode,
+          signal,
+          fatalSeen,
+          childError,
+          failedTestFiles,
+        });
+        resolve({
+          unitId: unit.id,
+          shardLabel,
+          classification,
+          exitCode: resolvedCode,
+          signal: signal ?? null,
+          elapsedMs,
+          failedTestFiles,
+          explicitEntryFilters,
+          failureArtifactPath,
+          logPath: laneLogPath,
+          outputTail: failureTail,
+        });
+      };
       try {
+        const childEnv = {
+          ...env,
+          ...unit.env,
+          VITEST_GROUP: unit.id,
+          NODE_OPTIONS: resolvedNodeOptions,
+        };
+        const vitestFsModuleCachePath = resolveVitestFsModuleCachePath({
+          env: childEnv,
+          platform: process.platform,
+          unitId: unit.id,
+        });
+        if (vitestFsModuleCachePath) {
+          childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = vitestFsModuleCachePath;
+          laneLogStream.write(`[test-parallel] fsModuleCachePath=${vitestFsModuleCachePath}\n`);
+        }
         child = spawn(pnpmInvocation.command, spawnArgs, {
           stdio: ["inherit", "pipe", "pipe"],
-          env: {
-            ...env,
-            ...unit.env,
-            VITEST_GROUP: unit.id,
-            NODE_OPTIONS: resolvedNodeOptions,
-          },
+          env: childEnv,
           shell: false,
         });
         captureTreeSample("spawn");
@@ -482,7 +748,19 @@ export async function executePlan(plan, options = {}) {
       } catch (err) {
         laneLogStream.end();
         console.error(`[test-parallel] spawn failed: ${String(err)}`);
-        resolve(1);
+        resolve({
+          unitId: unit.id,
+          shardLabel: getShardLabel(extraArgs),
+          classification: "infra-failure",
+          exitCode: 1,
+          signal: null,
+          elapsedMs: Date.now() - startedAt,
+          failedTestFiles: [...explicitEntryFilters],
+          explicitEntryFilters,
+          failureArtifactPath: null,
+          logPath: laneLogPath,
+          outputTail: String(err),
+        });
         return;
       }
       children.add(child);
@@ -507,70 +785,39 @@ export async function executePlan(plan, options = {}) {
         laneLogStream.write(`\n[test-parallel] child error: ${String(err)}\n`);
         console.error(`[test-parallel] child error: ${String(err)}`);
       });
+      child.on("exit", (code, signal) => {
+        childExitState = { code, signal };
+        if (settled || closeFallbackTimer) {
+          return;
+        }
+        closeFallbackTimer = setTimeout(() => {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          finalizeRun(code, signal, "exit-timeout");
+        }, closeGraceMs);
+      });
       child.on("close", (code, signal) => {
-        if (memoryPollTimer) {
-          clearInterval(memoryPollTimer);
-        }
-        if (heapSnapshotTimer) {
-          clearInterval(heapSnapshotTimer);
-        }
-        children.delete(child);
-        const resolvedCode = resolveTestRunExitCode({
-          code,
-          signal,
-          output,
-          fatalSeen,
-          childError,
-        });
-        const elapsedMs = Date.now() - startedAt;
-        logMemoryTraceSummary();
-        if (resolvedCode !== 0) {
-          const failureTail = formatCapturedOutputTail(output);
-          const failureArtifactPath = artifacts.writeTempJsonArtifact(`${artifactStem}-failure`, {
-            entry: unit.id,
-            command: [pnpmInvocation.command, ...spawnArgs],
-            elapsedMs,
-            error: childError ? String(childError) : null,
-            exitCode: resolvedCode,
-            fatalSeen,
-            logPath: laneLogPath,
-            outputTail: failureTail,
-            signal: signal ?? null,
-          });
-          if (failureTail) {
-            console.error(`[test-parallel] failure tail ${unit.id}\n${failureTail}`);
-          }
-          console.error(
-            `[test-parallel] failure artifacts ${unit.id} log=${laneLogPath} meta=${failureArtifactPath}`,
-          );
-        }
-        laneLogStream.write(
-          `\n[test-parallel] done ${unit.id} code=${String(resolvedCode)} signal=${
-            signal ?? "none"
-          } elapsed=${formatElapsedMs(elapsedMs)}\n`,
-        );
-        laneLogStream.end();
-        console.log(
-          `[test-parallel] done ${unit.id} code=${String(resolvedCode)} elapsed=${formatElapsedMs(elapsedMs)}`,
-        );
-        resolve(resolvedCode);
+        finalizeRun(childExitState?.code ?? code, childExitState?.signal ?? signal, "close");
       });
     });
 
   const runUnit = async (unit, extraArgs = []) => {
+    const results = [];
     if (unit.fixedShardIndex !== undefined) {
       if (plan.shardIndexOverride !== null && plan.shardIndexOverride !== unit.fixedShardIndex) {
-        return 0;
+        return results;
       }
-      return runOnce(unit, extraArgs);
+      results.push(await runOnce(unit, extraArgs));
+      return results;
     }
     const explicitFilterCount = countExplicitEntryFilters(unit.args);
     const topLevelAssignedShard = plan.topLevelSingleShardAssignments.get(unit);
     if (topLevelAssignedShard !== undefined) {
       if (plan.shardIndexOverride !== null && plan.shardIndexOverride !== topLevelAssignedShard) {
-        return 0;
+        return results;
       }
-      return runOnce(unit, extraArgs);
+      results.push(await runOnce(unit, extraArgs));
+      return results;
     }
     const effectiveShardCount =
       explicitFilterCount === null
@@ -578,67 +825,73 @@ export async function executePlan(plan, options = {}) {
         : Math.min(plan.shardCount, Math.max(1, explicitFilterCount - 1));
     if (effectiveShardCount <= 1) {
       if (plan.shardIndexOverride !== null && plan.shardIndexOverride > effectiveShardCount) {
-        return 0;
+        return results;
       }
-      return runOnce(unit, extraArgs);
+      results.push(await runOnce(unit, extraArgs));
+      return results;
     }
     if (plan.shardIndexOverride !== null) {
       if (plan.shardIndexOverride > effectiveShardCount) {
-        return 0;
+        return results;
       }
-      return runOnce(unit, [
-        "--shard",
-        `${plan.shardIndexOverride}/${effectiveShardCount}`,
-        ...extraArgs,
-      ]);
+      results.push(
+        await runOnce(unit, [
+          "--shard",
+          `${plan.shardIndexOverride}/${effectiveShardCount}`,
+          ...extraArgs,
+        ]),
+      );
+      return results;
     }
     for (let shardIndex = 1; shardIndex <= effectiveShardCount; shardIndex += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      const code = await runOnce(unit, [
-        "--shard",
-        `${shardIndex}/${effectiveShardCount}`,
-        ...extraArgs,
-      ]);
-      if (code !== 0) {
-        return code;
+      results.push(
+        // eslint-disable-next-line no-await-in-loop
+        await runOnce(unit, ["--shard", `${shardIndex}/${effectiveShardCount}`, ...extraArgs]),
+      );
+      if (!shouldCollectAllFailures && results.at(-1)?.exitCode !== 0) {
+        return results;
       }
     }
-    return 0;
+    return results;
   };
 
   const runUnitsWithLimit = async (units, extraArgs = [], concurrency = 1) => {
+    const results = [];
     if (units.length === 0) {
-      return undefined;
+      return results;
     }
     const normalizedConcurrency = Math.max(1, Math.floor(concurrency));
     if (normalizedConcurrency <= 1) {
       for (const unit of units) {
-        // eslint-disable-next-line no-await-in-loop
-        const code = await runUnit(unit, extraArgs);
-        if (code !== 0) {
-          return code;
+        results.push(
+          // eslint-disable-next-line no-await-in-loop
+          ...(await runUnit(unit, extraArgs)),
+        );
+        if (!shouldCollectAllFailures && results.some((result) => result.exitCode !== 0)) {
+          return results;
         }
       }
-      return undefined;
+      return results;
     }
     let nextIndex = 0;
-    let firstFailure;
+    let stopScheduling = false;
     const worker = async () => {
-      while (firstFailure === undefined) {
+      while (!stopScheduling) {
         const unitIndex = nextIndex;
         nextIndex += 1;
         if (unitIndex >= units.length) {
           return;
         }
-        const code = await runUnit(units[unitIndex], extraArgs);
-        if (code !== 0 && firstFailure === undefined) {
-          firstFailure = code;
+        const unitResults = await runUnit(units[unitIndex], extraArgs);
+        results.push(...unitResults);
+        if (!shouldCollectAllFailures && unitResults.some((result) => result.exitCode !== 0)) {
+          stopScheduling = true;
         }
       }
     };
     const workerCount = Math.min(normalizedConcurrency, units.length);
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
-    return firstFailure;
+    return results;
   };
 
   const runUnits = async (units, extraArgs = []) => {
@@ -649,14 +902,19 @@ export async function executePlan(plan, options = {}) {
   };
 
   if (plan.passthroughMetadataOnly) {
-    return runOnce(
-      {
-        id: "vitest-meta",
-        args: ["vitest", "run"],
-        maxWorkers: null,
-      },
-      plan.passthroughOptionArgs,
-    );
+    const report = buildFinalRunReport([
+      await runOnce(
+        {
+          id: "vitest-meta",
+          args: ["vitest", "run"],
+          maxWorkers: null,
+        },
+        plan.passthroughOptionArgs,
+      ),
+    ]);
+    const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+    printFinalRunSummary(plan, report, reportArtifactPath);
+    return report;
   }
 
   if (plan.targetedUnits.length > 0) {
@@ -664,29 +922,60 @@ export async function executePlan(plan, options = {}) {
       console.error(
         "[test-parallel] The provided Vitest args require a single run, but the selected test filters span multiple wrapper configs. Run one target/config at a time.",
       );
-      return 2;
+      return {
+        exitCode: 2,
+        results: [],
+        summary: {
+          failedRunCount: 0,
+          failedUnitCount: 0,
+          failedTestFileCount: 0,
+          infraFailureCount: 0,
+        },
+      };
     }
-    const failedTargetedParallel = await runUnits(plan.parallelUnits, plan.passthroughOptionArgs);
-    if (failedTargetedParallel !== undefined) {
-      return failedTargetedParallel;
+    const results = [];
+    results.push(...(await runUnits(plan.parallelUnits, plan.passthroughOptionArgs)));
+    if (!shouldCollectAllFailures && results.some((result) => result.exitCode !== 0)) {
+      const report = buildFinalRunReport(results);
+      const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+      printFinalRunSummary(plan, report, reportArtifactPath);
+      return report;
     }
     for (const unit of plan.serialUnits) {
-      // eslint-disable-next-line no-await-in-loop
-      const code = await runUnit(unit, plan.passthroughOptionArgs);
-      if (code !== 0) {
-        return code;
+      results.push(
+        // eslint-disable-next-line no-await-in-loop
+        ...(await runUnit(unit, plan.passthroughOptionArgs)),
+      );
+      if (!shouldCollectAllFailures && results.some((result) => result.exitCode !== 0)) {
+        const report = buildFinalRunReport(results);
+        const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+        printFinalRunSummary(plan, report, reportArtifactPath);
+        return report;
       }
     }
-    return 0;
+    const report = buildFinalRunReport(results);
+    const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+    printFinalRunSummary(plan, report, reportArtifactPath);
+    return report;
   }
 
   if (plan.passthroughRequiresSingleRun && plan.passthroughOptionArgs.length > 0) {
     console.error(
       "[test-parallel] The provided Vitest args require a single run. Use the dedicated npm script for that workflow (for example `pnpm test:coverage`) or target a single test file/filter.",
     );
-    return 2;
+    return {
+      exitCode: 2,
+      results: [],
+      summary: {
+        failedRunCount: 0,
+        failedUnitCount: 0,
+        failedTestFileCount: 0,
+        infraFailureCount: 0,
+      },
+    };
   }
 
+  const results = [];
   if (plan.serialPrefixUnits.length > 0) {
     const orderedSegments = buildOrderedParallelSegments(plan.parallelUnits);
     let pendingDeferredSegment = null;
@@ -760,58 +1049,101 @@ export async function executePlan(plan, options = {}) {
       }
       pendingDeferredSegment = null;
       // eslint-disable-next-line no-await-in-loop
-      const failedSerialPhase = await runUnits(segment.units, plan.passthroughOptionArgs);
-      if (failedSerialPhase !== undefined) {
-        return failedSerialPhase;
+      const serialPhaseResults = await runUnits(segment.units, plan.passthroughOptionArgs);
+      results.push(...serialPhaseResults);
+      if (!shouldCollectAllFailures && serialPhaseResults.some((result) => result.exitCode !== 0)) {
+        const report = buildFinalRunReport(results);
+        const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+        printFinalRunSummary(plan, report, reportArtifactPath);
+        return report;
       }
       if (deferredCarryPromise !== null && deferredCarrySurface === segment.phase) {
-        // eslint-disable-next-line no-await-in-loop
-        const failedCarriedDeferred = await deferredCarryPromise;
-        if (failedCarriedDeferred !== undefined) {
-          return failedCarriedDeferred;
+        const carriedDeferredResults =
+          // eslint-disable-next-line no-await-in-loop
+          await deferredCarryPromise;
+        results.push(...carriedDeferredResults);
+        if (
+          !shouldCollectAllFailures &&
+          carriedDeferredResults.some((result) => result.exitCode !== 0)
+        ) {
+          const report = buildFinalRunReport(results);
+          const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+          printFinalRunSummary(plan, report, reportArtifactPath);
+          return report;
         }
         deferredCarryPromise = null;
         deferredCarrySurface = null;
       }
       if (deferredPromise !== null) {
-        // eslint-disable-next-line no-await-in-loop
-        const failedDeferredPhase = await deferredPromise;
-        if (failedDeferredPhase !== undefined) {
-          return failedDeferredPhase;
+        const deferredResults =
+          // eslint-disable-next-line no-await-in-loop
+          await deferredPromise;
+        results.push(...deferredResults);
+        if (!shouldCollectAllFailures && deferredResults.some((result) => result.exitCode !== 0)) {
+          const report = buildFinalRunReport(results);
+          const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+          printFinalRunSummary(plan, report, reportArtifactPath);
+          return report;
         }
       }
       carriedDeferredPromise = deferredCarryPromise;
       carriedDeferredSurface = deferredCarrySurface;
     }
     if (pendingDeferredSegment !== null) {
-      const failedDeferredParallel = await runUnitsWithLimit(
+      const deferredParallelResults = await runUnitsWithLimit(
         pendingDeferredSegment.units,
         plan.passthroughOptionArgs,
         plan.deferredRunConcurrency ?? 1,
       );
-      if (failedDeferredParallel !== undefined) {
-        return failedDeferredParallel;
+      results.push(...deferredParallelResults);
+      if (
+        !shouldCollectAllFailures &&
+        deferredParallelResults.some((result) => result.exitCode !== 0)
+      ) {
+        const report = buildFinalRunReport(results);
+        const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+        printFinalRunSummary(plan, report, reportArtifactPath);
+        return report;
       }
     }
     if (carriedDeferredPromise !== null) {
-      const failedCarriedDeferred = await carriedDeferredPromise;
-      if (failedCarriedDeferred !== undefined) {
-        return failedCarriedDeferred;
+      const carriedDeferredResults = await carriedDeferredPromise;
+      results.push(...carriedDeferredResults);
+      if (
+        !shouldCollectAllFailures &&
+        carriedDeferredResults.some((result) => result.exitCode !== 0)
+      ) {
+        const report = buildFinalRunReport(results);
+        const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+        printFinalRunSummary(plan, report, reportArtifactPath);
+        return report;
       }
     }
   } else {
-    const failedParallel = await runUnits(plan.parallelUnits, plan.passthroughOptionArgs);
-    if (failedParallel !== undefined) {
-      return failedParallel;
+    const parallelResults = await runUnits(plan.parallelUnits, plan.passthroughOptionArgs);
+    results.push(...parallelResults);
+    if (!shouldCollectAllFailures && parallelResults.some((result) => result.exitCode !== 0)) {
+      const report = buildFinalRunReport(results);
+      const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+      printFinalRunSummary(plan, report, reportArtifactPath);
+      return report;
     }
   }
 
   for (const unit of plan.serialUnits) {
-    // eslint-disable-next-line no-await-in-loop
-    const code = await runUnit(unit, plan.passthroughOptionArgs);
-    if (code !== 0) {
-      return code;
+    results.push(
+      // eslint-disable-next-line no-await-in-loop
+      ...(await runUnit(unit, plan.passthroughOptionArgs)),
+    );
+    if (!shouldCollectAllFailures && results.some((result) => result.exitCode !== 0)) {
+      const report = buildFinalRunReport(results);
+      const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+      printFinalRunSummary(plan, report, reportArtifactPath);
+      return report;
     }
   }
-  return 0;
+  const report = buildFinalRunReport(results);
+  const reportArtifactPath = artifacts.writeTempJsonArtifact("summary-report", report);
+  printFinalRunSummary(plan, report, reportArtifactPath);
+  return report;
 }

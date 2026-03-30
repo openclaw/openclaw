@@ -1,12 +1,27 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
 import {
+  clearSessionStoreCacheForTest,
   getSessionStoreLockQueueSizeForTest,
   withSessionStoreLockForTest,
 } from "../config/sessions/store.js";
+import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
+
+const acquireSessionWriteLockMock = vi.hoisted(() =>
+  vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+);
+
+vi.mock("../agents/session-write-lock.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../agents/session-write-lock.js")>();
+  return {
+    ...original,
+    acquireSessionWriteLock: acquireSessionWriteLockMock,
+  };
+});
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -19,8 +34,18 @@ function createDeferred<T>() {
 }
 
 describe("cleanupSessionStateForTest", () => {
-  afterEach(async () => {
-    await cleanupSessionStateForTest();
+  beforeEach(() => {
+    clearSessionStoreCacheForTest();
+    resetFileLockStateForTest();
+    resetSessionWriteLockStateForTest();
+    acquireSessionWriteLockMock.mockClear();
+  });
+
+  afterEach(() => {
+    clearSessionStoreCacheForTest();
+    resetFileLockStateForTest();
+    resetSessionWriteLockStateForTest();
+    vi.restoreAllMocks();
   });
 
   it("waits for in-flight session store locks before clearing test state", async () => {

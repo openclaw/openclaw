@@ -444,6 +444,7 @@ describe("gateway server agent", () => {
         message: "hi",
         sessionKey: "main",
         deliver: true,
+        bestEffortDeliver: false,
         idempotencyKey: "idem-agent-missing-provider",
       });
       expect(res.ok).toBe(false);

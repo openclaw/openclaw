@@ -27,7 +27,7 @@ openclaw onboard
 openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
-### Config snippet
+### Claude CLI config snippet
 
 ```json5
 {
@@ -47,7 +47,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Fast mode (Anthropic API)
 
-OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
+OpenClaw's shared `/fast` toggle also supports direct public Anthropic traffic, including API-key and OAuth-authenticated requests sent to `api.anthropic.com`.
 
 - `/fast on` maps to `service_tier: "auto"`
 - `/fast off` maps to `service_tier: "standard_only"`
@@ -69,8 +69,8 @@ OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
 
 Important limits:
 
-- This is **API-key only**. Anthropic setup-token / OAuth auth does not honor OpenClaw fast-mode tier injection.
 - OpenClaw only injects Anthropic service tiers for direct `api.anthropic.com` requests. If you route `anthropic/*` through a proxy or gateway, `/fast` leaves `service_tier` untouched.
+- Explicit Anthropic `serviceTier` or `service_tier` model params override the `/fast` default when both are set.
 - Anthropic reports the effective tier on the response under `usage.service_tier`. On accounts without Priority Tier capacity, `service_tier: "auto"` may still resolve to `standard`.
 
 ## Prompt caching (Anthropic API)
@@ -260,6 +260,38 @@ If the `claude` binary is not on the gateway host PATH:
 - Claude subscription auth reused from the local CLI
 - Normal OpenClaw message/session routing
 - Claude CLI session continuity across turns
+
+### Migrate from Anthropic auth to Claude CLI
+
+If you currently use `anthropic/...` with a setup-token or API key and want to
+switch the same gateway host to Claude CLI:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+Or in onboarding:
+
+```bash
+openclaw onboard --auth-choice anthropic-cli
+```
+
+What this does:
+
+- verifies Claude CLI is already signed in on the gateway host
+- switches the default model to `claude-cli/...`
+- rewrites Anthropic default-model fallbacks like `anthropic/claude-opus-4-6`
+  to `claude-cli/claude-opus-4-6`
+- adds matching `claude-cli/...` entries to `agents.defaults.models`
+
+What it does **not** do:
+
+- delete your existing Anthropic auth profiles
+- remove every old `anthropic/...` config reference outside the main default
+  model/allowlist path
+
+That makes rollback simple: change the default model back to `anthropic/...` if
+you need to.
 
 ### Important limits
 

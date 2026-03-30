@@ -6,7 +6,7 @@ export { resolveReactionMessageId } from "../channels/plugins/actions/reaction-m
 export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
-import { stringEnum } from "../agents/schema/typebox.js";
+import { stringEnum as createStringEnum } from "../agents/schema/typebox.js";
 
 /** Schema helper for channels that expose button rows on the shared `message` tool. */
 export function createMessageToolButtonsSchema(): TSchema {
@@ -16,7 +16,7 @@ export function createMessageToolButtonsSchema(): TSchema {
         Type.Object({
           text: Type.String(),
           callback_data: Type.String(),
-          style: Type.Optional(stringEnum(["danger", "success", "primary"])),
+          style: Type.Optional(createStringEnum(["danger", "success", "primary"])),
         }),
       ),
       {
