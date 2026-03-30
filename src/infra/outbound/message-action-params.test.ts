@@ -35,10 +35,20 @@ function resolveTelegramAutoThreadIdForTest(params: {
     return undefined;
   }
   const normalizeChatId = (raw: string) => {
-    const trimmed = raw
-      .trim()
-      .replace(/^telegram:/i, "")
-      .replace(/^tg:/i, "");
+    let trimmed = raw.trim();
+    let strippedTelegramPrefix = false;
+    while (true) {
+      if (/^(telegram|tg):/i.test(trimmed)) {
+        strippedTelegramPrefix = true;
+        trimmed = trimmed.replace(/^(telegram|tg):/i, "").trim();
+        continue;
+      }
+      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
+        trimmed = trimmed.replace(/^group:/i, "").trim();
+        continue;
+      }
+      break;
+    }
     const groupTopic = /^group:([^:]+):topic:\d+$/i.exec(trimmed);
     if (groupTopic) {
       return groupTopic[1].toLowerCase();
