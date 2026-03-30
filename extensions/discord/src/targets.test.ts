@@ -6,7 +6,12 @@ import {
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
 import { normalizeDiscordMessagingTarget } from "./normalize.js";
-import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
+import {
+  parseDiscordTarget,
+  resolveDiscordChannelId,
+  resolveDiscordTarget,
+  resolveDiscordTargetForMessaging,
+} from "./targets.js";
 
 describe("parseDiscordTarget", () => {
   it("parses user mention and prefixes", () => {
@@ -107,6 +112,136 @@ describe("resolveDiscordTarget", () => {
 describe("normalizeDiscordMessagingTarget", () => {
   it("defaults raw numeric ids to channels", () => {
     expect(normalizeDiscordMessagingTarget("123")).toBe("channel:123");
+  });
+});
+
+describe("resolveDiscordTargetForMessaging", () => {
+  const cfg = { channels: { discord: {} } } as OpenClawConfig;
+
+  it("resolves explicit user: prefixed targets", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "user:123",
+      normalized: "user:123",
+    });
+
+    expect(result).toEqual({
+      to: "user:123",
+      kind: "user",
+      display: "123",
+      source: "normalized",
+    });
+  });
+
+  it("resolves explicit channel: prefixed targets", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "channel:456",
+      normalized: "channel:456",
+    });
+
+    expect(result).toEqual({
+      to: "channel:456",
+      kind: "channel",
+      display: "456",
+      source: "normalized",
+    });
+  });
+
+  it("resolves user mentions (<@ID>)", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "<@789>",
+      normalized: "<@789>",
+    });
+
+    expect(result).toEqual({
+      to: "user:789",
+      kind: "user",
+      display: "789",
+      source: "normalized",
+    });
+  });
+
+  it("resolves user mentions with ! (<@!ID>)", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "<@!999>",
+      normalized: "<@!999>",
+    });
+
+    expect(result).toEqual({
+      to: "user:999",
+      kind: "user",
+      display: "999",
+      source: "normalized",
+    });
+  });
+
+  it("resolves discord: prefixed targets as users", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "discord:111",
+      normalized: "discord:111",
+    });
+
+    expect(result).toEqual({
+      to: "user:111",
+      kind: "user",
+      display: "111",
+      source: "normalized",
+    });
+  });
+
+  it("returns null for empty input", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "",
+      normalized: "",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null for bare numeric input (not explicit)", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "123",
+      normalized: "123",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null for channel names without prefix (not explicit)", async () => {
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "general",
+      normalized: "general",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("respects preferredKind when parsing fails", async () => {
+    // Even with preferredKind, explicit targets should still work
+    const result = await resolveDiscordTargetForMessaging({
+      cfg,
+      accountId: "default",
+      input: "user:222",
+      normalized: "user:222",
+      preferredKind: "channel",
+    });
+
+    expect(result?.kind).toBe("user");
   });
 });
 

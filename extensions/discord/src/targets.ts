@@ -6,6 +6,7 @@ import {
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
 } from "openclaw/plugin-sdk/channel-targets";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
@@ -154,4 +155,67 @@ function isLikelyUsername(input: string): boolean {
   }
   // Likely a username if it doesn't match known patterns
   return true;
+}
+
+/**
+ * Resolve a Discord target for messaging (used by the messaging plugin interface).
+ * This function is called during target resolution in all contexts, including isolated cron jobs.
+ *
+ * It validates explicit user/channel targets like "user:123" or "<@456>" and returns them
+ * in normalized form. For explicit targets, directory lookup is skipped to avoid unnecessary
+ * API calls when the format is already unambiguous.
+ *
+ * @param params Configuration and input for target resolution
+ * @returns Resolved target with normalized format, or null if input doesn't look like an explicit Discord target
+ */
+export async function resolveDiscordTargetForMessaging(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  input: string;
+  normalized: string;
+  preferredKind?: "user" | "group" | "channel";
+}): Promise<{
+  to: string;
+  kind: "user" | "group" | "channel";
+  display?: string;
+  source?: "normalized" | "directory";
+} | null> {
+  const raw = params.input.trim();
+  if (!raw) {
+    return null;
+  }
+
+  // Parse the input using existing Discord target parsing logic
+  try {
+    // Discord only supports user/channel kinds, so we filter out "group" from preferredKind
+    const defaultKind: "user" | "channel" =
+      params.preferredKind === "group" ? "channel" : (params.preferredKind ?? "channel");
+    const parsed = parseDiscordTarget(raw, {
+      defaultKind,
+    });
+    if (!parsed) {
+      return null;
+    }
+
+    // For explicit targets (user:ID, channel:ID, mentions), return normalized immediately
+    // without directory lookup. This ensures explicit user:<id> targets work in isolated
+    // contexts (like cron jobs) where Discord gateway state may not be available.
+    const isExplicitTarget = /^(user:|channel:|discord:)/.test(raw) || /^<@!?\d+>$/.test(raw);
+
+    if (isExplicitTarget) {
+      return {
+        to: parsed.normalized,
+        kind: parsed.kind as "user" | "group" | "channel",
+        display: parsed.id,
+        source: "normalized",
+      };
+    }
+
+    // For other formats (e.g., bare IDs, channel names), fall through to null
+    // to let directory lookup or other resolvers handle it
+    return null;
+  } catch {
+    // If parsing fails, return null to let other resolvers try
+    return null;
+  }
 }
