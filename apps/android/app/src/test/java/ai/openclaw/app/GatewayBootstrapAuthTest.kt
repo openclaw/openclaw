@@ -6,15 +6,16 @@ import org.junit.Test
 
 class GatewayBootstrapAuthTest {
   @Test
-  fun detectsBootstrapOnlyGatewayAuth() {
-    assertTrue(isBootstrapOnlyGatewayAuth(token = "", bootstrapToken = "bootstrap-1", password = ""))
-    assertTrue(isBootstrapOnlyGatewayAuth(token = null, bootstrapToken = "bootstrap-1", password = null))
+  fun connectsOperatorSessionWhenBootstrapAuthExists() {
+    assertTrue(shouldConnectOperatorSession(token = "", bootstrapToken = "bootstrap-1", password = "", storedOperatorToken = ""))
+    assertTrue(shouldConnectOperatorSession(token = null, bootstrapToken = "bootstrap-1", password = null, storedOperatorToken = null))
   }
 
   @Test
-  fun rejectsBootstrapOnlyGatewayAuthWhenSharedCredentialsExist() {
-    assertFalse(isBootstrapOnlyGatewayAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null))
-    assertFalse(isBootstrapOnlyGatewayAuth(token = null, bootstrapToken = "bootstrap-1", password = "shared-password"))
-    assertFalse(isBootstrapOnlyGatewayAuth(token = null, bootstrapToken = "", password = null))
+  fun skipsOperatorSessionOnlyWhenNoSharedBootstrapOrStoredAuthExists() {
+    assertTrue(shouldConnectOperatorSession(token = "shared-token", bootstrapToken = "bootstrap-1", password = null, storedOperatorToken = null))
+    assertTrue(shouldConnectOperatorSession(token = null, bootstrapToken = "bootstrap-1", password = "shared-password", storedOperatorToken = null))
+    assertTrue(shouldConnectOperatorSession(token = null, bootstrapToken = null, password = null, storedOperatorToken = "stored-token"))
+    assertFalse(shouldConnectOperatorSession(token = null, bootstrapToken = "", password = null, storedOperatorToken = null))
   }
 }

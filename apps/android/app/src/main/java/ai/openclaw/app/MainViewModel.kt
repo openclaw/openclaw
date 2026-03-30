@@ -204,10 +204,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     prefs.setOnboardingCompleted(value)
   }
 
-  fun hasStoredNodeDeviceToken(): Boolean {
-    return ensureRuntime().hasStoredNodeDeviceToken()
-  }
-
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
