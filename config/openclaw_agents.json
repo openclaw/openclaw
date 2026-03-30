@@ -6,6 +6,12 @@
     "system_prompt": "Модель-предохранитель. Анализирует баланс и блокирует транзакции при нарушении риск-лимитов API DMarket.",
     "dependency_chains": [
       "Latency Monitor"
+    ],
+    "skills": [
+      "github",
+      "session-logs",
+      "healthcheck",
+      "clawhub"
     ]
   },
   {
@@ -15,6 +21,13 @@
     "system_prompt": "Эксперт по производительности. Ищет time.sleep и синхронные вызовы, заменяя их на asyncio и httpx.",
     "dependency_chains": [
       "Security Auditor"
+    ],
+    "skills": [
+      "github",
+      "coding-agent",
+      "tmux",
+      "session-logs",
+      "clawhub"
     ]
   },
   {
@@ -24,6 +37,13 @@
     "system_prompt": "Офицер безопасности. Сканирует код на наличие хардкода API-ключей и утечек .env в логи Telegram.",
     "dependency_chains": [
       "Executor"
+    ],
+    "skills": [
+      "github",
+      "healthcheck",
+      "1password",
+      "session-logs",
+      "clawhub"
     ]
   },
   {
@@ -33,6 +53,15 @@
     "system_prompt": "Автономный разработчик инструментов. Пишет новые Python-скрипты в папку /tools для расширения функций системы.",
     "dependency_chains": [
       "Planner"
+    ],
+    "skills": [
+      "github",
+      "coding-agent",
+      "skill-creator",
+      "mcporter",
+      "tmux",
+      "clawhub",
+      "session-logs"
     ]
   },
   {
@@ -42,6 +71,11 @@
     "system_prompt": "Чистильщик контекста. Выполняет суммаризацию диалогов и очистку context_window для предотвращения переполнения памяти.",
     "dependency_chains": [
       "Tool Smith"
+    ],
+    "skills": [
+      "session-logs",
+      "summarize",
+      "clawhub"
     ]
   }
 ]
