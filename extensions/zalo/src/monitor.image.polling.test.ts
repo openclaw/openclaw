@@ -5,14 +5,14 @@ import {
   createImageUpdate,
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
-} from "../test-support/lifecycle.js";
+} from "../test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
   getZaloRuntimeMock,
   loadLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
-} from "../test-support/monitor-mocks.js";
+} from "../test-support/monitor-mocks-test-support.js";
 
 describe("Zalo polling image handling", () => {
   const {
