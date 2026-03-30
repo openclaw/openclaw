@@ -224,7 +224,7 @@ function discoverChannelConfigsFromSource(params: {
   manifest: PluginManifest;
   channelConfigs: Record<string, PluginManifestChannelConfig> | undefined;
 }): Record<string, PluginManifestChannelConfig> | undefined {
-  const channelIds = params.manifest.channels ?? [];
+  const channelIds = params.manifest.channels?.map((id) => id.trim()).filter(Boolean) ?? [];
   if (channelIds.length === 0) {
     return params.channelConfigs;
   }
