@@ -158,8 +158,9 @@ describe("IntegrationsPanel", () => {
     expect(screen.getByText("Exa Search")).toBeInTheDocument();
     expect(screen.getByText("Apollo Enrichment")).toBeInTheDocument();
     expect(screen.getByText("ElevenLabs")).toBeInTheDocument();
-    expect(screen.getAllByText("Enabled")).toHaveLength(2);
-    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText("Search the web with Exa")).toBeInTheDocument();
+    expect(screen.getByText("Enrich people and company data")).toBeInTheDocument();
+    expect(screen.getByText("Generate speech with ElevenLabs")).toBeInTheDocument();
 
     await user.click(screen.getByLabelText("Toggle Apollo Enrichment"));
 

@@ -142,7 +142,8 @@ describe("dench-cloud helpers", () => {
         alias: "Claude Opus 4.6 (Dench Cloud)",
       }),
     );
-    expect(patch.messages.tts.elevenlabs).toEqual({
+    expect(patch.messages.tts.provider).toBe("elevenlabs");
+    expect(patch.messages.tts.providers.elevenlabs).toEqual({
       baseUrl: "https://gateway.merseoriginals.com",
       apiKey: "dench_live_key",
     });
@@ -194,9 +195,12 @@ describe("dench-cloud helpers", () => {
       },
       messages: {
         tts: {
-          elevenlabs: {
-            baseUrl: "https://gateway.merseoriginals.com",
-            apiKey: "dench_cfg_key",
+          provider: "elevenlabs",
+          providers: {
+            elevenlabs: {
+              baseUrl: "https://gateway.merseoriginals.com",
+              apiKey: "dench_cfg_key",
+            },
           },
         },
       },

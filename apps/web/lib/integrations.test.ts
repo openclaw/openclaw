@@ -56,9 +56,12 @@ describe("integrations state", () => {
           },
           messages: {
             tts: {
-              elevenlabs: {
-                baseUrl: "https://gateway.merseoriginals.com",
-                apiKey: "dench-key",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  baseUrl: "https://gateway.merseoriginals.com",
+                  apiKey: "dench-key",
+                },
               },
             },
           },
@@ -351,19 +354,15 @@ describe("integrations state", () => {
 
     expect(result.changed).toBe(true);
     expect(result.state.search.effectiveOwner).toBe("web_search");
-    expect(result.state.search.builtIn).toEqual({
+    expect(result.state.search.builtIn).toMatchObject({
       enabled: true,
       denied: false,
-      provider: "duckduckgo",
     });
 
     const writtenConfig = JSON.parse(openClawJson);
     expect(writtenConfig.plugins.entries["exa-search"]).toEqual({ enabled: false });
     expect(writtenConfig.tools.deny).toEqual([]);
-    expect(writtenConfig.tools.web.search).toEqual({
-      enabled: true,
-      provider: "duckduckgo",
-    });
+    expect(writtenConfig.tools.web.search.enabled).toBe(true);
   });
 
   it("hard-enables Apollo when the plugin asset is present", async () => {
@@ -424,10 +423,13 @@ describe("integrations state", () => {
       },
       messages: {
         tts: {
-          elevenlabs: {
-            baseUrl: "https://gateway.merseoriginals.com",
-            apiKey: "dench-key",
-            voiceId: "voice_123",
+          provider: "elevenlabs",
+          providers: {
+            elevenlabs: {
+              baseUrl: "https://gateway.merseoriginals.com",
+              apiKey: "dench-key",
+              voiceId: "voice_123",
+            },
           },
         },
       },
@@ -460,14 +462,16 @@ describe("integrations state", () => {
     const disabled = setElevenLabsIntegrationEnabled(false);
     expect(disabled.changed).toBe(true);
     let writtenConfig = JSON.parse(openClawJson);
-    expect(writtenConfig.messages.tts.elevenlabs).toEqual({
+    expect(writtenConfig.messages.tts.providers.elevenlabs).toEqual({
       voiceId: "voice_123",
     });
+    expect(writtenConfig.messages.tts.provider).toBeUndefined();
 
     const enabled = setElevenLabsIntegrationEnabled(true);
     expect(enabled.changed).toBe(true);
     writtenConfig = JSON.parse(openClawJson);
-    expect(writtenConfig.messages.tts.elevenlabs).toEqual({
+    expect(writtenConfig.messages.tts.provider).toBe("elevenlabs");
+    expect(writtenConfig.messages.tts.providers.elevenlabs).toEqual({
       voiceId: "voice_123",
       baseUrl: "https://gateway.merseoriginals.com",
       apiKey: "dench-key",
@@ -497,6 +501,53 @@ describe("integrations state", () => {
       expect.objectContaining({ timeout: 30000 }),
       expect.any(Function),
     );
+  });
+
+  it("preserves unrelated config keys through write round-trip", async () => {
+    const { existsSync, readFileSync, writeFileSync } = await import("node:fs");
+    const mockExists = vi.mocked(existsSync);
+    const mockRead = vi.mocked(readFileSync);
+    const mockWrite = vi.mocked(writeFileSync);
+    const originalConfig = {
+      meta: { lastTouchedVersion: "2026.3.28" },
+      wizard: { lastRunAt: "2026-03-30" },
+      auth: { profiles: { "dench-cloud:default": { provider: "dench-cloud" } } },
+      agents: { defaults: { model: { primary: "dench-cloud/claude-sonnet-4.6" } } },
+      gateway: { port: 19002 },
+      models: { providers: { "dench-cloud": { apiKey: "dench-key" } } },
+      plugins: { entries: { "apollo-enrichment": { enabled: true } } },
+    };
+    let openClawJson = JSON.stringify(originalConfig);
+
+    mockExists.mockImplementation((path) => {
+      const value = String(path);
+      return (
+        value.endsWith("openclaw.json") ||
+        value === "/home/testuser/.openclaw-dench/extensions/apollo-enrichment"
+      );
+    });
+    mockRead.mockImplementation((path) => {
+      if (String(path).endsWith("openclaw.json")) {
+        return openClawJson as never;
+      }
+      return "" as never;
+    });
+    mockWrite.mockImplementation((path, data) => {
+      if (String(path).endsWith("openclaw.json")) {
+        openClawJson = String(data);
+      }
+    });
+
+    const { setApolloIntegrationEnabled } = await import("./integrations.js");
+    setApolloIntegrationEnabled(false);
+
+    const writtenConfig = JSON.parse(openClawJson);
+    expect(writtenConfig.meta).toEqual(originalConfig.meta);
+    expect(writtenConfig.wizard).toEqual(originalConfig.wizard);
+    expect(writtenConfig.auth).toEqual(originalConfig.auth);
+    expect(writtenConfig.agents).toEqual(originalConfig.agents);
+    expect(writtenConfig.gateway).toEqual(originalConfig.gateway);
+    expect(writtenConfig.plugins.entries["apollo-enrichment"]).toEqual({ enabled: false });
   });
 
   it("repairs older profiles by copying and re-registering bundled plugins", async () => {

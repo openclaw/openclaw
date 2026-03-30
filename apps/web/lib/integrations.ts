@@ -116,35 +116,12 @@ export type IntegrationsRepairResult = {
 
 type UnknownRecord = Record<string, unknown>;
 
-type OpenClawConfig = {
-  models?: {
-    providers?: Record<string, unknown>;
-  };
-  messages?: {
-    tts?: Record<string, unknown>;
-  };
-  plugins?: {
-    allow?: unknown[];
-    load?: {
-      paths?: unknown[];
-    };
-    entries?: Record<string, unknown>;
-    installs?: Record<string, unknown>;
-  };
-  tools?: {
-    deny?: unknown[];
-    web?: {
-      search?: {
-        enabled?: unknown;
-        provider?: unknown;
-      };
-    };
-  };
-};
-
-type WebSearchConfig = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]
->;
+/**
+ * The full openclaw.json parsed as an opaque record so that writes preserve
+ * every key the integrations code does not know about (meta, wizard, auth,
+ * agents, gateway, etc.).
+ */
+type OpenClawConfig = UnknownRecord;
 
 const DEFAULT_GATEWAY_URL = "https://gateway.merseoriginals.com";
 const DEFAULT_FALLBACK_PROVIDER = "duckduckgo";
@@ -196,7 +173,8 @@ function readJsonFile<T>(path: string, fallback: T): T {
 }
 
 export function readOpenClawConfigForIntegrations(): OpenClawConfig {
-  return readJsonFile<OpenClawConfig>(openClawConfigPath(), {});
+  const raw = readJsonFile<unknown>(openClawConfigPath(), {});
+  return asRecord(raw) ?? {};
 }
 
 export function writeOpenClawConfigForIntegrations(config: OpenClawConfig): void {
@@ -234,7 +212,8 @@ export function writeIntegrationsMetadata(metadata: DenchIntegrationMetadata): v
 }
 
 function resolveGatewayBaseUrl(config: OpenClawConfig): string | null {
-  const pluginEntries = asRecord(config.plugins?.entries);
+  const plugins = asRecord(config.plugins);
+  const pluginEntries = asRecord(plugins?.entries);
   const gatewayConfig = asRecord(asRecord(pluginEntries?.["dench-ai-gateway"])?.config);
   return (
     readString(gatewayConfig?.gatewayUrl) ||
@@ -243,29 +222,28 @@ function resolveGatewayBaseUrl(config: OpenClawConfig): string | null {
   );
 }
 
-function ensurePluginsConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["plugins"]> {
-  if (!config.plugins) {
-    config.plugins = {};
+function ensureRecord(parent: UnknownRecord, key: string): UnknownRecord {
+  const existing = asRecord(parent[key]);
+  if (existing) {
+    return existing;
   }
-  return config.plugins;
+  const fresh: UnknownRecord = {};
+  parent[key] = fresh;
+  return fresh;
 }
 
-function ensureToolsConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["tools"]> {
-  if (!config.tools) {
-    config.tools = {};
-  }
-  return config.tools;
+function ensurePluginsConfig(config: OpenClawConfig): UnknownRecord {
+  return ensureRecord(config, "plugins");
 }
 
-function ensureWebSearchConfig(config: OpenClawConfig): WebSearchConfig {
+function ensureToolsConfig(config: OpenClawConfig): UnknownRecord {
+  return ensureRecord(config, "tools");
+}
+
+function ensureWebSearchConfig(config: OpenClawConfig): UnknownRecord {
   const tools = ensureToolsConfig(config);
-  if (!tools.web) {
-    tools.web = {};
-  }
-  if (!tools.web.search) {
-    tools.web.search = {};
-  }
-  return tools.web.search;
+  const web = ensureRecord(tools, "web");
+  return ensureRecord(web, "search");
 }
 
 function ensureStringList(target: unknown): string[] {
@@ -298,18 +276,12 @@ function removeValue(list: string[], value: string): boolean {
 function ensurePluginRegistration(config: OpenClawConfig, pluginId: string): boolean {
   const plugins = ensurePluginsConfig(config);
   const allow = ensureStringList(plugins.allow);
-  const loadPaths = ensureStringList(plugins.load?.paths);
   plugins.allow = allow;
-  if (!plugins.load) {
-    plugins.load = {};
-  }
-  plugins.load.paths = loadPaths;
-  if (!plugins.entries) {
-    plugins.entries = {};
-  }
-  if (!plugins.installs) {
-    plugins.installs = {};
-  }
+  const load = ensureRecord(plugins, "load");
+  const loadPaths = ensureStringList(load.paths);
+  load.paths = loadPaths;
+  const entries = ensureRecord(plugins, "entries");
+  const installs = ensureRecord(plugins, "installs");
 
   let changed = false;
   const { installPath, sourcePath } = resolveBundledPluginPaths(pluginId);
@@ -317,11 +289,11 @@ function ensurePluginRegistration(config: OpenClawConfig, pluginId: string): boo
 
   changed = addUnique(allow, pluginId) || changed;
 
-  if (!plugins.entries[pluginId] || !asRecord(plugins.entries[pluginId])) {
-    plugins.entries[pluginId] = { enabled: true };
+  if (!entries[pluginId] || !asRecord(entries[pluginId])) {
+    entries[pluginId] = { enabled: true };
     changed = true;
   }
-  const entry = asRecord(plugins.entries[pluginId]);
+  const entry = asRecord(entries[pluginId]);
   if (entry && entry.enabled !== true) {
     entry.enabled = true;
     changed = true;
@@ -329,9 +301,9 @@ function ensurePluginRegistration(config: OpenClawConfig, pluginId: string): boo
 
   if (pluginExists) {
     changed = addUnique(loadPaths, installPath) || changed;
-    const install = asRecord(plugins.installs[pluginId]);
+    const install = asRecord(installs[pluginId]);
     if (!install) {
-      plugins.installs[pluginId] = { installPath, sourcePath };
+      installs[pluginId] = { installPath, sourcePath };
       changed = true;
     } else {
       if (install.installPath !== installPath) {
@@ -372,18 +344,12 @@ function repairBundledPluginRegistration(
 ): IntegrationRepairEntry & { changed: boolean } {
   const plugins = ensurePluginsConfig(config);
   const allow = ensureStringList(plugins.allow);
-  const loadPaths = ensureStringList(plugins.load?.paths);
   plugins.allow = allow;
-  if (!plugins.load) {
-    plugins.load = {};
-  }
-  plugins.load.paths = loadPaths;
-  if (!plugins.entries) {
-    plugins.entries = {};
-  }
-  if (!plugins.installs) {
-    plugins.installs = {};
-  }
+  const load = ensureRecord(plugins, "load");
+  const loadPaths = ensureStringList(load.paths);
+  load.paths = loadPaths;
+  const entries = ensureRecord(plugins, "entries");
+  const installs = ensureRecord(plugins, "installs");
 
   const { installPath, sourcePath } = resolveBundledPluginPaths(params.pluginId);
   const sourceExists = existsSync(sourcePath);
@@ -404,19 +370,19 @@ function repairBundledPluginRegistration(
     issues.push("source_asset_missing");
   }
 
-  const existingEntry = asRecord(plugins.entries[params.pluginId]);
+  const existingEntry = asRecord(entries[params.pluginId]);
   const preservedEnabled = existingEntry?.enabled !== false;
   if (!existingEntry) {
-    plugins.entries[params.pluginId] = { enabled: preservedEnabled };
+    entries[params.pluginId] = { enabled: preservedEnabled };
     changed = true;
   }
 
   if (installExists) {
     changed = addUnique(allow, params.pluginId) || changed;
     changed = addUnique(loadPaths, installPath) || changed;
-    const install = asRecord(plugins.installs[params.pluginId]);
+    const install = asRecord(installs[params.pluginId]);
     if (!install) {
-      plugins.installs[params.pluginId] = { installPath, sourcePath };
+      installs[params.pluginId] = { installPath, sourcePath };
       changed = true;
     } else {
       if (install.installPath !== installPath) {
@@ -445,13 +411,11 @@ function repairBundledPluginRegistration(
 
 function setPluginEnabled(config: OpenClawConfig, pluginId: string, enabled: boolean): boolean {
   const plugins = ensurePluginsConfig(config);
-  if (!plugins.entries) {
-    plugins.entries = {};
-  }
+  const entries = ensureRecord(plugins, "entries");
   let changed = false;
-  const existing = asRecord(plugins.entries[pluginId]);
+  const existing = asRecord(entries[pluginId]);
   if (!existing) {
-    plugins.entries[pluginId] = { enabled };
+    entries[pluginId] = { enabled };
     changed = true;
   } else if (existing.enabled !== enabled) {
     existing.enabled = enabled;
@@ -463,7 +427,6 @@ function setPluginEnabled(config: OpenClawConfig, pluginId: string, enabled: boo
 function setWebSearchPolicy(config: OpenClawConfig, params: {
   enabled: boolean;
   denied: boolean;
-  provider?: string;
 }): boolean {
   let changed = false;
   const tools = ensureToolsConfig(config);
@@ -475,10 +438,6 @@ function setWebSearchPolicy(config: OpenClawConfig, params: {
     webSearch.enabled = params.enabled;
     changed = true;
   }
-  if (params.provider && webSearch.provider !== params.provider) {
-    webSearch.provider = params.provider;
-    changed = true;
-  }
   if (params.denied) {
     changed = addUnique(deny, "web_search") || changed;
   } else {
@@ -488,7 +447,8 @@ function setWebSearchPolicy(config: OpenClawConfig, params: {
 }
 
 function resolveDenchAuth(config: OpenClawConfig): IntegrationAuthSummary {
-  const provider = asRecord(asRecord(config.models?.providers)?.["dench-cloud"]);
+  const models = asRecord(config.models);
+  const provider = asRecord(asRecord(models?.providers)?.["dench-cloud"]);
   if (readString(provider?.apiKey)) {
     return { configured: true, source: "config" };
   }
@@ -499,7 +459,8 @@ function resolveDenchAuth(config: OpenClawConfig): IntegrationAuthSummary {
 }
 
 function resolveDenchApiKey(config: OpenClawConfig): string | null {
-  const provider = asRecord(asRecord(config.models?.providers)?.["dench-cloud"]);
+  const models = asRecord(config.models);
+  const provider = asRecord(asRecord(models?.providers)?.["dench-cloud"]);
   if (readString(provider?.apiKey)) {
     return readString(provider?.apiKey) ?? null;
   }
@@ -512,21 +473,23 @@ function resolveDenchApiKey(config: OpenClawConfig): string | null {
   return null;
 }
 
-function ensureTtsConfig(config: OpenClawConfig): Record<string, unknown> {
-  if (!config.messages) {
-    config.messages = {};
-  }
-  if (!config.messages.tts) {
-    config.messages.tts = {};
-  }
-  return config.messages.tts;
+function ensureTtsConfig(config: OpenClawConfig): UnknownRecord {
+  const messages = ensureRecord(config, "messages");
+  return ensureRecord(messages, "tts");
+}
+
+function ensureTtsProviders(config: OpenClawConfig): UnknownRecord {
+  const tts = ensureTtsConfig(config);
+  return ensureRecord(tts, "providers");
 }
 
 function readPluginState(config: OpenClawConfig, pluginId: string): IntegrationPluginState {
-  const entries = asRecord(config.plugins?.entries);
-  const installs = asRecord(config.plugins?.installs);
-  const allow = readStringList(config.plugins?.allow);
-  const loadPaths = readStringList(config.plugins?.load?.paths);
+  const plugins = asRecord(config.plugins);
+  const entries = asRecord(plugins?.entries);
+  const installs = asRecord(plugins?.installs);
+  const allow = readStringList(plugins?.allow);
+  const load = asRecord(plugins?.load);
+  const loadPaths = readStringList(load?.paths);
   const entry = asRecord(entries?.[pluginId]);
   const install = asRecord(installs?.[pluginId]);
   const installPath = readString(install?.installPath) ?? null;
@@ -546,8 +509,10 @@ function readPluginState(config: OpenClawConfig, pluginId: string): IntegrationP
 }
 
 function readBuiltInSearchState(config: OpenClawConfig): BuiltInSearchState {
-  const deny = readStringList(config.tools?.deny);
-  const searchConfig = config.tools?.web?.search;
+  const tools = asRecord(config.tools);
+  const deny = readStringList(tools?.deny);
+  const web = asRecord(tools?.web);
+  const searchConfig = asRecord(web?.search);
   return {
     enabled: readBoolean(searchConfig?.enabled) !== false,
     denied: deny.includes("web_search"),
@@ -675,10 +640,18 @@ function buildElevenLabsState(
   gatewayBaseUrl: string | null,
   auth: IntegrationAuthSummary,
 ): DenchIntegrationState {
-  const elevenlabs = asRecord(asRecord(config.messages)?.tts);
-  const override = asRecord(elevenlabs?.elevenlabs);
-  const overrideBaseUrl = readString(override?.baseUrl) ?? null;
-  const overrideActive = Boolean(overrideBaseUrl && gatewayBaseUrl && overrideBaseUrl === gatewayBaseUrl);
+  const messages = asRecord(config.messages);
+  const tts = asRecord(messages?.tts);
+  const providers = asRecord(tts?.providers);
+  const elevenlabs = asRecord(providers?.elevenlabs);
+  const overrideBaseUrl = readString(elevenlabs?.baseUrl) ?? null;
+  const ttsProvider = readString(tts?.provider);
+  const overrideActive = Boolean(
+    ttsProvider === "elevenlabs" &&
+    overrideBaseUrl &&
+    gatewayBaseUrl &&
+    overrideBaseUrl === gatewayBaseUrl,
+  );
   const healthIssues: IntegrationHealthIssue[] = [];
   if (!auth.configured) healthIssues.push("missing_auth");
   if (!gatewayBaseUrl) healthIssues.push("missing_gateway");
@@ -829,11 +802,7 @@ export function setExaIntegrationEnabled(enabled: boolean): IntegrationToggleRes
     changed = setWebSearchPolicy(config, { enabled: false, denied: true }) || changed;
   } else {
     changed = setPluginEnabled(config, EXA_PLUGIN_ID, false) || changed;
-    changed = setWebSearchPolicy(config, {
-      enabled: true,
-      denied: false,
-      provider: DEFAULT_FALLBACK_PROVIDER,
-    }) || changed;
+    changed = setWebSearchPolicy(config, { enabled: true, denied: false }) || changed;
   }
 
   const nextMetadata: DenchIntegrationMetadata = {
@@ -883,16 +852,21 @@ export function setApolloIntegrationEnabled(enabled: boolean): IntegrationToggle
 export function setElevenLabsIntegrationEnabled(enabled: boolean): IntegrationToggleResult {
   const config = readOpenClawConfigForIntegrations();
   const tts = ensureTtsConfig(config);
+  const providers = ensureTtsProviders(config);
   const gatewayBaseUrl = resolveGatewayBaseUrl(config) ?? DEFAULT_GATEWAY_URL;
   const denchApiKey = resolveDenchApiKey(config);
   let changed = false;
 
   if (enabled) {
-    const existing = asRecord(tts.elevenlabs);
-    if (!existing) {
-      tts.elevenlabs = {};
+    if (tts.provider !== "elevenlabs") {
+      tts.provider = "elevenlabs";
+      changed = true;
     }
-    const elevenlabs = asRecord(tts.elevenlabs);
+    const existing = asRecord(providers.elevenlabs);
+    if (!existing) {
+      providers.elevenlabs = {};
+    }
+    const elevenlabs = asRecord(providers.elevenlabs);
     if (elevenlabs && elevenlabs.baseUrl !== gatewayBaseUrl) {
       elevenlabs.baseUrl = gatewayBaseUrl;
       changed = true;
@@ -902,7 +876,7 @@ export function setElevenLabsIntegrationEnabled(enabled: boolean): IntegrationTo
       changed = true;
     }
   } else {
-    const elevenlabs = asRecord(tts.elevenlabs);
+    const elevenlabs = asRecord(providers.elevenlabs);
     if (elevenlabs) {
       if (elevenlabs.baseUrl === gatewayBaseUrl || elevenlabs.baseUrl === DEFAULT_GATEWAY_URL) {
         delete elevenlabs.baseUrl;
@@ -913,9 +887,13 @@ export function setElevenLabsIntegrationEnabled(enabled: boolean): IntegrationTo
         changed = true;
       }
       if (Object.keys(elevenlabs).length === 0) {
-        delete tts.elevenlabs;
+        delete providers.elevenlabs;
         changed = true;
       }
+    }
+    if (tts.provider === "elevenlabs") {
+      delete tts.provider;
+      changed = true;
     }
   }
 

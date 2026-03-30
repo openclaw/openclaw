@@ -392,9 +392,12 @@ export function buildDenchCloudConfigPatch(params: {
     },
     messages: {
       tts: {
-        elevenlabs: {
-          baseUrl: params.gatewayUrl,
-          apiKey: params.apiKey,
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            baseUrl: params.gatewayUrl,
+            apiKey: params.apiKey,
+          },
         },
       },
     },
@@ -450,9 +453,9 @@ export function readConfiguredDenchCloudSettings(
       : undefined;
 
   const baseUrl = readString(provider ?? {}, "baseUrl", "base_url");
-  const ttsElevenlabs = asRecord(
-    asRecord(asRecord(rawConfig?.messages)?.tts)?.elevenlabs,
-  );
+  const tts = asRecord(asRecord(rawConfig?.messages)?.tts);
+  const ttsProviders = asRecord(tts?.providers);
+  const ttsElevenlabs = asRecord(ttsProviders?.elevenlabs);
   return {
     gatewayUrl: baseUrl ? normalizeDenchGatewayUrl(baseUrl) : undefined,
     apiKey: readString(provider ?? {}, "apiKey", "api_key"),

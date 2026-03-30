@@ -1976,8 +1976,16 @@ async function applyDenchCloudBootstrapConfig(params: {
   await setOpenClawConfigJson({
     openclawCommand: params.openclawCommand,
     profile: params.profile,
-    key: "messages.tts.elevenlabs",
-    value: configPatch.messages.tts.elevenlabs,
+    key: "messages.tts.provider",
+    value: configPatch.messages.tts.provider,
+    errorMessage: "Failed to set ElevenLabs as TTS provider.",
+  });
+
+  await setOpenClawConfigJson({
+    openclawCommand: params.openclawCommand,
+    profile: params.profile,
+    key: "messages.tts.providers.elevenlabs",
+    value: configPatch.messages.tts.providers.elevenlabs,
     errorMessage: "Failed to configure ElevenLabs TTS via Dench Cloud gateway.",
   });
 }

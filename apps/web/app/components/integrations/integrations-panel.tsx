@@ -75,6 +75,12 @@ const INTEGRATION_ICONS = {
   elevenlabs: ElevenLabsIcon,
 } satisfies Record<DenchIntegrationId, () => JSX.Element>;
 
+const INTEGRATION_DESCRIPTIONS: Record<DenchIntegrationId, string> = {
+  exa: "Search the web with Exa",
+  apollo: "Enrich people and company data",
+  elevenlabs: "Generate speech with ElevenLabs",
+};
+
 function IntegrationCard({
   integration,
   isSaving,
@@ -85,6 +91,7 @@ function IntegrationCard({
   onToggle: (integration: DenchIntegrationState, enabled: boolean) => void;
 }) {
   const Icon = INTEGRATION_ICONS[integration.id];
+  const description = INTEGRATION_DESCRIPTIONS[integration.id];
 
   return (
     <div
@@ -104,8 +111,8 @@ function IntegrationCard({
           <div className="truncate text-sm font-medium text-foreground">
             {integration.label}
           </div>
-          <div className="text-xs text-muted-foreground">
-            {isSaving ? "Saving..." : integration.enabled ? "Enabled" : "Disabled"}
+          <div className="text-[11px] leading-4 text-muted-foreground">
+            {isSaving ? "Saving..." : description}
           </div>
         </div>
       </div>
