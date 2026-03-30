@@ -261,6 +261,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().connect(endpoint)
   }
 
+  fun connect(
+    endpoint: GatewayEndpoint,
+    token: String?,
+    bootstrapToken: String?,
+    password: String?,
+  ) {
+    ensureRuntime().connect(
+      endpoint,
+      NodeRuntime.GatewayConnectAuth(
+        token = token,
+        bootstrapToken = bootstrapToken,
+        password = password,
+      ),
+    )
+  }
+
   fun connectManual() {
     ensureRuntime().connectManual()
   }
