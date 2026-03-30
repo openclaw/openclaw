@@ -9,11 +9,25 @@ title: "Background Tasks"
 
 # Background Tasks
 
-Background tasks track work that runs **outside your main conversation session**: ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
+> **Cron vs Heartbeat vs Tasks?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for choosing the right scheduling mechanism. This page covers **tracking** background work, not scheduling it.
+
+Background tasks track work that runs **outside your main conversation session**:
+ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
+
+Tasks do **not** replace sessions, cron jobs, or heartbeats — they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
 
 <Note>
-Not every agent run creates a task. Heartbeat turns and main-session cron reminders stay in main-session history. Only **detached** work (isolated cron, ACP, subagents, CLI operations) appears in the task ledger.
+Not every agent run creates a task. Heartbeat turns and main-session cron reminders stay in main-session history. Only **detached** work appears in the task ledger.
 </Note>
+
+## TL;DR
+
+- Tasks are **records**, not schedulers — cron and heartbeat decide _when_ work runs, tasks track _what happened_.
+- Only detached work creates tasks: ACP, subagents, isolated cron, CLI operations.
+- Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
+- Completion notifications are delivered directly to a channel or queued for the next heartbeat.
+- `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
+- Terminal records are kept for 7 days, then automatically pruned.
 
 ## Quick start
 
@@ -21,14 +35,18 @@ Not every agent run creates a task. Heartbeat turns and main-session cron remind
 # List all tasks (newest first)
 openclaw tasks list
 
-# Show details for a specific task
-openclaw tasks show <task-id>
+# Filter by runtime or status
+openclaw tasks list --runtime acp
+openclaw tasks list --status running
 
-# Cancel a running task
-openclaw tasks cancel <task-id>
+# Show details for a specific task (by ID, run ID, or session key)
+openclaw tasks show <lookup>
 
-# Change notification policy
-openclaw tasks notify <task-id> state_changes
+# Cancel a running task (kills the child session)
+openclaw tasks cancel <lookup>
+
+# Change notification policy for a task
+openclaw tasks notify <lookup> state_changes
 
 # Run a health audit
 openclaw tasks audit
@@ -36,179 +54,180 @@ openclaw tasks audit
 
 ## What creates a task
 
-| Source                 | Runtime    | When a task is created                                                     |
-| ---------------------- | ---------- | -------------------------------------------------------------------------- |
-| ACP background runs    | `acp`      | Spawning a child ACP session                                               |
-| Subagent orchestration | `subagent` | Spawning a subagent via `sessions_spawn`                                   |
-| Isolated cron jobs     | `cron`     | Each execution of a `sessionTarget: "isolated"` or custom-session cron job |
-| CLI operations         | `cli`      | Background CLI commands that run through the gateway                       |
+| Source                 | Runtime type | When a task record is created                                              |
+| ---------------------- | ------------ | -------------------------------------------------------------------------- |
+| ACP background runs    | `acp`        | Spawning a child ACP session                                               |
+| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`                                   |
+| Isolated cron jobs     | `cron`       | Each execution of an isolated or custom-session cron job                   |
+| CLI operations         | `cli`        | Background CLI commands that run through the gateway                       |
 
-**Not tracked as tasks:**
+**What does not create tasks:**
 
-- Heartbeat turns (main-session; see [Heartbeat](/gateway/heartbeat))
-- Main-session cron reminders (`sessionTarget: "main"`; see [Cron Jobs](/automation/cron-jobs))
+- Heartbeat turns — main-session; see [Heartbeat](/gateway/heartbeat)
+- Main-session cron (`sessionTarget: "main"`) — see [Cron Jobs](/automation/cron-jobs)
 - Normal interactive chat turns
+- Direct `/command` responses
 
 ## Task lifecycle
 
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> running : agent starts
+    running --> succeeded : completes ok
+    running --> failed : error
+    running --> timed_out : timeout exceeded
+    running --> cancelled : operator cancels
+    queued --> lost : session gone > 5 min
+    running --> lost : session gone > 5 min
 ```
-queued ──→ running ──→ succeeded
-                   ├──→ failed
-                   ├──→ timed_out
-                   └──→ cancelled
 
-           (any active state) ──→ lost
-```
+| Status      | What it means                                                                |
+| ----------- | ---------------------------------------------------------------------------- |
+| `queued`    | Created, waiting for the agent to start                                      |
+| `running`   | Agent turn is actively executing                                             |
+| `succeeded` | Completed successfully                                                       |
+| `failed`    | Completed with an error                                                      |
+| `timed_out` | Exceeded the configured timeout                                              |
+| `cancelled` | Stopped by the operator via `openclaw tasks cancel`                          |
+| `lost`      | Backing child session disappeared (detected after a 5-minute grace period)   |
 
-| Status      | Meaning                                                              |
-| ----------- | -------------------------------------------------------------------- |
-| `queued`    | Created, waiting to start                                            |
-| `running`   | Actively executing                                                   |
-| `succeeded` | Completed successfully                                               |
-| `failed`    | Completed with an error                                              |
-| `timed_out` | Exceeded the configured timeout                                      |
-| `cancelled` | Cancelled by the operator (`openclaw tasks cancel`)                  |
-| `lost`      | Backing session disappeared (detected after a 5-minute grace period) |
-
-Tasks automatically transition from `running` to their terminal state when the associated agent run ends.
+Transitions happen automatically — when the associated agent run ends, the task status updates to match.
 
 ## Delivery and notifications
 
-When a task finishes, OpenClaw can notify you through two mechanisms:
+When a task reaches a terminal state, OpenClaw notifies you. There are two delivery paths:
 
-### Direct delivery
+**Direct delivery** — if the task has a channel target (the `requesterOrigin`), the completion message goes straight to that channel (Telegram, Discord, Slack, etc.).
 
-If the task has a `requesterOrigin` (channel target), the completion message is delivered directly to that channel (Telegram, Discord, Slack, etc.).
+**Session-queued delivery** — if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
-### Session-queued delivery
-
-If direct delivery fails or no origin is set, the update is queued as a system event in the requester session and delivered on the next heartbeat.
+<Tip>
+Task completion triggers an immediate heartbeat wake so you see the result quickly — you do not have to wait for the next scheduled heartbeat tick.
+</Tip>
 
 ### Notification policies
 
-Control how much you hear about a task:
+Control how much you hear about each task:
 
-| Policy                | Behavior                                             |
-| --------------------- | ---------------------------------------------------- |
-| `done_only` (default) | Notify only when the task reaches a terminal state   |
-| `state_changes`       | Notify on every state transition and progress update |
-| `silent`              | No notifications at all                              |
+| Policy                | What is delivered                                                       |
+| --------------------- | ----------------------------------------------------------------------- |
+| `done_only` (default) | Only terminal state (succeeded, failed, etc.) — **this is the default** |
+| `state_changes`       | Every state transition and progress update                              |
+| `silent`              | Nothing at all                                                          |
 
-Change the policy for a running task:
-
-```bash
-openclaw tasks notify <task-id> state_changes
-```
-
-## Inspecting tasks
-
-### List all tasks
+Change the policy while a task is running:
 
 ```bash
-openclaw tasks list
+openclaw tasks notify <lookup> state_changes
 ```
 
-Output columns: Task ID, Kind (runtime), Status, Delivery status, Run ID, Child Session, Summary.
+## CLI reference
 
-Filter by runtime or status:
+### `tasks list`
 
 ```bash
-openclaw tasks list --runtime acp
-openclaw tasks list --status running
-openclaw tasks list --json
+openclaw tasks list [--runtime <acp|subagent|cron|cli>] [--status <status>] [--json]
 ```
 
-### Show task details
+Output columns: Task ID, Kind, Status, Delivery, Run ID, Child Session, Summary.
+
+### `tasks show`
 
 ```bash
 openclaw tasks show <lookup>
 ```
 
-The lookup token can be a task ID, run ID, or session key. Shows full task record including timing, delivery state, and terminal summary.
+The lookup token accepts a task ID, run ID, or session key. Shows the full record including timing, delivery state, error, and terminal summary.
 
-### Cancel a task
+### `tasks cancel`
 
 ```bash
 openclaw tasks cancel <lookup>
 ```
 
-For ACP and subagent tasks, this kills the child session. The task status transitions to `cancelled`.
+For ACP and subagent tasks, this kills the child session. Status transitions to `cancelled` and a delivery notification is sent.
 
-## Task audit
-
-The audit surfaces operational issues with background tasks:
+### `tasks notify`
 
 ```bash
-openclaw tasks audit
-openclaw tasks audit --json
+openclaw tasks notify <lookup> <done_only|state_changes|silent>
 ```
 
-| Finding                   | Severity | Condition                                         |
-| ------------------------- | -------- | ------------------------------------------------- |
-| `stale_queued`            | warn     | Queued for more than 10 minutes                   |
-| `stale_running`           | error    | Running for more than 30 minutes                  |
-| `lost`                    | error    | Status is `lost` (backing session gone)           |
-| `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent` |
-| `missing_cleanup`         | warn     | Terminal but no cleanup timestamp set             |
-| `inconsistent_timestamps` | warn     | Timeline violations (ended before started, etc.)  |
+### `tasks audit`
 
-Task audit findings also appear in `openclaw status` output when issues are detected.
+```bash
+openclaw tasks audit [--json]
+```
 
-## Task pressure (status integration)
+Surfaces operational issues. Findings also appear in `openclaw status` when issues are detected.
 
-The task system reports an "at a glance" summary in `openclaw status`:
+| Finding                   | Severity | Trigger                                                       |
+| ------------------------- | -------- | ------------------------------------------------------------- |
+| `stale_queued`            | warn     | Queued for more than 10 minutes                               |
+| `stale_running`           | error    | Running for more than 30 minutes                              |
+| `lost`                    | error    | Backing session is gone                                       |
+| `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`             |
+| `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp                       |
+| `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started)         |
+
+## Status integration (task pressure)
+
+`openclaw status` includes an at-a-glance task summary:
 
 ```
 Tasks: 3 queued · 2 running · 1 issues
 ```
 
-This includes:
+The summary reports:
 
-- **active**: count of `queued` + `running` tasks
-- **failures**: count of `failed` + `timed_out` + `lost` tasks
-- **byRuntime**: breakdown by `acp`, `subagent`, `cron`, `cli`
+- **active** — count of `queued` + `running`
+- **failures** — count of `failed` + `timed_out` + `lost`
+- **byRuntime** — breakdown by `acp`, `subagent`, `cron`, `cli`
 
 ## Storage and maintenance
 
-### Where tasks are stored
+### Where tasks live
 
-Task records persist in SQLite at `$OPENCLAW_STATE_DIR/tasks/runs.sqlite`. The registry loads into memory at gateway start and syncs writes to SQLite for durability across restarts.
+Task records persist in SQLite at:
 
-### Automatic cleanup
+```
+$OPENCLAW_STATE_DIR/tasks/runs.sqlite
+```
 
-A maintenance sweeper runs every 60 seconds:
+The registry loads into memory at gateway start and syncs writes to SQLite for durability across restarts.
 
-1. **Reconciliation**: checks if active tasks' backing sessions still exist. If a session is gone for more than 5 minutes, the task is marked `lost`.
-2. **Cleanup stamping**: terminal tasks get a `cleanupAfter` timestamp set to 7 days after completion.
-3. **Pruning**: records past their `cleanupAfter` are deleted.
+### Automatic maintenance
 
-**Retention**: terminal task records are kept for **7 days** for historical inspection, then automatically pruned.
+A sweeper runs every **60 seconds** and handles three things:
+
+1. **Reconciliation** — checks if active tasks' backing sessions still exist. If a child session has been gone for more than 5 minutes, the task is marked `lost`.
+2. **Cleanup stamping** — sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days).
+3. **Pruning** — deletes records past their `cleanupAfter` date.
+
+**Retention**: terminal task records are kept for **7 days**, then automatically pruned. No configuration needed.
 
 ## How tasks relate to other systems
 
 ### Tasks and cron
 
-- A cron job **definition** lives in `~/.openclaw/cron/jobs.json`.
-- Each **execution** of an isolated cron job creates a task record.
-- Main-session cron jobs (`sessionTarget: "main"`) do **not** create task records.
-- See [Cron Jobs](/automation/cron-jobs) for scheduling and [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for choosing the right mechanism.
+A cron job **definition** lives in `~/.openclaw/cron/jobs.json`. Each **execution** of an isolated cron job creates a task record. Main-session cron jobs do not.
+
+See [Cron Jobs](/automation/cron-jobs).
 
 ### Tasks and heartbeat
 
-- Heartbeat runs are main-session turns — they do **not** create task records.
-- When a detached task completes, it can enqueue a system event and trigger an immediate heartbeat wake so you see the result quickly.
-- See [Heartbeat](/gateway/heartbeat) for configuration.
+Heartbeat runs are main-session turns — they do not create task records. When a task completes, it can trigger a heartbeat wake so you see the result promptly.
+
+See [Heartbeat](/gateway/heartbeat).
 
 ### Tasks and sessions
 
-- A task may have an associated `childSessionKey` (the session where work happens).
-- The `requesterSessionKey` identifies who initiated the task (the parent session).
-- Sessions are conversation context; tasks are activity tracking records.
+A task may reference a `childSessionKey` (where work runs) and a `requesterSessionKey` (who started it). Sessions are conversation context; tasks are activity tracking on top of that.
 
 ### Tasks and agent runs
 
-- A task's `runId` links to the agent run executing the work.
-- Agent lifecycle events (start, end, error) automatically update task status.
+A task's `runId` links to the agent run doing the work. Agent lifecycle events (start, end, error) automatically update the task status — you do not need to manage the lifecycle manually.
 
 ## Related
 
