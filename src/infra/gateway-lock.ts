@@ -209,6 +209,13 @@ export async function acquireGatewayLock(
       // Without this, a crash between lock acquisition and registerCleanupHandlers()
       // leaves a stale lock file that delays the next gateway start by up to 30s.
       const exitHandler = () => {
+        // Close fd synchronously — exit handlers cannot run async ops.
+        // On Windows, unlinkSync fails with EBUSY on open handles.
+        try {
+          fsSync.closeSync(handle.fd);
+        } catch {
+          // fd may already be closed
+        }
         try {
           fsSync.unlinkSync(lockPath);
         } catch {
