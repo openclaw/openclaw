@@ -1425,7 +1425,7 @@ export async function loadOpenClawPluginCliRegistry(
     logger,
     runtime: {} as PluginRuntime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
-    suppressGlobalCommands: true,
+    activateGlobalSideEffects: false,
   });
 
   const discovery = discoverOpenClawPlugins({
