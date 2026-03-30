@@ -138,3 +138,45 @@ changing global defaults:
   },
 }
 ```
+
+### Owner-only tools
+
+Some tools are restricted to the gateway owner only and are silently hidden
+from agents when the sender isn't recognized as owner:
+
+| Tool     | Purpose                              |
+| -------- | ------------------------------------ |
+| `gateway` | Restart/stop the Gateway             |
+| `cron`   | Add, update, remove scheduled jobs  |
+| `nodes`  | Discover and target paired devices   |
+
+These tools require ownership configuration to work. Without it, agents
+fall back to CLI workarounds (e.g., shelling out to `openclaw cron add`)
+without knowing native tools exist.
+
+**Configuring owner access:**
+
+```bash
+# Find your sender ID (check gateway logs or session info)
+openclaw config get state.knownSenders
+```
+
+Then add to your config:
+
+```json5
+{
+  commands: {
+    ownerAllowFrom: ["YOUR_SENDER_ID"]
+  }
+}
+```
+
+Alternatively, set `dmPolicy: "pairing"` on your channel — the first user
+to pair will automatically become the owner.
+
+<Note>
+If `commands.ownerAllowFrom` is not configured, owner-only tools are
+silently removed from the agent's tool list. The agent won't see any error
+— it will simply use slower CLI workarounds instead.
+</Note>
+
