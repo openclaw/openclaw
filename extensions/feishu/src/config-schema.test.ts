@@ -28,13 +28,13 @@ describe("FeishuConfigSchema webhook validation", () => {
   it("does not force top-level policy defaults into account config", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
-        main: {},
+        default: {},
       },
     });
 
-    expect(result.accounts?.main?.dmPolicy).toBeUndefined();
-    expect(result.accounts?.main?.groupPolicy).toBeUndefined();
-    expect(result.accounts?.main?.requireMention).toBeUndefined();
+    expect(result.accounts?.default?.dmPolicy).toBeUndefined();
+    expect(result.accounts?.default?.groupPolicy).toBeUndefined();
+    expect(result.accounts?.default?.requireMention).toBeUndefined();
   });
 
   it("normalizes legacy groupPolicy allowall to open", () => {
@@ -81,30 +81,30 @@ describe("FeishuConfigSchema webhook validation", () => {
   it("rejects account webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       accounts: {
-        main: {
+        default: {
           connectionMode: "webhook",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
+          appId: "cli_default",
+          appSecret: "secret_default", // pragma: allowlist secret
         },
       },
     });
 
-    expectSchemaIssue(result, "accounts.main.verificationToken");
+    expectSchemaIssue(result, "accounts.default.verificationToken");
   });
 
   it("rejects account webhook mode without encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       accounts: {
-        main: {
+        default: {
           connectionMode: "webhook",
-          verificationToken: "token_main",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
+          verificationToken: "token_default",
+          appId: "cli_default",
+          appSecret: "secret_default", // pragma: allowlist secret
         },
       },
     });
 
-    expectSchemaIssue(result, "accounts.main.encryptKey");
+    expectSchemaIssue(result, "accounts.default.encryptKey");
   });
 
   it("accepts account webhook mode inheriting top-level verificationToken and encryptKey", () => {
@@ -112,10 +112,10 @@ describe("FeishuConfigSchema webhook validation", () => {
       verificationToken: "token_top",
       encryptKey: "encrypt_top",
       accounts: {
-        main: {
+        default: {
           connectionMode: "webhook",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
+          appId: "cli_default",
+          appSecret: "secret_default", // pragma: allowlist secret
         },
       },
     });
@@ -192,10 +192,10 @@ describe("FeishuConfigSchema replyInThread", () => {
   it("accepts replyInThread in account config", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
-        main: { replyInThread: "enabled" },
+        default: { replyInThread: "enabled" },
       },
     });
-    expect(result.accounts?.main?.replyInThread).toBe("enabled");
+    expect(result.accounts?.default?.replyInThread).toBe("enabled");
   });
 });
 
@@ -209,14 +209,14 @@ describe("FeishuConfigSchema optimization flags", () => {
   it("accepts account-level optimization flags", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
-        main: {
+        default: {
           typingIndicator: false,
           resolveSenderNames: false,
         },
       },
     });
-    expect(result.accounts?.main?.typingIndicator).toBe(false);
-    expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+    expect(result.accounts?.default?.typingIndicator).toBe(false);
+    expect(result.accounts?.default?.resolveSenderNames).toBe(false);
   });
 });
 
@@ -231,12 +231,12 @@ describe("FeishuConfigSchema actions", () => {
   it("accepts account-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
-        main: {
+        default: {
           actions: { reactions: false },
         },
       },
     });
-    expect(result.accounts?.main?.actions?.reactions).toBe(false);
+    expect(result.accounts?.default?.actions?.reactions).toBe(false);
   });
 });
 
@@ -246,6 +246,16 @@ describe("FeishuConfigSchema defaultAccount", () => {
       defaultAccount: "router-d",
       accounts: {
         "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts any account key when defaultAccount is omitted", () => {
+    const result = FeishuConfigSchema.safeParse({
+      accounts: {
+        "whatever-bot": { appId: "cli_whatever", appSecret: "secret_whatever" }, // pragma: allowlist secret
       },
     });
 

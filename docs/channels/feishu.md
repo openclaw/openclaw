@@ -182,7 +182,7 @@ Edit `~/.openclaw/openclaw.json`:
       enabled: true,
       dmPolicy: "pairing",
       accounts: {
-        main: {
+        default: {
           appId: "cli_xxx",
           appSecret: "xxx",
           name: "My AI assistant",
@@ -225,7 +225,7 @@ If your tenant is on Lark (international), set the domain to `lark` (or a full d
     feishu: {
       domain: "lark",
       accounts: {
-        main: {
+        default: {
           appId: "cli_xxx",
           appSecret: "xxx",
         },
@@ -251,7 +251,7 @@ Set them at top level or per account:
       typingIndicator: false,
       resolveSenderNames: false,
       accounts: {
-        main: {
+        default: {
           appId: "cli_xxx",
           appSecret: "xxx",
           typingIndicator: true,

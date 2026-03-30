@@ -187,7 +187,7 @@ openclaw channels add
       enabled: true,
       dmPolicy: "pairing",
       accounts: {
-        main: {
+        default: {
           appId: "cli_xxx",
           appSecret: "xxx",
           name: "My AI assistant",
@@ -230,7 +230,7 @@ export FEISHU_APP_SECRET="xxx"
     feishu: {
       domain: "lark",
       accounts: {
-        main: {
+        default: {
           appId: "cli_xxx",
           appSecret: "xxx",
         },
@@ -256,7 +256,7 @@ export FEISHU_APP_SECRET="xxx"
       typingIndicator: false,
       resolveSenderNames: false,
       accounts: {
-        main: {
+        default: {
           appId: "cli_xxx",
           appSecret: "xxx",
           typingIndicator: true,
