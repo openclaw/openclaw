@@ -1,0 +1,71 @@
+{
+  "id": "kafka-producer",
+  "uiHints": {
+    "bootstrap.servers": {
+      "label": "Bootstrap Servers",
+      "help": "Comma-separated Kafka broker addresses (e.g., localhost:9092)",
+      "placeholder": "localhost:9092"
+    },
+    "topic": {
+      "label": "Topic",
+      "help": "Topic name or pattern with {agentId}, {channel}, {stream}, etc.",
+      "placeholder": "openclaw.events"
+    },
+    "key": {
+      "label": "Partition Key",
+      "help": "Event field for the Kafka record key (sessionKey, agentId, channel). Leave empty for round-robin.",
+      "placeholder": "sessionKey"
+    },
+    "security.protocol": {
+      "label": "Security Protocol",
+      "help": "PLAINTEXT, SSL, SASL_PLAINTEXT, or SASL_SSL",
+      "advanced": true
+    },
+    "sasl.username": {
+      "label": "SASL Username",
+      "sensitive": true,
+      "advanced": true
+    },
+    "sasl.password": {
+      "label": "SASL Password",
+      "sensitive": true,
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "bootstrap.servers": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "topic": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "key": {
+        "type": ["string", "null"]
+      },
+      "schema.registry": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "api.key": {
+            "type": "string"
+          },
+          "api.secret": {
+            "type": "string"
+          }
+        },
+        "required": ["url"]
+      }
+    },
+    "required": ["bootstrap.servers", "topic"]
+  }
+}

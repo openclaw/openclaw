@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/kafka-producer",
+  "version": "2026.3.28",
+  "description": "Publishes OpenClaw agent events to Apache Kafka",
+  "type": "module",
+  "dependencies": {
+    "@confluentinc/kafka-javascript": "^1.8.0",
+    "@confluentinc/schemaregistry": "^1.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/kafka-producer",
+      "localPath": "extensions/kafka-producer",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.0"
+    },
+    "release": {
+      "publishToNpm": true
+    }
+  }
+}
