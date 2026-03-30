@@ -315,7 +315,7 @@ Session events include rich context about the session and changes:
     label?: string | null,           // Human-readable session label
 
     // AI model configuration
-    model?: string | null,           // Model override (e.g., "claude-opus-4-5")
+    model?: string | null,           // Model override (e.g., "claude-sonnet-4-6")
     thinkingLevel?: string | null,   // Thinking level ("off"|"low"|"med"|"high")
     verboseLevel?: string | null,    // Verbose output level
     reasoningLevel?: string | null,  // Reasoning mode override
@@ -606,69 +606,69 @@ All 27 hooks registered via the Plugin SDK. Hooks marked **sequential** run in p
 
 #### Model and prompt hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
-| `before_model_resolve` | Before model/provider lookup | Sequential | `{ modelOverride?, providerOverride? }` |
-| `before_prompt_build` | After model resolved, session messages ready | Sequential | `{ systemPrompt?, prependContext?, appendSystemContext? }` |
-| `before_agent_start` | Legacy combined hook (prefer the two above) | Sequential | Union of both result shapes |
-| `llm_input` | Immediately before the LLM API call | Parallel | `void` |
-| `llm_output` | Immediately after LLM response received | Parallel | `void` |
+| Hook                   | When                                         | Execution  | Returns                                                    |
+| ---------------------- | -------------------------------------------- | ---------- | ---------------------------------------------------------- |
+| `before_model_resolve` | Before model/provider lookup                 | Sequential | `{ modelOverride?, providerOverride? }`                    |
+| `before_prompt_build`  | After model resolved, session messages ready | Sequential | `{ systemPrompt?, prependContext?, appendSystemContext? }` |
+| `before_agent_start`   | Legacy combined hook (prefer the two above)  | Sequential | Union of both result shapes                                |
+| `llm_input`            | Immediately before the LLM API call          | Parallel   | `void`                                                     |
+| `llm_output`           | Immediately after LLM response received      | Parallel   | `void`                                                     |
 
 #### Agent lifecycle hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
-| `agent_end` | After agent run completes (success or failure) | Parallel | `void` |
-| `before_reset` | When `/new` or `/reset` clears a session | Parallel | `void` |
-| `before_compaction` | Before compaction summarizes history | Parallel | `void` |
-| `after_compaction` | After compaction completes | Parallel | `void` |
+| Hook                | When                                           | Execution | Returns |
+| ------------------- | ---------------------------------------------- | --------- | ------- |
+| `agent_end`         | After agent run completes (success or failure) | Parallel  | `void`  |
+| `before_reset`      | When `/new` or `/reset` clears a session       | Parallel  | `void`  |
+| `before_compaction` | Before compaction summarizes history           | Parallel  | `void`  |
+| `after_compaction`  | After compaction completes                     | Parallel  | `void`  |
 
 #### Session lifecycle hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
-| `session_start` | When a new session begins | Parallel | `void` |
-| `session_end` | When a session ends | Parallel | `void` |
+| Hook            | When                      | Execution | Returns |
+| --------------- | ------------------------- | --------- | ------- |
+| `session_start` | When a new session begins | Parallel  | `void`  |
+| `session_end`   | When a session ends       | Parallel  | `void`  |
 
 #### Message flow hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
-| `inbound_claim` | Before command/agent dispatch; first-claim wins | Sequential | `{ handled: boolean }` |
-| `message_received` | After an inbound message is received | Parallel | `void` |
-| `before_dispatch` | After commands parsed, before model dispatch | Sequential | `{ handled: boolean, text? }` |
-| `message_sending` | Before an outbound message is delivered | Sequential | `{ content?, cancel? }` |
-| `message_sent` | After an outbound message is delivered | Parallel | `void` |
-| `before_message_write` | Before a message is written to session transcript | **Sync**, sequential | `{ block?, message? }` |
+| Hook                   | When                                              | Execution            | Returns                       |
+| ---------------------- | ------------------------------------------------- | -------------------- | ----------------------------- |
+| `inbound_claim`        | Before command/agent dispatch; first-claim wins   | Sequential           | `{ handled: boolean }`        |
+| `message_received`     | After an inbound message is received              | Parallel             | `void`                        |
+| `before_dispatch`      | After commands parsed, before model dispatch      | Sequential           | `{ handled: boolean, text? }` |
+| `message_sending`      | Before an outbound message is delivered           | Sequential           | `{ content?, cancel? }`       |
+| `message_sent`         | After an outbound message is delivered            | Parallel             | `void`                        |
+| `before_message_write` | Before a message is written to session transcript | **Sync**, sequential | `{ block?, message? }`        |
 
 #### Tool execution hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
-| `before_tool_call` | Before each tool call | Sequential | `{ params?, block?, blockReason?, requireApproval? }` |
-| `after_tool_call` | After a tool call completes | Parallel | `void` |
-| `tool_result_persist` | Before a tool result is written to transcript | **Sync**, sequential | `{ message? }` |
+| Hook                  | When                                          | Execution            | Returns                                               |
+| --------------------- | --------------------------------------------- | -------------------- | ----------------------------------------------------- |
+| `before_tool_call`    | Before each tool call                         | Sequential           | `{ params?, block?, blockReason?, requireApproval? }` |
+| `after_tool_call`     | After a tool call completes                   | Parallel             | `void`                                                |
+| `tool_result_persist` | Before a tool result is written to transcript | **Sync**, sequential | `{ message? }`                                        |
 
 #### Subagent hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
-| `subagent_spawning` | Before a subagent session is created | Sequential | `{ status, threadBindingReady? }` |
-| `subagent_delivery_target` | After spawning, to resolve delivery target | Sequential | `{ origin? }` |
-| `subagent_spawned` | After a subagent is fully spawned | Parallel | `void` |
-| `subagent_ended` | When a subagent session terminates | Parallel | `void` |
+| Hook                       | When                                       | Execution  | Returns                           |
+| -------------------------- | ------------------------------------------ | ---------- | --------------------------------- |
+| `subagent_spawning`        | Before a subagent session is created       | Sequential | `{ status, threadBindingReady? }` |
+| `subagent_delivery_target` | After spawning, to resolve delivery target | Sequential | `{ origin? }`                     |
+| `subagent_spawned`         | After a subagent is fully spawned          | Parallel   | `void`                            |
+| `subagent_ended`           | When a subagent session terminates         | Parallel   | `void`                            |
 
 #### Gateway hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
-| `gateway_start` | After the gateway process is fully started | Parallel | `void` |
-| `gateway_stop` | When the gateway is shutting down | Parallel | `void` |
+| Hook            | When                                       | Execution | Returns |
+| --------------- | ------------------------------------------ | --------- | ------- |
+| `gateway_start` | After the gateway process is fully started | Parallel  | `void`  |
+| `gateway_stop`  | When the gateway is shutting down          | Parallel  | `void`  |
 
 #### Install hooks
 
-| Hook | When | Execution | Returns |
-|---|---|---|---|
+| Hook             | When                                                  | Execution  | Returns                               |
+| ---------------- | ----------------------------------------------------- | ---------- | ------------------------------------- |
 | `before_install` | After built-in security scan, before install proceeds | Sequential | `{ findings?, block?, blockReason? }` |
 
 <Note>
@@ -1100,7 +1100,7 @@ metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
 
 The gateway logs hook loading at startup:
 
-```
+```text
 Registered hook: session-memory -> command:new, command:reset
 Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
