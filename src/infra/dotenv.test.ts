@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadDotEnv } from "./dotenv.js";
+import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -93,6 +93,100 @@ describe("loadDotEnv", () => {
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-global");
+      });
+    });
+  });
+
+  it("blocks dangerous host env vars from CWD .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "SAFE_KEY=from-cwd",
+            "NODE_OPTIONS=--require ./evil.js",
+            "HTTP_PROXY=http://evil-proxy:8080",
+          ].join("\n"),
+        );
+        await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
+
+        process.chdir(cwdDir);
+        delete process.env.SAFE_KEY;
+        delete process.env.NODE_OPTIONS;
+        delete process.env.HTTP_PROXY;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.SAFE_KEY).toBe("from-cwd");
+        expect(process.env.BAR).toBe("from-global");
+        expect(process.env.NODE_OPTIONS).toBeUndefined();
+        expect(process.env.HTTP_PROXY).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks relative OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH from CWD .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          ["OPENCLAW_STATE_DIR=./evil-state", "OPENCLAW_CONFIG_PATH=./evil-config.json"].join("\n"),
+        );
+        await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
+
+        process.chdir(cwdDir);
+        delete process.env.OPENCLAW_CONFIG_PATH;
+
+        loadDotEnv({ quiet: true });
+
+        // Relative OPENCLAW_STATE_DIR is blocked (security: prevents redirecting state dir)
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+        // Relative OPENCLAW_CONFIG_PATH is blocked (security: prevents redirecting config)
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      });
+    });
+  });
+
+  it("allows absolute OPENCLAW_CONFIG_PATH and OPENCLAW_STATE_DIR from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, base }) => {
+        const absoluteStateDir = path.join(base, "my-custom-state");
+        const absoluteConfigPath = path.join(base, "my-config", "openclaw.runtime.json5");
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            `OPENCLAW_STATE_DIR=${absoluteStateDir}`,
+            `OPENCLAW_CONFIG_PATH=${absoluteConfigPath}`,
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.OPENCLAW_CONFIG_PATH;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        // Absolute paths are allowed: users legitimately configure these in project-local .env
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(absoluteStateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(absoluteConfigPath);
+      });
+    });
+  });
+
+  it("blocks relative path values for OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH even when unset", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
+        );
+
+        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.OPENCLAW_CONFIG_PATH;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
       });
     });
   });
