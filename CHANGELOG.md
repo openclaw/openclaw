@@ -230,6 +230,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/gateway: reconnect the browser client when gateway event sequence gaps are detected, so stale non-chat state recovers automatically instead of only telling the user to refresh. (#23912) thanks @Olshansk.
 - ClawDock/docs: move the helper scripts to `scripts/clawdock`, publish ClawDock as a first-class docs page on the docs site, and document reinstalling local helper copies from the new raw GitHub path. (#23912) thanks @Olshansk.
 - Control UI/gateway: clear queued browser connect timeouts on client stop so aborted or replaced gateway clients do not send delayed connect requests after shutdown. (#57338) thanks @gumadeiras.
+- Mattermost: detect stale websocket sessions after bot disable/enable cycles by polling the bot account `update_at` and forcing a reconnect when it changes. (#53604) Thanks @Qinsam.
 
 ## 2026.3.24
 
