@@ -39,7 +39,10 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | unde
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
-    return { allowedHostnames: [parsed.hostname] };
+    return {
+      allowedHostnames: [parsed.hostname],
+      hostnameAllowlist: [parsed.hostname],
+    };
   } catch {
     return undefined;
   }
