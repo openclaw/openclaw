@@ -378,8 +378,13 @@ describe("scripts/test-parallel lane planning", () => {
       parseNumericPlanField(line, "filters"),
     );
 
-    expect(unitBatchLines.length).toBe(2);
-    expect(unitBatchFilterCounts).toEqual([50, 50]);
+    expect(unitBatchLines.length).toBeGreaterThanOrEqual(3);
+    expect(unitBatchLines.every((line) => line.includes("maxWorkers=6"))).toBe(true);
+    expect(Math.max(...unitBatchFilterCounts)).toBeLessThan(40);
+    expect(unitBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
+      sharedTargetedUnitProxyFiles.length,
+    );
+    expect(output).toContain("unit-qr-dashboard.integration-isolated filters=1 maxWorkers=2");
   });
 
   it("explains targeted file ownership and execution policy", () => {
