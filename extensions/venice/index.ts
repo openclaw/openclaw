@@ -63,5 +63,58 @@ export default defineSingleProviderPluginEntry({
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiCompat(model) : undefined,
+    prepareExtraParams: ({ modelId, extraParams, thinkingLevel }) => {
+      // Check if this is a reasoning model via thinkingLevel hint or model-name heuristics
+      // Only apply strip_thinking_response when thinking is actually enabled (not 'off')
+      const thinkingEnabled = thinkingLevel != null && thinkingLevel !== 'off';
+      const isReasoningModel = thinkingEnabled || isVeniceReasoningModel(modelId);
+      
+      if (!isReasoningModel) {
+        return extraParams;
+      }
+      
+      // For reasoning models, add Venice-specific parameters to strip thinking response
+      // This moves the answer from reasoning_content back into content
+      return {
+        ...extraParams,
+        venice_parameters: {
+          ...extraParams?.venice_parameters,
+          strip_thinking_response: true,
+          // Only set disable_thinking as default if user didn't provide a value
+          disable_thinking: extraParams?.venice_parameters?.disable_thinking ?? false,
+        },
+      };
+    },
   },
 });
+
+/**
+ * Check if a Venice model ID corresponds to a reasoning model.
+ * Venice uses various naming conventions and vendor prefixes for reasoning models.
+ * See: extensions/venice/models.ts for the complete model catalog with reasoning: true.
+ */
+function isVeniceReasoningModel(modelId: string): boolean {
+  const lower = modelId.trim().toLowerCase();
+  // Venice reasoning models typically have names that include "thinking" or specific reasoning model IDs
+  return (
+    lower.includes("thinking") ||
+    // MiniMax models (m21, m25, m27)
+    lower.includes("minimax") ||
+    // Kimi K2 series
+    lower.includes("kimi-k2") ||
+    // GLM 4.7/5 series (various vendor prefixes: zai-org-, olafangensan-)
+    lower.includes("glm-4.7") ||
+    lower.includes("glm-5") ||
+    // DeepSeek
+    lower.includes("deepseek") ||
+    // Qwen reasoning models
+    lower.includes("qwen3-235b-a22b-thinking") ||
+    lower.includes("qwen3-5-35b-a3b") ||
+    lower.includes("qwen3-4b") ||
+    // Claude/GPT/Gemini/Grok passthrough models marked as reasoning
+    lower.includes("claude-") ||
+    lower.includes("gpt-5") ||
+    lower.includes("gemini") ||
+    lower.includes("grok")
+  );
+}
