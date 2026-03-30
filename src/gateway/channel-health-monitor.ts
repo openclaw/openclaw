@@ -45,12 +45,12 @@ export type ChannelHealthMonitorDeps = {
   /**
    * Default restart mode for unhealthy channels.
    *
-   * `"stop-start"` (default): full stop → start cycle.
-   * `"reconnect"`: lightweight stop → start that skips resetting the restart
-   *   counter, signalling to the channel runtime that this is a soft reconnect
-   *   rather than a hard restart. Falls back to `"stop-start"` on error.
+   * `"stop-start"` (default): full stop → start cycle with restart-counter reset.
+   * `"graceful"`: stop → start that skips `resetRestartAttempts`, signalling
+   *   a soft recovery to the channel runtime. Useful for transient stale-socket
+   *   events where escalating backoff should not reset.
    *
-   * The per-channel `healthMonitor.restartMode` config overrides this value.
+   * Per-channel `healthMonitor.restartMode` overrides this value.
    */
   defaultRestartMode?: ChannelHealthRestartMode;
   abortSignal?: AbortSignal;
@@ -168,8 +168,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           const reason = resolveChannelRestartReason(status, health);
 
-          // Resolve effective restart mode: per-channel config overrides the global default.
-          const channelCfg = channelManager.getChannelHealthMonitorConfig?.(
+          // Per-channel config overrides the global default.
+          const channelCfg = channelManager.getChannelHealthMonitorConfig(
             channelId as ChannelId,
             accountId,
           );
@@ -181,23 +181,16 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           );
 
           try {
-            if (effectiveRestartMode === "reconnect") {
-              // Lightweight reconnect: stop → start without resetting the
-              // restart-attempt counter. Preserves SDK session state where
-              // the provider supports resumption (e.g. Discord RESUME), which
-              // avoids invalidating Anthropic prompt-cache context.
-              if (status.running) {
-                await channelManager.stopChannel(channelId as ChannelId, accountId);
-              }
-              await channelManager.startChannel(channelId as ChannelId, accountId);
-            } else {
-              // Default stop-start: full cycle with counter reset.
-              if (status.running) {
-                await channelManager.stopChannel(channelId as ChannelId, accountId);
-              }
-              channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
-              await channelManager.startChannel(channelId as ChannelId, accountId);
+            if (status.running) {
+              await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
+            if (effectiveRestartMode !== "graceful") {
+              // "stop-start": reset the counter so backoff restarts from scratch.
+              channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
+            }
+            // "graceful": skips counter reset — preserves backoff state,
+            // signalling a soft recovery to the channel runtime.
+            await channelManager.startChannel(channelId as ChannelId, accountId);
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
             restartRecords.set(key, record);
@@ -205,12 +198,6 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             log.error?.(
               `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,
             );
-            // If reconnect mode failed, fall back to stop-start on next cycle.
-            if (effectiveRestartMode === "reconnect") {
-              log.warn?.(
-                `[${channelId}:${accountId}] health-monitor: reconnect failed, will retry with stop-start`,
-              );
-            }
           }
         }
       }

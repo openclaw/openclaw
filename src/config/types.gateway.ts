@@ -455,12 +455,11 @@ export type GatewayConfig = {
    * detected as unhealthy. Can be overridden per-channel via
    * `channels.<provider>.healthMonitor.restartMode`.
    *
-   * - `"stop-start"` (default): full stop + start cycle. Compatible with all
-   *   channel providers but invalidates in-memory SDK state (including
-   *   Anthropic prompt-cache warm-up).
-   * - `"reconnect"`: lightweight re-connect that preserves SDK session state
-   *   where the provider supports it (e.g. Discord gateway RESUME). Falls
-   *   back to `"stop-start"` if the reconnect does not succeed.
+   * - `"stop-start"` (default): full stop + start cycle with restart-counter
+   *   reset. Reliable across all providers.
+   * - `"graceful"`: stop + start without resetting the restart-attempt counter.
+   *   Useful for transient stale-socket events where escalating backoff should
+   *   not be triggered.
    */
-  channelHealthRestartMode?: "stop-start" | "reconnect";
+  channelHealthRestartMode?: "stop-start" | "graceful";
 };

@@ -12,16 +12,16 @@ export type ChannelHeartbeatVisibilityConfig = {
 /**
  * Controls how the channel health-monitor reacts to a stale-socket condition.
  *
- * - `"stop-start"` (default): stops the channel then starts it again. Reliable
- *   but invalidates any in-memory state held by the provider client, including
- *   Anthropic's prompt-cache warm-up context.
- * - `"reconnect"`: performs a lightweight re-connect by stopping and immediately
- *   starting the channel without resetting the restart-attempt counter or
- *   emitting a full channel teardown. Preserves in-memory provider state where
- *   the underlying SDK supports session resumption (e.g. Discord gateway
- *   RESUME). Falls back to `"stop-start"` if the reconnect fails.
+ * - `"stop-start"` (default): full stop → start cycle that also resets the
+ *   restart-attempt counter. Reliable across all providers.
+ * - `"graceful"`: stop → start without resetting the restart-attempt counter.
+ *   Signals to the channel runtime that this is a soft recovery rather than
+ *   a hard restart, which allows providers that track consecutive restarts
+ *   (e.g. to apply escalating backoff) to distinguish transient stale-socket
+ *   events from genuine failure loops. Does **not** automatically preserve
+ *   SDK-level session state — that depends on the provider implementation.
  */
-export type ChannelHealthRestartMode = "stop-start" | "reconnect";
+export type ChannelHealthRestartMode = "stop-start" | "graceful";
 
 export type ChannelHealthMonitorConfig = {
   /**
@@ -30,9 +30,9 @@ export type ChannelHealthMonitorConfig = {
    */
   enabled?: boolean;
   /**
-   * How to restart a stale channel. `"reconnect"` attempts a lightweight
-   * re-connect that may preserve SDK-level session state (e.g. Discord
-   * RESUME), which avoids invalidating Anthropic prompt-cache context.
+   * How to restart a stale channel.
+   * `"graceful"` performs a stop → start without resetting the restart-attempt
+   * counter, signalling a soft recovery to the channel runtime.
    * Defaults to `"stop-start"` for backwards-compatibility.
    */
   restartMode?: ChannelHealthRestartMode;

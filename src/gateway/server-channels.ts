@@ -2,6 +2,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelHealthMonitorConfig as ChannelHealthMonitorPublicConfig } from "../config/types.channels.js";
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -150,14 +151,15 @@ export type ChannelManager = {
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
   /**
-   * Returns the per-channel `healthMonitor` config for a given channel and
-   * account, or `undefined` if no per-channel override is configured.
+   * Returns the resolved `healthMonitor` config for a given channel and
+   * account (account-level overrides take precedence over channel-level).
+   * Returns `undefined` if no per-channel override is configured.
    * Used by the health-monitor to resolve the effective `restartMode`.
    */
   getChannelHealthMonitorConfig: (
     channelId: ChannelId,
     accountId: string,
-  ) => import("../config/types.channels.js").ChannelHealthMonitorConfig | undefined;
+  ) => ChannelHealthMonitorPublicConfig | undefined;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
@@ -235,17 +237,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const getChannelHealthMonitorConfig = (
     channelId: ChannelId,
     accountId: string,
-  ): import("../config/types.channels.js").ChannelHealthMonitorConfig | undefined => {
+  ): ChannelHealthMonitorPublicConfig | undefined => {
     const cfg = loadConfig();
-    const channelConfig = cfg.channels?.[channelId] as
-      | import("../config/types.channels.js").ChannelHealthMonitorConfig
-      | undefined;
+    // Re-use the same local ChannelHealthMonitorConfig type already in scope
+    // (the internal one used by isHealthMonitorEnabled / resolveAccountHealthMonitorOverride).
+    const channelConfig = cfg.channels?.[channelId] as ChannelHealthMonitorConfig | undefined;
 
-    // Check account-level override first.
+    // Account-level config takes precedence over channel-level.
     if (channelConfig?.accounts) {
       const direct = resolveAccountEntry(channelConfig.accounts, accountId);
       if (direct?.healthMonitor != null) {
-        return direct.healthMonitor as import("../config/types.channels.js").ChannelHealthMonitorConfig;
+        return direct.healthMonitor as ChannelHealthMonitorPublicConfig;
       }
       const normalizedAccountId = normalizeOptionalAccountId(accountId);
       if (normalizedAccountId) {
@@ -255,13 +257,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           normalizeAccountId,
         );
         if (match?.healthMonitor != null) {
-          return match.healthMonitor as import("../config/types.channels.js").ChannelHealthMonitorConfig;
+          return match.healthMonitor as ChannelHealthMonitorPublicConfig;
         }
       }
     }
 
-    // Fall back to channel-level healthMonitor config.
-    return channelConfig?.healthMonitor;
+    return channelConfig?.healthMonitor as ChannelHealthMonitorPublicConfig | undefined;
   };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
