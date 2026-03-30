@@ -112,10 +112,17 @@ export class TelegramPollingSession {
         await sleepWithAbort(HEARTBEAT_INTERVAL_MS, heartbeatStop.signal).catch(() => {});
         if (heartbeatAborted()) return;
 
-        const heartbeat = await this.#probeHeartbeatOnce({
-          stopSignal: heartbeatStop.signal,
-          rebuildTransportIfDirty: heartbeatSuspended,
-        });
+        let heartbeat: "ok" | "network-failure" | "fatal-api-failure" = "network-failure";
+        try {
+          heartbeat = await this.#probeHeartbeatOnce({
+            stopSignal: heartbeatStop.signal,
+            rebuildTransportIfDirty: heartbeatSuspended,
+          });
+        } catch (err) {
+          const errMsg = formatErrorMessage(err);
+          this.opts.log(`[telegram][diag] Heartbeat probe threw before completion: ${errMsg}`);
+          heartbeat = "network-failure";
+        }
         if (heartbeat === "ok") {
           if (heartbeatConsecutiveFailures > 0) {
             this.opts.log(
@@ -176,7 +183,9 @@ export class TelegramPollingSession {
           const onRecovery = () => abortController.abort();
           this.opts.abortSignal?.addEventListener("abort", onSessionAbort, { once: true });
           heartbeatRecoveryWake.signal.addEventListener("abort", onRecovery, { once: true });
-          await sleepWithAbort(HEARTBEAT_INTERVAL_MS, abortController.signal).catch(() => {});
+          if (heartbeatSuspended) {
+            await sleepWithAbort(HEARTBEAT_INTERVAL_MS, abortController.signal).catch(() => {});
+          }
           this.opts.abortSignal?.removeEventListener("abort", onSessionAbort);
           heartbeatRecoveryWake.signal.removeEventListener("abort", onRecovery);
         }
