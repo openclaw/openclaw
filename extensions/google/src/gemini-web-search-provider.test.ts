@@ -134,6 +134,35 @@ describe("gemini web search provider", () => {
     ).toBe("scoped-secret");
   });
 
+  it("treats blank scoped Gemini web search keys as unset for auto-detect fallback", () => {
+    const provider = createGeminiWebSearchProvider();
+
+    expect(
+      provider.getConfiguredCredentialValue?.({
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "   ",
+                },
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              apiKey: "provider-secret",
+              baseUrl: "https://example.com",
+              models: [],
+            },
+          },
+        },
+      } as never),
+    ).toBe("provider-secret");
+  });
+
   it("returns a missing-key error when no dedicated, env, or provider fallback exists", async () => {
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({

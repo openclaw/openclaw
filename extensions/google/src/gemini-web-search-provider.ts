@@ -77,6 +77,41 @@ function resolveGeminiApiKey(
   );
 }
 
+function resolveGeminiConfiguredCredentialValue(
+  config:
+    | {
+        plugins?: {
+          entries?: {
+            google?: {
+              config?: {
+                webSearch?: {
+                  apiKey?: unknown;
+                };
+              };
+            };
+          };
+        };
+        models?: {
+          providers?: {
+            google?: ModelProviderConfig;
+          };
+        };
+      }
+    | undefined,
+): string | undefined {
+  const scopedApiKey = readConfiguredSecretString(
+    resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
+    "plugins.entries.google.config.webSearch.apiKey",
+  );
+  if (scopedApiKey) {
+    return scopedApiKey;
+  }
+  return readConfiguredSecretString(
+    config?.models?.providers?.google?.apiKey,
+    "models.providers.google.apiKey",
+  );
+}
+
 function resolveGeminiBaseUrl(gemini?: GeminiConfig, providerConfig?: ModelProviderConfig): string {
   const configuredBaseUrl =
     typeof gemini?.baseUrl === "string" && gemini.baseUrl.trim().length > 0
@@ -283,9 +318,7 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
     setCredentialValue: (searchConfigTarget, value) =>
       setScopedCredentialValue(searchConfigTarget, "gemini", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "google")?.apiKey ??
-      config?.models?.providers?.google?.apiKey,
+    getConfiguredCredentialValue: (config) => resolveGeminiConfiguredCredentialValue(config),
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
     },
@@ -304,5 +337,6 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
 export const __testing = {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
+  resolveGeminiConfiguredCredentialValue,
   resolveGeminiModel,
 } as const;
