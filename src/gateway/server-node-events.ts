@@ -466,13 +466,15 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (change !== "posted" && change !== "removed") {
         return;
       }
-      const key = normalizeNonEmptyString(obj.key);
-      if (!key) {
+      const keyRaw = normalizeNonEmptyString(obj.key);
+      if (!keyRaw) {
         return;
       }
+      const key = sanitizeInboundSystemTags(keyRaw);
       const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
-      const packageName = normalizeNonEmptyString(obj.packageName);
+      const packageNameRaw = normalizeNonEmptyString(obj.packageName);
+      const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
       const title = compactNotificationEventText(
         sanitizeInboundSystemTags(normalizeNonEmptyString(obj.title) ?? ""),
       );
@@ -494,7 +496,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const queued = enqueueSystemEvent(summary, {
         sessionKey,
-        contextKey: `notification:${key}`,
+        contextKey: `notification:${keyRaw}`,
         trusted: false,
       });
       if (queued) {
