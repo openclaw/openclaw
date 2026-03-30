@@ -19,7 +19,7 @@ export function resolveMediaMaxBytes(
   return undefined;
 }
 
-export async function withResolvedMatrixClient<T>(
+export async function withResolvedMatrixSendClient<T>(
   opts: {
     client?: MatrixClient;
     cfg?: CoreConfig;
@@ -39,5 +39,23 @@ export async function withResolvedMatrixClient<T>(
     // Started one-off send clients should flush sync/crypto state before CLI
     // shutdown paths can tear down the process.
     "persist",
+  );
+}
+
+export async function withResolvedMatrixControlClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+  },
+  run: (client: MatrixClient) => Promise<T>,
+): Promise<T> {
+  return await withResolvedRuntimeMatrixClient(
+    {
+      ...opts,
+      readiness: "none",
+    },
+    run,
   );
 }
