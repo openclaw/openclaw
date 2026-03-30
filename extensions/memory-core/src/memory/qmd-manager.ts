@@ -1839,6 +1839,37 @@ export class QmdMemoryManager implements MemorySearchManager {
     return trimmed || "agent";
   }
 
+  private listCollectionLookupNames(collection: string): string[] {
+    const trimmed = collection.trim();
+    if (!trimmed) {
+      return [];
+    }
+    if (this.collectionRoots.has(trimmed)) {
+      return [trimmed];
+    }
+    const names = [trimmed];
+    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (trimmed.endsWith(agentSuffix)) {
+      const legacyName = trimmed.slice(0, -agentSuffix.length).trim();
+      if (legacyName) {
+        names.push(legacyName);
+      }
+    } else {
+      names.push(`${trimmed}${agentSuffix}`);
+    }
+    return Array.from(new Set(names));
+  }
+
+  private resolveCollectionRoot(collection: string): CollectionRoot | null {
+    for (const candidate of this.listCollectionLookupNames(collection)) {
+      const root = this.collectionRoots.get(candidate);
+      if (root) {
+        return root;
+      }
+    }
+    return null;
+  }
+
   private async resolveDocLocation(
     docid?: string,
     hints?: { preferredCollection?: string; preferredFile?: string },
@@ -1989,7 +2020,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private toCollectionRelativePath(collection: string, filePath: string): string | null {
-    const root = this.collectionRoots.get(collection);
+    const root = this.resolveCollectionRoot(collection);
     if (!root) {
       return null;
     }
@@ -2170,7 +2201,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     collection: string,
     collectionRelativePath: string,
   ): { rel: string; abs: string; source: MemorySource } | null {
-    const root = this.collectionRoots.get(collection);
+    const root = this.resolveCollectionRoot(collection);
     if (!root) {
       return null;
     }
@@ -2230,7 +2261,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!collection || rest.length === 0) {
         throw new Error("invalid qmd path");
       }
-      const root = this.collectionRoots.get(collection);
+      const root = this.resolveCollectionRoot(collection);
       if (!root) {
         throw new Error(`unknown qmd collection: ${collection}`);
       }
