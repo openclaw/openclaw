@@ -99,7 +99,7 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
-  const isArkProvider = /(volcengine(-plan)?|byteplus(-plan)?|ark)\/?/.test(
+  const isArkProvider = /^(volcengine(-plan)?|byteplus(-plan)?|ark)(\/.*)?$/.test(
     options?.modelProvider?.toLowerCase() ?? "",
   );
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
