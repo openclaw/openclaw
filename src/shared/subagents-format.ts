@@ -1,20 +1,4 @@
-export function formatDurationCompact(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const minutes = Math.max(1, Math.round(valueMs / 60_000));
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const minutesRemainder = minutes % 60;
-  if (hours < 24) {
-    return minutesRemainder > 0 ? `${hours}h${minutesRemainder}m` : `${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  const hoursRemainder = hours % 24;
-  return hoursRemainder > 0 ? `${days}d${hoursRemainder}h` : `${days}d`;
-}
+export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
 export function formatTokenShort(value?: number) {
   if (!value || !Number.isFinite(value) || value <= 0) {
