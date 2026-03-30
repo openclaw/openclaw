@@ -1,11 +1,8 @@
 import os from "node:os";
-import {
-  createSyntheticSourceInfo,
-  formatSkillsForPrompt,
-  type Skill,
-} from "@mariozechner/pi-coding-agent";
+import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
 import type { SkillEntry } from "./types.js";
 import {
   formatSkillsCompact,
@@ -14,18 +11,13 @@ import {
 } from "./workspace.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  return {
+  return createCanonicalFixtureSkill({
     name,
     description: desc,
     filePath,
     baseDir: `/skills/${name}`,
     source: "workspace",
-    sourceInfo: createSyntheticSourceInfo(filePath, {
-      source: "workspace",
-      baseDir: `/skills/${name}`,
-    }),
-    disableModelInvocation: false,
-  };
+  });
 }
 
 function makeEntry(skill: Skill): SkillEntry {
