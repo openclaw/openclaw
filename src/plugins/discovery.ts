@@ -4,10 +4,6 @@ import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/bou
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
-  BUNDLED_PLUGIN_METADATA,
-  resolveBundledPluginGeneratedPath,
-} from "./bundled-plugin-metadata.js";
-import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
   loadPluginManifest,
@@ -471,11 +467,56 @@ function resolvePackageEntrySource(params: {
   rejectHardlinks?: boolean;
 }): string | null {
   const source = path.resolve(params.packageDir, params.entryPath);
+  const rejectHardlinks = params.rejectHardlinks ?? true;
+  const candidates = [source];
+  if (!rejectHardlinks) {
+    const builtCandidate = source.replace(/\.[^.]+$/u, ".js");
+    if (builtCandidate !== source) {
+      candidates.push(builtCandidate);
+    }
+  }
+
+  for (const candidate of new Set(candidates)) {
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+    const opened = openBoundaryFileSync({
+      absolutePath: candidate,
+      rootPath: params.packageDir,
+      boundaryLabel: "plugin package directory",
+      rejectHardlinks,
+    });
+    if (!opened.ok) {
+      return matchBoundaryFileOpenFailure(opened, {
+        path: () => null,
+        io: () => {
+          params.diagnostics.push({
+            level: "warn",
+            message: `extension entry unreadable (I/O error): ${params.entryPath}`,
+            source: params.sourceLabel,
+          });
+          return null;
+        },
+        fallback: () => {
+          params.diagnostics.push({
+            level: "error",
+            message: `extension entry escapes package directory: ${params.entryPath}`,
+            source: params.sourceLabel,
+          });
+          return null;
+        },
+      });
+    }
+    const safeSource = opened.path;
+    fs.closeSync(opened.fd);
+    return safeSource;
+  }
+
   const opened = openBoundaryFileSync({
     absolutePath: source,
     rootPath: params.packageDir,
     boundaryLabel: "plugin package directory",
-    rejectHardlinks: params.rejectHardlinks ?? true,
+    rejectHardlinks,
   });
   if (!opened.ok) {
     return matchBoundaryFileOpenFailure(opened, {
@@ -788,62 +829,6 @@ function discoverFromPath(params: {
   }
 }
 
-function discoverBundledMetadataInDirectory(params: {
-  dir: string;
-  ownershipUid?: number | null;
-  candidates: PluginCandidate[];
-  diagnostics: PluginDiagnostic[];
-  seen: Set<string>;
-}) {
-  if (!fs.existsSync(params.dir)) {
-    return null;
-  }
-
-  const coveredDirectories = new Set<string>();
-  for (const entry of BUNDLED_PLUGIN_METADATA) {
-    const rootDir = path.join(params.dir, entry.dirName);
-    if (!fs.existsSync(rootDir)) {
-      continue;
-    }
-    coveredDirectories.add(entry.dirName);
-    const source = resolveBundledPluginGeneratedPath(rootDir, entry.source);
-    if (!source) {
-      continue;
-    }
-    const setupSource = resolveBundledPluginGeneratedPath(rootDir, entry.setupSource);
-    const packageManifest = readPackageManifest(rootDir, false);
-    addCandidate({
-      candidates: params.candidates,
-      diagnostics: params.diagnostics,
-      seen: params.seen,
-      idHint: entry.idHint,
-      source,
-      ...(setupSource ? { setupSource } : {}),
-      rootDir,
-      origin: "bundled",
-      ownershipUid: params.ownershipUid,
-      manifest: {
-        ...packageManifest,
-        ...(!packageManifest?.name && entry.packageName ? { name: entry.packageName } : {}),
-        ...(!packageManifest?.version && entry.packageVersion
-          ? { version: entry.packageVersion }
-          : {}),
-        ...(!packageManifest?.description && entry.packageDescription
-          ? { description: entry.packageDescription }
-          : {}),
-        ...(!packageManifest?.openclaw && entry.packageManifest
-          ? { openclaw: entry.packageManifest }
-          : {}),
-      },
-      packageDir: rootDir,
-      bundledManifest: entry.manifest,
-      bundledManifestPath: path.join(rootDir, "openclaw.plugin.json"),
-    });
-  }
-
-  return coveredDirectories;
-}
-
 export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
@@ -906,13 +891,6 @@ export function discoverOpenClawPlugins(params: {
   }
 
   if (roots.stock) {
-    const coveredBundledDirectories = discoverBundledMetadataInDirectory({
-      dir: roots.stock,
-      ownershipUid: params.ownershipUid,
-      candidates,
-      diagnostics,
-      seen,
-    });
     discoverInDirectory({
       dir: roots.stock,
       origin: "bundled",
@@ -920,7 +898,6 @@ export function discoverOpenClawPlugins(params: {
       candidates,
       diagnostics,
       seen,
-      ...(coveredBundledDirectories ? { skipDirectories: coveredBundledDirectories } : {}),
     });
   }
 

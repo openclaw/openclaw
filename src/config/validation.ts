@@ -21,14 +21,14 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
-import { getBundledChannelConfigSchemaMap } from "./bundled-channel-config-runtime.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
-import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import {
   listLegacyWebSearchConfigPaths,
   normalizeLegacyWebSearchConfig,
 } from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -41,9 +41,14 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
-type JsonSchemaNode = Record<string, unknown>;
+type JsonSchemaLike = Record<string, unknown>;
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
+const bundledChannelSchemaById = new Map<string, unknown>(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+    (entry) => [entry.channelId, entry.schema] as const,
+  ),
+);
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
@@ -66,128 +71,98 @@ function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
 }
 
-function toJsonSchemaNode(value: unknown): JsonSchemaNode | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as JsonSchemaNode;
+function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
+  return value && typeof value === "object" ? (value as JsonSchemaLike) : null;
 }
 
-function getSchemaCombinatorBranches(node: JsonSchemaNode): JsonSchemaNode[] {
-  const keys = ["anyOf", "oneOf", "allOf"] as const;
-  const branches: JsonSchemaNode[] = [];
-  for (const key of keys) {
-    const value = node[key];
-    if (!Array.isArray(value)) {
+function lookupJsonSchemaNode(
+  schema: unknown,
+  pathSegments: readonly ConfigPathSegment[],
+): JsonSchemaLike | null {
+  let current = asJsonSchemaLike(schema);
+  for (const segment of pathSegments) {
+    if (!current) {
+      return null;
+    }
+    if (typeof segment === "number") {
+      const items = current.items;
+      if (Array.isArray(items)) {
+        current = asJsonSchemaLike(items[segment] ?? items[0]);
+        continue;
+      }
+      current = asJsonSchemaLike(items);
       continue;
     }
-    for (const entry of value) {
-      const child = toJsonSchemaNode(entry);
-      if (child) {
-        branches.push(child);
-      }
-    }
+    const properties = asJsonSchemaLike(current.properties);
+    const next =
+      (properties && asJsonSchemaLike(properties[segment])) ||
+      asJsonSchemaLike(current.additionalProperties);
+    current = next;
   }
-  return branches;
+  return current;
 }
 
-function collectAllowedValuesFromSchemaNode(node: JsonSchemaNode): AllowedValuesCollection {
+function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesCollection {
+  const node = asJsonSchemaLike(schema);
+  if (!node) {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+
   if (Object.prototype.hasOwnProperty.call(node, "const")) {
     return { values: [node.const], incomplete: false, hasValues: true };
   }
 
-  const enumValues = node.enum;
-  if (Array.isArray(enumValues)) {
-    return { values: enumValues, incomplete: false, hasValues: enumValues.length > 0 };
+  if (Array.isArray(node.enum)) {
+    return { values: node.enum, incomplete: false, hasValues: node.enum.length > 0 };
   }
 
-  if (node.type === "boolean") {
+  const type = node.type;
+  if (type === "boolean") {
+    return { values: [true, false], incomplete: false, hasValues: true };
+  }
+  if (Array.isArray(type) && type.includes("boolean")) {
     return { values: [true, false], incomplete: false, hasValues: true };
   }
 
-  const branches = getSchemaCombinatorBranches(node);
-  if (branches.length === 0) {
-    return { values: [], incomplete: true, hasValues: false };
+  const unionBranches = Array.isArray(node.anyOf)
+    ? node.anyOf
+    : Array.isArray(node.oneOf)
+      ? node.oneOf
+      : null;
+  if (!unionBranches) {
+    return { values: [], incomplete: false, hasValues: false };
   }
 
   const collected: unknown[] = [];
-  for (const branch of branches) {
-    const result = collectAllowedValuesFromSchemaNode(branch);
-    if (result.incomplete || !result.hasValues) {
+  for (const branch of unionBranches) {
+    const branchCollected = collectAllowedValuesFromJsonSchemaNode(branch);
+    if (branchCollected.incomplete || !branchCollected.hasValues) {
       return { values: [], incomplete: true, hasValues: false };
     }
-    collected.push(...result.values);
+    collected.push(...branchCollected.values);
   }
 
   return { values: collected, incomplete: false, hasValues: collected.length > 0 };
 }
 
-function advanceSchemaNodes(node: JsonSchemaNode, segment: ConfigPathSegment): JsonSchemaNode[] {
-  const branches = getSchemaCombinatorBranches(node);
-  if (branches.length > 0) {
-    return branches.flatMap((branch) => advanceSchemaNodes(branch, segment));
-  }
-
-  if (typeof segment === "number") {
-    const items = toJsonSchemaNode(node.items);
-    return items ? [items] : [];
-  }
-
-  const properties = toJsonSchemaNode(node.properties);
-  const propertyNode = properties ? toJsonSchemaNode(properties[segment]) : null;
-  if (propertyNode) {
-    return [propertyNode];
-  }
-
-  const additionalProperties = toJsonSchemaNode(node.additionalProperties);
-  return additionalProperties ? [additionalProperties] : [];
-}
-
-function collectAllowedValuesFromSchemaPath(
-  root: JsonSchemaNode,
-  path: readonly ConfigPathSegment[],
+function collectAllowedValuesFromBundledChannelSchemaPath(
+  pathSegments: readonly ConfigPathSegment[],
 ): AllowedValuesCollection {
-  let currentNodes = [root];
-  for (const segment of path) {
-    currentNodes = currentNodes.flatMap((node) => advanceSchemaNodes(node, segment));
-    if (currentNodes.length === 0) {
-      return { values: [], incomplete: false, hasValues: false };
-    }
+  if (pathSegments[0] !== "channels" || typeof pathSegments[1] !== "string") {
+    return { values: [], incomplete: false, hasValues: false };
   }
-
-  const collected: unknown[] = [];
-  for (const node of currentNodes) {
-    const result = collectAllowedValuesFromSchemaNode(node);
-    if (result.incomplete || !result.hasValues) {
-      return { values: [], incomplete: true, hasValues: false };
-    }
-    collected.push(...result.values);
+  const channelSchema = bundledChannelSchemaById.get(pathSegments[1]);
+  if (!channelSchema) {
+    return { values: [], incomplete: false, hasValues: false };
   }
-
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
-}
-
-function collectAllowedValuesFromConfigPath(
-  path: readonly ConfigPathSegment[],
-): AllowedValuesCollection {
-  if (path[0] === "channels" && typeof path[1] === "string") {
-    const channelSchema = getBundledChannelConfigSchemaMap().get(path[1]);
-    const schemaRoot = toJsonSchemaNode(channelSchema?.schema);
-    if (schemaRoot) {
-      return collectAllowedValuesFromSchemaPath(schemaRoot, path.slice(2));
-    }
+  const targetNode = lookupJsonSchemaNode(channelSchema, pathSegments.slice(2));
+  if (!targetNode) {
+    return { values: [], incomplete: false, hasValues: false };
   }
-
-  return { values: [], incomplete: false, hasValues: false };
+  return collectAllowedValuesFromJsonSchemaNode(targetNode);
 }
 
 function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
-  const path = toConfigPathSegments(record.path);
-  const schemaValues = collectAllowedValuesFromConfigPath(path);
-  if (schemaValues.hasValues && !schemaValues.incomplete) {
-    return schemaValues;
-  }
-
   const message = typeof record.message === "string" ? record.message : "";
   const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
   if (expectedMatch?.[1]) {
@@ -195,7 +170,11 @@ function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): Allowe
     return { values, incomplete: false, hasValues: values.length > 0 };
   }
 
-  return { values: [], incomplete: false, hasValues: false };
+  // Custom Zod issues usually come from superRefine rules, but some normalized
+  // channel unions collapse to a generic custom issue. Use generated channel
+  // config metadata here so we can recover enum hints without touching runtime
+  // plugin registries during validation formatting.
+  return collectAllowedValuesFromBundledChannelSchemaPath(toConfigPathSegments(record.path));
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -438,7 +417,7 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
+    config: materializeRuntimeConfig(result.config, "snapshot"),
   };
 }
 

@@ -432,7 +432,7 @@ const ToolExecSafeBinProfileSchema = z
   .strict();
 
 const ToolExecBaseShape = {
-  host: z.enum(["sandbox", "gateway", "node"]).optional(),
+  host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   node: z.string().optional(),
@@ -653,6 +653,12 @@ export const MemorySearchSchema = z
       .object({
         driver: z.literal("sqlite").optional(),
         path: z.string().optional(),
+        fts: z
+          .object({
+            tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),
+          })
+          .strict()
+          .optional(),
         vector: z
           .object({
             enabled: z.boolean().optional(),

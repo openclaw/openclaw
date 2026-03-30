@@ -13,9 +13,11 @@ import {
   type ConfigFileSnapshot,
   type OpenClawConfig,
   applyConfigOverrides,
+  getRuntimeConfig,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
+  registerConfigWriteListener,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
@@ -50,6 +52,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -72,6 +75,10 @@ import {
 } from "../secrets/runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  getInspectableTaskRegistrySummary,
+  startTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -115,6 +122,7 @@ import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
+import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -291,6 +299,7 @@ async function prepareGatewayStartupConfig(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
     persist: true,
+    baseHash: params.configSnapshot.hash,
   });
   const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
     auth: params.authOverride,
@@ -515,11 +524,15 @@ export async function startGatewayServer(
   }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat();
+    startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   setPreRestartDeferralCheck(
-    () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
+    () =>
+      getTotalQueueSize() +
+      getTotalPendingReplies() +
+      getActiveEmbeddedRunCount() +
+      getInspectableTaskRegistrySummary().active,
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
@@ -533,6 +546,11 @@ export async function startGatewayServer(
     env: process.env,
     log,
   });
+  await runStartupSessionMigration({
+    cfg: cfgAtStart,
+    env: process.env,
+    log,
+  });
   const matrixInstallPathIssue = await detectPluginInstallPathIssue({
     pluginId: "matrix",
     install: cfgAtStart.plugins?.installs?.matrix,
@@ -542,7 +560,10 @@ export async function startGatewayServer(
       issue: matrixInstallPathIssue,
       pluginLabel: "Matrix",
       defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-      repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+      repoInstallCommand: resolveBundledPluginInstallCommandHint({
+        pluginId: "matrix",
+        workspaceDir: process.cwd(),
+      }),
       formatCommand: formatCliCommand,
     });
     log.warn(
@@ -876,6 +897,7 @@ export async function startGatewayServer(
         });
 
     if (!minimalTestGateway) {
+      startTaskRegistryMaintenance();
       ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } =
         startGatewayMaintenanceTimers({
           broadcast,
@@ -1403,6 +1425,7 @@ export async function startGatewayServer(
           return startGatewayConfigReloader({
             initialConfig: cfgAtStart,
             readSnapshot: readConfigFileSnapshot,
+            subscribeToWrites: registerConfigWriteListener,
             onHotReload: async (plan, nextConfig) => {
               const previousSnapshot = getActiveSecretsRuntimeSnapshot();
               const prepared = await activateRuntimeSecrets(nextConfig, {

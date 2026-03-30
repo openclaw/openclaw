@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { matrixPlugin } from "../../channel.js";
 import {
   __testing as sessionBindingTesting,
   createTestRegistry,
@@ -6,8 +7,7 @@ import {
   resolveAgentRoute,
   setActivePluginRegistry,
   type OpenClawConfig,
-} from "../../../../../test/helpers/extensions/matrix-monitor-route.js";
-import { matrixPlugin } from "../../channel.js";
+} from "../../test-support/monitor-route-test-support.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 
 const baseCfg = {
