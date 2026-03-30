@@ -19,6 +19,7 @@ import {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "../../media/local-roots.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
@@ -395,12 +396,32 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
   // Support media, path, and filePath parameters for attachments
-  const mediaHint =
+  let mediaHint =
     readStringParam(params, "media", { trim: false }) ??
     readStringParam(params, "mediaUrl", { trim: false }) ??
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false }) ??
     readStringParam(params, "fileUrl", { trim: false });
+
+  // When hydration populated params.buffer but no URL-based media exists,
+  // materialize the buffer to a local temp file so existing downstream
+  // paths can consume it as a normal media path.
+  const hasHydratedBuffer =
+    !mediaHint && typeof params.buffer === "string" && params.buffer.trim().length > 0;
+
+  if (hasHydratedBuffer && !dryRun) {
+    const bufferBytes = Buffer.from(params.buffer as string, "base64");
+    const saved = await saveMediaBuffer(
+      bufferBytes,
+      typeof params.contentType === "string" ? params.contentType : undefined,
+      "outbound",
+      undefined,
+      typeof params.filename === "string" ? params.filename : undefined,
+    );
+    params.media = saved.path;
+    mediaHint = saved.path;
+  }
+
   const hasButtons = Array.isArray(params.buttons) && params.buttons.length > 0;
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
@@ -412,7 +433,13 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   let message =
     readStringParam(params, "message", {
       required:
-        !mediaHint && !hasButtons && !hasCard && !hasComponents && !hasInteractive && !hasBlocks,
+        !mediaHint &&
+        !hasHydratedBuffer &&
+        !hasButtons &&
+        !hasCard &&
+        !hasComponents &&
+        !hasInteractive &&
+        !hasBlocks,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -481,7 +508,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
         interactive: params.interactive,
       },
       {
-        extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
+        extraContent: hasButtons || hasCard || hasComponents || hasBlocks || hasHydratedBuffer,
       },
     )
   ) {
