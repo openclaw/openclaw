@@ -232,14 +232,14 @@ export async function handleToolExecutionEnd(
     const outputText = extractToolResultText(sanitizedResult);
     const mediaUrls = extractToolResultMediaUrls(sanitizedResult);
     if (mediaUrls?.length) {
-      try {
-        void ctx.params.onToolResult({
+      void ctx.params
+        .onToolResult({
           text: outputText,
           mediaUrls,
+        })
+        .catch(() => {
+          // ignore tool result delivery failures
         });
-      } catch {
-        // ignore tool result delivery failures
-      }
     } else if (ctx.shouldEmitToolOutput() && outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
     }
