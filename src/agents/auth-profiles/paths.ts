@@ -34,9 +34,9 @@ export function ensureAuthStoreFile(pathname: string) {
 }
 
 export function resolveOAuthRefreshLockPath(profileId: string): string {
-  const safeId = profileId.replace(
-    /[^a-zA-Z0-9_.-]/g,
-    (c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
-  );
+  // Encode the full UTF-8 byte sequence so lock ids remain collision-free and
+  // never normalize into "."/".." path segments.
+  const encodedId = Buffer.from(profileId, "utf8").toString("hex");
+  const safeId = `utf8-${encodedId || "00"}`;
   return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
 }
