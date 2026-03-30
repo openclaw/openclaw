@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { InteractiveReply } from "../interactive/payload.js";
 import type { TypingController } from "./reply/typing.js";
 
 export type BlockReplyContext = {
@@ -76,6 +77,10 @@ export type ReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  interactive?: InteractiveReply;
+  btw?: {
+    question: string;
+  };
   replyToId?: string;
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
@@ -86,6 +91,10 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Marks this payload as a compaction status notice (start/end).
+   *  Should be excluded from TTS transcript accumulation so compaction
+   *  status lines are not synthesised into the spoken assistant reply. */
+  isCompactionNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };

@@ -14,7 +14,8 @@
  */
 
 import { EventEmitter } from "node:events";
-import WebSocket from "ws";
+import WebSocket, { type ClientOptions } from "ws";
+import { resolveProviderAttributionHeaders } from "./provider-attribution.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket Event Types (Server → Client)
@@ -57,10 +58,10 @@ export type OutputItem =
       status?: "in_progress" | "completed";
     }
   | {
-      type: "reasoning";
+      type: "reasoning" | `reasoning.${string}`;
       id: string;
       content?: string;
-      summary?: string;
+      summary?: unknown;
     };
 
 export interface ResponseCreatedEvent {
@@ -197,7 +198,13 @@ export type InputItem =
     }
   | { type: "function_call"; id?: string; call_id?: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string }
-  | { type: "reasoning"; content?: string; encrypted_content?: string; summary?: string }
+  | {
+      type: "reasoning";
+      id?: string;
+      content?: string;
+      encrypted_content?: string;
+      summary?: string;
+    }
   | { type: "item_reference"; id: string };
 
 export type ToolChoice =
@@ -231,6 +238,7 @@ export interface ResponseCreateEvent {
   top_p?: number;
   metadata?: Record<string, string>;
   reasoning?: { effort?: "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
+  text?: { verbosity?: "low" | "medium" | "high"; [key: string]: unknown };
   truncation?: "auto" | "disabled";
   [key: string]: unknown;
 }
@@ -251,6 +259,14 @@ const MAX_RETRIES = 5;
 /** Backoff delays in ms: 1s, 2s, 4s, 8s, 16s */
 const BACKOFF_DELAYS_MS = [1000, 2000, 4000, 8000, 16000] as const;
 
+function isOpenAIPublicWebSocketUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return url.toLowerCase().includes("api.openai.com");
+  }
+}
+
 export interface OpenAIWebSocketManagerOptions {
   /** Override the default WebSocket URL (useful for testing) */
   url?: string;
@@ -258,6 +274,8 @@ export interface OpenAIWebSocketManagerOptions {
   maxRetries?: number;
   /** Custom backoff delays in ms (default: [1000, 2000, 4000, 8000, 16000]) */
   backoffDelaysMs?: readonly number[];
+  /** Custom socket factory for tests. */
+  socketFactory?: (url: string, options: ClientOptions) => WebSocket;
 }
 
 type InternalEvents = {
@@ -297,12 +315,15 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   private readonly wsUrl: string;
   private readonly maxRetries: number;
   private readonly backoffDelaysMs: readonly number[];
+  private readonly socketFactory: (url: string, options: ClientOptions) => WebSocket;
 
   constructor(options: OpenAIWebSocketManagerOptions = {}) {
     super();
     this.wsUrl = options.url ?? OPENAI_WS_URL;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.backoffDelaysMs = options.backoffDelaysMs ?? BACKOFF_DELAYS_MS;
+    this.socketFactory =
+      options.socketFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions));
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -366,8 +387,15 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     this._cancelRetryTimer();
     if (this.ws) {
       this.ws.removeAllListeners();
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-        this.ws.close(1000, "Client closed");
+      try {
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this.ws.close(1000, "Client closed");
+        } else if (this.ws.readyState === WebSocket.CONNECTING) {
+          // ws can still throw here while the handshake is in-flight.
+          this.ws.terminate();
+        }
+      } catch {
+        // Best-effort close during setup/teardown.
       }
       this.ws = null;
     }
@@ -382,10 +410,13 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         return;
       }
 
-      const socket = new WebSocket(this.wsUrl, {
+      const socket = this.socketFactory(this.wsUrl, {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "OpenAI-Beta": "responses-websocket=v1",
+          ...(isOpenAIPublicWebSocketUrl(this.wsUrl)
+            ? resolveProviderAttributionHeaders("openai")
+            : undefined),
         },
       });
 

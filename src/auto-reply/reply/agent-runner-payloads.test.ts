@@ -9,6 +9,20 @@ const baseParams = {
   replyToMode: "off" as const,
 };
 
+async function expectSameTargetRepliesSuppressed(params: { provider: string; to: string }) {
+  const { replyPayloads } = await buildReplyPayloads({
+    ...baseParams,
+    payloads: [{ text: "hello world!" }],
+    messageProvider: "heartbeat",
+    originatingChannel: "feishu",
+    originatingTo: "ou_abc123",
+    messagingToolSentTexts: ["different message"],
+    messagingToolSentTargets: [{ tool: "message", provider: params.provider, to: params.to }],
+  });
+
+  expect(replyPayloads).toHaveLength(0);
+}
+
 describe("buildReplyPayloads media filter integration", () => {
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
     const { replyPayloads } = await buildReplyPayloads({
@@ -142,31 +156,11 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("suppresses same-target replies when message tool target provider is generic", async () => {
-    const { replyPayloads } = await buildReplyPayloads({
-      ...baseParams,
-      payloads: [{ text: "hello world!" }],
-      messageProvider: "heartbeat",
-      originatingChannel: "feishu",
-      originatingTo: "ou_abc123",
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "ou_abc123" }],
-    });
-
-    expect(replyPayloads).toHaveLength(0);
+    await expectSameTargetRepliesSuppressed({ provider: "message", to: "ou_abc123" });
   });
 
   it("suppresses same-target replies when target provider is channel alias", async () => {
-    const { replyPayloads } = await buildReplyPayloads({
-      ...baseParams,
-      payloads: [{ text: "hello world!" }],
-      messageProvider: "heartbeat",
-      originatingChannel: "feishu",
-      originatingTo: "ou_abc123",
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "message", provider: "lark", to: "ou_abc123" }],
-    });
-
-    expect(replyPayloads).toHaveLength(0);
+    await expectSameTargetRepliesSuppressed({ provider: "lark", to: "ou_abc123" });
   });
 
   it("drops all final payloads when block pipeline streamed successfully", async () => {
@@ -187,6 +181,16 @@ describe("buildReplyPayloads media filter integration", () => {
       blockReplyPipeline: pipeline,
       replyToMode: "all",
       payloads: [{ text: "response", replyToId: "post-123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("drops all final payloads during silent turns, including media-only payloads", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [{ text: "NO_REPLY", mediaUrl: "file:///tmp/photo.jpg" }],
     });
 
     expect(replyPayloads).toHaveLength(0);

@@ -1,33 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/index.js";
 import {
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
   resolveHandshakeBrowserSecurityContext,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
-  shouldSkipBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
+
+function createRateLimiter(): AuthRateLimiter {
+  return {
+    check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
+    reset: () => {},
+    recordFailure: () => {},
+    size: () => 0,
+    prune: () => {},
+    dispose: () => {},
+  };
+}
 
 describe("handshake auth helpers", () => {
   it("pins browser-origin loopback clients to the synthetic rate-limit ip", () => {
-    const rateLimiter: AuthRateLimiter = {
-      check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
-      reset: () => {},
-      recordFailure: () => {},
-      size: () => 0,
-      prune: () => {},
-      dispose: () => {},
-    };
-    const browserRateLimiter: AuthRateLimiter = {
-      check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
-      reset: () => {},
-      recordFailure: () => {},
-      size: () => 0,
-      prune: () => {},
-      dispose: () => {},
-    };
+    const rateLimiter = createRateLimiter();
+    const browserRateLimiter = createRateLimiter();
     const resolved = resolveHandshakeBrowserSecurityContext({
       requestOrigin: "https://app.example",
       clientIp: "127.0.0.1",
@@ -88,34 +82,6 @@ describe("handshake auth helpers", () => {
         isControlUi: false,
         isWebchat: false,
         reason: "metadata-upgrade",
-      }),
-    ).toBe(false);
-  });
-
-  it("skips backend self-pairing only for local shared-secret backend clients", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
-    } as ConnectParams;
-
-    expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
-        isLocalClient: true,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
-        isLocalClient: false,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
       }),
     ).toBe(false);
   });

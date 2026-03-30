@@ -4,10 +4,12 @@ node_modules
 docker-compose.override.yml
 docker-compose.extra.yml
 dist
+dist-runtime
 pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__openclaw_vitest__/
 __pycache__/
 *.pyc
 .tsbuildinfo
@@ -29,6 +31,7 @@ apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
 apps/android/.kotlin/
+apps/android/benchmark/results/
 
 # Bun build artifacts
 *.bun-build
@@ -82,6 +85,7 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
+docs/internal/
 tmp/
 IDENTITY.md
 USER.md
@@ -98,8 +102,6 @@ USER.md
 /local/
 package-lock.json
 .claude/
-.agents/
-.agents
 .agent/
 skills-lock.json
 
@@ -136,3 +138,9 @@ docs/superpowers
 skills/Pulaoecho-voice-assistant/certs/
 skills/Pulaoecho-voice-assistant/config.json.example
 skills/Pulaoecho-voice-assistant/pulaoecho-voice-assistant.log
+
+# Deprecated changelog fragment workflow
+changelog/fragments/
+
+# Local scratch workspace
+.tmp/

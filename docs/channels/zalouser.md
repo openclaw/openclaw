@@ -17,7 +17,7 @@ Status: experimental. This integration automates a **personal Zalo account** via
 Zalo Personal ships as a plugin and is not bundled with the core install.
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
-- Or from a source checkout: `openclaw plugins install ./extensions/zalouser`
+- Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 
 No external `zca`/`openzca` CLI binary is required.
@@ -41,7 +41,7 @@ No external `zca`/`openzca` CLI binary is required.
 }
 ```
 
-4. Restart the Gateway (or finish onboarding).
+4. Restart the Gateway (or finish setup).
 5. DM access defaults to pairing; approve the pairing code on first contact.
 
 ## What it is
@@ -74,7 +74,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 `channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
 
-`channels.zalouser.allowFrom` accepts user IDs or names. During onboarding, names are resolved to IDs using the plugin's in-process contact lookup.
+`channels.zalouser.allowFrom` accepts user IDs or names. During setup, names are resolved to IDs using the plugin's in-process contact lookup.
 
 Approve via:
 

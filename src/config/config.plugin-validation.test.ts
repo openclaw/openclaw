@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
+
+vi.unmock("../version.js");
 
 async function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -43,26 +45,90 @@ async function writePluginFixture(params: {
   );
 }
 
+async function writeBundleFixture(params: {
+  dir: string;
+  format: "codex" | "claude";
+  name: string;
+}) {
+  await mkdirSafe(params.dir);
+  const manifestDir = path.join(
+    params.dir,
+    params.format === "codex" ? ".codex-plugin" : ".claude-plugin",
+  );
+  await mkdirSafe(manifestDir);
+  await fs.writeFile(
+    path.join(manifestDir, "plugin.json"),
+    JSON.stringify({ name: params.name }, null, 2),
+    "utf-8",
+  );
+}
+
+async function writeManifestlessClaudeBundleFixture(params: { dir: string }) {
+  await mkdirSafe(params.dir);
+  await mkdirSafe(path.join(params.dir, "commands"));
+  await fs.writeFile(
+    path.join(params.dir, "commands", "review.md"),
+    "---\ndescription: fixture\n---\n",
+    "utf-8",
+  );
+  await fs.writeFile(path.join(params.dir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+}
+
+function expectRemovedPluginWarnings(
+  result: { ok: boolean; warnings?: Array<{ path: string; message: string }> },
+  removedId: string,
+  removedLabel: string,
+) {
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    const message = `plugin removed: ${removedLabel} (stale config entry ignored; remove it from plugins config)`;
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        { path: `plugins.entries.${removedId}`, message },
+        { path: "plugins.allow", message },
+        { path: "plugins.deny", message },
+        { path: "plugins.slots.memory", message },
+      ]),
+    );
+  }
+}
+
 describe("config plugin validation", () => {
-  const previousUmask = process.umask(0o022);
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
+  let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
+  let bundlePluginDir = "";
+  let manifestlessClaudeBundleDir = "";
   const suiteEnv = () =>
     ({
-      ...process.env,
       HOME: suiteHome,
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
-      CLAWDBOT_STATE_DIR: undefined,
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: undefined,
+      VITEST: "true",
     }) satisfies NodeJS.ProcessEnv;
 
   const validateInSuite = (raw: unknown) =>
     validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
+
+  const validateRemovedPluginConfig = (removedId: string) =>
+    validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: false,
+        entries: { [removedId]: { enabled: true } },
+        allow: [removedId],
+        deny: [removedId],
+        slots: { memory: removedId },
+      },
+    });
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
@@ -104,6 +170,27 @@ describe("config plugin validation", () => {
       channels: ["bluebubbles"],
       schema: { type: "object" },
     });
+    googleOverridePluginDir = path.join(suiteHome, "google");
+    await writePluginFixture({
+      dir: googleOverridePluginDir,
+      id: "google",
+      schema: {
+        type: "object",
+        properties: {
+          apiKey: { type: "string" },
+        },
+      },
+    });
+    bundlePluginDir = path.join(suiteHome, "bundle-plugin");
+    await writeBundleFixture({
+      dir: bundlePluginDir,
+      format: "codex",
+      name: "Bundle Fixture",
+    });
+    manifestlessClaudeBundleDir = path.join(suiteHome, "manifestless-claude-bundle");
+    await writeManifestlessClaudeBundleFixture({
+      dir: manifestlessClaudeBundleDir,
+    });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
       process.cwd(),
@@ -128,15 +215,27 @@ describe("config plugin validation", () => {
     validateInSuite({
       plugins: {
         enabled: false,
-        load: { paths: [badPluginDir, bluebubblesPluginDir, voiceCallSchemaPluginDir] },
+        load: {
+          paths: [
+            badPluginDir,
+            bluebubblesPluginDir,
+            bundlePluginDir,
+            manifestlessClaudeBundleDir,
+            voiceCallSchemaPluginDir,
+          ],
+        },
       },
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearPluginManifestRegistryCache();
   });
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
-    process.umask(previousUmask);
   });
 
   it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
@@ -162,11 +261,15 @@ describe("config plugin validation", () => {
       ).toBe(true);
       expect(res.issues).toEqual(
         expect.arrayContaining([
-          { path: "plugins.allow", message: "plugin not found: missing-allow" },
           { path: "plugins.deny", message: "plugin not found: missing-deny" },
           { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
         ]),
       );
+      expect(res.warnings).toContainEqual({
+        path: "plugins.allow",
+        message:
+          "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+      });
       expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
         message:
@@ -175,45 +278,61 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("does not fail validation for the implicit default memory slot when plugins config is explicit", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { acpx: { enabled: true } },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+        },
+      },
+    );
+    expect(res.ok).toBe(true);
+  });
+
   it("warns for removed legacy plugin ids instead of failing validation", async () => {
     const removedId = "google-antigravity-auth";
+    const res = validateRemovedPluginConfig(removedId);
+    expectRemovedPluginWarnings(res, removedId, removedId);
+  });
+
+  it("warns for removed google gemini auth plugin ids instead of failing validation", async () => {
+    const removedId = "google-gemini-cli-auth";
+    const res = validateRemovedPluginConfig(removedId);
+    expectRemovedPluginWarnings(res, removedId, removedId);
+  });
+
+  it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
       plugins: {
-        enabled: false,
-        entries: { [removedId]: { enabled: true } },
-        allow: [removedId],
-        deny: [removedId],
-        slots: { memory: removedId },
+        allow: ["bluebubbles", "memory-core"],
+        load: {
+          paths: [googleOverridePluginDir],
+        },
+        entries: {
+          google: {
+            config: {
+              apiKey: "test-google-key",
+            },
+          },
+        },
       },
     });
+
     expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.warnings).toEqual(
-        expect.arrayContaining([
-          {
-            path: `plugins.entries.${removedId}`,
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.allow",
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.deny",
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.slots.memory",
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-        ]),
-      );
+    if (!res.ok) {
+      return;
     }
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.google",
+      message: "plugin disabled (not in allowlist) but config is present",
+    });
   });
 
   it("surfaces plugin config diagnostics", async () => {
@@ -234,6 +353,32 @@ describe("config plugin validation", () => {
       );
       expect(hasIssue).toBe(true);
     }
+  });
+
+  it("does not require native config schemas for enabled bundle plugins", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [bundlePluginDir] },
+        entries: { "bundle-fixture": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts enabled manifestless Claude bundles without a native schema", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [manifestlessClaudeBundleDir] },
+        entries: { "manifestless-claude-bundle": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
   });
 
   it("surfaces allowed enum values for plugin config diagnostics", async () => {

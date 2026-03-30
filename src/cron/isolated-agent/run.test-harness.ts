@@ -43,8 +43,10 @@ export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
 export const listDescendantRunsForRequesterMock = createMock();
 export const pickLastNonEmptyTextFromPayloadsMock = createMock();
+export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
+export const resolveSessionAuthProfileOverrideMock = createMock();
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
@@ -110,6 +112,15 @@ vi.mock("../../agents/model-fallback.js", async (importOriginal) => {
   return {
     ...actual,
     runWithModelFallback: runWithModelFallbackMock,
+  };
+});
+
+vi.mock("../../agents/auth-profiles/session-override.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agents/auth-profiles/session-override.js")>();
+  return {
+    ...actual,
+    resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
   };
 });
 
@@ -285,6 +296,7 @@ vi.mock("./helpers.js", () => ({
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
+  resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
   resolveHeartbeatAckMaxChars: vi.fn().mockReturnValue(100),
 }));
 
@@ -341,6 +353,13 @@ function makeDefaultEmbeddedResult() {
   };
 }
 
+export function mockRunCronFallbackPassthrough(): void {
+  runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+    const result = await run(provider, model);
+    return { result, provider, model, attempts: [] };
+  });
+}
+
 export function resetRunCronIsolatedAgentTurnHarness(): void {
   vi.clearAllMocks();
 
@@ -356,7 +375,7 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
-  resolveThinkingDefaultMock.mockReturnValue(undefined);
+  resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
   isCliProviderMock.mockReturnValue(false);
 
@@ -380,6 +399,26 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   listDescendantRunsForRequesterMock.mockReturnValue([]);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
+  resolveCronPayloadOutcomeMock.mockReset();
+  resolveCronPayloadOutcomeMock.mockImplementation(
+    ({ payloads }: { payloads: Array<{ isError?: boolean }> }) => {
+      const outputText = pickLastNonEmptyTextFromPayloadsMock(payloads);
+      const synthesizedText = outputText?.trim() || "summary";
+      const hasFatalErrorPayload = payloads.some((payload) => payload?.isError === true);
+      return {
+        summary: "summary",
+        outputText,
+        synthesizedText,
+        deliveryPayload: undefined,
+        deliveryPayloads: synthesizedText ? [{ text: synthesizedText }] : [],
+        deliveryPayloadHasStructuredContent: false,
+        hasFatalErrorPayload,
+        embeddedRunError: hasFatalErrorPayload
+          ? "cron isolated run returned an error payload"
+          : undefined,
+      };
+    },
+  );
   resolveCronDeliveryPlanMock.mockReset();
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   resolveDeliveryTargetMock.mockReset();
@@ -389,6 +428,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     accountId: undefined,
     error: undefined,
   });
+  resolveSessionAuthProfileOverrideMock.mockReset();
+  resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 
   logWarnMock.mockReset();
 }

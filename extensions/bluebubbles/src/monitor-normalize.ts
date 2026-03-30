@@ -1,4 +1,4 @@
-import { parseFiniteNumber } from "openclaw/plugin-sdk/bluebubbles";
+import { parseFiniteNumber } from "./runtime-api.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
@@ -189,6 +189,25 @@ function readFirstChatRecord(message: Record<string, unknown>): Record<string, u
   return asRecord(first);
 }
 
+function readParticipantEntries(record: Record<string, unknown> | null): unknown[] | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const participants = record["participants"];
+  if (Array.isArray(participants)) {
+    return participants;
+  }
+  const handles = record["handles"];
+  if (Array.isArray(handles)) {
+    return handles;
+  }
+  const participantHandles = record["participantHandles"];
+  if (Array.isArray(participantHandles)) {
+    return participantHandles;
+  }
+  return undefined;
+}
+
 function extractSenderInfo(message: Record<string, unknown>): {
   senderId: string;
   senderIdExplicit: boolean;
@@ -265,16 +284,11 @@ function extractChatContext(message: Record<string, unknown>): {
     readString(chatFromList, "name") ??
     undefined;
 
-  const chatParticipants = chat ? chat["participants"] : undefined;
-  const messageParticipants = message["participants"];
-  const chatsParticipants = chatFromList ? chatFromList["participants"] : undefined;
-  const participants = Array.isArray(chatParticipants)
-    ? chatParticipants
-    : Array.isArray(messageParticipants)
-      ? messageParticipants
-      : Array.isArray(chatsParticipants)
-        ? chatsParticipants
-        : [];
+  const participants =
+    readParticipantEntries(chat) ??
+    readParticipantEntries(message) ??
+    readParticipantEntries(chatFromList) ??
+    [];
   const participantsCount = participants.length;
   const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
   const explicitIsGroup =
@@ -336,13 +350,14 @@ function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | nul
   return { id: normalizedId, name };
 }
 
-function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
-  if (!Array.isArray(raw) || raw.length === 0) {
+export function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
+  const entries = Array.isArray(raw) ? raw : (readParticipantEntries(asRecord(raw)) ?? []);
+  if (entries.length === 0) {
     return [];
   }
   const seen = new Set<string>();
   const output: BlueBubblesParticipant[] = [];
-  for (const entry of raw) {
+  for (const entry of entries) {
     const normalized = normalizeParticipantEntry(entry);
     if (!normalized?.id) {
       continue;
@@ -582,6 +597,29 @@ export function parseTapbackText(params: {
     return null;
   }
 
+  const parseLeadingReactionAction = (
+    prefix: "reacted" | "removed",
+    defaultAction: "added" | "removed",
+  ) => {
+    if (!lower.startsWith(prefix)) {
+      return null;
+    }
+    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
+    if (!emoji) {
+      return null;
+    }
+    const quotedText = extractQuotedTapbackText(trimmed);
+    if (params.requireQuoted && !quotedText) {
+      return null;
+    }
+    const fallback = trimmed.slice(prefix.length).trim();
+    return {
+      emoji,
+      action: params.actionHint ?? defaultAction,
+      quotedText: quotedText ?? fallback,
+    };
+  };
+
   for (const [pattern, { emoji, action }] of TAPBACK_TEXT_MAP) {
     if (lower.startsWith(pattern)) {
       // Extract quoted text if present (e.g., 'Loved "hello"' -> "hello")
@@ -599,30 +637,14 @@ export function parseTapbackText(params: {
     }
   }
 
-  if (lower.startsWith("reacted")) {
-    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
-    if (!emoji) {
-      return null;
-    }
-    const quotedText = extractQuotedTapbackText(trimmed);
-    if (params.requireQuoted && !quotedText) {
-      return null;
-    }
-    const fallback = trimmed.slice("reacted".length).trim();
-    return { emoji, action: params.actionHint ?? "added", quotedText: quotedText ?? fallback };
+  const reacted = parseLeadingReactionAction("reacted", "added");
+  if (reacted) {
+    return reacted;
   }
 
-  if (lower.startsWith("removed")) {
-    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
-    if (!emoji) {
-      return null;
-    }
-    const quotedText = extractQuotedTapbackText(trimmed);
-    if (params.requireQuoted && !quotedText) {
-      return null;
-    }
-    const fallback = trimmed.slice("removed".length).trim();
-    return { emoji, action: params.actionHint ?? "removed", quotedText: quotedText ?? fallback };
+  const removed = parseLeadingReactionAction("removed", "removed");
+  if (removed) {
+    return removed;
   }
   return null;
 }

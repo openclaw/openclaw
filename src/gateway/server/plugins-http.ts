@@ -1,8 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
+import { WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
@@ -26,16 +27,10 @@ export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-function createPluginRouteRuntimeClient(params: {
-  requiresGatewayAuth: boolean;
-  gatewayAuthSatisfied?: boolean;
-}): GatewayRequestOptions["client"] {
-  // Plugin-authenticated webhooks can still use non-admin subagent helpers,
-  // but they must not inherit admin-only gateway methods by default.
-  const scopes =
-    params.requiresGatewayAuth && params.gatewayAuthSatisfied !== false
-      ? [ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE]
-      : [WRITE_SCOPE];
+function createPluginRouteRuntimeClient(): GatewayRequestOptions["client"] {
+  // Plugin HTTP handlers only need the least-privilege runtime scope.
+  // Gateway route auth controls request admission, not runtime admin elevation.
+  const scopes = [WRITE_SCOPE];
   return {
     connect: {
       minProtocol: PROTOCOL_VERSION,
@@ -63,8 +58,9 @@ export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
-  const { registry, log } = params;
+  const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
+    const registry = resolveActivePluginHttpRouteRegistry(params.registry);
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -85,10 +81,7 @@ export function createGatewayPluginRequestHandler(params: {
       log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
       return false;
     }
-    const runtimeClient = createPluginRouteRuntimeClient({
-      requiresGatewayAuth,
-      gatewayAuthSatisfied: dispatchContext?.gatewayAuthSatisfied,
-    });
+    const runtimeClient = createPluginRouteRuntimeClient();
 
     return await withPluginRuntimeGatewayRequestScope(
       {

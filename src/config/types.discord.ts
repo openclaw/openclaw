@@ -1,4 +1,3 @@
-import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -8,13 +7,21 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+
+export type DiscordPluralKitConfig = {
+  enabled?: boolean;
+  token?: string;
+};
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -54,6 +61,10 @@ export type DiscordGuildChannelConfig = {
   includeThreadStarter?: boolean;
   /** If true, automatically create a thread for each new message in this channel. */
   autoThread?: boolean;
+  /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+  /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
+  autoThreadName?: "message" | "generated";
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -131,7 +142,7 @@ export type DiscordVoiceConfig = {
 export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
-  /** Discord user IDs to receive approval prompts. Required if enabled. */
+  /** Discord user IDs to receive approval prompts. Optional: falls back to owner IDs inferred from allowFrom/defaultTo when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -141,7 +152,7 @@ export type DiscordExecApprovalConfig = {
   cleanupAfterResolve?: boolean;
   /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
    *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by configured approvers; other users receive an ephemeral denial. */
+   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
   target?: "dm" | "channel" | "both";
 };
 
@@ -297,6 +308,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
@@ -364,3 +377,9 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    discord?: DiscordConfig;
+  }
+}

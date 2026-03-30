@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
-import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/suites.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { MsgContext } from "../templating.js";
@@ -16,6 +16,7 @@ import {
 } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
+import { parseSlackDirectives, hasSlackDirectives } from "./slack-directives.js";
 
 describe("normalizeInboundTextNewlines", () => {
   it("normalizes real newlines and preserves literal backslash-n sequences", () => {
@@ -196,6 +197,8 @@ describe("inbound context contract (providers + extensions)", () => {
 
 const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
+const getSlackInteractive = (result: ReturnType<typeof parseSlackDirectives>) =>
+  result.interactive?.blocks ?? [];
 
 describe("hasLineDirectives", () => {
   it("matches expected detection across directive patterns", () => {
@@ -215,6 +218,24 @@ describe("hasLineDirectives", () => {
 
     for (const testCase of cases) {
       expect(hasLineDirectives(testCase.text)).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("hasSlackDirectives", () => {
+  it("matches expected detection across Slack directive patterns", () => {
+    const cases: Array<{ text: string; expected: boolean }> = [
+      { text: "Pick one [[slack_buttons: Approve:approve, Reject:reject]]", expected: true },
+      {
+        text: "[[slack_select: Choose a project | Alpha:alpha, Beta:beta]]",
+        expected: true,
+      },
+      { text: "Just regular text", expected: false },
+      { text: "[[buttons: Menu | Choose | A:a]]", expected: false },
+    ];
+
+    for (const testCase of cases) {
+      expect(hasSlackDirectives(testCase.text)).toBe(testCase.expected);
     }
   });
 });
@@ -575,6 +596,151 @@ describe("parseLineDirectives", () => {
       expect(result.mediaUrl).toBe("https://example.com/image.jpg");
       expect(result.replyToId).toBe("msg123");
       expect(getLineData(result).quickReplies).toEqual(["A", "B"]);
+    });
+  });
+});
+
+describe("parseSlackDirectives", () => {
+  it("builds shared text and button blocks from slack_buttons directives", () => {
+    const result = parseSlackDirectives({
+      text: "Choose an action [[slack_buttons: Approve:approve, Reject:reject]]",
+    });
+
+    expect(result.text).toBe("Choose an action");
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "text",
+        text: "Choose an action",
+      },
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            value: "approve",
+          },
+          {
+            label: "Reject",
+            value: "reject",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("builds shared select blocks from slack_select directives", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Choose a project | Alpha:alpha, Beta:beta]]",
+    });
+
+    expect(result.text).toBeUndefined();
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Choose a project",
+        options: [
+          { label: "Alpha", value: "alpha" },
+          { label: "Beta", value: "beta" },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves existing slack blocks in channelData and appends shared interactive blocks", () => {
+    const result = parseSlackDirectives({
+      text: "Act now [[slack_buttons: Retry:retry]]",
+      channelData: {
+        slack: {
+          blocks: [{ type: "divider" }],
+        },
+      },
+    });
+
+    expect(result.text).toBe("Act now");
+    expect(result.channelData).toEqual({
+      slack: {
+        blocks: [{ type: "divider" }],
+      },
+    });
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "text",
+        text: "Act now",
+      },
+      {
+        type: "buttons",
+        buttons: [{ label: "Retry", value: "retry" }],
+      },
+    ]);
+  });
+
+  it("preserves authored order for mixed Slack directives", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Pick one | Alpha:alpha]] then [[slack_buttons: Retry:retry]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Pick one",
+        options: [{ label: "Alpha", value: "alpha" }],
+      },
+      {
+        type: "text",
+        text: "then",
+      },
+      {
+        type: "buttons",
+        buttons: [{ label: "Retry", value: "retry" }],
+      },
+    ]);
+  });
+
+  it("preserves long Slack directive values in the shared interactive model", () => {
+    const long = "x".repeat(120);
+    const result = parseSlackDirectives({
+      text: `${"y".repeat(3100)} [[slack_select: ${long} | ${long}:${long}]] [[slack_buttons: ${long}:${long}]]`,
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "text",
+        text: "y".repeat(3100),
+      },
+      {
+        type: "select",
+        placeholder: long,
+        options: [{ label: long, value: long }],
+      },
+      {
+        type: "buttons",
+        buttons: [{ label: long, value: long }],
+      },
+    ]);
+  });
+
+  it("keeps existing interactive blocks when compiling additional Slack directives", () => {
+    const result = parseSlackDirectives({
+      text: "Choose [[slack_buttons: Retry:retry]]",
+      interactive: {
+        blocks: [{ type: "text", text: "Existing" }],
+      },
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      { type: "text", text: "Existing" },
+      { type: "text", text: "Choose" },
+      { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
+    ]);
+  });
+
+  it("ignores malformed directive choices when none remain", () => {
+    const result = parseSlackDirectives({
+      text: "Choose [[slack_buttons: : , : ]]",
+    });
+
+    expect(result).toEqual({
+      text: "Choose [[slack_buttons: : , : ]]",
     });
   });
 });
@@ -1288,7 +1454,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
   });
 
-  it("processes a message enqueued after the drain empties and deletes the queue", async () => {
+  it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
     const key = `test-idle-window-race-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
@@ -1319,10 +1485,16 @@ describe("followup queue drain restart after idle window", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     // Simulate the race: a new message arrives AFTER the drain finished and
-    // deleted the queue, but WITHOUT calling scheduleFollowupDrain again.
-    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    // deleted the queue. The next enqueue refreshes the callback and should
+    // kick a new idle drain automatically.
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      runFollowup,
+    );
 
-    // kickFollowupDrainIfIdle should have restarted the drain automatically.
     await secondProcessed.promise;
 
     expect(calls).toHaveLength(2);
@@ -1330,7 +1502,80 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[1]?.prompt).toBe("after-idle");
   });
 
-  it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
+  it("restarts an idle drain with the newest followup callback", async () => {
+    const key = `test-idle-window-fresh-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+    const firstProcessed = createDeferred<void>();
+    const secondProcessed = createDeferred<void>();
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+      if (staleCalls.length === 1) {
+        firstProcessed.resolve();
+      }
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+      secondProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, staleFollowup);
+    await firstProcessed.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      freshFollowup,
+    );
+    await secondProcessed.promise;
+
+    expect(staleCalls).toHaveLength(1);
+    expect(staleCalls[0]?.prompt).toBe("before-idle");
+    expect(freshCalls).toHaveLength(1);
+    expect(freshCalls[0]?.prompt).toBe("after-idle");
+  });
+
+  it("does not auto-start a drain when a busy run only refreshes the callback", async () => {
+    const key = `test-busy-run-refreshes-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "queued-while-busy" }),
+      settings,
+      "message-id",
+      freshFollowup,
+      false,
+    );
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(freshCalls).toHaveLength(0);
+
+    scheduleFollowupDrain(key, staleFollowup);
+    await vi.waitFor(() => {
+      expect(freshCalls).toHaveLength(1);
+    });
+
+    expect(staleCalls).toHaveLength(0);
+    expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
+  });
+
+  it("restarts an idle drain across distinct enqueue and drain module instances when enqueue refreshes the callback", async () => {
     const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
       import.meta.url,
       "./queue/drain.js?scope=restart-a",
@@ -1361,7 +1606,13 @@ describe("followup queue drain restart after idle window", () => {
 
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+      enqueueB.enqueueFollowupRun(
+        key,
+        createRun({ prompt: "after-idle" }),
+        settings,
+        "message-id",
+        runFollowup,
+      );
 
       await vi.waitFor(
         () => {
@@ -1446,6 +1697,33 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-clear");
   });
+
+  it("clears the remembered callback after a queue drains fully", async () => {
+    const key = `test-auto-clear-callback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstProcessed = createDeferred<void>();
+
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      firstProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstProcessed.promise;
+
+    // Let the idle drain finish and clear its callback.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Enqueueing after a clean drain should not auto-start anything until a
+    // fresh finalize path supplies a new callback.
+    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe("before-idle");
+  });
 });
 
 const emptyCfg = {} as OpenClawConfig;
@@ -1483,6 +1761,38 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0][0].text).toBe("PFX hello");
     expect(onHeartbeatStrip).toHaveBeenCalledTimes(2);
+  });
+
+  it("compiles Slack directives in dispatcher flows when enabled", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      enableSlackInteractiveReplies: true,
+    });
+
+    expect(
+      dispatcher.sendFinalReply({
+        text: "Choose [[slack_buttons: Retry:retry]]",
+      }),
+    ).toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
+      text: "Choose",
+      interactive: {
+        blocks: [
+          {
+            type: "text",
+            text: "Choose",
+          },
+          {
+            type: "buttons",
+            buttons: [{ label: "Retry", value: "retry" }],
+          },
+        ],
+      },
+    });
   });
 
   it("avoids double-prefixing and keeps media when heartbeat is the only text", async () => {

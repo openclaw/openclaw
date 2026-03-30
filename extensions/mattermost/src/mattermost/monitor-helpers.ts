@@ -1,9 +1,12 @@
 import {
+  createDedupeCache,
   formatInboundFromLabel as formatInboundFromLabelShared,
+  rawDataToString,
   resolveThreadSessionKeys as resolveThreadSessionKeysShared,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/mattermost";
-export { createDedupeCache, rawDataToString } from "openclaw/plugin-sdk/mattermost";
+} from "./runtime-api.js";
+
+export { createDedupeCache, rawDataToString };
 
 export type ResponsePrefixContext = {
   model?: string;
@@ -41,12 +44,12 @@ function normalizeAgentId(value: string | undefined | null): string {
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
+function isAgentEntry(entry: unknown): entry is AgentEntry {
+  return Boolean(entry && typeof entry === "object");
+}
+
 function listAgents(cfg: OpenClawConfig): AgentEntry[] {
-  const list = cfg.agents?.list;
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
+  return Array.isArray(cfg.agents?.list) ? cfg.agents.list.filter(isAgentEntry) : [];
 }
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {

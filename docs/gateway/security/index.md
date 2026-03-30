@@ -5,12 +5,15 @@ read_when:
 title: "Security"
 ---
 
-# Security 🔒
+# Security
 
-> [!WARNING]
-> **Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
-> OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
-> If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+<Warning>
+**Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
+OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
+If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+</Warning>
+
+**On this page:** [Trust model](#scope-first-personal-assistant-security-model) | [Quick audit](#quick-check-openclaw-security-audit) | [Hardened baseline](#hardened-baseline-in-60-seconds) | [DM access model](#dm-access-model-pairing--allowlist--open--disabled) | [Configuration hardening](#configuration-hardening-examples) | [Incident response](#incident-response)
 
 ## Scope first: personal assistant security model
 
@@ -25,7 +28,7 @@ This page explains hardening **within that model**. It does not claim hostile mu
 
 ## Quick check: `openclaw security audit`
 
-See also: [Formal Verification (Security Models)](/security/formal-verification/)
+See also: [Formal Verification (Security Models)](/security/formal-verification)
 
 Run this regularly (especially after changing config or exposing network surfaces):
 
@@ -36,7 +39,7 @@ openclaw security audit --fix
 openclaw security audit --json
 ```
 
-It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions).
+It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions, permissive exec approvals, and open-channel tool exposure).
 
 OpenClaw is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
 
@@ -46,34 +49,17 @@ OpenClaw is both a product and an experiment: you’re wiring frontier-model beh
 
 Start with the smallest access that still works, then widen it as you gain confidence.
 
-## Deployment assumption (important)
+### Deployment and host trust
 
 OpenClaw assumes the host and config boundary are trusted:
 
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
-- OpenClaw can run multiple gateway instances on one machine, but recommended operations favor clean trust-boundary separation.
 - Recommended default: one user per machine/host (or VPS), one gateway for that user, and one or more agents in that gateway.
-- If multiple users want OpenClaw, use one VPS/host per user.
-
-### Practical consequence (operator trust boundary)
-
-Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
-
-- Operators with read/control-plane access can inspect gateway session metadata/history by design.
+- Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
 - Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
-- Example: expecting per-operator isolation for methods like `sessions.list`, `sessions.preview`, or `chat.history` is outside this model.
-- If you need adversarial-user isolation, run separate gateways per trust boundary.
-- Multiple gateways on one machine are technically possible, but not the recommended baseline for multi-user isolation.
-
-## Personal assistant model (not a multi-tenant bus)
-
-OpenClaw is designed as a personal assistant security model: one trusted operator boundary, potentially many agents.
-
-- If several people can message one tool-enabled agent, each of them can steer that same permission set.
-- Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
-- If users may be adversarial to each other, run separate gateways (or separate OS users/hosts) per trust boundary.
+- If several people can message one tool-enabled agent, each of them can steer that same permission set. Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
 
 ### Shared Slack workspace: real risk
 
@@ -181,16 +167,17 @@ If more than one person can DM your bot:
 - Never combine shared DMs with broad tool access.
 - This hardens cooperative/shared inboxes, but is not designed as hostile co-tenant isolation when users share host/config write access.
 
-### What the audit checks (high level)
+## What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
+- **Exec approval drift** (`security=full`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`): are host-exec guardrails still doing what you think they are?
 - **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens).
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
 - **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns because matching is exact command-name only (for example `system.run`) and does not inspect shell text; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
-- **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
+- **Runtime expectation drift** (for example assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or explicitly setting `tools.exec.host="sandbox"` while sandbox mode is off).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
@@ -210,7 +197,7 @@ Use this when auditing access or deciding what to back up:
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
-## Security Audit Checklist
+## Security audit checklist
 
 When the audit prints findings, treat this as a priority order:
 
@@ -225,40 +212,48 @@ When the audit prints findings, treat this as a priority order:
 
 High-signal `checkId` values you will most likely see in real deployments (not exhaustive):
 
-| `checkId`                                          | Severity      | Why it matters                                                                       | Primary fix key/path                                                                              | Auto-fix |
-| -------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | -------- |
-| `fs.state_dir.perms_world_writable`                | critical      | Other users/processes can modify full OpenClaw state                                 | filesystem perms on `~/.openclaw`                                                                 | yes      |
-| `fs.config.perms_writable`                         | critical      | Others can change auth/tool policy/config                                            | filesystem perms on `~/.openclaw/openclaw.json`                                                   | yes      |
-| `fs.config.perms_world_readable`                   | critical      | Config can expose tokens/settings                                                    | filesystem perms on config file                                                                   | yes      |
-| `gateway.bind_no_auth`                             | critical      | Remote bind without shared secret                                                    | `gateway.bind`, `gateway.auth.*`                                                                  | no       |
-| `gateway.loopback_no_auth`                         | critical      | Reverse-proxied loopback may become unauthenticated                                  | `gateway.auth.*`, proxy setup                                                                     | no       |
-| `gateway.http.no_auth`                             | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                                  | `gateway.auth.mode`, `gateway.http.endpoints.*`                                                   | no       |
-| `gateway.tools_invoke_http.dangerous_allow`        | warn/critical | Re-enables dangerous tools over HTTP API                                             | `gateway.tools.allow`                                                                             | no       |
-| `gateway.nodes.allow_commands_dangerous`           | warn/critical | Enables high-impact node commands (camera/screen/contacts/calendar/SMS)              | `gateway.nodes.allowCommands`                                                                     | no       |
-| `gateway.tailscale_funnel`                         | critical      | Public internet exposure                                                             | `gateway.tailscale.mode`                                                                          | no       |
-| `gateway.control_ui.allowed_origins_required`      | critical      | Non-loopback Control UI without explicit browser-origin allowlist                    | `gateway.controlUi.allowedOrigins`                                                                | no       |
-| `gateway.control_ui.host_header_origin_fallback`   | warn/critical | Enables Host-header origin fallback (DNS rebinding hardening downgrade)              | `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`                                      | no       |
-| `gateway.control_ui.insecure_auth`                 | warn          | Insecure-auth compatibility toggle enabled                                           | `gateway.controlUi.allowInsecureAuth`                                                             | no       |
-| `gateway.control_ui.device_auth_disabled`          | critical      | Disables device identity check                                                       | `gateway.controlUi.dangerouslyDisableDeviceAuth`                                                  | no       |
-| `gateway.real_ip_fallback_enabled`                 | warn/critical | Trusting `X-Real-IP` fallback can enable source-IP spoofing via proxy misconfig      | `gateway.allowRealIpFallback`, `gateway.trustedProxies`                                           | no       |
-| `discovery.mdns_full_mode`                         | warn/critical | mDNS full mode advertises `cliPath`/`sshPort` metadata on local network              | `discovery.mdns.mode`, `gateway.bind`                                                             | no       |
-| `config.insecure_or_dangerous_flags`               | warn          | Any insecure/dangerous debug flags enabled                                           | multiple keys (see finding detail)                                                                | no       |
-| `hooks.token_too_short`                            | warn          | Easier brute force on hook ingress                                                   | `hooks.token`                                                                                     | no       |
-| `hooks.request_session_key_enabled`                | warn/critical | External caller can choose sessionKey                                                | `hooks.allowRequestSessionKey`                                                                    | no       |
-| `hooks.request_session_key_prefixes_missing`       | warn/critical | No bound on external session key shapes                                              | `hooks.allowedSessionKeyPrefixes`                                                                 | no       |
-| `logging.redact_off`                               | warn          | Sensitive values leak to logs/status                                                 | `logging.redactSensitive`                                                                         | yes      |
-| `sandbox.docker_config_mode_off`                   | warn          | Sandbox Docker config present but inactive                                           | `agents.*.sandbox.mode`                                                                           | no       |
-| `sandbox.dangerous_network_mode`                   | critical      | Sandbox Docker network uses `host` or `container:*` namespace-join mode              | `agents.*.sandbox.docker.network`                                                                 | no       |
-| `tools.exec.host_sandbox_no_sandbox_defaults`      | warn          | `exec host=sandbox` resolves to host exec when sandbox is off                        | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                 | no       |
-| `tools.exec.host_sandbox_no_sandbox_agents`        | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off              | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                     | no       |
-| `tools.exec.safe_bins_interpreter_unprofiled`      | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk   | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                 | no       |
-| `skills.workspace.symlink_escape`                  | warn          | Workspace `skills/**/SKILL.md` resolves outside workspace root (symlink-chain drift) | workspace `skills/**` filesystem state                                                            | no       |
-| `security.exposure.open_groups_with_elevated`      | critical      | Open groups + elevated tools create high-impact prompt-injection paths               | `channels.*.groupPolicy`, `tools.elevated.*`                                                      | no       |
-| `security.exposure.open_groups_with_runtime_or_fs` | critical/warn | Open groups can reach command/file tools without sandbox/workspace guards            | `channels.*.groupPolicy`, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode` | no       |
-| `security.trust_model.multi_user_heuristic`        | warn          | Config looks multi-user while gateway trust model is personal-assistant              | split trust boundaries, or shared-user hardening (`sandbox.mode`, tool deny/workspace scoping)    | no       |
-| `tools.profile_minimal_overridden`                 | warn          | Agent overrides bypass global minimal profile                                        | `agents.list[].tools.profile`                                                                     | no       |
-| `plugins.tools_reachable_permissive_policy`        | warn          | Extension tools reachable in permissive contexts                                     | `tools.profile` + tool allow/deny                                                                 | no       |
-| `models.small_params`                              | critical/info | Small models + unsafe tool surfaces raise injection risk                             | model choice + sandbox/tool policy                                                                | no       |
+| `checkId`                                                     | Severity      | Why it matters                                                                       | Primary fix key/path                                                                                 | Auto-fix |
+| ------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | -------- |
+| `fs.state_dir.perms_world_writable`                           | critical      | Other users/processes can modify full OpenClaw state                                 | filesystem perms on `~/.openclaw`                                                                    | yes      |
+| `fs.config.perms_writable`                                    | critical      | Others can change auth/tool policy/config                                            | filesystem perms on `~/.openclaw/openclaw.json`                                                      | yes      |
+| `fs.config.perms_world_readable`                              | critical      | Config can expose tokens/settings                                                    | filesystem perms on config file                                                                      | yes      |
+| `gateway.bind_no_auth`                                        | critical      | Remote bind without shared secret                                                    | `gateway.bind`, `gateway.auth.*`                                                                     | no       |
+| `gateway.loopback_no_auth`                                    | critical      | Reverse-proxied loopback may become unauthenticated                                  | `gateway.auth.*`, proxy setup                                                                        | no       |
+| `gateway.http.no_auth`                                        | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                                  | `gateway.auth.mode`, `gateway.http.endpoints.*`                                                      | no       |
+| `gateway.tools_invoke_http.dangerous_allow`                   | warn/critical | Re-enables dangerous tools over HTTP API                                             | `gateway.tools.allow`                                                                                | no       |
+| `gateway.nodes.allow_commands_dangerous`                      | warn/critical | Enables high-impact node commands (camera/screen/contacts/calendar/SMS)              | `gateway.nodes.allowCommands`                                                                        | no       |
+| `gateway.tailscale_funnel`                                    | critical      | Public internet exposure                                                             | `gateway.tailscale.mode`                                                                             | no       |
+| `gateway.control_ui.allowed_origins_required`                 | critical      | Non-loopback Control UI without explicit browser-origin allowlist                    | `gateway.controlUi.allowedOrigins`                                                                   | no       |
+| `gateway.control_ui.host_header_origin_fallback`              | warn/critical | Enables Host-header origin fallback (DNS rebinding hardening downgrade)              | `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`                                         | no       |
+| `gateway.control_ui.insecure_auth`                            | warn          | Insecure-auth compatibility toggle enabled                                           | `gateway.controlUi.allowInsecureAuth`                                                                | no       |
+| `gateway.control_ui.device_auth_disabled`                     | critical      | Disables device identity check                                                       | `gateway.controlUi.dangerouslyDisableDeviceAuth`                                                     | no       |
+| `gateway.real_ip_fallback_enabled`                            | warn/critical | Trusting `X-Real-IP` fallback can enable source-IP spoofing via proxy misconfig      | `gateway.allowRealIpFallback`, `gateway.trustedProxies`                                              | no       |
+| `discovery.mdns_full_mode`                                    | warn/critical | mDNS full mode advertises `cliPath`/`sshPort` metadata on local network              | `discovery.mdns.mode`, `gateway.bind`                                                                | no       |
+| `config.insecure_or_dangerous_flags`                          | warn          | Any insecure/dangerous debug flags enabled                                           | multiple keys (see finding detail)                                                                   | no       |
+| `hooks.token_reuse_gateway_token`                             | critical      | Hook ingress token also unlocks Gateway auth                                         | `hooks.token`, `gateway.auth.token`                                                                  | no       |
+| `hooks.token_too_short`                                       | warn          | Easier brute force on hook ingress                                                   | `hooks.token`                                                                                        | no       |
+| `hooks.default_session_key_unset`                             | warn          | Hook agent runs fan out into generated per-request sessions                          | `hooks.defaultSessionKey`                                                                            | no       |
+| `hooks.allowed_agent_ids_unrestricted`                        | warn/critical | Authenticated hook callers may route to any configured agent                         | `hooks.allowedAgentIds`                                                                              | no       |
+| `hooks.request_session_key_enabled`                           | warn/critical | External caller can choose sessionKey                                                | `hooks.allowRequestSessionKey`                                                                       | no       |
+| `hooks.request_session_key_prefixes_missing`                  | warn/critical | No bound on external session key shapes                                              | `hooks.allowedSessionKeyPrefixes`                                                                    | no       |
+| `logging.redact_off`                                          | warn          | Sensitive values leak to logs/status                                                 | `logging.redactSensitive`                                                                            | yes      |
+| `sandbox.docker_config_mode_off`                              | warn          | Sandbox Docker config present but inactive                                           | `agents.*.sandbox.mode`                                                                              | no       |
+| `sandbox.dangerous_network_mode`                              | critical      | Sandbox Docker network uses `host` or `container:*` namespace-join mode              | `agents.*.sandbox.docker.network`                                                                    | no       |
+| `tools.exec.host_sandbox_no_sandbox_defaults`                 | warn          | `exec host=sandbox` fails closed when sandbox is off                                 | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                    | no       |
+| `tools.exec.host_sandbox_no_sandbox_agents`                   | warn          | Per-agent `exec host=sandbox` fails closed when sandbox is off                       | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                        | no       |
+| `tools.exec.security_full_configured`                         | warn/critical | Host exec is running with `security="full"`                                          | `tools.exec.security`, `agents.list[].tools.exec.security`                                           | no       |
+| `tools.exec.auto_allow_skills_enabled`                        | warn          | Exec approvals trust skill bins implicitly                                           | `~/.openclaw/exec-approvals.json`                                                                    | no       |
+| `tools.exec.allowlist_interpreter_without_strict_inline_eval` | warn          | Interpreter allowlists permit inline eval without forced reapproval                  | `tools.exec.strictInlineEval`, `agents.list[].tools.exec.strictInlineEval`, exec approvals allowlist | no       |
+| `tools.exec.safe_bins_interpreter_unprofiled`                 | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk   | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                    | no       |
+| `tools.exec.safe_bins_broad_behavior`                         | warn          | Broad-behavior tools in `safeBins` weaken the low-risk stdin-filter trust model      | `tools.exec.safeBins`, `agents.list[].tools.exec.safeBins`                                           | no       |
+| `skills.workspace.symlink_escape`                             | warn          | Workspace `skills/**/SKILL.md` resolves outside workspace root (symlink-chain drift) | workspace `skills/**` filesystem state                                                               | no       |
+| `security.exposure.open_channels_with_exec`                   | warn/critical | Shared/public rooms can reach exec-enabled agents                                    | `channels.*.dmPolicy`, `channels.*.groupPolicy`, `tools.exec.*`, `agents.list[].tools.exec.*`        | no       |
+| `security.exposure.open_groups_with_elevated`                 | critical      | Open groups + elevated tools create high-impact prompt-injection paths               | `channels.*.groupPolicy`, `tools.elevated.*`                                                         | no       |
+| `security.exposure.open_groups_with_runtime_or_fs`            | critical/warn | Open groups can reach command/file tools without sandbox/workspace guards            | `channels.*.groupPolicy`, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode`    | no       |
+| `security.trust_model.multi_user_heuristic`                   | warn          | Config looks multi-user while gateway trust model is personal-assistant              | split trust boundaries, or shared-user hardening (`sandbox.mode`, tool deny/workspace scoping)       | no       |
+| `tools.profile_minimal_overridden`                            | warn          | Agent overrides bypass global minimal profile                                        | `agents.list[].tools.profile`                                                                        | no       |
+| `plugins.tools_reachable_permissive_policy`                   | warn          | Extension tools reachable in permissive contexts                                     | `tools.profile` + tool allow/deny                                                                    | no       |
+| `models.small_params`                                         | critical/info | Small models + unsafe tool surfaces raise injection risk                             | model choice + sandbox/tool policy                                                                   | no       |
 
 ## Control UI over HTTP
 
@@ -304,6 +299,8 @@ schema:
 - `channels.googlechat.dangerouslyAllowNameMatching`
 - `channels.googlechat.accounts.<accountId>.dangerouslyAllowNameMatching`
 - `channels.msteams.dangerouslyAllowNameMatching`
+- `channels.synology-chat.dangerouslyAllowNameMatching` (extension channel)
+- `channels.synology-chat.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
 - `channels.zalouser.dangerouslyAllowNameMatching` (extension channel)
 - `channels.irc.dangerouslyAllowNameMatching` (extension channel)
 - `channels.irc.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
@@ -355,6 +352,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 - If the gateway itself terminates HTTPS, you can set `gateway.http.securityHeaders.strictTransportSecurity` to emit the HSTS header from OpenClaw responses.
 - Detailed deployment guidance is in [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
 - For non-loopback Control UI deployments, `gateway.controlUi.allowedOrigins` is required by default.
+- `gateway.controlUi.allowedOrigins: ["*"]` is an explicit allow-all browser-origin policy, not a hardened default. Avoid it outside tightly controlled local testing.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
 
@@ -446,8 +444,8 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Prefer explicit `plugins.allow` allowlists.
 - Review plugin config before enabling.
 - Restart the Gateway after plugin changes.
-- If you install plugins from npm (`openclaw plugins install <npm-spec>`), treat it like running untrusted code:
-  - The install path is `~/.openclaw/extensions/<pluginId>/` (or `$OPENCLAW_STATE_DIR/extensions/<pluginId>/`).
+- If you install plugins (`openclaw plugins install <package>`), treat it like running untrusted code:
+  - The install path is the per-plugin directory under the active plugin install root.
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
 
@@ -492,10 +490,11 @@ Treat the snippet above as **secure DM mode**:
 - Default: `session.dmScope: "main"` (all DMs share one session for continuity).
 - Local CLI onboarding default: writes `session.dmScope: "per-channel-peer"` when unset (keeps existing explicit values).
 - Secure DM mode: `session.dmScope: "per-channel-peer"` (each channel+sender pair gets an isolated DM context).
+- Cross-channel peer isolation: `session.dmScope: "per-peer"` (each sender gets one session across all channels of the same type).
 
 If you run multiple accounts on the same channel, use `per-account-channel-peer` instead. If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
 
-## Allowlists (DM + groups) — terminology
+## Allowlists (DM + groups) - terminology
 
 OpenClaw has two separate “who can trigger me?” layers:
 
@@ -522,8 +521,9 @@ Even with strong system prompts, **prompt injection is not solved**. System prom
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
-- Note: sandboxing is opt-in. If sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox, and host exec does not require approvals unless you set host=gateway and configure exec approvals.
+- Note: sandboxing is opt-in. If sandbox mode is off, implicit `host=auto` resolves to the gateway host. Explicit `host=sandbox` still fails closed because no sandbox runtime is available. Set `host=gateway` if you want that behavior to be explicit in config.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
+- If you allowlist interpreters (`python`, `node`, `ruby`, `perl`, `php`, `lua`, `osascript`), enable `tools.exec.strictInlineEval` so inline eval forms still need explicit approval.
 - **Model choice matters:** older/smaller/legacy models are significantly less robust against prompt injection and tool misuse. For tool-enabled agents, use the strongest latest-generation, instruction-hardened model available.
 
 Red flags to treat as untrusted:
@@ -568,6 +568,8 @@ tool calls. Reduce the blast radius by:
 - For OpenResponses URL inputs (`input_file` / `input_image`), set tight
   `gateway.http.endpoints.responses.files.urlAllowlist` and
   `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
+  Empty allowlists are treated as unset; use `files.allowUrl: false` / `images.allowUrl: false`
+  if you want to disable URL fetching entirely.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -586,6 +588,8 @@ Recommendations:
 - If you must use a smaller model, **reduce blast radius** (read-only tools, strong sandboxing, minimal filesystem access, strict allowlists).
 - When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
 - For chat-only personal assistants with trusted input and no tools, smaller models are usually fine.
+
+<a id="reasoning-verbose-output-in-groups"></a>
 
 ## Reasoning & verbose output in groups
 
@@ -738,7 +742,7 @@ In minimal mode, the Gateway still broadcasts enough for device discovery (`role
 Gateway auth is **required by default**. If no token/password is configured,
 the Gateway refuses WebSocket connections (fail‑closed).
 
-The onboarding wizard generates a token by default (even for loopback) so
+Onboarding generates a token by default (even for loopback) so
 local clients must authenticate.
 
 Set a token so **all** WS clients must authenticate:
@@ -834,7 +838,7 @@ Avoid:
 - Exposing relay/control ports over LAN or public Internet.
 - Tailscale Funnel for browser control endpoints (public exposure).
 
-### 0.7) Secrets on disk (what’s sensitive)
+### 0.7) Secrets on disk (sensitive data)
 
 Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain secrets or private data:
 
@@ -844,7 +848,7 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
-- `extensions/**`: installed plugins (plus their `node_modules/`).
+- bundled plugin packages: installed plugins (plus their `node_modules/`).
 - `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
 
 Hardening tips:
@@ -901,21 +905,19 @@ Details: [Logging](/gateway/logging)
 
 In group chats, only respond when explicitly mentioned.
 
-### 3. Separate Numbers
+### 3) Separate numbers (WhatsApp, Signal, Telegram)
 
-Consider running your AI on a separate phone number from your personal one:
+For phone-number-based channels, consider running your AI on a separate phone number from your personal one:
 
 - Personal number: Your conversations stay private
 - Bot number: AI handles these, with appropriate boundaries
 
-### 4. Read-Only Mode (Today, via sandbox + tools)
+### 4) Read-only mode (via sandbox + tools)
 
-You can already build a read-only profile by combining:
+You can build a read-only profile by combining:
 
 - `agents.defaults.sandbox.workspaceAccess: "ro"` (or `"none"` for no workspace access)
 - tool allow/deny lists that block `write`, `edit`, `apply_patch`, `exec`, `process`, etc.
-
-We may add a single `readOnlyMode` flag later to simplify this configuration.
 
 Additional hardening options:
 
@@ -990,10 +992,9 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
-- Keep the Gateway and node hosts tailnet-only; avoid exposing relay/control ports to LAN or public Internet.
-- The Chrome extension relay’s CDP endpoint is auth-gated; only OpenClaw clients can connect.
+- Keep the Gateway and node hosts tailnet-only; avoid exposing browser control ports to LAN or public Internet.
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
-- Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
+- Chrome MCP existing-session mode is **not** “safer”; it can act as you in whatever that host Chrome profile can reach.
 
 ### Browser SSRF policy (trusted-network default)
 

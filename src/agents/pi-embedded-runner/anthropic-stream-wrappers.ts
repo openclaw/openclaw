@@ -1,12 +1,15 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFastModeParam } from "../fast-mode.js";
 import {
+  type ProviderCapabilityLookupOptions,
   requiresOpenAiCompatibleAnthropicToolPayload,
   usesOpenAiFunctionAnthropicToolSchema,
   usesOpenAiStringModeAnthropicToolChoice,
 } from "../provider-capabilities.js";
 import { log } from "./logger.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
@@ -22,6 +25,7 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
 type AnthropicServiceTier = "auto" | "standard_only";
 
 type CacheRetention = "none" | "short" | "long";
+type AnthropicToolPayloadResolverOptions = ProviderCapabilityLookupOptions;
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
@@ -74,65 +78,79 @@ function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier
   return enabled ? "auto" : "standard_only";
 }
 
-function requiresAnthropicToolPayloadCompatibilityForModel(model: {
-  api?: unknown;
-  provider?: unknown;
-  compat?: unknown;
-}): boolean {
+function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): boolean {
+  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
+    return false;
+  }
+
+  return (
+    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
+      .requiresOpenAiAnthropicToolPayload === true
+  );
+}
+
+function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "standard_only") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function requiresAnthropicToolPayloadCompatibilityForModel(
+  model: {
+    api?: unknown;
+    provider?: unknown;
+    compat?: unknown;
+  },
+  options?: AnthropicToolPayloadResolverOptions,
+): boolean {
   if (model.api !== "anthropic-messages") {
     return false;
   }
 
   if (
     typeof model.provider === "string" &&
-    requiresOpenAiCompatibleAnthropicToolPayload(model.provider)
+    requiresOpenAiCompatibleAnthropicToolPayload(model.provider, options)
   ) {
     return true;
   }
-
-  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
-    return false;
-  }
-
-  return (
-    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
-      .requiresOpenAiAnthropicToolPayload === true
-  );
+  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
 
-function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
-  provider?: unknown;
-  compat?: unknown;
-}): boolean {
-  if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
-    return true;
-  }
-  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
-    return false;
-  }
-  return (
-    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
-      .requiresOpenAiAnthropicToolPayload === true
-  );
-}
-
-function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
-  provider?: unknown;
-  compat?: unknown;
-}): boolean {
+function usesOpenAiFunctionAnthropicToolSchemaForModel(
+  model: {
+    provider?: unknown;
+    compat?: unknown;
+  },
+  options?: AnthropicToolPayloadResolverOptions,
+): boolean {
   if (
     typeof model.provider === "string" &&
-    usesOpenAiStringModeAnthropicToolChoice(model.provider)
+    usesOpenAiFunctionAnthropicToolSchema(model.provider, options)
   ) {
     return true;
   }
-  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
-    return false;
+  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
+}
+
+function usesOpenAiStringModeAnthropicToolChoiceForModel(
+  model: {
+    provider?: unknown;
+    compat?: unknown;
+  },
+  options?: AnthropicToolPayloadResolverOptions,
+): boolean {
+  if (
+    typeof model.provider === "string" &&
+    usesOpenAiStringModeAnthropicToolChoice(model.provider, options)
+  ) {
+    return true;
   }
-  return (
-    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
-      .requiresOpenAiAnthropicToolPayload === true
-  );
+  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
 
 function normalizeOpenAiFunctionAnthropicToolDefinition(
@@ -292,28 +310,47 @@ export function createAnthropicBetaHeadersWrapper(
 
 export function createAnthropicToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
+  resolverOptions?: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
+  return (model, context, streamOptions) => {
+    const originalOnPayload = streamOptions?.onPayload;
     return underlying(model, context, {
-      ...options,
+      ...streamOptions,
       onPayload: (payload) => {
         if (
           payload &&
           typeof payload === "object" &&
-          requiresAnthropicToolPayloadCompatibilityForModel(model)
+          requiresAnthropicToolPayloadCompatibilityForModel(model, {
+            config: resolverOptions?.config,
+            workspaceDir: resolverOptions?.workspaceDir,
+            env: resolverOptions?.env,
+          })
         ) {
           const payloadObj = payload as Record<string, unknown>;
           if (
             Array.isArray(payloadObj.tools) &&
-            usesOpenAiFunctionAnthropicToolSchemaForModel(model)
+            usesOpenAiFunctionAnthropicToolSchemaForModel(model, {
+              config: resolverOptions?.config,
+              workspaceDir: resolverOptions?.workspaceDir,
+              env: resolverOptions?.env,
+            })
           ) {
             payloadObj.tools = payloadObj.tools
               .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
               .filter((tool): tool is Record<string, unknown> => !!tool);
           }
-          if (usesOpenAiStringModeAnthropicToolChoiceForModel(model)) {
+          if (
+            usesOpenAiStringModeAnthropicToolChoiceForModel(model, {
+              config: resolverOptions?.config,
+              workspaceDir: resolverOptions?.workspaceDir,
+              env: resolverOptions?.env,
+            })
+          ) {
             payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(
               payloadObj.tool_choice,
             );
@@ -335,24 +372,37 @@ export function createAnthropicFastModeWrapper(
     if (
       model.api !== "anthropic-messages" ||
       model.provider !== "anthropic" ||
-      !isAnthropicPublicApiBaseUrl(model.baseUrl) ||
-      isAnthropicOAuthApiKey(options?.apiKey)
+      !isAnthropicPublicApiBaseUrl(model.baseUrl)
     ) {
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (payloadObj.service_tier === undefined) {
-            payloadObj.service_tier = serviceTier;
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.service_tier === undefined) {
+        payloadObj.service_tier = serviceTier;
+      }
+    });
+  };
+}
+
+export function createAnthropicServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serviceTier: AnthropicServiceTier,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "anthropic-messages" ||
+      model.provider !== "anthropic" ||
+      !isAnthropicPublicApiBaseUrl(model.baseUrl)
+    ) {
+      return underlying(model, context, options);
+    }
+
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.service_tier === undefined) {
+        payloadObj.service_tier = serviceTier;
+      }
     });
   };
 }
@@ -363,16 +413,14 @@ export function resolveAnthropicFastMode(
   return resolveFastModeParam(extraParams);
 }
 
-export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      cacheRetention: "none",
-    });
-}
-
-export function isAnthropicBedrockModel(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
-  return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
+export function resolveAnthropicServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+): AnthropicServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  const normalized = normalizeAnthropicServiceTier(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid Anthropic service tier param: ${rawSummary}`);
+  }
+  return normalized;
 }

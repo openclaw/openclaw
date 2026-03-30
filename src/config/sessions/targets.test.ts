@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config.js";
+import { resolveStorePath } from "./paths.js";
 import {
   resolveAllAgentSessionStoreTargets,
   resolveAllAgentSessionStoreTargetsSync,
@@ -40,6 +41,14 @@ function createCustomRootCfg(customRoot: string, defaultAgentId = "ops"): OpenCl
   };
 }
 
+async function resolveTargetsForCustomRoot(home: string, agentIds: string[]) {
+  const customRoot = path.join(home, "custom-state");
+  const storePaths = await createAgentSessionStores(customRoot, agentIds);
+  const cfg = createCustomRootCfg(customRoot);
+  const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+  return { storePaths, targets };
+}
+
 function expectTargetsToContainStores(
   targets: Array<{ agentId: string; storePath: string }>,
   stores: Record<string, string>,
@@ -68,32 +77,30 @@ const discoveryResolvers = [
 ] as const;
 
 describe("resolveSessionStoreTargets", () => {
-  it("resolves all configured agent stores", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
-      },
-      agents: {
-        list: [{ id: "main", default: true }, { id: "work" }],
-      },
-    };
+  it("resolves all configured agent stores", async () => {
+    await withTempHome(async () => {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+        },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      };
 
-    const targets = resolveSessionStoreTargets(cfg, { allAgents: true });
-
-    expect(targets).toEqual([
-      {
-        agentId: "main",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/main/sessions/sessions.json"),
-        ),
-      },
-      {
-        agentId: "work",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/work/sessions/sessions.json"),
-        ),
-      },
-    ]);
+      const env = { ...process.env };
+      const targets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env });
+      expect(targets).toEqual([
+        {
+          agentId: "main",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "main", env }),
+        },
+        {
+          agentId: "work",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "work", env }),
+        },
+      ]);
+    });
   });
 
   it("dedupes shared store paths for --all-agents", () => {
@@ -152,11 +159,7 @@ describe("resolveAllAgentSessionStoreTargets", () => {
 
   it("discovers retired agent stores under a configured custom session root", async () => {
     await withTempHome(async (home) => {
-      const customRoot = path.join(home, "custom-state");
-      const storePaths = await createAgentSessionStores(customRoot, ["ops", "retired"]);
-      const cfg = createCustomRootCfg(customRoot);
-
-      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+      const { storePaths, targets } = await resolveTargetsForCustomRoot(home, ["ops", "retired"]);
 
       expectTargetsToContainStores(targets, storePaths);
       expect(targets.filter((target) => target.storePath === storePaths.ops)).toHaveLength(1);
@@ -165,11 +168,10 @@ describe("resolveAllAgentSessionStoreTargets", () => {
 
   it("keeps the actual on-disk store path for discovered retired agents", async () => {
     await withTempHome(async (home) => {
-      const customRoot = path.join(home, "custom-state");
-      const storePaths = await createAgentSessionStores(customRoot, ["ops", "Retired Agent"]);
-      const cfg = createCustomRootCfg(customRoot);
-
-      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+      const { storePaths, targets } = await resolveTargetsForCustomRoot(home, [
+        "ops",
+        "Retired Agent",
+      ]);
 
       expect(targets).toEqual(
         expect.arrayContaining([

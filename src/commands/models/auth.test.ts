@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -15,12 +16,20 @@ const mocks = vi.hoisted(() => ({
   upsertAuthProfile: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
-  loginOpenAICodexOAuth: vi.fn(),
-  writeOAuthCredentials: vi.fn(),
   loadValidConfigOrThrow: vi.fn(),
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
+  loadAuthProfileStoreForRuntime: vi.fn(),
+  listProfilesForProvider: vi.fn(),
+  clearAuthProfileCooldown: vi.fn(),
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+  listProfilesForProvider: mocks.listProfilesForProvider,
+  clearAuthProfileCooldown: mocks.clearAuthProfileCooldown,
+  upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -41,29 +50,13 @@ vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  upsertAuthProfile: mocks.upsertAuthProfile,
-}));
-
-vi.mock("../../plugins/providers.js", () => ({
+vi.mock("../../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
 vi.mock("../../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
-
-vi.mock("../openai-codex-oauth.js", () => ({
-  loginOpenAICodexOAuth: mocks.loginOpenAICodexOAuth,
-}));
-
-vi.mock("../onboard-auth.js", async (importActual) => {
-  const actual = await importActual<typeof import("../onboard-auth.js")>();
-  return {
-    ...actual,
-    writeOAuthCredentials: mocks.writeOAuthCredentials,
-  };
-});
 
 vi.mock("./shared.js", async (importActual) => {
   const actual = await importActual<typeof import("./shared.js")>();
@@ -82,7 +75,8 @@ vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
-const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand } = await import("./auth.js");
+const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
+  await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -110,10 +104,30 @@ function withInteractiveStdin() {
   };
 }
 
+function createProvider(params: {
+  id: string;
+  label?: string;
+  run: NonNullable<ProviderPlugin["auth"]>[number]["run"];
+}): ProviderPlugin {
+  return {
+    id: params.id,
+    label: params.label ?? params.id,
+    auth: [
+      {
+        id: "oauth",
+        label: "OAuth",
+        kind: "oauth",
+        run: params.run,
+      },
+    ],
+  };
+}
+
 describe("modelsAuthLoginCommand", () => {
   let restoreStdin: (() => void) | null = null;
   let currentConfig: OpenClawConfig;
   let lastUpdatedConfig: OpenClawConfig | null;
+  let runProviderAuth: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -145,16 +159,32 @@ describe("modelsAuthLoginCommand", () => {
       note: vi.fn(async () => {}),
       select: vi.fn(),
     });
-    mocks.loginOpenAICodexOAuth.mockResolvedValue({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-      email: "user@example.com",
+    runProviderAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai-codex:user@example.com",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+            email: "user@example.com",
+          },
+        },
+      ],
+      defaultModel: "openai-codex/gpt-5.4",
     });
-    mocks.writeOAuthCredentials.mockResolvedValue("openai-codex:user@example.com");
-    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
+    mocks.listProfilesForProvider.mockReturnValue([]);
+    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -162,19 +192,20 @@ describe("modelsAuthLoginCommand", () => {
     restoreStdin = null;
   });
 
-  it("supports built-in openai-codex login without provider plugins", async () => {
+  it("runs plugin-owned openai-codex login", async () => {
     const runtime = createRuntime();
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
-    expect(mocks.loginOpenAICodexOAuth).toHaveBeenCalledOnce();
-    expect(mocks.writeOAuthCredentials).toHaveBeenCalledWith(
-      "openai-codex",
-      expect.any(Object),
-      "/tmp/openclaw/agents/main",
-      { syncSiblingAgents: true },
-    );
-    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+    expect(runProviderAuth).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai-codex:user@example.com",
+      credential: expect.objectContaining({
+        type: "oauth",
+        provider: "openai-codex",
+      }),
+      agentDir: "/tmp/openclaw/agents/main",
+    });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
       provider: "openai-codex",
       mode: "oauth",
@@ -198,11 +229,111 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.4");
   });
 
-  it("keeps existing plugin error behavior for non built-in providers", async () => {
+  it("supports provider-owned Claude CLI migration without writing auth profiles", async () => {
+    const runtime = createRuntime();
+    const runClaudeCliMigration = vi.fn().mockResolvedValue({
+      profiles: [],
+      defaultModel: "claude-cli/claude-sonnet-4-6",
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "cli",
+            label: "Claude CLI",
+            kind: "custom",
+            run: runClaudeCliMigration,
+          },
+        ],
+      },
+    ]);
+
+    await modelsAuthLoginCommand(
+      { provider: "anthropic", method: "cli", setDefault: true },
+      runtime,
+    );
+
+    expect(runClaudeCliMigration).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "claude-cli/claude-sonnet-4-6",
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-sonnet-4-6": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
+  });
+
+  it("clears stale auth lockouts before attempting openai-codex login", async () => {
+    const runtime = createRuntime();
+    const fakeStore = {
+      profiles: {
+        "openai-codex:user@example.com": {
+          type: "oauth",
+          provider: "openai-codex",
+        },
+      },
+      usageStats: {
+        "openai-codex:user@example.com": {
+          disabledUntil: Date.now() + 3_600_000,
+          disabledReason: "auth_permanent",
+          errorCount: 3,
+        },
+      },
+    };
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
+    mocks.listProfilesForProvider.mockReturnValue(["openai-codex:user@example.com"]);
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+      store: fakeStore,
+      profileId: "openai-codex:user@example.com",
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    // Verify clearing happens before login attempt
+    const clearOrder = mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0];
+    const loginOrder = runProviderAuth.mock.invocationCallOrder[0];
+    expect(clearOrder).toBeLessThan(loginOrder);
+  });
+
+  it("survives lockout clearing failure without blocking login", async () => {
+    const runtime = createRuntime();
+    mocks.loadAuthProfileStoreForRuntime.mockImplementation(() => {
+      throw new Error("corrupt auth-profiles.json");
+    });
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(runProviderAuth).toHaveBeenCalledOnce();
+  });
+
+  it("loads lockout state from the agent-scoped store", async () => {
+    const runtime = createRuntime();
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
+    mocks.listProfilesForProvider.mockReturnValue([]);
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
+  });
+
+  it("reports loaded plugin providers when requested provider is unavailable", async () => {
     const runtime = createRuntime();
 
     await expect(modelsAuthLoginCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
-      "No provider plugins found.",
+      'Unknown provider "anthropic". Loaded providers: openai-codex. Verify plugins via `openclaw plugins list --json`.',
     );
   });
 
@@ -228,5 +359,65 @@ describe("modelsAuthLoginCommand", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+
+  it("writes pasted tokens to the resolved agent store", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("tok-fresh");
+
+    await modelsAuthPasteTokenCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "tok-fresh",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
+
+  it("runs token auth for any token-capable provider plugin", async () => {
+    const runtime = createRuntime();
+    const runTokenAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "moonshot:token",
+          credential: {
+            type: "token",
+            provider: "moonshot",
+            token: "moonshot-token",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "moonshot",
+        label: "Moonshot",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            run: runTokenAuth,
+          },
+        ],
+      },
+    ]);
+
+    await modelsAuthSetupTokenCommand({ provider: "moonshot", yes: true }, runtime);
+
+    expect(runTokenAuth).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "moonshot:token",
+      credential: {
+        type: "token",
+        provider: "moonshot",
+        token: "moonshot-token",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
   });
 });

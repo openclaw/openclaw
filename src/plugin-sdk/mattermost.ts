@@ -1,5 +1,5 @@
-// Narrow plugin-sdk surface for the bundled mattermost plugin.
-// Keep this list additive and scoped to symbols used under extensions/mattermost.
+// Private helper surface for the bundled mattermost plugin.
+// Keep this list additive and scoped to the bundled Mattermost surface.
 
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
@@ -27,18 +27,17 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
-export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-types.js";
 export {
   buildSingleChannelSecretPromptState,
-  promptAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
-  resolveAccountIdForConfigure,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
+  createSetupInputPresenceValidator,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountStatusSink } from "./channel-lifecycle.js";
@@ -53,8 +52,7 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export { loadSessionStore, resolveStorePath } from "../config/sessions.js";
@@ -64,13 +62,6 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "../config/types.js";
-export type { SecretInput } from "../config/types.secrets.js";
-export {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "../config/types.secrets.js";
-export { buildSecretInputSchema } from "./secret-input-schema.js";
 export {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
@@ -103,4 +94,5 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
+export { createChannelPairingController } from "./channel-pairing.js";
+export { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";

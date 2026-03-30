@@ -1,13 +1,134 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import * as secretResolve from "./resolve.js";
-import { createResolverContext } from "./runtime-shared.js";
-import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
+
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+
+const { resolveBundledPluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+
+const mockedModuleIds = [
+  "../plugins/web-search-providers.js",
+  "../plugins/web-search-providers.runtime.js",
+] as const;
+
+let bundledWebSearchProviders: typeof import("../plugins/web-search-providers.js");
+let runtimeWebSearchProviders: typeof import("../plugins/web-search-providers.runtime.js");
+let secretResolve: typeof import("./resolve.js");
+let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
+let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/web-search-providers.runtime.js")>();
+  return {
+    ...actual,
+    resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
+}
+
+function providerPluginId(provider: ProviderUnderTest): string {
+  switch (provider) {
+    case "duckduckgo":
+      return "duckduckgo";
+    case "gemini":
+      return "google";
+    case "grok":
+      return "xai";
+    case "kimi":
+      return "moonshot";
+    default:
+      return provider;
+  }
+}
+
+function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (typeof current === "object" && current !== null && !Array.isArray(current)) {
+    return current as Record<string, unknown>;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
+
+function setConfiguredProviderKey(
+  configTarget: OpenClawConfig,
+  pluginId: string,
+  value: unknown,
+): void {
+  const plugins = ensureRecord(configTarget as Record<string, unknown>, "plugins");
+  const entries = ensureRecord(plugins, "entries");
+  const pluginEntry = ensureRecord(entries, pluginId);
+  const config = ensureRecord(pluginEntry, "config");
+  const webSearch = ensureRecord(config, "webSearch");
+  webSearch.apiKey = value;
+}
+
+function createTestProvider(params: {
+  provider: ProviderUnderTest;
+  pluginId: string;
+  order: number;
+}): PluginWebSearchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  return {
+    pluginId: params.pluginId,
+    id: params.provider,
+    label: params.provider,
+    hint: `${params.provider} test provider`,
+    requiresCredential: params.provider === "duckduckgo" ? false : undefined,
+    envVars: params.provider === "duckduckgo" ? [] : [`${params.provider.toUpperCase()}_API_KEY`],
+    placeholder: params.provider === "duckduckgo" ? "(no key needed)" : `${params.provider}-...`,
+    signupUrl: `https://example.com/${params.provider}`,
+    autoDetectOrder: params.order,
+    credentialPath: params.provider === "duckduckgo" ? "" : credentialPath,
+    inactiveSecretPaths: params.provider === "duckduckgo" ? [] : [credentialPath],
+    getCredentialValue: (searchConfig) =>
+      params.provider === "duckduckgo" ? "duckduckgo-no-key-needed" : searchConfig?.apiKey,
+    setCredentialValue: (searchConfigTarget, value) => {
+      searchConfigTarget.apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) => {
+      const entryConfig = config?.plugins?.entries?.[params.pluginId]?.config;
+      return entryConfig && typeof entryConfig === "object"
+        ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+        : undefined;
+    },
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setConfiguredProviderKey(configTarget, params.pluginId, value);
+    },
+    resolveRuntimeMetadata:
+      params.provider === "perplexity"
+        ? () => ({
+            perplexityTransport: "search_api" as const,
+          })
+        : undefined,
+    createTool: () => null,
+  };
+}
+
+function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  return [
+    createTestProvider({ provider: "brave", pluginId: "brave", order: 10 }),
+    createTestProvider({ provider: "gemini", pluginId: "google", order: 20 }),
+    createTestProvider({ provider: "grok", pluginId: "xai", order: 30 }),
+    createTestProvider({ provider: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ provider: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ provider: "duckduckgo", pluginId: "duckduckgo", order: 100 }),
+  ];
 }
 
 async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
@@ -29,45 +150,135 @@ function createProviderSecretRefConfig(
   provider: ProviderUnderTest,
   envRefId: string,
 ): OpenClawConfig {
-  const search: Record<string, unknown> = {
-    enabled: true,
-    provider,
-  };
-  if (provider === "brave") {
-    search.apiKey = { source: "env", provider: "default", id: envRefId };
-  } else {
-    search[provider] = {
-      apiKey: { source: "env", provider: "default", id: envRefId },
-    };
-  }
   return asConfig({
     tools: {
       web: {
-        search,
+        search: {
+          enabled: true,
+          provider,
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        [providerPluginId(provider)]: {
+          enabled: true,
+          config: {
+            webSearch: {
+              apiKey: { source: "env", provider: "default", id: envRefId },
+            },
+          },
+        },
       },
     },
   });
 }
 
 function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): unknown {
-  if (provider === "brave") {
-    return config.tools?.web?.search?.apiKey;
-  }
-  if (provider === "gemini") {
-    return config.tools?.web?.search?.gemini?.apiKey;
-  }
-  if (provider === "grok") {
-    return config.tools?.web?.search?.grok?.apiKey;
-  }
-  if (provider === "kimi") {
-    return config.tools?.web?.search?.kimi?.apiKey;
-  }
-  return config.tools?.web?.search?.perplexity?.apiKey;
+  const pluginConfig = config.plugins?.entries?.[providerPluginId(provider)]?.config as
+    | { webSearch?: { apiKey?: unknown } }
+    | undefined;
+  return pluginConfig?.webSearch?.apiKey;
+}
+
+function expectInactiveFirecrawlSecretRef(params: {
+  resolveSpy: ReturnType<typeof vi.spyOn>;
+  metadata: Awaited<ReturnType<typeof runRuntimeWebTools>>["metadata"];
+  context: Awaited<ReturnType<typeof runRuntimeWebTools>>["context"];
+}) {
+  expect(params.resolveSpy).not.toHaveBeenCalled();
+  expect(params.metadata.fetch.firecrawl.active).toBe(false);
+  expect(params.metadata.fetch.firecrawl.apiKeySource).toBe("secretRef");
+  expect(params.context.warnings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "tools.web.fetch.firecrawl.apiKey",
+      }),
+    ]),
+  );
 }
 
 describe("runtime web tools resolution", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    bundledWebSearchProviders = await import("../plugins/web-search-providers.js");
+    runtimeWebSearchProviders = await import("../plugins/web-search-providers.runtime.js");
+    secretResolve = await import("./resolve.js");
+    ({ createResolverContext } = await import("./runtime-shared.js"));
+    ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
+  });
+
+  beforeEach(() => {
+    runtimeWebSearchProviders.__testing.resetWebSearchProviderSnapshotCacheForTests();
+    vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders).mockClear();
+    vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders).mockClear();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+  });
+
+  it("keeps web search disabled when search config is absent", async () => {
+    const bundledProviderSpy = vi.mocked(
+      bundledWebSearchProviders.resolveBundledPluginWebSearchProviders,
+    );
+    const runtimeProviderSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY_REF" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-runtime-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(bundledProviderSpy).not.toHaveBeenCalled();
+    expect(runtimeProviderSpy).not.toHaveBeenCalled();
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.fetch.firecrawl.active).toBe(true);
+    expect(metadata.fetch.firecrawl.apiKeySource).toBe("env");
+  });
+
+  it("auto-selects a keyless provider when no credentials are configured", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.search.selectedProvider).toBe("duckduckgo");
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_AUTODETECT_SELECTED",
+          message: expect.stringContaining('keyless provider "duckduckgo"'),
+        }),
+      ]),
+    );
   });
 
   it.each([
@@ -126,18 +337,40 @@ describe("runtime web tools resolution", () => {
         tools: {
           web: {
             search: {
-              apiKey: { source: "env", provider: "default", id: "BRAVE_REF" },
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_REF" },
+              enabled: true,
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: { source: "env", provider: "default", id: "BRAVE_REF" } },
               },
-              grok: {
-                apiKey: { source: "env", provider: "default", id: "GROK_REF" },
+            },
+            google: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: { source: "env", provider: "default", id: "GEMINI_REF" } },
               },
-              kimi: {
-                apiKey: { source: "env", provider: "default", id: "KIMI_REF" },
+            },
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: { source: "env", provider: "default", id: "GROK_REF" } },
               },
-              perplexity: {
-                apiKey: { source: "env", provider: "default", id: "PERPLEXITY_REF" },
+            },
+            moonshot: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: { source: "env", provider: "default", id: "KIMI_REF" } },
+              },
+            },
+            perplexity: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: { source: "env", provider: "default", id: "PERPLEXITY_REF" } },
               },
             },
           },
@@ -154,13 +387,13 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.search.providerSource).toBe("auto-detect");
     expect(metadata.search.selectedProvider).toBe("brave");
-    expect(resolvedConfig.tools?.web?.search?.apiKey).toBe("brave-precedence-key");
+    expect(readProviderKey(resolvedConfig, "brave")).toBe("brave-precedence-key");
     expect(context.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: "tools.web.search.gemini.apiKey" }),
-        expect.objectContaining({ path: "tools.web.search.grok.apiKey" }),
-        expect.objectContaining({ path: "tools.web.search.kimi.apiKey" }),
-        expect.objectContaining({ path: "tools.web.search.perplexity.apiKey" }),
+        expect.objectContaining({ path: "plugins.entries.google.config.webSearch.apiKey" }),
+        expect.objectContaining({ path: "plugins.entries.xai.config.webSearch.apiKey" }),
+        expect.objectContaining({ path: "plugins.entries.moonshot.config.webSearch.apiKey" }),
+        expect.objectContaining({ path: "plugins.entries.perplexity.config.webSearch.apiKey" }),
       ]),
     );
   });
@@ -171,12 +404,25 @@ describe("runtime web tools resolution", () => {
         tools: {
           web: {
             search: {
-              apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
-              gemini: {
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "MISSING_GEMINI_API_KEY_REF",
+              enabled: true,
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY_REF" },
+                },
+              },
+            },
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY_REF" },
                 },
               },
             },
@@ -191,8 +437,8 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.providerSource).toBe("auto-detect");
     expect(metadata.search.selectedProvider).toBe("brave");
     expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
-    expect(resolvedConfig.tools?.web?.search?.apiKey).toBe("brave-runtime-key");
-    expect(resolvedConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+    expect(readProviderKey(resolvedConfig, "brave")).toBe("brave-runtime-key");
+    expect(readProviderKey(resolvedConfig, "gemini")).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_GEMINI_API_KEY_REF",
@@ -201,7 +447,7 @@ describe("runtime web tools resolution", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.gemini.apiKey",
+          path: "plugins.entries.google.config.webSearch.apiKey",
         }),
       ]),
     );
@@ -216,9 +462,26 @@ describe("runtime web tools resolution", () => {
         tools: {
           web: {
             search: {
-              apiKey: { source: "env", provider: "default", id: "MISSING_BRAVE_API_KEY_REF" },
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+              enabled: true,
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "MISSING_BRAVE_API_KEY_REF" },
+                },
+              },
+            },
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+                },
               },
             },
           },
@@ -231,12 +494,12 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.search.providerSource).toBe("auto-detect");
     expect(metadata.search.selectedProvider).toBe("gemini");
-    expect(resolvedConfig.tools?.web?.search?.gemini?.apiKey).toBe("gemini-runtime-key");
+    expect(readProviderKey(resolvedConfig, "gemini")).toBe("gemini-runtime-key");
     expect(context.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.apiKey",
+          path: "plugins.entries.brave.config.webSearch.apiKey",
         }),
       ]),
     );
@@ -252,8 +515,17 @@ describe("runtime web tools resolution", () => {
           web: {
             search: {
               provider: "invalid-provider",
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+                },
               },
             },
           },
@@ -267,7 +539,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.providerConfigured).toBeUndefined();
     expect(metadata.search.providerSource).toBe("auto-detect");
     expect(metadata.search.selectedProvider).toBe("gemini");
-    expect(resolvedConfig.tools?.web?.search?.gemini?.apiKey).toBe("gemini-runtime-key");
+    expect(readProviderKey(resolvedConfig, "gemini")).toBe("gemini-runtime-key");
     expect(metadata.search.diagnostics).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -292,8 +564,17 @@ describe("runtime web tools resolution", () => {
         web: {
           search: {
             provider: "gemini",
-            gemini: {
-              apiKey: { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY_REF" },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          google: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY_REF" },
+              },
             },
           },
         },
@@ -316,10 +597,52 @@ describe("runtime web tools resolution", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
-          path: "tools.web.search.gemini.apiKey",
+          path: "plugins.entries.google.config.webSearch.apiKey",
         }),
       ]),
     );
+  });
+
+  it("uses bundled provider resolution for configured bundled providers", async () => {
+    const bundledSpy = vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders);
+    const genericSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GEMINI_PROVIDER_REF: "gemini-provider-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(bundledSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledAllowlistCompat: true,
+        onlyPluginIds: ["google"],
+      }),
+    );
+    expect(genericSpy).not.toHaveBeenCalled();
   });
 
   it("does not resolve Firecrawl SecretRef when Firecrawl is inactive", async () => {
@@ -339,17 +662,7 @@ describe("runtime web tools resolution", () => {
       }),
     });
 
-    expect(resolveSpy).not.toHaveBeenCalled();
-    expect(metadata.fetch.firecrawl.active).toBe(false);
-    expect(metadata.fetch.firecrawl.apiKeySource).toBe("secretRef");
-    expect(context.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.fetch.firecrawl.apiKey",
-        }),
-      ]),
-    );
+    expectInactiveFirecrawlSecretRef({ resolveSpy, metadata, context });
   });
 
   it("does not resolve Firecrawl SecretRef when Firecrawl is disabled", async () => {
@@ -370,17 +683,54 @@ describe("runtime web tools resolution", () => {
       }),
     });
 
-    expect(resolveSpy).not.toHaveBeenCalled();
-    expect(metadata.fetch.firecrawl.active).toBe(false);
-    expect(metadata.fetch.firecrawl.apiKeySource).toBe("secretRef");
+    expectInactiveFirecrawlSecretRef({ resolveSpy, metadata, context });
+  });
+
+  it("keeps configured provider metadata and inactive warnings when search is disabled", async () => {
+    const { metadata, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.search.providerConfigured).toBe("gemini");
+    expect(metadata.search.providerSource).toBe("configured");
     expect(context.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.fetch.firecrawl.apiKey",
+          path: "plugins.entries.google.config.webSearch.apiKey",
         }),
       ]),
     );
+  });
+
+  it("does not auto-enable search when tools.web.search is absent", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({}),
+    });
+
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.search.selectedProvider).toBeUndefined();
   });
 
   it("uses env fallback for unresolved Firecrawl SecretRef when active", async () => {
@@ -444,6 +794,59 @@ describe("runtime web tools resolution", () => {
         expect.objectContaining({
           code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
           path: "tools.web.fetch.firecrawl.apiKey",
+        }),
+      ]),
+    );
+  });
+
+  it("resolves x_search SecretRef and writes the resolved key into runtime config", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_REF: "x-search-runtime-key",
+      },
+    });
+
+    expect(metadata.xSearch.active).toBe(true);
+    expect(metadata.xSearch.apiKeySource).toBe("secretRef");
+    expect(resolvedConfig.tools?.web?.x_search?.apiKey).toBe("x-search-runtime-key");
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("uses env fallback for unresolved x_search SecretRef when active", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "MISSING_X_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        XAI_API_KEY: "x-search-fallback-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.xSearch.active).toBe(true);
+    expect(metadata.xSearch.apiKeySource).toBe("env");
+    expect(resolvedConfig.tools?.web?.x_search?.apiKey).toBe("x-search-fallback-key");
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+          path: "tools.web.x_search.apiKey",
         }),
       ]),
     );

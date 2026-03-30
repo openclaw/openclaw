@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
   normalizeUsageDisplay,
@@ -43,9 +44,15 @@ type CommandHandlerContext = {
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
+  noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
+  forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
 };
+
+function isBtwCommand(text: string): boolean {
+  return /^\/btw(?::|\s|$)/i.test(text.trim());
+}
 
 export function createCommandHandlers(context: CommandHandlerContext) {
   const {
@@ -65,8 +72,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     setActivityStatus,
     formatSessionKey,
     applySessionInfoFromPatch,
-    noteLocalRunId,
+    noteLocalBtwRunId,
     forgetLocalRunId,
+    forgetLocalBtwRunId,
     requestExit,
   } = context;
 
@@ -432,12 +440,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("usage: /activation <mention|always>");
           break;
         }
+        const activation = normalizeGroupActivation(args);
+        if (!activation) {
+          chatLog.addSystem("usage: /activation <mention|always>");
+          break;
+        }
         try {
           const result = await client.patchSession({
             key: state.currentSessionKey,
-            groupActivation: args === "always" ? "always" : "mention",
+            groupActivation: activation,
           });
-          chatLog.addSystem(`activation set to ${args}`);
+          chatLog.addSystem(`activation set to ${activation}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -501,13 +514,16 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
+    const isBtw = isBtwCommand(text);
+    const runId = randomUUID();
     try {
-      chatLog.addUser(text);
-      tui.requestRender();
-      const runId = randomUUID();
-      noteLocalRunId(runId);
-      state.activeChatRunId = runId;
-      setActivityStatus("sending");
+      if (!isBtw) {
+        chatLog.addUser(text);
+        state.pendingOptimisticUserMessage = true;
+        setActivityStatus("sending");
+      } else {
+        noteLocalBtwRunId?.(runId);
+      }
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
@@ -517,15 +533,25 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         timeoutMs: opts.timeoutMs,
         runId,
       });
-      setActivityStatus("waiting");
-      tui.requestRender();
+      if (!isBtw) {
+        setActivityStatus("waiting");
+        tui.requestRender();
+      }
     } catch (err) {
-      if (state.activeChatRunId) {
+      if (isBtw) {
+        forgetLocalBtwRunId?.(runId);
+      }
+      if (!isBtw && state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
-      state.activeChatRunId = null;
-      chatLog.addSystem(`send failed: ${String(err)}`);
-      setActivityStatus("error");
+      if (!isBtw) {
+        state.pendingOptimisticUserMessage = false;
+        state.activeChatRunId = null;
+      }
+      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
+      if (!isBtw) {
+        setActivityStatus("error");
+      }
       tui.requestRender();
     }
   };

@@ -1,10 +1,43 @@
-import { normalizeIMessageHandle } from "../../../imessage/targets.js";
+import { normalizeE164 } from "../../../plugin-sdk/account-resolution.js";
 import { looksLikeHandleOrPhoneTarget, trimMessagingTarget } from "./shared.js";
 
 // Service prefixes that indicate explicit delivery method; must be preserved during normalization
 const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
   /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i;
+
+export function normalizeIMessageHandle(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("imessage:")) {
+    return normalizeIMessageHandle(trimmed.slice("imessage:".length));
+  }
+  if (lowered.startsWith("sms:")) {
+    return normalizeIMessageHandle(trimmed.slice("sms:".length));
+  }
+  if (lowered.startsWith("auto:")) {
+    return normalizeIMessageHandle(trimmed.slice("auto:".length));
+  }
+  if (CHAT_TARGET_PREFIX_RE.test(trimmed)) {
+    const prefix = trimmed.match(CHAT_TARGET_PREFIX_RE)?.[0];
+    if (!prefix) {
+      return "";
+    }
+    const value = trimmed.slice(prefix.length).trim();
+    return `${prefix.toLowerCase()}${value}`;
+  }
+  if (trimmed.includes("@")) {
+    return trimmed.toLowerCase();
+  }
+  const normalized = normalizeE164(trimmed);
+  if (normalized) {
+    return normalized;
+  }
+  return trimmed.replace(/\s+/g, "");
+}
 
 export function normalizeIMessageMessagingTarget(raw: string): string | undefined {
   const trimmed = trimMessagingTarget(raw);

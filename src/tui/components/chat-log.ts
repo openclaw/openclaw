@@ -2,6 +2,7 @@ import type { Component } from "@mariozechner/pi-tui";
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { theme } from "../theme/theme.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
+import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
@@ -9,6 +10,7 @@ export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
+  private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
 
   constructor(maxComponents = 180) {
@@ -26,6 +28,9 @@ export class ChatLog extends Container {
       if (message === component) {
         this.streamingRuns.delete(runId);
       }
+    }
+    if (this.btwMessage === component) {
+      this.btwMessage = null;
     }
   }
 
@@ -49,11 +54,18 @@ export class ChatLog extends Container {
     this.clear();
     this.toolById.clear();
     this.streamingRuns.clear();
+    this.btwMessage = null;
+  }
+
+  private createSystemMessage(text: string): Container {
+    const entry = new Container();
+    entry.addChild(new Spacer(1));
+    entry.addChild(new Text(theme.system(text), 1, 0));
+    return entry;
   }
 
   addSystem(text: string) {
-    this.append(new Spacer(1));
-    this.append(new Text(theme.system(text), 1, 0));
+    this.append(this.createSystemMessage(text));
   }
 
   addUser(text: string) {
@@ -106,6 +118,33 @@ export class ChatLog extends Container {
     }
     this.removeChild(existing);
     this.streamingRuns.delete(effectiveRunId);
+  }
+
+  showBtw(params: { question: string; text: string; isError?: boolean }) {
+    if (this.btwMessage) {
+      this.btwMessage.setResult(params);
+      if (this.children[this.children.length - 1] !== this.btwMessage) {
+        this.removeChild(this.btwMessage);
+        this.append(this.btwMessage);
+      }
+      return this.btwMessage;
+    }
+    const component = new BtwInlineMessage(params);
+    this.btwMessage = component;
+    this.append(component);
+    return component;
+  }
+
+  dismissBtw() {
+    if (!this.btwMessage) {
+      return;
+    }
+    this.removeChild(this.btwMessage);
+    this.btwMessage = null;
+  }
+
+  hasVisibleBtw() {
+    return this.btwMessage !== null;
   }
 
   startTool(toolCallId: string, toolName: string, args: unknown) {

@@ -67,11 +67,12 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
     expect(resolveFailoverReasonFromError({ status: 422 })).toBe("format");
-    // Keep the status-only path behavior-preserving and conservative.
-    expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
+    // Transient server errors (500/502/503/504) should trigger failover as timeout.
+    expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
@@ -80,6 +81,46 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("treats session-specific HTTP 410s differently from generic 410s", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "session not found",
+      }),
+    ).toBe("session_expired");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 410: No body",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 410: conversation expired",
+      }),
+    ).toBe("session_expired");
+  });
+
+  it("preserves explicit auth and billing signals on HTTP 410", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "invalid_api_key",
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "authentication failed",
+      }),
+    ).toBe("auth");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "insufficient credits",
+      }),
+    ).toBe("billing");
   });
 
   it("classifies documented provider error shapes at the error boundary", () => {
@@ -362,6 +403,23 @@ describe("failover-error", () => {
       reason: "reason: abort",
     });
     expect(isTimeoutError(err)).toBe(true);
+  });
+
+  it("classifies abort-wrapped RESOURCE_EXHAUSTED as rate_limit", () => {
+    const err = Object.assign(new Error("request aborted"), {
+      name: "AbortError",
+      cause: {
+        error: {
+          code: 429,
+          message: GEMINI_RESOURCE_EXHAUSTED_MESSAGE,
+          status: "RESOURCE_EXHAUSTED",
+        },
+      },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.status).toBe(429);
   });
 
   it("coerces failover-worthy errors into FailoverError with metadata", () => {

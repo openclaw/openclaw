@@ -18,6 +18,7 @@ export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
+    imageGenerationModel: AgentModelSchema.optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -84,6 +85,19 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    llm: z
+      .object({
+        idleTimeoutSeconds: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+          ),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
@@ -107,6 +121,7 @@ export const AgentDefaultsSchema = z
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
@@ -183,7 +198,7 @@ export const AgentDefaultsSchema = z
           .describe(
             "Maximum number of active children a single agent session can spawn (default: 5).",
           ),
-        archiveAfterMinutes: z.number().int().positive().optional(),
+        archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
