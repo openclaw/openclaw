@@ -592,6 +592,7 @@ export async function sanitizeSessionHistory(params: {
       modelApi: params.modelApi,
       provider: params.provider,
       modelId: params.modelId,
+      config: params.config,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const canonicalizedAssistantHistory = canonicalizeAssistantHistoryMessages({

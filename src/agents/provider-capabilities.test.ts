@@ -241,6 +241,29 @@ describe("resolveProviderCapabilities", () => {
     ).toBe(true);
   });
 
+  it("drops thinking blocks for MiniMax models via static fallback", () => {
+    // Plugin mock returns undefined for minimax — relies on PLUGIN_CAPABILITIES_FALLBACKS.
+    // This ensures the fix works even when plugin context (config/workspaceDir) is absent.
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "minimax",
+        modelId: "MiniMax-M2.7",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "minimax-portal",
+        modelId: "MiniMax-M2.7",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "minimax",
+        modelId: "MiniMax-M2.5",
+      }),
+    ).toBe(true);
+  });
+
   it("forwards config and workspace context to plugin capability lookup", () => {
     const config = { plugins: { enabled: true } };
     const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;

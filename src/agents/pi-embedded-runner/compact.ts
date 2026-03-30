@@ -657,6 +657,8 @@ export async function compactEmbeddedPiSessionDirect(
         modelApi: model.api,
         provider,
         modelId,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
       });
       const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
