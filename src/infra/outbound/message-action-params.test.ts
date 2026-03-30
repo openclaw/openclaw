@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveSlackAutoThreadId } from "../../../extensions/slack/api.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSlackAutoThreadId } from "../../plugin-sdk/slack.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
