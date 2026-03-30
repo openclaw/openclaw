@@ -98,6 +98,42 @@ const connectNodeClientWithPairing = async (params: Parameters<typeof connectNod
   }
 };
 
+const connectNodeClientWithNodePairing = async (
+  params: Parameters<typeof connectNodeClient>[0],
+) => {
+  const provisionalClient = await connectNodeClientWithPairing(params);
+  const listRes = await rpcReq<{
+    nodes?: Array<{ nodeId: string; displayName?: string; connected?: boolean }>;
+  }>(ws, "node.list", {});
+  const provisionalNode = (listRes.payload?.nodes ?? []).find((node) => {
+    if (!node.connected) {
+      return false;
+    }
+    if (params.displayName) {
+      return node.displayName === params.displayName;
+    }
+    return true;
+  });
+  const nodeId = provisionalNode?.nodeId ?? "";
+  expect(nodeId).toBeTruthy();
+
+  await provisionalClient.stopAndWait();
+
+  const { approveNodePairing, requestNodePairing } = await import("../infra/node-pairing.js");
+  const request = await requestNodePairing({
+    nodeId,
+    displayName: params.displayName,
+    platform: params.platform ?? "ios",
+    deviceFamily: params.deviceFamily,
+    commands: params.commands,
+  });
+  await approveNodePairing(request.request.requestId, {
+    callerScopes: ["operator.admin", "operator.write"],
+  });
+
+  return await connectNodeClient(params);
+};
+
 describe("gateway role enforcement", () => {
   test("enforces operator and node permissions", async () => {
     let nodeClient: GatewayClient | undefined;
@@ -275,7 +311,7 @@ describe("gateway node command allowlist", () => {
         new Promise<{ id?: string; nodeId?: string }>((resolve) => {
           resolveInvoke = resolve;
         });
-      allowedClient = await connectNodeClientWithPairing({
+      allowedClient = await connectNodeClientWithNodePairing({
         port,
         commands: ["canvas.snapshot"],
         instanceId: "node-allowed",
@@ -331,6 +367,66 @@ describe("gateway node command allowlist", () => {
     }
   });
 
+  test("blocks all declared commands until node pairing exists", async () => {
+    const findConnectedNode = async (displayName: string) => {
+      const listRes = await rpcReq<{
+        nodes?: Array<{
+          nodeId: string;
+          displayName?: string;
+          connected?: boolean;
+          commands?: string[];
+        }>;
+      }>(ws, "node.list", {});
+      return (listRes.payload?.nodes ?? []).find(
+        (node) => node.connected && node.displayName === displayName,
+      );
+    };
+
+    const displayName = "node-device-paired-only";
+    let nodeClient: GatewayClient | undefined;
+
+    try {
+      nodeClient = await connectNodeClientWithPairing({
+        port,
+        commands: ["canvas.snapshot", "system.run"],
+        platform: "darwin",
+        instanceId: displayName,
+        displayName,
+      });
+
+      await expect
+        .poll(async () => {
+          const node = await findConnectedNode(displayName);
+          return node?.commands?.toSorted() ?? [];
+        }, FAST_WAIT_OPTS)
+        .toEqual([]);
+
+      const node = await findConnectedNode(displayName);
+      const nodeId = node?.nodeId ?? "";
+      expect(nodeId).toBeTruthy();
+
+      const canvasRes = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "canvas.snapshot",
+        params: { format: "png" },
+        idempotencyKey: "allowlist-device-paired-only-canvas",
+      });
+      expect(canvasRes.ok).toBe(false);
+      expect(canvasRes.error?.message ?? "").toContain("node command not allowed");
+
+      const systemRunRes = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: { command: "echo blocked" },
+        idempotencyKey: "allowlist-device-paired-only-system-run",
+      });
+      expect(systemRunRes.ok).toBe(false);
+      expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
+    } finally {
+      nodeClient?.stop();
+    }
+  });
+
   test("rejects reconnect metadata spoof for paired node devices", async () => {
     const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const deviceIdentityPath = path.join(
@@ -350,7 +446,7 @@ describe("gateway node command allowlist", () => {
         displayName: "node-platform-pin",
         deviceIdentity,
       });
-      iosClient.stop();
+      await iosClient.stopAndWait();
       await expect
         .poll(async () => {
           const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(
@@ -417,7 +513,7 @@ describe("gateway node command allowlist", () => {
 
       let client: GatewayClient | undefined;
       try {
-        client = await connectNodeClientWithPairing({
+        client = await connectNodeClientWithNodePairing({
           port,
           commands: ["system.run", "canvas.snapshot"],
           platform: testCase.platform,

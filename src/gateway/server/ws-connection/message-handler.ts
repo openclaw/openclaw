@@ -966,15 +966,10 @@ export function attachGatewayWsMessageHandler(params: {
             deviceFamily: connectParams.client.deviceFamily,
           });
           const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
-          const pairedCommands = pairedNode ? new Set(pairedNode.commands ?? []) : null;
+          const pairedCommands = new Set(pairedNode?.commands ?? []);
           const filtered = declared
             .map((cmd) => cmd.trim())
-            .filter(
-              (cmd) =>
-                cmd.length > 0 &&
-                allowlist.has(cmd) &&
-                (pairedCommands === null || pairedCommands.has(cmd)),
-            );
+            .filter((cmd) => cmd.length > 0 && allowlist.has(cmd) && pairedCommands.has(cmd));
           connectParams.commands = filtered;
         }
 
