@@ -340,13 +340,24 @@ function ensureTaskRegistryPermissions(pathname: string) {
   }
 }
 
+function closeDatabase(store: TaskRegistryDatabase) {
+  try {
+    // Flush WAL sidecars before closing so Windows temp-dir cleanup can unlink
+    // runs.sqlite{-wal,-shm} without transient EBUSY/EPERM failures.
+    store.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } catch {
+    // Ignore checkpoint failures during teardown; close still releases handles.
+  }
+  store.db.close();
+}
+
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const pathname = resolveTaskRegistrySqlitePath(process.env);
   if (cachedDatabase && cachedDatabase.path === pathname) {
     return cachedDatabase;
   }
   if (cachedDatabase) {
-    cachedDatabase.db.close();
+    closeDatabase(cachedDatabase);
     cachedDatabase = null;
   }
   ensureTaskRegistryPermissions(pathname);
@@ -430,6 +441,6 @@ export function closeTaskRegistrySqliteStore() {
   if (!cachedDatabase) {
     return;
   }
-  cachedDatabase.db.close();
+  closeDatabase(cachedDatabase);
   cachedDatabase = null;
 }

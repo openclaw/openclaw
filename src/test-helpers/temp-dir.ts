@@ -2,6 +2,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+function getTempDirCleanupOptions(): Parameters<typeof fs.rm>[1] {
+  if (process.platform === "win32") {
+    return {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 50,
+    };
+  }
+  return {
+    recursive: true,
+    force: true,
+  };
+}
+
+export async function removeTempDir(dir: string): Promise<void> {
+  await fs.rm(dir, getTempDirCleanupOptions());
+}
+
 export async function withTempDir<T>(
   options: {
     prefix: string;
@@ -18,6 +37,6 @@ export async function withTempDir<T>(
   try {
     return await run(dir);
   } finally {
-    await fs.rm(base, { recursive: true, force: true });
+    await removeTempDir(base);
   }
 }

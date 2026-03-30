@@ -26,6 +26,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import { removeTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -340,12 +341,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
     gatewayEnvSnapshot = undefined;
   }
   if (options.restoreEnv && tempHome) {
-    await fs.rm(tempHome, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
+    await removeTempDir(tempHome);
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
@@ -361,16 +357,16 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
     beforeAll(async () => {
       await setupGatewayTestHome();
       await resetGatewayTestState({ uniqueConfigRoot: false });
-    });
+    }, 60_000);
     beforeEach(async () => {
       await resetGatewayTestState({ uniqueConfigRoot: false });
     }, 60_000);
     afterEach(async () => {
       await cleanupGatewayTestHome({ restoreEnv: false });
-    });
+    }, 60_000);
     afterAll(async () => {
       await cleanupGatewayTestHome({ restoreEnv: true });
-    });
+    }, 60_000);
     return;
   }
 
@@ -381,7 +377,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
 
   afterEach(async () => {
     await cleanupGatewayTestHome({ restoreEnv: true });
-  });
+  }, 60_000);
 }
 
 export async function getFreePort(): Promise<number> {
