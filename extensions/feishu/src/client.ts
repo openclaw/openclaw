@@ -50,7 +50,7 @@ function applyFeishuSDKReconnectPatch(): void {
     | ((data: { headers: Array<{ key: string; value: string }>; payload?: Uint8Array }) => Promise<void>)
     | undefined;
   if (origHandleControlData) {
-    (proto as Record<string, unknown>).handleControlData = async function (
+    (proto as unknown as Record<string, unknown>).handleControlData = async function (
       data: { headers: Array<{ key: string; value: string }>; payload?: Uint8Array },
     ) {
       try {
@@ -72,16 +72,16 @@ function applyFeishuSDKReconnectPatch(): void {
   // --- Fix 2: Exponential backoff on reConnect ---
   const origReConnect = proto.reConnect as ((isStart?: boolean) => Promise<void>) | undefined;
   if (origReConnect) {
-    (proto as Record<string, unknown>).reConnect = async function (isStart = false) {
+    (proto as unknown as Record<string, unknown>).reConnect = async function (isStart = false) {
       if (isStart) {
         // Reset backoff counter on a fresh start
-        (this as Record<string, unknown>)._feishuReconnectCount = 0;
+        (this as unknown as Record<string, unknown>)._feishuReconnectCount = 0;
       }
       if (!isStart) {
         // Exponential backoff: doubles each retry, capped at MAX_RECONNECT_BACKOFF_MS
         // Add ±20% jitter to avoid synchronized retries across multiple clients
-        this._feishuReconnectCount = ((this as Record<string, unknown>)._feishuReconnectCount as number) + 1 || 1;
-        const count = (this as Record<string, unknown>)._feishuReconnectCount as number;
+        (this as unknown as Record<string, unknown>)._feishuReconnectCount = ((this as unknown as Record<string, unknown>)._feishuReconnectCount as number) + 1 || 1;
+        const count = (this as unknown as Record<string, unknown>)._feishuReconnectCount as number;
         const { reconnectInterval = DEFAULT_RECONNECT_INTERVAL_MS } = this.wsConfig?.getWS?.() ?? {};
         const jitter = 1 + (Math.random() - 0.5) * 0.4; // ±20%
         const backoff = Math.min(reconnectInterval * Math.pow(2, count - 1) * jitter, MAX_RECONNECT_BACKOFF_MS);
