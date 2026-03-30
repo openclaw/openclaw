@@ -178,6 +178,51 @@ class ConnectionManagerTest {
     assertFalse(options.caps.contains(OpenClawCapability.VoiceWake.rawValue))
   }
 
+  @Test
+  fun buildNodeConnectOptions_omitsUnavailableCameraLocationAndCallLogSurfaces() {
+    val options =
+      newManager(
+        cameraEnabled = false,
+        locationMode = LocationMode.Off,
+        callLogAvailable = false,
+      ).buildNodeConnectOptions()
+
+    assertFalse(options.commands.contains(OpenClawCameraCommand.List.rawValue))
+    assertFalse(options.commands.contains(OpenClawCameraCommand.Snap.rawValue))
+    assertFalse(options.commands.contains(OpenClawCameraCommand.Clip.rawValue))
+    assertFalse(options.commands.contains(OpenClawLocationCommand.Get.rawValue))
+    assertFalse(options.commands.contains(OpenClawCallLogCommand.Search.rawValue))
+    assertFalse(options.caps.contains(OpenClawCapability.Camera.rawValue))
+    assertFalse(options.caps.contains(OpenClawCapability.Location.rawValue))
+    assertFalse(options.caps.contains(OpenClawCapability.CallLog.rawValue))
+  }
+
+  @Test
+  fun buildNodeConnectOptions_advertisesOnlyAvailableMotionCommand() {
+    val options =
+      newManager(
+        motionActivityAvailable = false,
+        motionPedometerAvailable = true,
+      ).buildNodeConnectOptions()
+
+    assertFalse(options.commands.contains(OpenClawMotionCommand.Activity.rawValue))
+    assertTrue(options.commands.contains(OpenClawMotionCommand.Pedometer.rawValue))
+    assertTrue(options.caps.contains(OpenClawCapability.Motion.rawValue))
+  }
+
+  @Test
+  fun buildNodeConnectOptions_omitsMotionSurfaceWhenMotionApisUnavailable() {
+    val options =
+      newManager(
+        motionActivityAvailable = false,
+        motionPedometerAvailable = false,
+      ).buildNodeConnectOptions()
+
+    assertFalse(options.commands.contains(OpenClawMotionCommand.Activity.rawValue))
+    assertFalse(options.commands.contains(OpenClawMotionCommand.Pedometer.rawValue))
+    assertFalse(options.caps.contains(OpenClawCapability.Motion.rawValue))
+  }
+
   private fun newManager(
     cameraEnabled: Boolean = false,
     locationMode: LocationMode = LocationMode.Off,
