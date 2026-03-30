@@ -80,6 +80,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     refresh: string;
     expires: number;
     provider?: string;
+    accountId?: string;
   }): AuthProfileStore {
     return {
       version: 1,
@@ -90,6 +91,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           access: params.access,
           refresh: params.refresh,
           expires: params.expires,
+          accountId: params.accountId,
         },
       },
     };
@@ -165,6 +167,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         access: "expired-access-token",
         refresh: "expired-refresh-token",
         expires: expiredTime,
+        accountId: "acct-shared",
       }),
     );
 
@@ -176,6 +179,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         access: "fresh-access-token",
         refresh: "fresh-refresh-token",
         expires: freshTime,
+        accountId: "acct-shared",
       }),
     );
 
@@ -198,6 +202,45 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
   });
 
+  it("does not inherit main agent credentials on provider-only matches", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const expiredTime = now - 60 * 60 * 1000;
+    const freshTime = now + 60 * 60 * 1000;
+
+    await writeAuthProfilesStore(
+      secondaryAgentDir,
+      createOauthStore({
+        profileId,
+        access: "secondary-expired-access-token",
+        refresh: "secondary-expired-refresh-token",
+        expires: expiredTime,
+      }),
+    );
+
+    await writeAuthProfilesStore(
+      mainAgentDir,
+      createOauthStore({
+        profileId,
+        access: "main-fresh-access-token",
+        refresh: "main-fresh-refresh-token",
+        expires: freshTime,
+      }),
+    );
+
+    await expect(resolveFromSecondaryAgent(profileId)).rejects.toThrow(
+      /OAuth token refresh failed for anthropic/,
+    );
+
+    const updatedSecondaryStore = JSON.parse(
+      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
+      access: "secondary-expired-access-token",
+      expires: expiredTime,
+    });
+  });
+
   it("adopts newer OAuth token from main agent even when secondary token is still valid", async () => {
     const profileId = "anthropic:claude-cli";
     const now = Date.now();
@@ -211,6 +254,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         access: "secondary-access-token",
         refresh: "secondary-refresh-token",
         expires: secondaryExpiry,
+        accountId: "acct-shared",
       }),
     );
 
@@ -221,6 +265,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         access: "main-newer-access-token",
         refresh: "main-newer-refresh-token",
         expires: mainExpiry,
+        accountId: "acct-shared",
       }),
     );
 
@@ -249,6 +294,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         access: "secondary-stale",
         refresh: "secondary-refresh",
         expires: NaN,
+        accountId: "acct-shared",
       }),
     );
 
@@ -259,6 +305,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         access: "main-fresh-token",
         refresh: "main-refresh",
         expires: mainExpiry,
+        accountId: "acct-shared",
       }),
     );
 

@@ -22,17 +22,21 @@ const {
   refreshProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
   buildProviderAuthDoctorHintWithPluginMock,
+  readCodexCliCredentialsCachedMock,
+  readMiniMaxCliCredentialsCachedMock,
 } = vi.hoisted(() => ({
   refreshProviderOAuthCredentialWithPluginMock: vi.fn(
     async (_params?: { context?: unknown }) => undefined,
   ),
   formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   buildProviderAuthDoctorHintWithPluginMock: vi.fn(async () => undefined),
+  readCodexCliCredentialsCachedMock: vi.fn(() => null),
+  readMiniMaxCliCredentialsCachedMock: vi.fn(() => null),
 }));
 
 vi.mock("../cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
+  readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
+  readMiniMaxCliCredentialsCached: readMiniMaxCliCredentialsCachedMock,
   resetCliCredentialCachesForTest: () => undefined,
 }));
 
@@ -65,6 +69,8 @@ function createExpiredOauthStore(params: {
   profileId: string;
   provider: string;
   access?: string;
+  refresh?: string;
+  accountId?: string;
 }): AuthProfileStore {
   return {
     version: 1,
@@ -73,8 +79,9 @@ function createExpiredOauthStore(params: {
         type: "oauth",
         provider: params.provider,
         access: params.access ?? "cached-access-token",
-        refresh: "refresh-token",
+        refresh: params.refresh ?? "refresh-token",
         expires: Date.now() - 60_000,
+        accountId: params.accountId,
       },
     },
   };
@@ -98,6 +105,10 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
     buildProviderAuthDoctorHintWithPluginMock.mockReset();
     buildProviderAuthDoctorHintWithPluginMock.mockResolvedValue(undefined);
+    readCodexCliCredentialsCachedMock.mockReset();
+    readCodexCliCredentialsCachedMock.mockReturnValue(null);
+    readMiniMaxCliCredentialsCachedMock.mockReset();
+    readMiniMaxCliCredentialsCachedMock.mockReturnValue(null);
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     agentDir = path.join(tempRoot, "agents", "main", "agent");
@@ -192,13 +203,21 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     const subAgentDir = path.join(tempRoot, "agents", "sub-a", "agent");
     await fs.mkdir(subAgentDir, { recursive: true });
     saveAuthProfileStore(
-      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        accountId: "acct-shared",
+      }),
       subAgentDir,
     );
 
     // Main agent also starts with expired credentials
     saveAuthProfileStore(
-      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        accountId: "acct-shared",
+      }),
       agentDir,
     );
 
@@ -216,6 +235,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
               access: "fresh-access-from-main",
               refresh: "fresh-refresh-from-main",
               expires: freshExpiry,
+              accountId: "acct-shared",
             },
           },
         },
@@ -280,13 +300,21 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     const subAgentDir = path.join(tempRoot, "agents", "sub-wb", "agent");
     await fs.mkdir(subAgentDir, { recursive: true });
     saveAuthProfileStore(
-      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        accountId: "acct-shared",
+      }),
       subAgentDir,
     );
 
     // Main agent also has expired credentials
     saveAuthProfileStore(
-      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        accountId: "acct-shared",
+      }),
       agentDir,
     );
 
@@ -299,6 +327,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
           access: "newly-refreshed-access",
           refresh: "newly-refreshed-refresh",
           expires: freshExpiry,
+          accountId: "acct-shared",
         }) as never,
     );
 
@@ -320,6 +349,201 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       access: "newly-refreshed-access",
       expires: freshExpiry,
     });
+  });
+
+  it("does not write back refreshed credentials to main on provider-only matches", async () => {
+    const profileId = "openai-codex:default";
+    const now = Date.now();
+    const freshExpiry = now + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-isolated", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        access: "sub-expired-access",
+        refresh: "sub-expired-refresh",
+      }),
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        access: "main-expired-access",
+        refresh: "main-expired-refresh",
+      }),
+      agentDir,
+    );
+
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        ({
+          type: "oauth",
+          provider: "openai-codex",
+          access: "sub-refreshed-access",
+          refresh: "sub-refreshed-refresh",
+          expires: freshExpiry,
+        }) as never,
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    expect(result?.apiKey).toBe("sub-refreshed-access");
+
+    const mainStoreRaw = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(mainStoreRaw.profiles[profileId]).toMatchObject({
+      access: "main-expired-access",
+      refresh: "main-expired-refresh",
+    });
+  });
+
+  it("preserves a token re-auth that lands while refresh is in flight", async () => {
+    const profileId = "openai-codex:default";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+    let releaseRefresh:
+      | ((value: {
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+        }) => void)
+      | undefined;
+
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        await new Promise<{
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+        }>((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const resolving = resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+    });
+
+    await vi.waitFor(() =>
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1),
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "token",
+            provider: "openai-codex",
+            token: "replacement-token",
+            expires: freshExpiry,
+          },
+        },
+      },
+      agentDir,
+    );
+    releaseRefresh?.({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "stale-refreshed-access",
+      refresh: "stale-refreshed-refresh",
+      expires: freshExpiry,
+    });
+
+    await expect(resolving).resolves.toEqual({
+      apiKey: "replacement-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const currentStore = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(currentStore.profiles[profileId]).toMatchObject({
+      type: "token",
+      token: "replacement-token",
+    });
+  });
+
+  it("does not recreate a profile that was deleted while refresh was in flight", async () => {
+    const profileId = "openai-codex:default";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+    let releaseRefresh:
+      | ((value: {
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+        }) => void)
+      | undefined;
+
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        await new Promise<{
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+        }>((resolve) => {
+          releaseRefresh = resolve;
+        }),
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const resolving = resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+    });
+
+    await vi.waitFor(() =>
+      expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1),
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {},
+      },
+      agentDir,
+    );
+    releaseRefresh?.({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "stale-refreshed-access",
+      refresh: "stale-refreshed-refresh",
+      expires: freshExpiry,
+    });
+
+    await expect(resolving).resolves.toBeNull();
+
+    const currentStore = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(currentStore.profiles[profileId]).toBeUndefined();
   });
 
   it("serializes concurrent refreshes so only one HTTP call is made", async () => {

@@ -21,7 +21,7 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
   ensureAuthProfileStore,
   loadAuthProfileStoreForAgent,
-  saveAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -123,25 +123,81 @@ function isRefreshTokenReusedError(error: unknown): boolean {
 }
 
 /**
- * Guard: only allow cross-agent credential operations when both credentials
- * belong to the same OAuth identity (same provider, and same email if both set).
- * Prevents overwriting credentials when agents use different accounts under the
- * same profile name.
+ * Cross-agent credential sharing needs positive identity evidence. Providers
+ * without stable account metadata may reuse the same profile id across distinct
+ * accounts, so provider-only matches are not enough to safely copy tokens.
  */
-function isSameOAuthIdentity(a: OAuthCredential, b: OAuthCredential): boolean {
+function normalizeOAuthIdentityValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeOAuthEmail(value: string | undefined): string | undefined {
+  const normalized = normalizeOAuthIdentityValue(value);
+  return normalized?.toLowerCase();
+}
+
+function areOAuthCredentialsEquivalent(a: OAuthCredential, b: OAuthCredential): boolean {
+  return (
+    a.provider === b.provider &&
+    a.access === b.access &&
+    a.refresh === b.refresh &&
+    Object.is(a.expires, b.expires) &&
+    a.email === b.email &&
+    a.enterpriseUrl === b.enterpriseUrl &&
+    a.projectId === b.projectId &&
+    a.accountId === b.accountId
+  );
+}
+
+function hasPositiveOAuthIdentityMatch(a: OAuthCredential, b: OAuthCredential): boolean {
   if (a.provider !== b.provider) {
     return false;
   }
+
   // accountId is the strongest identity signal (used by Codex CLI credentials).
-  const aAcct = (a as Record<string, unknown>).accountId;
-  const bAcct = (b as Record<string, unknown>).accountId;
-  if (aAcct && bAcct && aAcct !== bAcct) {
+  const aAcct = normalizeOAuthIdentityValue(a.accountId);
+  const bAcct = normalizeOAuthIdentityValue(b.accountId);
+  if (aAcct || bAcct) {
+    return aAcct !== undefined && aAcct === bAcct;
+  }
+
+  const aEmail = normalizeOAuthEmail(a.email);
+  const bEmail = normalizeOAuthEmail(b.email);
+  if (aEmail || bEmail) {
+    return aEmail !== undefined && aEmail === bEmail;
+  }
+
+  return false;
+}
+
+function canShareOAuthCredentialAcrossAgents(a: OAuthCredential, b: OAuthCredential): boolean {
+  if (a.provider !== b.provider) {
     return false;
   }
-  if (a.email && b.email && a.email !== b.email) {
+  return hasPositiveOAuthIdentityMatch(a, b) || areOAuthCredentialsEquivalent(a, b);
+}
+
+function shouldOverwriteOAuthCredential(
+  existing: OAuthCredential,
+  incoming: OAuthCredential,
+): boolean {
+  if (areOAuthCredentialsEquivalent(existing, incoming)) {
     return false;
   }
-  return true;
+  if (!Number.isFinite(existing.expires)) {
+    return true;
+  }
+  if (!Number.isFinite(incoming.expires)) {
+    return false;
+  }
+  if (existing.expires < incoming.expires) {
+    return true;
+  }
+  return (
+    existing.expires === incoming.expires &&
+    (existing.access !== incoming.access || existing.refresh !== incoming.refresh)
+  );
 }
 
 async function performOAuthRefresh(
@@ -171,38 +227,56 @@ async function performOAuthRefresh(
   return await getOAuthApiKey(oauthProvider, oauthCreds);
 }
 
-async function writeCredentialToAgentStore(
-  agentDir: string | undefined,
-  profileId: string,
-  newCred: OAuthCredential,
-): Promise<void> {
+type WriteOAuthCredentialResult =
+  | { status: "written" | "kept_current"; current: OAuthCredential }
+  | { status: "missing" | "conflict" | "lock_failed"; current: null | OAuthCredential };
+
+async function writeCredentialToAgentStore(params: {
+  agentDir: string | undefined;
+  profileId: string;
+  expectedCurrent: OAuthCredential;
+  newCred: OAuthCredential;
+}): Promise<WriteOAuthCredentialResult> {
+  let result: WriteOAuthCredentialResult = { status: "lock_failed", current: null };
   try {
-    await updateAuthProfileStoreWithLock({
-      agentDir,
+    const updatedStore = await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
       updater: (store) => {
-        const existing = store.profiles[profileId];
-        if (
-          !existing ||
-          existing.type !== "oauth" ||
-          !Number.isFinite(existing.expires) ||
-          existing.expires < newCred.expires ||
-          // Token rotation without expiry change: persist when expiry matches
-          // but don't overwrite a strictly newer credential from a concurrent re-auth.
-          (existing.expires === newCred.expires &&
-            (existing.access !== newCred.access || existing.refresh !== newCred.refresh))
-        ) {
-          store.profiles[profileId] = { ...newCred };
+        const existing = store.profiles[params.profileId];
+        if (!existing || existing.type !== "oauth") {
+          result = { status: "missing", current: null };
+          return false;
+        }
+        if (!areOAuthCredentialsEquivalent(existing, params.expectedCurrent)) {
+          result = { status: "conflict", current: existing };
+          return false;
+        }
+        if (!shouldOverwriteOAuthCredential(existing, params.newCred)) {
+          result = { status: "kept_current", current: existing };
+          return false;
+        }
+
+        store.profiles[params.profileId] = { ...params.newCred };
+        const written = store.profiles[params.profileId];
+        if (written.type === "oauth") {
+          result = { status: "written", current: written };
           return true;
         }
+        result = { status: "missing", current: null };
         return false;
       },
     });
+    if (!updatedStore) {
+      return result;
+    }
+    return result;
   } catch (err) {
     log.debug("writeCredentialToAgentStore failed", {
-      profileId,
-      agentDir,
+      profileId: params.profileId,
+      agentDir: params.agentDir,
       error: err instanceof Error ? err.message : String(err),
     });
+    return { status: "lock_failed", current: null };
   }
 }
 
@@ -214,13 +288,14 @@ type ResolveApiKeyForProfileParams = {
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
+const READ_ONLY_AUTH_STORE_OPTIONS = { readOnly: true, allowKeychainPrompt: false } as const;
 
-function adoptNewerMainOAuthCredential(params: {
+async function adoptNewerMainOAuthCredential(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
   cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
-}): (OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null {
+}): Promise<(OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null> {
   if (!params.agentDir) {
     return null;
   }
@@ -229,18 +304,31 @@ function adoptNewerMainOAuthCredential(params: {
     const mainCred = mainStore.profiles[params.profileId];
     if (
       mainCred?.type === "oauth" &&
-      isSameOAuthIdentity(params.cred, mainCred) &&
+      canShareOAuthCredentialAcrossAgents(params.cred, mainCred) &&
       Number.isFinite(mainCred.expires) &&
       (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
     ) {
-      params.store.profiles[params.profileId] = { ...mainCred };
-      saveAuthProfileStore(params.store, params.agentDir);
-      log.info("adopted newer OAuth credentials from main agent", {
-        profileId: params.profileId,
+      const writeResult = await writeCredentialToAgentStore({
         agentDir: params.agentDir,
-        expires: new Date(mainCred.expires).toISOString(),
+        profileId: params.profileId,
+        expectedCurrent: params.cred,
+        newCred: mainCred,
       });
-      return mainCred;
+      const currentCred = writeResult.current;
+      if (
+        currentCred &&
+        canShareOAuthCredentialAcrossAgents(params.cred, currentCred) &&
+        Number.isFinite(currentCred.expires) &&
+        (!Number.isFinite(params.cred.expires) || currentCred.expires > params.cred.expires)
+      ) {
+        params.store.profiles[params.profileId] = { ...currentCred };
+        log.info("adopted newer OAuth credentials from main agent", {
+          profileId: params.profileId,
+          agentDir: params.agentDir,
+          expires: new Date(currentCred.expires).toISOString(),
+        });
+        return currentCred;
+      }
     }
   } catch (err) {
     // Best-effort: don't crash if main agent store is missing or unreadable.
@@ -291,14 +379,11 @@ async function doRefreshOAuthTokenWithLock(params: {
   const globalLockPath = resolveOAuthRefreshLockPath(params.profileId);
 
   return await withFileLock(globalLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () => {
-    // Re-read the agent's own store (fresh disk read, bypasses runtime snapshot cache).
-    const store = loadAuthProfileStoreForAgent(params.agentDir);
-    let cred = store.profiles[params.profileId];
-    // Profile may only exist in main store (inherited via ensureAuthProfileStore merge).
-    if ((!cred || cred.type !== "oauth") && params.agentDir) {
-      const mainStore = loadAuthProfileStoreForAgent(undefined);
-      cred = mainStore.profiles[params.profileId];
-    }
+    // Refresh holds the global OAuth lock, not the per-store auth lock. Keep
+    // these lookups read-only so external CLI sync can't persist auth store
+    // changes while we're only coordinating refresh.
+    const store = loadAuthProfileStoreForRuntime(params.agentDir, READ_ONLY_AUTH_STORE_OPTIONS);
+    const cred = store.profiles[params.profileId];
     if (!cred || cred.type !== "oauth") {
       return null;
     }
@@ -312,26 +397,32 @@ async function doRefreshOAuthTokenWithLock(params: {
     }
 
     // Check if another process already refreshed (visible in the main store).
-    // Only adopt if the main credential belongs to the same OAuth identity
-    // (same provider + email) to avoid cross-account overwrites.
+    // Only adopt if the main credential is provably the same shared profile.
     if (params.agentDir) {
-      const mainStore = loadAuthProfileStoreForAgent(undefined);
+      const mainStore = loadAuthProfileStoreForAgent(undefined, READ_ONLY_AUTH_STORE_OPTIONS);
       const mainCred = mainStore.profiles[params.profileId];
       if (
         mainCred?.type === "oauth" &&
         Date.now() < mainCred.expires &&
-        isSameOAuthIdentity(cred, mainCred)
+        canShareOAuthCredentialAcrossAgents(cred, mainCred)
       ) {
-        await writeCredentialToAgentStore(params.agentDir, params.profileId, mainCred);
-        log.info("adopted fresh OAuth credentials from main store (under global lock)", {
-          profileId: params.profileId,
+        const adopted = await writeCredentialToAgentStore({
           agentDir: params.agentDir,
-          expires: new Date(mainCred.expires).toISOString(),
+          profileId: params.profileId,
+          expectedCurrent: cred,
+          newCred: mainCred,
         });
-        return {
-          apiKey: await buildOAuthApiKey(mainCred.provider, mainCred),
-          newCredentials: mainCred,
-        };
+        if (adopted.current && Date.now() < adopted.current.expires) {
+          log.info("adopted fresh OAuth credentials from main store (under global lock)", {
+            profileId: params.profileId,
+            agentDir: params.agentDir,
+            expires: new Date(adopted.current.expires).toISOString(),
+          });
+          return {
+            apiKey: await buildOAuthApiKey(adopted.current.provider, adopted.current),
+            newCredentials: adopted.current,
+          };
+        }
       }
     }
 
@@ -343,22 +434,29 @@ async function doRefreshOAuthTokenWithLock(params: {
       // Recovery: if refresh_token_reused, another process may have refreshed
       // outside the lock (different machine, stale lock, copied credentials).
       if (isRefreshTokenReusedError(refreshError) && params.agentDir) {
-        const recoveryStore = loadAuthProfileStoreForAgent(undefined);
+        const recoveryStore = loadAuthProfileStoreForAgent(undefined, READ_ONLY_AUTH_STORE_OPTIONS);
         const recoveryCred = recoveryStore.profiles[params.profileId];
         if (
           recoveryCred?.type === "oauth" &&
           Date.now() < recoveryCred.expires &&
-          isSameOAuthIdentity(cred, recoveryCred)
+          canShareOAuthCredentialAcrossAgents(cred, recoveryCred)
         ) {
-          await writeCredentialToAgentStore(params.agentDir, params.profileId, recoveryCred);
-          log.info("recovered from refresh_token_reused via main store", {
+          const recovered = await writeCredentialToAgentStore({
+            agentDir: params.agentDir,
             profileId: params.profileId,
-            expires: new Date(recoveryCred.expires).toISOString(),
+            expectedCurrent: cred,
+            newCred: recoveryCred,
           });
-          return {
-            apiKey: await buildOAuthApiKey(recoveryCred.provider, recoveryCred),
-            newCredentials: recoveryCred,
-          };
+          if (recovered.current && Date.now() < recovered.current.expires) {
+            log.info("recovered from refresh_token_reused via main store", {
+              profileId: params.profileId,
+              expires: new Date(recovered.current.expires).toISOString(),
+            });
+            return {
+              apiKey: await buildOAuthApiKey(recovered.current.provider, recovered.current),
+              newCredentials: recovered.current,
+            };
+          }
         }
       }
       throw refreshError;
@@ -374,19 +472,43 @@ async function doRefreshOAuthTokenWithLock(params: {
       ...refreshResult.newCredentials,
       type: "oauth",
     };
-    await writeCredentialToAgentStore(params.agentDir, params.profileId, mergedCred);
+    const localWrite = await writeCredentialToAgentStore({
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      expectedCurrent: cred,
+      newCred: mergedCred,
+    });
+    const effectiveCred = localWrite.current;
+    if (!effectiveCred || Date.now() >= effectiveCred.expires) {
+      if (areOAuthCredentialsEquivalent(mergedCred, cred)) {
+        return refreshResult;
+      }
+      return null;
+    }
 
     // Write-back to main agent store so other agents benefit — only if
     // the sub-agent and main agent share the same OAuth identity.
     if (params.agentDir) {
-      const mainStore = loadAuthProfileStoreForAgent(undefined);
+      const mainStore = loadAuthProfileStoreForAgent(undefined, READ_ONLY_AUTH_STORE_OPTIONS);
       const mainCred = mainStore.profiles[params.profileId];
-      if (mainCred?.type === "oauth" && isSameOAuthIdentity(cred, mainCred)) {
-        await writeCredentialToAgentStore(undefined, params.profileId, mergedCred);
+      if (
+        (localWrite.status === "written" || localWrite.status === "kept_current") &&
+        mainCred?.type === "oauth" &&
+        canShareOAuthCredentialAcrossAgents(cred, mainCred)
+      ) {
+        await writeCredentialToAgentStore({
+          agentDir: undefined,
+          profileId: params.profileId,
+          expectedCurrent: mainCred,
+          newCred: effectiveCred,
+        });
       }
     }
 
-    return refreshResult;
+    return {
+      apiKey: await buildOAuthApiKey(effectiveCred.provider, effectiveCred),
+      newCredentials: effectiveCred,
+    };
   });
 }
 
@@ -422,6 +544,16 @@ async function tryResolveOAuthProfile(
     agentDir: params.agentDir,
   });
   if (!refreshed) {
+    const refreshedStore = loadAuthProfileStoreForAgent(params.agentDir);
+    const current = refreshedStore.profiles[profileId];
+    if (current && (current.type !== "oauth" || !areOAuthCredentialsEquivalent(current, cred))) {
+      return await resolveApiKeyForProfile({
+        cfg,
+        store: refreshedStore,
+        profileId,
+        agentDir: params.agentDir,
+      });
+    }
     return null;
   }
   return buildApiKeyProfileResult({
@@ -547,12 +679,12 @@ export async function resolveApiKeyForProfile(
   }
 
   const oauthCred =
-    adoptNewerMainOAuthCredential({
+    (await adoptNewerMainOAuthCredential({
       store,
       profileId,
       agentDir: params.agentDir,
       cred,
-    }) ?? cred;
+    })) ?? cred;
 
   if (Date.now() < oauthCred.expires) {
     return await buildOAuthProfileResult({
@@ -568,12 +700,25 @@ export async function resolveApiKeyForProfile(
       agentDir: params.agentDir,
     });
     if (!result) {
+      const refreshedStore = loadAuthProfileStoreForAgent(params.agentDir);
+      const current = refreshedStore.profiles[profileId];
+      if (
+        current &&
+        (current.type !== "oauth" || !areOAuthCredentialsEquivalent(current, oauthCred))
+      ) {
+        return await resolveApiKeyForProfile({
+          cfg,
+          store: refreshedStore,
+          profileId,
+          agentDir: params.agentDir,
+        });
+      }
       return null;
     }
     return buildApiKeyProfileResult({
       apiKey: result.apiKey,
-      provider: cred.provider,
-      email: cred.email,
+      provider: oauthCred.provider,
+      email: oauthCred.email,
     });
   } catch (error) {
     const refreshedStore = ensureAuthProfileStore(params.agentDir);
@@ -615,21 +760,26 @@ export async function resolveApiKeyForProfile(
         if (
           mainCred?.type === "oauth" &&
           Date.now() < mainCred.expires &&
-          isSameOAuthIdentity(cred, mainCred)
+          canShareOAuthCredentialAcrossAgents(cred, mainCred)
         ) {
-          // Main agent has fresh credentials for the same identity - copy and use
-          refreshedStore.profiles[profileId] = { ...mainCred };
-          saveAuthProfileStore(refreshedStore, params.agentDir);
-          log.info("inherited fresh OAuth credentials from main agent", {
-            profileId,
+          const inherited = await writeCredentialToAgentStore({
             agentDir: params.agentDir,
-            expires: new Date(mainCred.expires).toISOString(),
+            profileId,
+            expectedCurrent: cred,
+            newCred: mainCred,
           });
-          return await buildOAuthProfileResult({
-            provider: mainCred.provider,
-            credentials: mainCred,
-            email: mainCred.email,
-          });
+          if (inherited.current && Date.now() < inherited.current.expires) {
+            log.info("inherited fresh OAuth credentials from main agent", {
+              profileId,
+              agentDir: params.agentDir,
+              expires: new Date(inherited.current.expires).toISOString(),
+            });
+            return await buildOAuthProfileResult({
+              provider: inherited.current.provider,
+              credentials: inherited.current,
+              email: inherited.current.email,
+            });
+          }
         }
       } catch {
         // keep original error if main agent fallback also fails
