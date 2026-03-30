@@ -19,6 +19,18 @@ function createBundledPluginDir(prefix: string, marker: string): string {
   return rootDir;
 }
 
+function createThrowingPluginDir(prefix: string): string {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(rootDir);
+  fs.mkdirSync(path.join(rootDir, "bad"), { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "bad", "api.js"),
+    `throw new Error("plugin load failure");\n`,
+    "utf8",
+  );
+  return rootDir;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   if (originalBundledPluginsDir === undefined) {
@@ -49,5 +61,41 @@ describe("plugin-sdk facade runtime", () => {
       artifactBasename: "api.js",
     });
     expect(fromB.marker).toBe("override-b");
+  });
+
+  it("returns the same object identity on repeated calls (sentinel consistency)", () => {
+    const dir = createBundledPluginDir("openclaw-facade-identity-", "identity-check");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+
+    const first = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+      dirName: "demo",
+      artifactBasename: "api.js",
+    });
+    const second = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+      dirName: "demo",
+      artifactBasename: "api.js",
+    });
+    expect(first).toBe(second);
+    expect(first.marker).toBe("identity-check");
+  });
+
+  it("clears the cache on load failure so retries re-execute", () => {
+    const dir = createThrowingPluginDir("openclaw-facade-throw-");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+
+    expect(() =>
+      loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+        dirName: "bad",
+        artifactBasename: "api.js",
+      }),
+    ).toThrow("plugin load failure");
+
+    // A second call must also throw (not return a stale empty sentinel).
+    expect(() =>
+      loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+        dirName: "bad",
+        artifactBasename: "api.js",
+      }),
+    ).toThrow("plugin load failure");
   });
 });

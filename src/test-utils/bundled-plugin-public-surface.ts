@@ -21,7 +21,7 @@ function findBundledPluginMetadata(pluginId: string): BundledPluginMetadata {
   return metadata;
 }
 
-export function loadBundledPluginPublicSurfaceSync<T>(params: {
+export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
   pluginId: string;
   artifactBasename: string;
 }): T {
@@ -32,7 +32,7 @@ export function loadBundledPluginPublicSurfaceSync<T>(params: {
   });
 }
 
-export function loadBundledPluginTestApiSync<T>(pluginId: string): T {
+export function loadBundledPluginTestApiSync<T extends object>(pluginId: string): T {
   return loadBundledPluginPublicSurfaceSync<T>({
     pluginId,
     artifactBasename: "test-api.js",
