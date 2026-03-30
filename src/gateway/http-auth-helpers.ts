@@ -33,7 +33,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
 
 export function resolveGatewayRequestedOperatorScopes(req: IncomingMessage): string[] {
   const raw = getHeader(req, OPERATOR_SCOPES_HEADER)?.trim();
-  if (raw === undefined || raw === null) {
+  if (raw === undefined) {
     // No x-openclaw-scopes header present at all: the caller is a plain
     // Bearer-token HTTP client (curl, OpenAI SDK, etc.) that has already
     // passed gateway token authentication.  Grant the same default operator
