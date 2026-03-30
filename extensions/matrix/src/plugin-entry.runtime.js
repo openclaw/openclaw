@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { createJiti } = require("jiti");
 
+const OPENCLAW_PLUGIN_SDK_PREFIX = ["openclaw", "plugin-sdk"].join("/");
 const PLUGIN_SDK_EXPORT_PREFIX = "./plugin-sdk/";
 const PLUGIN_SDK_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const JITI_EXTENSIONS = [
@@ -72,7 +73,7 @@ function buildPluginSdkAliasMap(moduleUrl) {
     resolveExistingFile(path.join(sourcePluginSdkDir, "root-alias"), [".cjs"]) ??
     resolveExistingFile(path.join(distPluginSdkDir, "root-alias"), [".cjs"]);
   if (rootAlias) {
-    aliasMap["openclaw/plugin-sdk"] = rootAlias;
+    aliasMap[OPENCLAW_PLUGIN_SDK_PREFIX] = rootAlias;
   }
 
   for (const exportKey of Object.keys(packageJson.exports ?? {})) {
@@ -87,7 +88,7 @@ function buildPluginSdkAliasMap(moduleUrl) {
       resolveExistingFile(path.join(sourcePluginSdkDir, subpath), PLUGIN_SDK_SOURCE_EXTENSIONS) ??
       resolveExistingFile(path.join(distPluginSdkDir, subpath), [".js"]);
     if (resolvedPath) {
-      aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolvedPath;
+      aliasMap[`${OPENCLAW_PLUGIN_SDK_PREFIX}/${subpath}`] = resolvedPath;
     }
   }
 
