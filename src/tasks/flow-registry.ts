@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { getFlowRegistryStore, resetFlowRegistryRuntimeForTests } from "./flow-registry.store.js";
 import type { FlowRecord, FlowStatus } from "./flow-registry.types.js";
-import type { TaskNotifyPolicy } from "./task-registry.types.js";
+import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
 const flows = new Map<string, FlowRecord>();
 let restoreAttempted = false;
@@ -19,6 +19,31 @@ function snapshotFlowRecords(source: ReadonlyMap<string, FlowRecord>): FlowRecor
 
 function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
   return notifyPolicy ?? "done_only";
+}
+
+function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
+  return task.label?.trim() || task.task.trim() || "Background task";
+}
+
+export function deriveFlowStatusFromTask(
+  task: Pick<TaskRecord, "status" | "terminalOutcome">,
+): FlowStatus {
+  if (task.status === "queued") {
+    return "queued";
+  }
+  if (task.status === "running") {
+    return "running";
+  }
+  if (task.status === "succeeded") {
+    return task.terminalOutcome === "blocked" ? "blocked" : "succeeded";
+  }
+  if (task.status === "cancelled") {
+    return "cancelled";
+  }
+  if (task.status === "lost") {
+    return "lost";
+  }
+  return "failed";
 }
 
 function ensureFlowRegistryReady() {
@@ -87,6 +112,43 @@ export function createFlowRecord(params: {
   return cloneFlowRecord(record);
 }
 
+export function createFlowForTask(params: {
+  task: Pick<
+    TaskRecord,
+    | "requesterSessionKey"
+    | "notifyPolicy"
+    | "status"
+    | "terminalOutcome"
+    | "label"
+    | "task"
+    | "createdAt"
+    | "lastEventAt"
+    | "endedAt"
+  >;
+  requesterOrigin?: FlowRecord["requesterOrigin"];
+}): FlowRecord {
+  const terminalFlowStatus = deriveFlowStatusFromTask(params.task);
+  const isTerminal =
+    terminalFlowStatus === "succeeded" ||
+    terminalFlowStatus === "blocked" ||
+    terminalFlowStatus === "failed" ||
+    terminalFlowStatus === "cancelled" ||
+    terminalFlowStatus === "lost";
+  const endedAt = isTerminal
+    ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
+    : undefined;
+  return createFlowRecord({
+    ownerSessionKey: params.task.requesterSessionKey,
+    requesterOrigin: params.requesterOrigin,
+    status: terminalFlowStatus,
+    notifyPolicy: params.task.notifyPolicy,
+    goal: resolveFlowGoal(params.task),
+    createdAt: params.task.createdAt,
+    updatedAt: params.task.lastEventAt ?? params.task.createdAt,
+    ...(endedAt !== undefined ? { endedAt } : {}),
+  });
+}
+
 export function updateFlowRecordById(
   flowId: string,
   patch: Partial<
@@ -111,6 +173,43 @@ export function updateFlowRecordById(
   flows.set(flowId, next);
   persistFlowUpsert(next);
   return cloneFlowRecord(next);
+}
+
+export function syncFlowFromTask(
+  task: Pick<
+    TaskRecord,
+    | "parentFlowId"
+    | "status"
+    | "terminalOutcome"
+    | "notifyPolicy"
+    | "label"
+    | "task"
+    | "lastEventAt"
+    | "endedAt"
+  >,
+): FlowRecord | null {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return null;
+  }
+  const terminalFlowStatus = deriveFlowStatusFromTask(task);
+  const isTerminal =
+    terminalFlowStatus === "succeeded" ||
+    terminalFlowStatus === "blocked" ||
+    terminalFlowStatus === "failed" ||
+    terminalFlowStatus === "cancelled" ||
+    terminalFlowStatus === "lost";
+  return updateFlowRecordById(flowId, {
+    status: terminalFlowStatus,
+    notifyPolicy: task.notifyPolicy,
+    goal: resolveFlowGoal(task),
+    updatedAt: task.lastEventAt ?? Date.now(),
+    ...(isTerminal
+      ? {
+          endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
+        }
+      : {}),
+  });
 }
 
 export function getFlowById(flowId: string): FlowRecord | undefined {
