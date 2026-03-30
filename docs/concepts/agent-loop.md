@@ -156,3 +156,11 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 - AbortSignal (cancel)
 - Gateway disconnect or RPC timeout
 - `agent.wait` timeout (wait-only, does not stop agent)
+
+## Related
+
+- [Tools](/tools) — available agent tools
+- [Hooks](/automation/hooks) — event-driven scripts triggered by agent lifecycle events
+- [Compaction](/concepts/compaction) — how long conversations are summarized
+- [Exec Approvals](/tools/exec-approvals) — approval gates for shell commands
+- [Thinking](/tools/thinking) — thinking/reasoning level configuration
