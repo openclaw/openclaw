@@ -231,8 +231,8 @@ describe("resolveDiscordTargetForMessaging", () => {
     expect(result).toBeNull();
   });
 
-  it("respects preferredKind when parsing fails", async () => {
-    // Even with preferredKind, explicit targets should still work
+  it("ignores preferredKind for explicit prefixed targets", async () => {
+    // Even with preferredKind: "channel", an explicit user: prefix takes precedence
     const result = await resolveDiscordTargetForMessaging({
       cfg,
       accountId: "default",

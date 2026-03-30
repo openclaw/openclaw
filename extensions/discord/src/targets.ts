@@ -180,6 +180,8 @@ export async function resolveDiscordTargetForMessaging(params: {
   display?: string;
   source?: "normalized" | "directory";
 } | null> {
+  // `params.normalized` is accepted for interface conformance but not used here;
+  // parseDiscordTarget handles normalization of explicit targets directly from `input`.
   const raw = params.input.trim();
   if (!raw) {
     return null;
