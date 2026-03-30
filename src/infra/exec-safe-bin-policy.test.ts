@@ -212,6 +212,36 @@ describe("exec safe bin policy knownLongFlags from config", () => {
     expect(validateSafeBinArgv(["--verb"], profile)).toBe(true);
   });
 
+  it("filters user knownLongFlags that are strict prefixes of denied flags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        deniedFlags: ["--recursive"],
+        knownLongFlags: ["--rec", "--recu"],
+      },
+    });
+    const profile = profiles.mycli;
+    // Prefix forms must not bypass --recursive denial
+    expect(validateSafeBinArgv(["--rec"], profile)).toBe(false);
+    expect(validateSafeBinArgv(["--recu"], profile)).toBe(false);
+    // Full form still denied via deniedFlags
+    expect(validateSafeBinArgv(["--recursive"], profile)).toBe(false);
+    // Filtered prefixes must not appear in knownLongFlagsSet
+    expect(profile.knownLongFlagsSet?.has("--rec")).toBe(false);
+    expect(profile.knownLongFlagsSet?.has("--recu")).toBe(false);
+  });
+
+  it("keeps user knownLongFlags that are not prefixes of denied flags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        deniedFlags: ["--recursive"],
+        knownLongFlags: ["--verbose", "--version"],
+      },
+    });
+    const profile = profiles.mycli;
+    expect(validateSafeBinArgv(["--verbose"], profile)).toBe(true);
+    expect(validateSafeBinArgv(["--version"], profile)).toBe(true);
+  });
+
   it("works identically to auto-derivation when knownLongFlags duplicates allow/deny", () => {
     const withExplicit = resolveSafeBinProfiles({
       mycli: {

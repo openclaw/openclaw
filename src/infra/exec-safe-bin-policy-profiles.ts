@@ -75,9 +75,23 @@ function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
   const derivedKnownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags);
-  const knownLongFlags = fixture.knownLongFlags
-    ? Array.from(new Set([...derivedKnownLongFlags, ...fixture.knownLongFlags]))
-    : derivedKnownLongFlags;
+  // Filter user-provided knownLongFlags that are strict prefixes of denied flags.
+  // Without this, a short form like "--rec" would get exact-match priority in
+  // resolveCanonicalLongFlag, bypassing the denial of "--recursive".
+  const userFlags = fixture.knownLongFlags
+    ? fixture.knownLongFlags.filter((flag) => {
+        if (!flag.startsWith("--")) {
+          return true;
+        }
+        for (const denied of deniedFlags) {
+          if (denied.startsWith(flag) && denied !== flag) {
+            return false;
+          }
+        }
+        return true;
+      })
+    : [];
+  const knownLongFlags = Array.from(new Set([...derivedKnownLongFlags, ...userFlags]));
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
