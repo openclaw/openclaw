@@ -260,6 +260,42 @@ Optional per-id errors:
 }
 ```
 
+### AuthVault (external resolver)
+
+AuthVault Daemon can act as an `exec` provider to keep API keys, gateway tokens, and other SecretRef-backed values out of plaintext config.
+
+This example wires `gateway.auth.token` through an `exec` SecretRef:
+
+```json5
+{
+  secrets: {
+    providers: {
+      authvault: {
+        source: "exec",
+        command: "/path/to/authvault",
+        args: ["resolve"],
+        passEnv: ["AUTHVAULT_DATA_DIR"],
+        jsonOnly: true,
+        allowInsecurePath: true, // Windows-only: use only for trusted paths
+      },
+    },
+  },
+  gateway: {
+    auth: {
+      mode: "token",
+      token: { source: "exec", provider: "authvault", id: "gateway.auth.token" },
+    },
+  },
+}
+```
+
+Store the token inside AuthVault, then run `openclaw secrets reload` (or restart the gateway) to activate:
+
+```bash
+authvault set-secret gateway.auth.token "<token>"
+openclaw secrets reload
+```
+
 ### `sops`
 
 ```json5
