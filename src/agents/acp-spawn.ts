@@ -565,6 +565,27 @@ function resolveConversationIdForThreadBinding(params: {
   if (genericConversationId) {
     return genericConversationId;
   }
+
+  const channel = params.channel?.trim().toLowerCase();
+  const target = params.to?.trim() || "";
+  if (channel === "line") {
+    const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
+    if (prefixed) {
+      return prefixed;
+    }
+    if (/^[UCR][a-f0-9]{32}$/i.test(target)) {
+      return target;
+    }
+  }
+
+  // Generic: strip channel prefix from target (e.g. "telegram:12345" → "12345")
+  if (channel && target.toLowerCase().startsWith(`${channel}:`)) {
+    const stripped = target.slice(channel.length + 1).trim();
+    if (stripped && /^\d{6,}$/.test(stripped)) {
+      return stripped;
+    }
+  }
+
   return undefined;
 }
 

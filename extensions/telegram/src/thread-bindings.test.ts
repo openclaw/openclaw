@@ -322,4 +322,84 @@ describe("telegram thread bindings", () => {
     };
     expect(persisted.bindings?.[0]?.idleTimeoutMs).toBe(90_000);
   });
+
+  it("restores previous binding when unbinding by session key", async () => {
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    const dmConversation = {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "12345678",
+    };
+
+    // Bind DM to main agent session
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:telegram:direct:12345678",
+      targetKind: "session",
+      conversation: dmConversation,
+      placement: "current",
+    });
+
+    // Specialist takes over (rebind)
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:coder:acp:uuid-1",
+      targetKind: "session",
+      conversation: dmConversation,
+      placement: "current",
+    });
+
+    // Verify specialist is active
+    const active = getSessionBindingService().resolveByConversation(dmConversation);
+    expect(active?.targetSessionKey).toBe("agent:coder:acp:uuid-1");
+
+    // Unbind specialist (session end)
+    await getSessionBindingService().unbind({
+      targetSessionKey: "agent:coder:acp:uuid-1",
+      reason: "manual-close",
+    });
+
+    // Verify DM reverted to main agent
+    const restored = getSessionBindingService().resolveByConversation(dmConversation);
+    expect(restored?.targetSessionKey).toBe("agent:main:telegram:direct:12345678");
+  });
+
+  it("restores previous binding when unbinding by conversation", async () => {
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    const dmConversation = {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "87654321",
+    };
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation: dmConversation,
+      placement: "current",
+    });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:analyst:acp:uuid-2",
+      targetKind: "session",
+      conversation: dmConversation,
+      placement: "current",
+    });
+
+    await getSessionBindingService().unbind({
+      bindingId: bound.bindingId,
+      reason: "manual-close",
+    });
+
+    const restored = getSessionBindingService().resolveByConversation(dmConversation);
+    expect(restored?.targetSessionKey).toBe("agent:main:session:1");
+  });
 });
