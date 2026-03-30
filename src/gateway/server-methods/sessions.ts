@@ -298,7 +298,7 @@ async function searchSessionsViaFts(params: {
   for (const dbPath of memoryDbPaths) {
     let db: DatabaseSync;
     try {
-      db = new DatabaseSync(dbPath);
+      db = new DatabaseSync(dbPath, { readOnly: true });
     } catch {
       continue;
     }
