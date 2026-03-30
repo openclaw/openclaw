@@ -356,8 +356,15 @@ export async function readCronRunLogEntriesPage(
   opts?: ReadCronRunLogPageOptions,
 ): Promise<CronRunLogPageResult> {
   await drainPendingWrite(filePath);
+  // Defensive prune before reading — if prior prunes failed (disk pressure),
+  // this prevents reading an unbounded file into memory.
+  const resolved = path.resolve(filePath);
+  await pruneIfNeeded(resolved, {
+    maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+    keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+  }).catch(() => undefined);
   const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 50)));
-  const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
+  const raw = await fs.readFile(resolved, "utf-8").catch(() => "");
   const statuses = normalizeRunStatuses(opts);
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
   const query = opts?.query?.trim().toLowerCase() ?? "";
