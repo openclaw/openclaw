@@ -10,6 +10,7 @@ import {
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { extractDocxText } from "../media/docx-extract.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -50,6 +51,7 @@ const MAX_ADAPTIVE_READ_PAGES = 8;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  readBufferForToolPath?: (toolPath: string, signal?: AbortSignal) => Promise<Buffer>;
 };
 
 type ReadTruncationDetails = {
@@ -351,6 +353,30 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
+async function normalizeReadDocumentResult(params: {
+  result: AgentToolResult<unknown>;
+  filePath: string;
+  readBufferForToolPath?: OpenClawReadToolOptions["readBufferForToolPath"];
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  if (!params.readBufferForToolPath) {
+    return params.result;
+  }
+
+  const buffer = await params.readBufferForToolPath(params.filePath, params.signal);
+  const mimeType = await detectMime({ buffer, filePath: params.filePath });
+  if (mimeType !== "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return params.result;
+  }
+
+  const text = await extractDocxText({ buffer });
+  if (!text.trim()) {
+    return params.result;
+  }
+
+  return withToolResultText(params.result, text);
+}
+
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
@@ -593,6 +619,8 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
+    readBufferForToolPath: (toolPath, signal) =>
+      params.bridge.readFile({ filePath: toolPath, cwd: params.root, signal }),
   });
 }
 
@@ -655,7 +683,13 @@ export function createOpenClawReadTool(
       });
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
-      const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
+      const normalizedDocumentResult = await normalizeReadDocumentResult({
+        result: strippedDetailsResult,
+        filePath,
+        readBufferForToolPath: options?.readBufferForToolPath,
+        signal,
+      });
+      const normalizedResult = await normalizeReadImageResult(normalizedDocumentResult, filePath);
       return sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,

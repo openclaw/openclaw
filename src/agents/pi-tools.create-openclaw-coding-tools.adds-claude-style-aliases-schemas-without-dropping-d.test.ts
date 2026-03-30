@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
@@ -12,6 +13,16 @@ const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
+
+async function makeDocx(documentXml: string): Promise<Buffer> {
+  const zip = new JSZip();
+  zip.file(
+    "[Content_Types].xml",
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+  );
+  zip.file("word/document.xml", documentXml);
+  return await zip.generateAsync({ type: "nodebuffer" });
+}
 
 describe("createOpenClawCodingTools", () => {
   it("returns image-aware read metadata for images and text-only blocks for text files", async () => {
@@ -56,6 +67,33 @@ describe("createOpenClawCodingTools", () => {
       expect(textBlocks?.length ?? 0).toBeGreaterThan(0);
       const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
       expect(combinedText).toContain(contents);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+  it("extracts native text when reading docx files", async () => {
+    const readTool = defaultTools.find((tool) => tool.name === "read");
+    expect(readTool).toBeDefined();
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-docx-"));
+    try {
+      const docxPath = path.join(tmpDir, "sample.docx");
+      const buffer = await makeDocx(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello DOCX</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Revenue</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>42</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>',
+      );
+      await fs.writeFile(docxPath, buffer);
+
+      const result = await readTool?.execute("tool-docx-1", {
+        path: docxPath,
+      });
+
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n") ?? "";
+      expect(combinedText).toContain("Hello DOCX");
+      expect(combinedText).toContain("Revenue\t42");
+      expect(result?.content?.some((block) => block.type === "image")).toBe(false);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

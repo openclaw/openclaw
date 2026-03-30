@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
@@ -37,6 +38,7 @@ import {
   createSandboxedWriteTool,
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
+  resolveToolPathAgainstWorkspaceRoot,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -388,6 +390,13 @@ export function createOpenClawCodingTools(options?: {
       const wrapped = createOpenClawReadTool(freshReadTool, {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
+        readBufferForToolPath: (toolPath) =>
+          fs.readFile(
+            resolveToolPathAgainstWorkspaceRoot({
+              filePath: toolPath,
+              root: workspaceRoot,
+            }),
+          ),
       });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
