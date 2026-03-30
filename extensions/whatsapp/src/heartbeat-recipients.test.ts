@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 const loadSessionStoreMock = vi.hoisted(() => vi.fn());
 const readChannelAllowFromStoreSyncMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
 
-type WhatsAppHeartbeatModule = typeof import("./whatsapp-heartbeat.js");
+type WhatsAppRuntimeApiModule = typeof import("./runtime-api.js");
 
-let resolveWhatsAppHeartbeatRecipients: WhatsAppHeartbeatModule["resolveWhatsAppHeartbeatRecipients"];
+let resolveWhatsAppHeartbeatRecipients: WhatsAppRuntimeApiModule["resolveWhatsAppHeartbeatRecipients"];
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   return {
@@ -43,16 +43,16 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     vi.resetModules();
     loadSessionStoreMock.mockReset();
     readChannelAllowFromStoreSyncMock.mockReset();
-    vi.doMock("../../config/sessions/store-summary.js", () => ({
+    vi.doMock("../../../src/config/sessions/store-summary.js", () => ({
       loadSessionStoreSummary: loadSessionStoreMock,
     }));
-    vi.doMock("../../config/sessions/paths.js", () => ({
+    vi.doMock("../../../src/config/sessions/paths.js", () => ({
       resolveStorePath: vi.fn(() => "/tmp/test-sessions.json"),
     }));
-    vi.doMock("../../pairing/pairing-store.js", () => ({
+    vi.doMock("../../../src/pairing/pairing-store.js", () => ({
       readChannelAllowFromStoreSync: readChannelAllowFromStoreSyncMock,
     }));
-    ({ resolveWhatsAppHeartbeatRecipients } = await import("./whatsapp-heartbeat.js"));
+    ({ resolveWhatsAppHeartbeatRecipients } = await import("./runtime-api.js"));
     setAllowFromStore([]);
   });
 
