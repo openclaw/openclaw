@@ -331,7 +331,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
   let inspectLegacyStore = params.deps?.inspectLegacyStore;
   const writeJsonFileAtomically =
     params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomicallyImpl;
-  if (!inspectLegacyStore) {
+  if (!inspectLegacyStore && detection.plans.length > 0) {
     try {
       inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
         cfg: params.cfg,
@@ -370,7 +370,8 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
 
     let summary: MatrixLegacyCryptoSummary;
     try {
-      summary = await inspectLegacyStore({
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      summary = await inspectLegacyStore!({
         cryptoRootDir: plan.legacyCryptoPath,
         userId: plan.userId,
         deviceId: plan.deviceId,
