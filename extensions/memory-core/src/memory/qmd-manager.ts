@@ -2192,15 +2192,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     relativeToWorkspace: string,
     absPath: string,
   ): string {
+    const sanitized = collectionRelativePath.replace(/^\/+/, "");
     const insideWorkspace = this.isInsideWorkspace(relativeToWorkspace);
     if (insideWorkspace) {
       const normalized = relativeToWorkspace.replace(/\\/g, "/");
       if (!normalized) {
         return path.basename(absPath);
       }
+      // `qmd/<collection>/...` is a reserved virtual path namespace consumed by
+      // readFile(). If a real workspace file happens to live under `qmd/...`,
+      // return the explicit collection-scoped virtual path so search->read
+      // remains roundtrip-safe.
+      if (normalized === "qmd" || normalized.startsWith("qmd/")) {
+        return `qmd/${collection}/${sanitized}`;
+      }
       return normalized;
     }
-    const sanitized = collectionRelativePath.replace(/^\/+/, "");
     return `qmd/${collection}/${sanitized}`;
   }
 
