@@ -545,6 +545,21 @@ async function doRefreshOAuthTokenWithLock(params: {
     });
     const effectiveCred = localWrite.current;
     if (!effectiveCred || Date.now() >= effectiveCred.expires) {
+      if (localWrite.status === "lock_failed") {
+        const refreshedStore = loadAuthProfileStoreForRuntime(
+          params.agentDir,
+          READ_ONLY_AUTH_STORE_OPTIONS,
+        );
+        const current = refreshedStore.profiles[params.profileId];
+        // If the store still resolves to the same stale OAuth snapshot, use the
+        // freshly minted credential for this request rather than failing auth.
+        if (
+          !current ||
+          (current.type === "oauth" && areOAuthCredentialsEquivalent(current, cred))
+        ) {
+          return refreshResult;
+        }
+      }
       if (areOAuthCredentialsEquivalent(mergedCred, cred)) {
         return refreshResult;
       }

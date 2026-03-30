@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { resolveAuthStorePath } from "./paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -607,6 +608,73 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       type: "token",
       token: "replacement-token",
     });
+  });
+
+  it("returns freshly refreshed credentials when CAS persistence times out", async () => {
+    const profileId = "openai-codex:default";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+    const authPath = resolveAuthStorePath(agentDir);
+    const authLockPath = `${authPath}.lock`;
+    const { AUTH_STORE_LOCK_OPTIONS: liveAuthStoreLockOptions } = await import("./constants.js");
+    const originalRetries = { ...liveAuthStoreLockOptions.retries };
+
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      agentDir,
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        ({
+          type: "oauth",
+          provider: "openai-codex",
+          access: "fresh-access-after-timeout",
+          refresh: "fresh-refresh-after-timeout",
+          expires: freshExpiry,
+        }) as never,
+    );
+
+    await fs.writeFile(
+      authLockPath,
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+      "utf8",
+    );
+    Object.assign(liveAuthStoreLockOptions.retries as Record<string, number | boolean>, {
+      retries: 0,
+      factor: 1,
+      minTimeout: 1,
+      maxTimeout: 1,
+      randomize: false,
+    });
+
+    try {
+      clearRuntimeAuthProfileStoreSnapshots();
+      const result = await resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      });
+
+      expect(result).toEqual({
+        apiKey: "fresh-access-after-timeout",
+        provider: "openai-codex",
+        email: undefined,
+      });
+
+      const currentStore = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(currentStore.profiles[profileId]).toMatchObject({
+        type: "oauth",
+        access: "cached-access-token",
+        refresh: "refresh-token",
+      });
+    } finally {
+      Object.assign(
+        liveAuthStoreLockOptions.retries as Record<string, number | boolean>,
+        originalRetries,
+      );
+      await fs.rm(authLockPath, { force: true });
+    }
   });
 
   it("re-resolves inherited main-store updates when refresh returns null", async () => {
