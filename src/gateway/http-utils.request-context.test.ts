@@ -1,10 +1,17 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import {
+  resolveGatewayRequestContext,
+  resolveHttpSenderIsOwner,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
 
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
+
+const tokenAuth = { mode: "token" as const };
+const noneAuth = { mode: "none" as const };
 
 describe("resolveGatewayRequestContext", () => {
   it("uses normalized x-openclaw-message-channel when enabled", () => {
@@ -41,5 +48,77 @@ describe("resolveGatewayRequestContext", () => {
     });
 
     expect(result.sessionKey).toContain("openresponses-user:alice");
+  });
+});
+
+describe("resolveTrustedHttpOperatorScopes", () => {
+  it("drops self-asserted scopes for bearer-authenticated requests", () => {
+    const scopes = resolveTrustedHttpOperatorScopes(
+      createReq({
+        authorization: "Bearer secret",
+        "x-openclaw-scopes": "operator.admin, operator.write",
+      }),
+      tokenAuth,
+    );
+
+    expect(scopes).toEqual([]);
+  });
+
+  it("keeps declared scopes for non-bearer HTTP requests", () => {
+    const scopes = resolveTrustedHttpOperatorScopes(
+      createReq({
+        "x-openclaw-scopes": "operator.admin, operator.write",
+      }),
+      noneAuth,
+    );
+
+    expect(scopes).toEqual(["operator.admin", "operator.write"]);
+  });
+
+  it("keeps declared scopes when auth mode is not shared-secret even if auth headers are forwarded", () => {
+    const scopes = resolveTrustedHttpOperatorScopes(
+      createReq({
+        authorization: "Bearer upstream-idp-token",
+        "x-openclaw-scopes": "operator.admin, operator.write",
+      }),
+      noneAuth,
+    );
+
+    expect(scopes).toEqual(["operator.admin", "operator.write"]);
+  });
+
+  it("drops declared scopes when request auth resolved to a shared-secret method", () => {
+    const scopes = resolveTrustedHttpOperatorScopes(
+      createReq({
+        authorization: "Bearer upstream-idp-token",
+        "x-openclaw-scopes": "operator.admin, operator.write",
+      }),
+      { trustDeclaredOperatorScopes: false },
+    );
+
+    expect(scopes).toEqual([]);
+  });
+});
+
+describe("resolveHttpSenderIsOwner", () => {
+  it("requires operator.admin on a trusted HTTP scope-bearing request", () => {
+    expect(
+      resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.admin" }), noneAuth),
+    ).toBe(true);
+    expect(
+      resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.write" }), noneAuth),
+    ).toBe(false);
+  });
+
+  it("returns false for bearer requests even with operator.admin in headers", () => {
+    expect(
+      resolveHttpSenderIsOwner(
+        createReq({
+          authorization: "Bearer secret",
+          "x-openclaw-scopes": "operator.admin",
+        }),
+        tokenAuth,
+      ),
+    ).toBe(false);
   });
 });
