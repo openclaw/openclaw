@@ -100,9 +100,6 @@ export async function resolveAgentTurnAttachments(params: {
     if (!isImageAgentTurnAttachment(attachment)) {
       return false;
     }
-    if (!normalizeOptionalString(attachment.path)) {
-      return false;
-    }
     try {
       const { buffer } = await cache.getBuffer({
         attachmentIndex: attachment.index,
