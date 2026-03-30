@@ -918,7 +918,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
-- `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
+- `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
@@ -2061,7 +2061,7 @@ Notes:
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
-### `tools.subagents`
+### `agents.defaults.subagents`
 
 ```json5
 {
@@ -2069,7 +2069,7 @@ Notes:
     defaults: {
       subagents: {
         model: "minimax/MiniMax-M2.7",
-        maxConcurrent: 1,
+        maxConcurrent: 8,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
       },
