@@ -30,13 +30,29 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
   return true;
 }
 
-export function resolveGatewayRequestedOperatorScopes(req: IncomingMessage): string[] {
+export function resolveGatewayRequestedOperatorScopes(
+  req: IncomingMessage,
+  auth?: ResolvedGatewayAuth,
+): string[] {
   const raw = getHeader(req, OPERATOR_SCOPES_HEADER)?.trim();
-  if (!raw) {
-    return [];
+  if (raw) {
+    return raw
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter((scope) => scope.length > 0);
   }
-  return raw
-    .split(",")
-    .map((scope) => scope.trim())
-    .filter((scope) => scope.length > 0);
+  // No explicit scopes header. If bearer token auth was configured and
+  // succeeded (auth mode is token/password, not none), treat the request
+  // as a fully privileged operator.
+  if (auth?.mode === "token" || auth?.mode === "password") {
+    return [
+      "operator.admin",
+      "operator.write",
+      "operator.read",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ];
+  }
+  return [];
 }

@@ -44,7 +44,7 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   if (opts.requiredOperatorMethod) {
-    const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
+    const requestedScopes = resolveGatewayRequestedOperatorScopes(req, opts.auth);
     const scopeAuth = authorizeOperatorScopesForMethod(
       opts.requiredOperatorMethod,
       requestedScopes,
