@@ -7,7 +7,6 @@ const tempDirs = createTrackedTempDirs();
 
 describe("fs-safe unlink helper errors", () => {
   let removeFileWithinRoot: typeof import("./fs-safe.js").removeFileWithinRoot;
-  let SafeOpenError: typeof import("./fs-safe.js").SafeOpenError;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -20,7 +19,7 @@ describe("fs-safe unlink helper errors", () => {
         },
       };
     });
-    ({ removeFileWithinRoot, SafeOpenError } = await import("./fs-safe.js"));
+    ({ removeFileWithinRoot } = await import("./fs-safe.js"));
   });
 
   afterEach(async () => {
@@ -30,25 +29,18 @@ describe("fs-safe unlink helper errors", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "preserves helper startup failures instead of rewriting them to not-found",
+    "falls back to the legacy rooted delete when the unlink helper cannot start",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
       const targetPath = path.join(root, "note.txt");
       await fs.writeFile(targetPath, "hello", "utf8");
 
-      try {
-        await removeFileWithinRoot({
-          rootDir: root,
-          relativePath: "note.txt",
-        });
-        throw new Error("expected rooted unlink to fail");
-      } catch (error) {
-        expect(error).toBeInstanceOf(SafeOpenError);
-        expect(error).toMatchObject({ code: "invalid-path" });
-        expect(String(error)).toMatch(/Pinned unlink helper failed to start:/i);
-      }
+      await removeFileWithinRoot({
+        rootDir: root,
+        relativePath: "note.txt",
+      });
 
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("hello");
+      await expect(fs.readFile(targetPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 });

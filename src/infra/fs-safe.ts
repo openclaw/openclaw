@@ -842,13 +842,19 @@ export async function removeFileWithinRoot(params: {
   }
 
   const pinned = await resolvePinnedDeleteTargetWithinRoot(params);
-  await runPinnedUnlinkHelper({
-    rootPath: pinned.rootReal,
-    relativeParentPath: pinned.relativeParentPath,
-    basename: pinned.basename,
-  }).catch((error) => {
+  try {
+    await runPinnedUnlinkHelper({
+      rootPath: pinned.rootReal,
+      relativeParentPath: pinned.relativeParentPath,
+      basename: pinned.basename,
+    });
+  } catch (error) {
+    if (isPinnedUnlinkHelperStartupFailure(error)) {
+      await removeFileWithinRootLegacy(params);
+      return;
+    }
     throw normalizePinnedUnlinkError(error);
-  });
+  }
 
   try {
     await fs.lstat(pinned.targetPath);
@@ -1140,6 +1146,10 @@ function normalizePinnedUnlinkError(error: unknown): Error {
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,
   });
+}
+
+function isPinnedUnlinkHelperStartupFailure(error: unknown): boolean {
+  return error instanceof Error && /^Pinned unlink helper failed to start:/i.test(error.message);
 }
 
 async function writeFileWithinRootLegacy(params: {
