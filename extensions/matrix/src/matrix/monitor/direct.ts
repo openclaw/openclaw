@@ -37,7 +37,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   let hasSeededDmCache = false;
   let cachedSelfUserId: string | null = null;
   const joinedMembersCache = new Map<string, { members: string[]; ts: number }>();
-  const directMemberFlagCache = new Map<string, { isDirect: boolean; ts: number }>();
+  const directMemberFlagCache = new Map<string, { isDirect: boolean | null; ts: number }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -113,19 +113,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       const { roomId, senderId } = params;
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const joinedMembers = await resolveJoinedMembers(roomId);
-
-      // Check is_direct flag from local user's membership state only.
-      // Do NOT trust remote sender's is_direct (CWE-285: improper authorization).
-      // In Matrix, m.room.member.content.is_direct is set by each member themselves,
-      // so a malicious remote user could manipulate it to bypass DM/room policies.
-      const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
-      const isDirectFlag: boolean | null = directViaSelf;
-
       const strictDirectMembership = isStrictDirectMembership({
         selfUserId,
         remoteUserId: senderId,
         joinedMembers,
-        isDirectFlag,
       });
 
       try {
@@ -143,12 +134,14 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       }
 
       if (strictDirectMembership) {
-        const directViaState =
-          (await resolveDirectMemberFlag(roomId, senderId)) ||
-          (await resolveDirectMemberFlag(roomId, selfUserId));
-        if (directViaState) {
+        const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
+        if (directViaSelf === true) {
           log(`matrix: dm detected via member state room=${roomId}`);
           return true;
+        }
+        if (directViaSelf === false) {
+          log(`matrix: dm rejected via member state room=${roomId}`);
+          return false;
         }
 
         if (!hasSeededDmCache) {

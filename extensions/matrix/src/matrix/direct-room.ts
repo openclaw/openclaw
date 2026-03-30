@@ -21,28 +21,10 @@ export function isStrictDirectMembership(params: {
   selfUserId?: string | null;
   remoteUserId?: string | null;
   joinedMembers?: readonly string[] | null;
-  isDirectFlag?: boolean | null;
 }): boolean {
   const selfUserId = trimMaybeString(params.selfUserId);
   const remoteUserId = trimMaybeString(params.remoteUserId);
   const joinedMembers = params.joinedMembers ?? [];
-
-  // Only trust is_direct from local user's membership state (selfUserId).
-  // Remote user's is_direct is NOT trusted (CWE-285: authorization bypass).
-
-  // When local user's is_direct=true, verify it's a true 2-person DM
-  if (params.isDirectFlag === true) {
-    return Boolean(
-      selfUserId &&
-      remoteUserId &&
-      joinedMembers.length === 2 &&
-      joinedMembers.includes(selfUserId) &&
-      joinedMembers.includes(remoteUserId),
-    );
-  }
-
-  // When is_direct=false or null, fall back to strict 2-member check
-  // This prevents attackers from forcing non-DM classification with is_direct=false
   return Boolean(
     selfUserId &&
     remoteUserId &&
@@ -93,6 +75,7 @@ export type MatrixDirectRoomEvidence = {
   joinedMembers: string[] | null;
   strict: boolean;
   viaMemberState: boolean;
+  memberStateFlag: boolean | null;
 };
 
 export async function inspectMatrixDirectRoomEvidence(params: {
@@ -116,15 +99,15 @@ export async function inspectMatrixDirectRoomEvidence(params: {
       joinedMembers,
       strict: false,
       viaMemberState: false,
+      memberStateFlag: null,
     };
   }
+  const memberStateFlag = await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId);
   return {
     joinedMembers,
     strict,
-    viaMemberState:
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, params.remoteUserId)) ===
-        true ||
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId)) === true,
+    viaMemberState: memberStateFlag === true,
+    memberStateFlag,
   };
 }
 
