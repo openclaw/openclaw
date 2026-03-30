@@ -4,7 +4,7 @@
 # https://til.simonwillison.net/llms/openclaw-docker
 #
 # Installation:
-#   mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/shell-helpers/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
+#   mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/clawdock/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
 #   echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc
 #
 # Usage:
@@ -57,6 +57,20 @@ _clawdock_trim_quotes() {
   value="${value#\"}"
   value="${value%\"}"
   printf "%s" "$value"
+}
+
+_clawdock_mask_value() {
+  local value="$1"
+  local length=${#value}
+  if (( length == 0 )); then
+    printf "%s" "<empty>"
+    return 0
+  fi
+  if (( length == 1 )); then
+    printf "%s" "<redacted:1 char>"
+    return 0
+  fi
+  printf "%s" "<redacted:${length} chars>"
 }
 
 _clawdock_read_config_dir() {
@@ -187,6 +201,58 @@ clawdock-config() {
   cd ~/.openclaw
 }
 
+clawdock-show-config() {
+  _clawdock_ensure_dir >/dev/null 2>&1 || true
+  local config_dir="${HOME}/.openclaw"
+  echo -e "${_CLR_BOLD}Config directory:${_CLR_RESET} ${_CLR_CYAN}${config_dir}${_CLR_RESET}"
+  echo ""
+
+  # Show openclaw.json
+  if [[ -f "${config_dir}/openclaw.json" ]]; then
+    echo -e "${_CLR_BOLD}${config_dir}/openclaw.json${_CLR_RESET}"
+    echo -e "${_CLR_DIM}$(cat "${config_dir}/openclaw.json")${_CLR_RESET}"
+  else
+    echo -e "${_CLR_YELLOW}No openclaw.json found${_CLR_RESET}"
+  fi
+  echo ""
+
+  # Show .env (mask secret values)
+  if [[ -f "${config_dir}/.env" ]]; then
+    echo -e "${_CLR_BOLD}${config_dir}/.env${_CLR_RESET}"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]]; then
+        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
+      elif [[ "$line" == *=* ]]; then
+        local key="${line%%=*}"
+        local val="${line#*=}"
+        echo -e "${_CLR_CYAN}${key}${_CLR_RESET}=${_CLR_DIM}$(_clawdock_mask_value "$val")${_CLR_RESET}"
+      else
+        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
+      fi
+    done < "${config_dir}/.env"
+  else
+    echo -e "${_CLR_YELLOW}No .env found${_CLR_RESET}"
+  fi
+  echo ""
+
+  # Show project .env if available
+  if [[ -n "$CLAWDOCK_DIR" && -f "${CLAWDOCK_DIR}/.env" ]]; then
+    echo -e "${_CLR_BOLD}${CLAWDOCK_DIR}/.env${_CLR_RESET}"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]]; then
+        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
+      elif [[ "$line" == *=* ]]; then
+        local key="${line%%=*}"
+        local val="${line#*=}"
+        echo -e "${_CLR_CYAN}${key}${_CLR_RESET}=${_CLR_DIM}$(_clawdock_mask_value "$val")${_CLR_RESET}"
+      else
+        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
+      fi
+    done < "${CLAWDOCK_DIR}/.env"
+  fi
+  echo ""
+}
+
 clawdock-workspace() {
   cd ~/.openclaw/workspace
 }
@@ -206,6 +272,32 @@ clawdock-cli() {
 }
 
 # Maintenance
+clawdock-update() {
+  _clawdock_ensure_dir || return 1
+
+  echo "🔄 Updating OpenClaw..."
+
+  echo ""
+  echo "📥 Pulling latest source..."
+  git -C "${CLAWDOCK_DIR}" pull || { echo "❌ git pull failed"; return 1; }
+
+  echo ""
+  echo "🔨 Rebuilding Docker image (this may take a few minutes)..."
+  _clawdock_compose build openclaw-gateway || { echo "❌ Build failed"; return 1; }
+
+  echo ""
+  echo "♻️  Recreating container with new image..."
+  _clawdock_compose down 2>&1 | _clawdock_filter_warnings
+  _clawdock_compose up -d openclaw-gateway 2>&1 | _clawdock_filter_warnings
+
+  echo ""
+  echo "⏳ Waiting for gateway to start..."
+  sleep 5
+
+  echo "✅ Update complete!"
+  echo -e "   Verify: $(_cmd clawdock-cli status)"
+}
+
 clawdock-rebuild() {
   _clawdock_compose build openclaw-gateway
 }
@@ -290,10 +382,10 @@ clawdock-dashboard() {
   fi
 
   if [[ -n "$url" ]]; then
-    echo "✅ Opening: $url"
-    open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || echo "   Please open manually: $url"
+    echo -e "✅ Opening: ${_CLR_CYAN}${url}${_CLR_RESET}"
+    open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || echo -e "   Please open manually: ${_CLR_CYAN}${url}${_CLR_RESET}"
     echo ""
-    echo -e "${_CLR_CYAN}💡 If you see 'pairing required' error:${_CLR_RESET}"
+    echo -e "${_CLR_CYAN}💡 If you see ${_CLR_RED}'pairing required'${_CLR_CYAN} error:${_CLR_RESET}"
     echo -e "   1. Run: $(_cmd clawdock-devices)"
     echo "   2. Copy the Request ID from the Pending table"
     echo -e "   3. Run: $(_cmd 'clawdock-approve <request-id>')"
@@ -316,7 +408,8 @@ clawdock-devices() {
     echo ""
     echo -e "${_CLR_CYAN}💡 If you see token errors above:${_CLR_RESET}"
     echo -e "   1. Verify token is set: $(_cmd clawdock-token)"
-    echo "   2. Try manual config inside container:"
+    echo -e "   2. Try fixing the token automatically: $(_cmd clawdock-fix-token)"
+    echo "   3. If you still see errors, try manual config inside container:"
     echo -e "      $(_cmd clawdock-shell)"
     echo -e "      $(_cmd 'openclaw config get gateway.remote.token')"
     return 1
@@ -381,7 +474,8 @@ clawdock-help() {
   echo ""
 
   echo -e "${_CLR_BOLD}${_CLR_MAGENTA}🔧 Maintenance${_CLR_RESET}"
-  echo -e "  $(_cmd clawdock-rebuild)     ${_CLR_DIM}Rebuild Docker image${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-update)      ${_CLR_DIM}Pull, rebuild, and restart ${_CLR_CYAN}(one-command update)${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-rebuild)     ${_CLR_DIM}Rebuild Docker image only${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-clean)       ${_CLR_RED}⚠️  Remove containers & volumes (nuclear)${_CLR_RESET}"
   echo ""
 
@@ -390,6 +484,7 @@ clawdock-help() {
   echo -e "  $(_cmd clawdock-token)       ${_CLR_DIM}Show gateway auth token${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-cd)          ${_CLR_DIM}Jump to openclaw project directory${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-config)      ${_CLR_DIM}Open config directory (~/.openclaw)${_CLR_RESET}"
+  echo -e "  $(_cmd clawdock-show-config) ${_CLR_DIM}Print config files with redacted values${_CLR_RESET}"
   echo -e "  $(_cmd clawdock-workspace)   ${_CLR_DIM}Open workspace directory${_CLR_RESET}"
   echo ""
 
