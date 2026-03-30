@@ -191,8 +191,8 @@ function dispatchAgentRunFromGateway(params: {
   if (params.ingressOpts.sessionKey?.trim()) {
     try {
       createTaskRecord({
-        source: "background_cli",
         runtime: "cli",
+        sourceId: params.runId,
         requesterSessionKey: params.ingressOpts.sessionKey,
         requesterOrigin: normalizeDeliveryContext({
           channel: params.ingressOpts.channel,
@@ -202,7 +202,6 @@ function dispatchAgentRunFromGateway(params: {
         }),
         childSessionKey: params.ingressOpts.sessionKey,
         runId: params.runId,
-        bindingTargetKind: "session",
         task: params.ingressOpts.message,
         status: "running",
         deliveryStatus: "not_applicable",

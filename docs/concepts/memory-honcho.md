@@ -31,19 +31,18 @@ Honcho registers tools that the agent can use during conversation:
 
 **Data retrieval (fast, no LLM call):**
 
-| Tool             | What it does                             |
-| ---------------- | ---------------------------------------- |
-| `honcho_session` | Conversation history and summaries       |
-| `honcho_profile` | User profile with key facts              |
-| `honcho_search`  | Semantic search over past observations   |
-| `honcho_context` | Full user representation across sessions |
+| Tool                        | What it does                                           |
+| --------------------------- | ------------------------------------------------------ |
+| `honcho_context`            | Full user representation across sessions               |
+| `honcho_search_conclusions` | Semantic search over stored conclusions                |
+| `honcho_search_messages`    | Find messages across sessions (filter by sender, date) |
+| `honcho_session`            | Current session history and summary                    |
 
 **Q&A (LLM-powered):**
 
-| Tool             | What it does                                 |
-| ---------------- | -------------------------------------------- |
-| `honcho_recall`  | Factual questions with minimal reasoning     |
-| `honcho_analyze` | Complex synthesis requiring deeper reasoning |
+| Tool         | What it does                                                              |
+| ------------ | ------------------------------------------------------------------------- |
+| `honcho_ask` | Ask about the user. `depth='quick'` for facts, `'thorough'` for synthesis |
 
 ## Getting started
 
@@ -87,6 +86,17 @@ Settings live under `plugins.entries["openclaw-honcho"].config`:
 For self-hosted instances, point `baseUrl` to your local server (for example
 `http://localhost:8000`) and omit the API key.
 
+## Migrating existing memory
+
+If you have existing workspace memory files (`USER.md`, `MEMORY.md`,
+`IDENTITY.md`, `memory/`, `canvas/`), `openclaw honcho setup` detects and
+offers to migrate them.
+
+<Info>
+Migration is non-destructive -- files are uploaded to Honcho. Originals are
+never deleted or moved.
+</Info>
+
 ## How it works
 
 After every AI turn, the conversation is persisted to Honcho. Both user and
@@ -112,8 +122,18 @@ Honcho and the builtin memory system can work together. When QMD is configured,
 additional tools become available for searching local Markdown files alongside
 Honcho's cross-session memory.
 
+## CLI commands
+
+```bash
+openclaw honcho setup                        # Configure API key and migrate files
+openclaw honcho status                       # Check connection status
+openclaw honcho ask <question>               # Query Honcho about the user
+openclaw honcho search <query> [-k N] [-d D] # Semantic search over memory
+```
+
 ## Further reading
 
+- [Plugin source code](https://github.com/plastic-labs/openclaw-honcho)
 - [Honcho documentation](https://docs.honcho.dev)
 - [Honcho OpenClaw integration guide](https://docs.honcho.dev/v3/guides/integrations/openclaw)
 - [Memory](/concepts/memory) -- OpenClaw memory overview

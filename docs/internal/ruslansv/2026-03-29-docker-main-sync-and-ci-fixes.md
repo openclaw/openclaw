@@ -37,3 +37,24 @@ Remaining local gap:
 Operational note:
 
 - the rebuilt Docker gateway is healthy after redeploy and responds on `http://127.0.0.1:18789/healthz`
+
+Second sync later the same day:
+
+- merged `upstream/main` again after `main` moved another 80 commits
+- resolved merge conflicts in:
+  - `extensions/zalo/test-support/monitor-mocks-test-support.ts`
+  - `src/cli/nodes-cli/register.invoke.approval-transport-timeout.test.ts`
+  - `src/tasks/task-registry.ts`
+- kept the Docker/Mac branch behavior that immediately re-runs task terminal delivery for newly created terminal task records, which preserves the restored-ACP delivery fix
+- aligned the renamed Zalo test-support import with the new shared plugin-registry helper while preserving the `runtime-api` type surface
+
+Verification for the second sync:
+
+- `pnpm check`
+- `pnpm build`
+- `pnpm test -- src/cli/nodes-cli/register.invoke.approval-transport-timeout.test.ts src/tasks/task-registry.test.ts src/tasks/task-registry.store.test.ts`
+- `OPENCLAW_INSTALL_URL=https://openclaw.ai/install.sh OPENCLAW_INSTALL_CLI_URL=https://openclaw.ai/install-cli.sh pnpm test:install:smoke`
+
+Observed gap:
+
+- `pnpm test -- extensions/zalo/src/monitor.reply-once.lifecycle.test.ts` hung under the wrapper on this macOS host, so the Zalo helper conflict was covered by the full `pnpm build` gate instead of a passing lifecycle test run

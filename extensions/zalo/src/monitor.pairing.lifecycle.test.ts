@@ -5,13 +5,13 @@ import {
   createTextUpdate,
   postWebhookReplay,
   settleAsyncWork,
-} from "../test-support/lifecycle.js";
+} from "../test-support/lifecycle-test-support.js";
 import {
   resetLifecycleTestState,
   sendMessageMock,
   setLifecycleRuntimeCore,
   startWebhookLifecycleMonitor,
-} from "../test-support/monitor-mocks.js";
+} from "../test-support/monitor-mocks-test-support.js";
 
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);

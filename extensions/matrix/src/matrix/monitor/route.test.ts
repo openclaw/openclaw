@@ -7,7 +7,7 @@ import {
   resolveAgentRoute,
   setActivePluginRegistry,
   type OpenClawConfig,
-} from "../../test-support/monitor-route.js";
+} from "../../test-support/monitor-route-test-support.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 
 const baseCfg = {

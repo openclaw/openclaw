@@ -33,6 +33,9 @@ export function createSubagentRunManager(params: {
   resumedRuns: Set<string>;
   endedHookInFlightRunIds: Set<string>;
   persist(): void;
+  callGateway: typeof callGateway;
+  loadConfig: typeof loadConfig;
+  ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoaded;
   ensureListener(): void;
   startSweeper(): void;
   stopSweeper(): void;
@@ -66,7 +69,7 @@ export function createSubagentRunManager(params: {
   const waitForSubagentCompletion = async (runId: string, waitTimeoutMs: number) => {
     try {
       const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-      const wait = await callGateway<{
+      const wait = await params.callGateway<{
         status?: string;
         startedAt?: number;
         endedAt?: number;
@@ -200,7 +203,7 @@ export function createSubagentRunManager(params: {
     }
 
     const now = Date.now();
-    const cfg = loadConfig();
+    const cfg = params.loadConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -277,7 +280,7 @@ export function createSubagentRunManager(params: {
     retainAttachmentsOnKeep?: boolean;
   }) => {
     const now = Date.now();
-    const cfg = loadConfig();
+    const cfg = params.loadConfig();
     const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
     const archiveAtMs =
@@ -318,13 +321,12 @@ export function createSubagentRunManager(params: {
     });
     try {
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "subagent",
+        sourceId: registerParams.runId,
         requesterSessionKey: registerParams.requesterSessionKey,
         requesterOrigin,
         childSessionKey: registerParams.childSessionKey,
         runId: registerParams.runId,
-        bindingTargetKind: "subagent",
         label: registerParams.label,
         task: registerParams.task,
         status: "running",
@@ -434,8 +436,8 @@ export function createSubagentRunManager(params: {
           cleanup: entry.cleanup,
           completedAt: now,
         });
-        const cfg = loadConfig();
-        ensureRuntimePluginsLoaded({
+        const cfg = params.loadConfig();
+        params.ensureRuntimePluginsLoaded({
           config: cfg,
           workspaceDir: entry.workspaceDir,
           allowGatewaySubagentBinding: true,

@@ -344,17 +344,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           hint: "<channelId|user:ID|channel:ID>",
         },
       },
-      execApprovals: {
-        auth: discordNativeApprovalAdapter.auth,
-        delivery: {
-          ...discordNativeApprovalAdapter.delivery,
-          shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
-            shouldSuppressLocalDiscordExecApprovalPrompt({
-              cfg,
-              accountId,
-              payload,
-            }),
-        },
+      auth: discordNativeApprovalAdapter.auth,
+      approvals: {
+        delivery: discordNativeApprovalAdapter.delivery,
       },
       directory: createChannelDirectoryAdapter({
         listPeers: async (params) => listDiscordDirectoryPeersFromConfig(params),
@@ -660,6 +652,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         chunker: null,
         textChunkLimit: 2000,
         pollMaxOptions: 10,
+        shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+          shouldSuppressLocalDiscordExecApprovalPrompt({
+            cfg,
+            accountId,
+            payload,
+          }),
         resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
       },
       attachedResults: {

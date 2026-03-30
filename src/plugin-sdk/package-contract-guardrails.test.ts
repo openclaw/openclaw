@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { pluginSdkEntrypoints } from "./entrypoints.js";
@@ -190,14 +190,28 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
   const leaks: Array<{ file: string; specifier: string }> = [];
   const importPattern = /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']((?:\.\.\/)+src\/[^"']+)["']/g;
   for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    if (
+      /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
+      /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+      /\.test\.[cm]?tsx?$/.test(repoRelativePath)
+    ) {
+      continue;
+    }
+    const extensionRootMatch = /^(.*?\/extensions\/[^/]+)/.exec(file.replaceAll("\\", "/"));
+    const extensionRoot = extensionRootMatch?.[1];
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(importPattern)) {
       const specifier = match[1];
       if (!specifier) {
         continue;
       }
+      const resolvedSpecifier = resolve(dirname(file), specifier).replaceAll("\\", "/");
+      if (extensionRoot && resolvedSpecifier.startsWith(`${extensionRoot}/`)) {
+        continue;
+      }
       leaks.push({
-        file: file.replaceAll(`${REPO_ROOT}/`, ""),
+        file: repoRelativePath,
         specifier,
       });
     }
