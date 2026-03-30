@@ -1,37 +1,54 @@
-type ToolDefinition = {
+// src/agents/tool-adapter.ts
+
+import type { AnyAgentTool } from "../plugins/tools.js";
+
+export interface ToolDefinition {
   name: string;
+  description?: string;
+  parameters?: any;
   execute: (args: any) => Promise<any>;
-};
+}
 
-export function adaptToolToRuntime(tool: any): ToolDefinition {
-  // Already runtime-compatible
-  if (tool.execute && tool.execute.length === 1) {
-    return tool;
-  }
+/**
+ * Adapts OpenClaw AgentTool -> LMStudio ToolDefinition
+ * Minimal-invasive: nutzt bestehenden execute() Call
+ */
+export function adaptTool(tool: AnyAgentTool): ToolDefinition {
+  return {
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
 
-  // OpenClaw Tool → Adapter
-  if (tool.execute) {
-    return {
-      name: tool.name,
-      async execute(args: any) {
-        const result = await tool.execute("lfm", args);
+    async execute(args: any): Promise<any> {
+      try {
+        const result = await tool.execute(
+          "toolcall",   // toolCallId (dummy)
+          args,
+          undefined,    // AbortSignal
+          undefined     // onUpdate
+        );
 
-        return result?.content
-          ?.map((c: any) => c.text || "")
-          .join("\n");
-      },
-    };
-  }
+        // 🔑 WICHTIG: normalize output → verhindert Hallucinationen
+        if (typeof result === "string") {
+          return result;
+        }
 
-  // Legacy Tool (.run)
-  if (tool.run) {
-    return {
-      name: tool.name,
-      async execute(args: any) {
-        return await tool.run(args);
-      },
-    };
-  }
+        if (result && typeof result === "object") {
+          if ("content" in result && result.content) {
+            return result.content;
+          }
 
-  throw new Error(`Invalid tool: ${tool?.name}`);
+          if ("output" in result && result.output) {
+            return result.output;
+          }
+        }
+
+        // fallback (letzter Ausweg)
+        return JSON.stringify(result, null, 2);
+
+      } catch (err: any) {
+        return `Tool execution failed: ${err?.message || err}`;
+      }
+    }
+  };
 }
