@@ -1,9 +1,14 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
+  resolveEffectiveToolPolicy,
   resolveSubagentToolPolicy,
+  resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 
@@ -25,8 +30,12 @@ describe("pi-tools.policy", () => {
     expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
   });
 
-  it("keeps apply_patch when exec is allowlisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(true);
+  it("keeps apply_patch when write is allowlisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
+  });
+
+  it("blocks apply_patch when write is denylisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
   });
 });
 
@@ -90,6 +99,22 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
   });
 
+  it("applies configured deny to memory tools even though they are allowed by default", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: {
+        subagents: {
+          tools: {
+            deny: ["memory_search", "memory_get"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
+  });
+
   it("does not create a restrictive allowlist when only alsoAllow is configured", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
@@ -120,12 +145,12 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(true);
   });
 
-  it("depth-1 orchestrator still denies gateway, cron, memory", () => {
+  it("depth-1 orchestrator still denies gateway and cron but allows memory tools", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 1);
     expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("cron", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
   it("depth-2 leaf denies sessions_spawn", () => {
@@ -143,9 +168,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
   });
 
-  it("depth-2 leaf allows subagents (for visibility)", () => {
+  it("depth-2 leaf denies subagents", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
-    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
   });
 
   it("depth-2 leaf denies sessions_list and sessions_history", () => {
@@ -164,6 +189,43 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(false);
   });
 
+  it("uses stored leaf role for flat depth-1 session keys", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:flat-leaf": {
+            sessionId: "flat-leaf",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "leaf",
+            subagentControlScope: "none",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
+  });
+
   it("defaults to leaf behavior when no depth is provided", () => {
     const policy = resolveSubagentToolPolicy(baseCfg);
     // Default depth=1, maxSpawnDepth=2 → orchestrator
@@ -174,5 +236,61 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     const policy = resolveSubagentToolPolicy(leafCfg);
     // Default depth=1, maxSpawnDepth=1 → leaf
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+  });
+});
+
+describe("resolveEffectiveToolPolicy", () => {
+  it("implicitly re-exposes exec and process when tools.exec is configured", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["exec", "process"]);
+  });
+
+  it("implicitly re-exposes read, write, and edit when tools.fs is configured", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+        fs: { workspaceOnly: false },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+  });
+
+  it("merges explicit alsoAllow with implicit tool-section exposure", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["web_search"],
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["web_search", "exec", "process"]);
+  });
+
+  it("uses agent tool sections when resolving implicit exposure", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "coder",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
+    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
 });

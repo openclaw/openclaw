@@ -9,7 +9,7 @@ status: active
 
 Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 
-## What is “one agent”?
+## What is "one agent"?
 
 An **agent** is a fully scoped brain with its own:
 
@@ -388,7 +388,7 @@ Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opu
         id: "chat",
         name: "Everyday",
         workspace: "~/.openclaw/workspace-chat",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
       {
         id: "opus",
@@ -422,7 +422,7 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
         id: "chat",
         name: "Everyday",
         workspace: "~/.openclaw/workspace-chat",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
       {
         id: "opus",
@@ -501,7 +501,7 @@ Notes:
 
 ## Per-Agent Sandbox and Tool Configuration
 
-Starting with v2026.1.6, each agent can have its own sandbox and tool restrictions:
+Each agent can have its own sandbox and tool restrictions:
 
 ```js
 {
@@ -550,3 +550,11 @@ If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
 See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.
+
+## Related
+
+- [Channel Routing](/channels/channel-routing) — how messages route to agents
+- [Sub-Agents](/tools/subagents) — spawning background agent runs
+- [ACP Agents](/tools/acp-agents) — running external coding harnesses
+- [Presence](/concepts/presence) — agent presence and availability
+- [Session](/concepts/session) — session isolation and routing

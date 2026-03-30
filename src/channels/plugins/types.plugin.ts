@@ -1,19 +1,24 @@
-import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
+import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
+  ChannelApprovalAdapter,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
+  ChannelConversationBindingSupport,
   ChannelDirectoryAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
   ChannelGroupAdapter,
   ChannelHeartbeatAdapter,
+  ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
+  ChannelAllowlistAdapter,
+  ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 import type {
   ChannelAgentTool,
@@ -40,11 +45,34 @@ export type ChannelConfigUiHint = {
   itemTemplate?: unknown;
 };
 
+export type ChannelConfigRuntimeIssue = {
+  path?: Array<string | number>;
+  message?: string;
+  code?: string;
+} & Record<string, unknown>;
+
+export type ChannelConfigRuntimeParseResult =
+  | {
+      success: true;
+      data: unknown;
+    }
+  | {
+      success: false;
+      issues: ChannelConfigRuntimeIssue[];
+    };
+
+export type ChannelConfigRuntimeSchema = {
+  safeParse: (value: unknown) => ChannelConfigRuntimeParseResult;
+};
+
+/** JSON-schema-like config description published by a channel plugin. */
 export type ChannelConfigSchema = {
   schema: Record<string, unknown>;
   uiHints?: Record<string, ChannelConfigUiHint>;
+  runtime?: ChannelConfigRuntimeSchema;
 };
 
+/** Full capability contract for a native channel plugin. */
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -56,8 +84,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     };
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
-  // CLI onboarding wizard hooks for this channel.
-  onboarding?: ChannelOnboardingAdapter;
+  setupWizard?: ChannelSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
@@ -72,6 +99,11 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   auth?: ChannelAuthAdapter;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
+  lifecycle?: ChannelLifecycleAdapter;
+  approvals?: ChannelApprovalAdapter;
+  allowlist?: ChannelAllowlistAdapter;
+  bindings?: ChannelConfiguredBindingProvider;
+  conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

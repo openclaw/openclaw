@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { BaseTokenResolution } from "openclaw/plugin-sdk/zalo";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import type { BaseTokenResolution } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 
@@ -9,16 +10,7 @@ export type ZaloTokenResolution = BaseTokenResolution & {
 };
 
 function readTokenFromFile(tokenFile: string | undefined): string {
-  const trimmedPath = tokenFile?.trim();
-  if (!trimmedPath) {
-    return "";
-  }
-  try {
-    return readFileSync(trimmedPath, "utf8").trim();
-  } catch {
-    // ignore read failures
-    return "";
-  }
+  return tryReadSecretFileSync(tokenFile, "Zalo token file", { rejectSymlink: true }) ?? "";
 }
 
 export function resolveZaloToken(
@@ -29,20 +21,10 @@ export function resolveZaloToken(
   const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
   const baseConfig = config;
-  const resolveAccountConfig = (id: string): ZaloConfig | undefined => {
-    const accounts = baseConfig?.accounts;
-    if (!accounts || typeof accounts !== "object") {
-      return undefined;
-    }
-    const direct = accounts[id] as ZaloConfig | undefined;
-    if (direct) {
-      return direct;
-    }
-    const normalized = normalizeAccountId(id);
-    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-    return matchKey ? ((accounts as Record<string, ZaloConfig>)[matchKey] ?? undefined) : undefined;
-  };
-  const accountConfig = resolveAccountConfig(resolvedAccountId);
+  const accountConfig = resolveAccountEntry(
+    baseConfig?.accounts as Record<string, ZaloConfig> | undefined,
+    normalizeAccountId(resolvedAccountId),
+  );
   const accountHasBotToken = Boolean(
     accountConfig && Object.prototype.hasOwnProperty.call(accountConfig, "botToken"),
   );

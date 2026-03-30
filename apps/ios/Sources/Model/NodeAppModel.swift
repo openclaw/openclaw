@@ -12,6 +12,12 @@ import UserNotifications
 private struct NotificationCallError: Error, Sendable {
     let message: String
 }
+
+private struct GatewayRelayIdentityResponse: Decodable {
+    let deviceId: String
+    let publicKey: String
+}
+
 // Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -88,6 +94,7 @@ final class NodeAppModel {
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
+    var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
@@ -139,6 +146,7 @@ final class NodeAppModel {
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
+    @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
     var gatewaySession: GatewayNodeSession { self.nodeGateway }
     var operatorSession: GatewayNodeSession { self.operatorGateway }
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -362,7 +370,14 @@ final class NodeAppModel {
                         await MainActor.run {
                             self.operatorConnected = false
                             self.gatewayConnected = false
+                            // Foreground recovery must actively restart the saved gateway config.
+                            // Disconnecting stale sockets alone can leave us idle if the old
+                            // reconnect tasks were suppressed or otherwise got stuck in background.
+                            self.gatewayStatusText = "Reconnecting…"
                             self.talkMode.updateGatewayConnected(false)
+                            if let cfg = self.activeGatewayConnectConfig {
+                                self.applyGatewayConnectConfig(cfg)
+                            }
                         }
                     }
                 }
@@ -520,13 +535,6 @@ final class NodeAppModel {
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
     private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
     private static let canvasUnattendedDeepLinkKey: String = NodeAppModel.generateDeepLinkKey()
-    private static var apnsEnvironment: String {
-#if DEBUG
-        "sandbox"
-#else
-        "production"
-#endif
-    }
 
     private func refreshBrandingFromGateway() async {
         do {
@@ -541,6 +549,7 @@ final class NodeAppModel {
                 self.seamColorHex = raw.isEmpty ? nil : raw
                 self.mainSessionBaseKey = mainKey
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
+                self.homeCanvasRevision &+= 1
             }
         } catch {
             if let gatewayError = error as? GatewayResponseError {
@@ -567,10 +576,17 @@ final class NodeAppModel {
                     self.selectedAgentId = nil
                 }
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
+                self.homeCanvasRevision &+= 1
             }
         } catch {
             // Best-effort only.
         }
+    }
+
+    func refreshGatewayOverviewIfConnected() async {
+        guard await self.isOperatorConnected() else { return }
+        await self.refreshBrandingFromGateway()
+        await self.refreshAgentsFromGateway()
     }
 
     func setSelectedAgentId(_ agentId: String?) {
@@ -583,6 +599,7 @@ final class NodeAppModel {
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: self.selectedAgentId)
         }
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.homeCanvasRevision &+= 1
         if let relay = ShareGatewayRelaySettings.loadConfig() {
             ShareGatewayRelaySettings.saveConfig(
                 ShareGatewayRelayConfig(
@@ -1172,7 +1189,15 @@ final class NodeAppModel {
             _ = try await notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
         }
 
-        return await self.notificationAuthorizationStatus()
+        let updatedStatus = await self.notificationAuthorizationStatus()
+        if Self.isNotificationAuthorizationAllowed(updatedStatus) {
+            // Refresh APNs registration immediately after the first permission grant so the
+            // gateway can receive a push registration without requiring an app relaunch.
+            await MainActor.run {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+        return updatedStatus
     }
 
     private func notificationAuthorizationStatus() async -> NotificationAuthorizationStatus {
@@ -1184,6 +1209,17 @@ final class NodeAppModel {
             return status
         case .failure:
             return .denied
+        }
+    }
+
+    private static func isNotificationAuthorizationAllowed(
+        _ status: NotificationAuthorizationStatus
+    ) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            true
+        case .denied, .notDetermined:
+            false
         }
     }
 
@@ -1622,11 +1658,9 @@ extension NodeAppModel {
     }
 
     var chatSessionKey: String {
-        let base = "ios"
-        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
-        return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
+        // Keep chat aligned with the gateway's resolved main session key.
+        // A hardcoded "ios" base creates synthetic placeholder sessions in the chat UI.
+        self.mainSessionKey
     }
 
     var activeAgentName: String {
@@ -1646,6 +1680,7 @@ extension NodeAppModel {
         gatewayStableID: String,
         tls: GatewayTLSParams?,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         connectOptions: GatewayConnectOptions)
     {
@@ -1658,6 +1693,7 @@ extension NodeAppModel {
             stableID: stableID,
             tls: tls,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions)
         self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
@@ -1665,6 +1701,7 @@ extension NodeAppModel {
             url: url,
             stableID: effectiveStableID,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions,
             sessionBox: sessionBox)
@@ -1672,6 +1709,7 @@ extension NodeAppModel {
             url: url,
             stableID: effectiveStableID,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions,
             sessionBox: sessionBox)
@@ -1687,6 +1725,7 @@ extension NodeAppModel {
             gatewayStableID: cfg.stableID,
             tls: cfg.tls,
             token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             connectOptions: cfg.nodeOptions)
     }
@@ -1742,6 +1781,7 @@ private extension NodeAppModel {
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
+        self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
     }
 
@@ -1766,6 +1806,7 @@ private extension NodeAppModel {
         url: URL,
         stableID: String,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         nodeOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?)
@@ -1803,6 +1844,7 @@ private extension NodeAppModel {
                     try await self.operatorGateway.connect(
                         url: url,
                         token: token,
+                        bootstrapToken: bootstrapToken,
                         password: password,
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
@@ -1818,6 +1860,7 @@ private extension NodeAppModel {
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
+                            await self.registerAPNsTokenIfNeeded()
                             await self.startVoiceWakeSync()
                             await MainActor.run { LiveActivityManager.shared.handleReconnect() }
                             await MainActor.run { self.startGatewayHealthMonitor() }
@@ -1860,6 +1903,7 @@ private extension NodeAppModel {
         url: URL,
         stableID: String,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         nodeOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?)
@@ -1908,6 +1952,7 @@ private extension NodeAppModel {
                     try await self.nodeGateway.connect(
                         url: url,
                         token: token,
+                        bootstrapToken: bootstrapToken,
                         password: password,
                         connectOptions: currentOptions,
                         sessionBox: sessionBox,
@@ -2239,8 +2284,7 @@ extension NodeAppModel {
                 from: payload)
             guard !decoded.actions.isEmpty else { return }
             self.pendingActionLogger.info(
-                "Pending actions pulled trigger=\(trigger, privacy: .public) "
-                    + "count=\(decoded.actions.count, privacy: .public)")
+                "Pending actions pulled trigger=\(trigger, privacy: .public) count=\(decoded.actions.count, privacy: .public)")
             await self.applyPendingForegroundNodeActions(decoded.actions, trigger: trigger)
         } catch {
             // Best-effort only.
@@ -2263,9 +2307,7 @@ extension NodeAppModel {
                 paramsJSON: action.paramsJSON)
             let result = await self.handleInvoke(req)
             self.pendingActionLogger.info(
-                "Pending action replay trigger=\(trigger, privacy: .public) "
-                    + "id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) "
-                    + "ok=\(result.ok, privacy: .public)")
+                "Pending action replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) ok=\(result.ok, privacy: .public)")
             guard result.ok else { return }
             let acked = await self.ackPendingForegroundNodeAction(
                 id: action.id,
@@ -2290,9 +2332,7 @@ extension NodeAppModel {
             return true
         } catch {
             self.pendingActionLogger.error(
-                "Pending action ack failed trigger=\(trigger, privacy: .public) "
-                    + "id=\(id, privacy: .public) command=\(command, privacy: .public) "
-                    + "error=\(String(describing: error), privacy: .public)")
+                "Pending action ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public) command=\(command, privacy: .public) error=\(String(describing: error), privacy: .public)")
             return false
         }
     }
@@ -2468,7 +2508,8 @@ extension NodeAppModel {
         else {
             return
         }
-        if token == self.apnsLastRegisteredTokenHex {
+        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        if !usesRelayTransport && token == self.apnsLastRegisteredTokenHex {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2477,23 +2518,38 @@ extension NodeAppModel {
             return
         }
 
-        struct PushRegistrationPayload: Codable {
-            var token: String
-            var topic: String
-            var environment: String
-        }
-
-        let payload = PushRegistrationPayload(
-            token: token,
-            topic: topic,
-            environment: Self.apnsEnvironment)
         do {
-            let json = try Self.encodePayload(payload)
-            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: json)
+            let gatewayIdentity: PushRelayGatewayIdentity?
+            if usesRelayTransport {
+                guard self.operatorConnected else { return }
+                gatewayIdentity = try await self.fetchPushRelayGatewayIdentity()
+            } else {
+                gatewayIdentity = nil
+            }
+            let payloadJSON = try await self.pushRegistrationManager.makeGatewayRegistrationPayload(
+                apnsTokenHex: token,
+                topic: topic,
+                gatewayIdentity: gatewayIdentity)
+            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: payloadJSON)
             self.apnsLastRegisteredTokenHex = token
         } catch {
-            // Best-effort only.
+            self.pushWakeLogger.error(
+                "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func fetchPushRelayGatewayIdentity() async throws -> PushRelayGatewayIdentity {
+        let response = try await self.operatorGateway.request(
+            method: "gateway.identity.get",
+            paramsJSON: "{}",
+            timeoutSeconds: 8)
+        let decoded = try JSONDecoder().decode(GatewayRelayIdentityResponse.self, from: response)
+        let deviceId = decoded.deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let publicKey = decoded.publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !deviceId.isEmpty, !publicKey.isEmpty else {
+            throw PushRelayError.relayMisconfigured("Gateway identity response missing required fields")
+        }
+        return PushRelayGatewayIdentity(deviceId: deviceId, publicKey: publicKey)
     }
 
     private static func isSilentPushPayload(_ userInfo: [AnyHashable: Any]) -> Bool {

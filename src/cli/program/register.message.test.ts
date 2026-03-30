@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
 
 const createMessageCliHelpersMock = vi.fn(() => ({ helper: true }));
@@ -62,10 +62,31 @@ vi.mock("./message/register.discord-admin.js", () => ({
   registerMessageDiscordAdminCommands: registerMessageDiscordAdminCommandsMock,
 }));
 
+const mockedModuleIds = [
+  "./message/helpers.js",
+  "./message/register.send.js",
+  "./message/register.broadcast.js",
+  "./message/register.poll.js",
+  "./message/register.reactions.js",
+  "./message/register.read-edit-delete.js",
+  "./message/register.pins.js",
+  "./message/register.permissions-search.js",
+  "./message/register.thread.js",
+  "./message/register.emoji-sticker.js",
+  "./message/register.discord-admin.js",
+];
+
 let registerMessageCommands: typeof import("./register.message.js").registerMessageCommands;
 
 beforeAll(async () => {
   ({ registerMessageCommands } = await import("./register.message.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerMessageCommands", () => {

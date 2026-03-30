@@ -21,6 +21,9 @@ output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
 Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
+Note: for one-shot CLI jobs, offset-less `--at` datetimes are treated as UTC unless you also pass
+`--tz <iana>`, which interprets that local wall-clock time in the given timezone.
+
 Note: recurring jobs now use exponential retry backoff after consecutive errors (30s → 1m → 5m → 15m → 60m), then return to normal schedule after the next successful run.
 
 Note: `openclaw cron run` now returns as soon as the manual run is queued for execution. Successful responses include `{ ok: true, enqueued: true, runId }`; use `openclaw cron runs --id <job-id>` to follow the eventual outcome.
@@ -29,6 +32,12 @@ Note: retention/pruning is controlled in config:
 
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl`.
+
+Upgrade note: if you have older cron jobs from before the current delivery/store format, run
+`openclaw doctor --fix`. Doctor now normalizes legacy cron fields (`jobId`, `schedule.cron`,
+top-level delivery fields, payload `provider` delivery aliases) and migrates simple
+`notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is
+configured.
 
 ## Common edits
 

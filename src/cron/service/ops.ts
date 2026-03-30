@@ -1,5 +1,10 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import {
+  completeTaskRunByRunId,
+  createRunningTaskRun,
+  failTaskRunByRunId,
+} from "../../tasks/task-executor.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -20,6 +25,7 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
   wake,
@@ -109,15 +115,22 @@ export async function start(state: CronServiceState) {
         startupInterruptedJobIds.add(job.id);
       }
     }
-    await persist(state);
+    if (startupInterruptedJobIds.size > 0) {
+      await persist(state);
+    }
   });
 
   await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
 
   await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    recomputeNextRuns(state);
-    await persist(state);
+    // Startup catch-up already persisted the latest in-memory store state, and
+    // this path runs before the scheduler begins servicing regular timer ticks.
+    // Avoid an extra reload/write cycle on startup.
+    await ensureLoaded(state, { skipRecompute: true });
+    const changed = recomputeNextRuns(state);
+    if (changed) {
+      await persist(state);
+    }
     armTimer(state);
     state.deps.log.info(
       {
@@ -351,6 +364,7 @@ type PreparedManualRun =
       ok: true;
       ran: true;
       jobId: string;
+      taskRunId?: string;
       startedAt: number;
       executionJob: CronJob;
     }
@@ -360,13 +374,101 @@ type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
   | { ok: true; runnable: true };
 
+type ManualRunPreflightResult =
+  | { ok: false }
+  | Extract<PreparedManualRun, { ran: false }>
+  | {
+      ok: true;
+      runnable: true;
+      job: CronJob;
+      now: number;
+    };
+
 let nextManualRunId = 1;
 
-async function inspectManualRunDisposition(
+function createCronTaskRunId(jobId: string, startedAt: number): string {
+  return `cron:${jobId}:${startedAt}`;
+}
+
+function tryCreateManualTaskRun(params: {
+  state: CronServiceState;
+  job: CronJob;
+  startedAt: number;
+}): string | undefined {
+  const runId = createCronTaskRunId(params.job.id, params.startedAt);
+  try {
+    createRunningTaskRun({
+      runtime: "cron",
+      sourceId: params.job.id,
+      requesterSessionKey: "",
+      childSessionKey: params.job.sessionKey,
+      agentId: params.job.agentId,
+      runId,
+      label: params.job.name,
+      task: params.job.name || params.job.id,
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: params.startedAt,
+      lastEventAt: params.startedAt,
+    });
+    return runId;
+  } catch (error) {
+    params.state.deps.log.warn(
+      { jobId: params.job.id, error },
+      "cron: failed to create task ledger record",
+    );
+    return undefined;
+  }
+}
+
+function tryFinishManualTaskRun(
+  state: CronServiceState,
+  params: {
+    taskRunId?: string;
+    coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+    endedAt: number;
+  },
+): void {
+  if (!params.taskRunId) {
+    return;
+  }
+  try {
+    if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
+      completeTaskRunByRunId({
+        runId: params.taskRunId,
+        endedAt: params.endedAt,
+        lastEventAt: params.endedAt,
+        terminalSummary: params.coreResult.summary ?? undefined,
+      });
+      return;
+    }
+    failTaskRunByRunId({
+      runId: params.taskRunId,
+      status:
+        normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
+          ? "timed_out"
+          : "failed",
+      endedAt: params.endedAt,
+      lastEventAt: params.endedAt,
+      error:
+        params.coreResult.status === "error"
+          ? normalizeCronRunErrorText(params.coreResult.error)
+          : undefined,
+      terminalSummary: params.coreResult.summary ?? undefined,
+    });
+  } catch (error) {
+    state.deps.log.warn(
+      { runId: params.taskRunId, jobStatus: params.coreResult.status, error },
+      "cron: failed to update task ledger record",
+    );
+  }
+}
+
+async function inspectManualRunPreflight(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-): Promise<ManualRunDisposition | { ok: false }> {
+): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
@@ -383,8 +485,23 @@ async function inspectManualRunDisposition(
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    return { ok: true, runnable: true } as const;
+    return { ok: true, runnable: true, job, now } as const;
   });
+}
+
+async function inspectManualRunDisposition(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+): Promise<ManualRunDisposition | { ok: false }> {
+  const result = await inspectManualRunPreflight(state, id, mode);
+  if (!result.ok) {
+    return result;
+  }
+  if ("reason" in result) {
+    return result;
+  }
+  return { ok: true, runnable: true } as const;
 }
 
 async function prepareManualRun(
@@ -392,37 +509,42 @@ async function prepareManualRun(
   id: string,
   mode?: "due" | "force",
 ): Promise<PreparedManualRun> {
+  const preflight = await inspectManualRunPreflight(state, id, mode);
+  if (!preflight.ok) {
+    return preflight;
+  }
+  if ("reason" in preflight) {
+    return {
+      ok: true,
+      ran: false,
+      reason: preflight.reason,
+    } as const;
+  }
   return await locked(state, async () => {
-    warnIfDisabled(state, "run");
-    await ensureLoaded(state, { skipRecompute: true });
-    // Normalize job tick state (clears stale runningAtMs markers) before
-    // checking if already running, so a stale marker from a crashed Phase-1
-    // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
-    recomputeNextRunsForMaintenance(state);
+    // Reserve this run under lock, then execute outside lock so read ops
+    // (`list`, `status`) stay responsive while the run is in progress.
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
-    const now = state.deps.nowMs();
-    const due = isJobDue(job, now, { forced: mode === "force" });
-    if (!due) {
-      return { ok: true, ran: false, reason: "not-due" as const };
-    }
-
-    // Reserve this run under lock, then execute outside lock so read ops
-    // (`list`, `status`) stay responsive while the run is in progress.
-    job.state.runningAtMs = now;
+    job.state.runningAtMs = preflight.now;
     job.state.lastError = undefined;
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    emit(state, { jobId: job.id, action: "started", runAtMs: now });
+    emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
+    const taskRunId = tryCreateManualTaskRun({
+      state,
+      job,
+      startedAt: preflight.now,
+    });
     const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
     return {
       ok: true,
       ran: true,
       jobId: job.id,
-      startedAt: now,
+      taskRunId,
+      startedAt: preflight.now,
       executionJob,
     } as const;
   });
@@ -436,14 +558,20 @@ async function finishPreparedManualRun(
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
+  const taskRunId = prepared.taskRunId;
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     coreResult = await executeJobCoreWithTimeout(state, executionJob);
   } catch (err) {
-    coreResult = { status: "error", error: String(err) };
+    coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
   }
   const endedAt = state.deps.nowMs();
+  tryFinishManualTaskRun(state, {
+    taskRunId,
+    coreResult,
+    endedAt,
+  });
 
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });

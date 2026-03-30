@@ -1,90 +1,37 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
-function readEnvNumber(name) {
-  const raw = process.env[name]?.trim();
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : null;
-}
+import { floatFlag, parseFlagArgs, readEnvNumber, stringFlag } from "./lib/arg-utils.mjs";
+import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
+import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mjs";
 
 function parseArgs(argv) {
-  const args = {
-    config: "vitest.unit.config.ts",
-    maxWallMs: readEnvNumber("OPENCLAW_TEST_PERF_MAX_WALL_MS"),
-    baselineWallMs: readEnvNumber("OPENCLAW_TEST_PERF_BASELINE_WALL_MS"),
-    maxRegressionPct: readEnvNumber("OPENCLAW_TEST_PERF_MAX_REGRESSION_PCT") ?? 10,
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--config") {
-      args.config = argv[i + 1] ?? args.config;
-      i += 1;
-      continue;
-    }
-    if (arg === "--max-wall-ms") {
-      const parsed = Number.parseFloat(argv[i + 1] ?? "");
-      if (Number.isFinite(parsed)) {
-        args.maxWallMs = parsed;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--baseline-wall-ms") {
-      const parsed = Number.parseFloat(argv[i + 1] ?? "");
-      if (Number.isFinite(parsed)) {
-        args.baselineWallMs = parsed;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--max-regression-pct") {
-      const parsed = Number.parseFloat(argv[i + 1] ?? "");
-      if (Number.isFinite(parsed)) {
-        args.maxRegressionPct = parsed;
-      }
-      i += 1;
-      continue;
-    }
-  }
-  return args;
-}
-
-function formatMs(ms) {
-  return `${ms.toFixed(1)}ms`;
+  return parseFlagArgs(
+    argv,
+    {
+      config: "vitest.unit.config.ts",
+      maxWallMs: readEnvNumber("OPENCLAW_TEST_PERF_MAX_WALL_MS"),
+      baselineWallMs: readEnvNumber("OPENCLAW_TEST_PERF_BASELINE_WALL_MS"),
+      maxRegressionPct: readEnvNumber("OPENCLAW_TEST_PERF_MAX_REGRESSION_PCT") ?? 10,
+    },
+    [
+      stringFlag("--config", "config"),
+      floatFlag("--max-wall-ms", "maxWallMs"),
+      floatFlag("--baseline-wall-ms", "baselineWallMs"),
+      floatFlag("--max-regression-pct", "maxRegressionPct"),
+    ],
+  );
 }
 
 const opts = parseArgs(process.argv.slice(2));
-const reportPath = path.join(os.tmpdir(), `openclaw-vitest-perf-${Date.now()}.json`);
-const cmd = [
-  "vitest",
-  "run",
-  "--config",
-  opts.config,
-  "--reporter=json",
-  "--outputFile",
-  reportPath,
-];
-
 const startedAt = process.hrtime.bigint();
-const run = spawnSync("pnpm", cmd, {
-  stdio: "inherit",
-  env: process.env,
+const reportPath = runVitestJsonReport({
+  config: opts.config,
+  prefix: "openclaw-vitest-perf",
 });
 const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-
-if (run.status !== 0) {
-  process.exit(run.status ?? 1);
-}
 
 let totalFileDurationMs = 0;
 let fileCount = 0;
 try {
-  const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  const report = readJsonFile(reportPath);
   for (const result of report.testResults ?? []) {
     if (typeof result.startTime === "number" && typeof result.endTime === "number") {
       totalFileDurationMs += Math.max(0, result.endTime - result.startTime);

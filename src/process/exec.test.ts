@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
+import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 import { resolveCommandEnv, runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 
@@ -31,6 +32,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
     expect(resolved.OPENCLAW_TO_REMOVE).toBeUndefined();
+    expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
   it("suppresses npm fund prompts for npm argv", async () => {
@@ -45,10 +47,10 @@ describe("runCommandWithTimeout", () => {
 
   it("kills command when no output timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 10)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
       {
-        timeoutMs: 30,
-        noOutputTimeoutMs: 4,
+        timeoutMs: 2_000,
+        noOutputTimeoutMs: 200,
       },
     );
 
@@ -59,9 +61,9 @@ describe("runCommandWithTimeout", () => {
 
   it("reports global timeout termination when overall timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 10)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
       {
-        timeoutMs: 4,
+        timeoutMs: 200,
       },
     );
 

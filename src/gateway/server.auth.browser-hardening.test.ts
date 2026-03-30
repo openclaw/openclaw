@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -12,8 +13,10 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectReq,
+  connectOk,
   installGatewayTestHooks,
   readConnectChallengeNonce,
+  rpcReq,
   testState,
   trackConnectChallengeNonce,
   withGatewayServer,
@@ -26,6 +29,12 @@ const TEST_OPERATOR_CLIENT = {
   version: "1.0.0",
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.TEST,
+};
+const ALLOWED_BROWSER_ORIGIN = "https://control.example.com";
+const TRUSTED_PROXY_BROWSER_HEADERS = {
+  "x-forwarded-for": "203.0.113.50",
+  "x-forwarded-proto": "https",
+  "x-forwarded-user": "operator@example.com",
 };
 
 const originForPort = (port: number) => `http://127.0.0.1:${port}`;
@@ -72,7 +81,129 @@ async function createSignedDevice(params: {
   };
 }
 
+async function writeTrustedProxyBrowserAuthConfig() {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
+    gateway: {
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+        },
+      },
+      trustedProxies: ["127.0.0.1"],
+      controlUi: {
+        allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+      },
+    },
+  });
+}
+
+async function withTrustedProxyBrowserWs(origin: string, run: (ws: WebSocket) => Promise<void>) {
+  await writeTrustedProxyBrowserAuthConfig();
+  await withGatewayServer(async ({ port }) => {
+    const ws = await openWs(port, {
+      origin,
+      ...TRUSTED_PROXY_BROWSER_HEADERS,
+    });
+    try {
+      await run(ws);
+    } finally {
+      ws.close();
+    }
+  });
+}
+
 describe("gateway auth browser hardening", () => {
+  test("rejects trusted-proxy browser connects from origins outside the allowlist", async () => {
+    await withTrustedProxyBrowserWs("https://evil.example", async (ws) => {
+      const res = await connectReq(ws, {
+        client: TEST_OPERATOR_CLIENT,
+        device: null,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+      );
+    });
+  });
+
+  test("accepts trusted-proxy browser connects from allowed origins", async () => {
+    await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {
+      const payload = await connectOk(ws, {
+        client: TEST_OPERATOR_CLIENT,
+        device: null,
+      });
+      expect(payload.type).toBe("hello-ok");
+    });
+  });
+
+  test("clears scopes for trusted-proxy non-control-ui browser sessions", async () => {
+    await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {
+      const payload = await connectOk(ws, {
+        client: TEST_OPERATOR_CLIENT,
+        device: null,
+        scopes: ["operator.read"],
+      });
+      expect(payload.type).toBe("hello-ok");
+
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
+    });
+  });
+
+  test.each([
+    {
+      name: "rejects disallowed origins",
+      origin: "https://evil.example",
+      ok: false,
+      expectedMessage: "origin not allowed",
+    },
+    {
+      name: "accepts allowed origins",
+      origin: ALLOWED_BROWSER_ORIGIN,
+      ok: true,
+    },
+  ])(
+    "keeps non-proxy browser-origin behavior unchanged: $name",
+    async ({ origin, ok, expectedMessage }) => {
+      const { writeConfigFile } = await import("../config/config.js");
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      await writeConfigFile({
+        gateway: {
+          controlUi: {
+            allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+          },
+        },
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin });
+        try {
+          const res = await connectReq(ws, {
+            token: "secret",
+            client: TEST_OPERATOR_CLIENT,
+            device: null,
+          });
+          expect(res.ok).toBe(ok);
+          if (ok) {
+            expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+          } else {
+            expect(res.error?.message ?? "").toContain(expectedMessage ?? "");
+            expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+              ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+            );
+          }
+        } finally {
+          ws.close();
+        }
+      });
+    },
+  );
+
   test("rejects non-local browser origins for non-control-ui clients", async () => {
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
@@ -84,6 +215,35 @@ describe("gateway auth browser hardening", () => {
         });
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("rejects browser-origin connects that claim to be tui clients", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: "https://attacker.example" });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            version: "1.0.0",
+            platform: "darwin",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        );
       } finally {
         ws.close();
       }

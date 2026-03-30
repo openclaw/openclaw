@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSendCfgThreadingRuntime } from "../../../test/helpers/plugins/send-config.js";
 import type { IrcClient } from "./client.js";
+import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -12,40 +14,11 @@ const hoisted = vi.hoisted(() => {
     resolveMarkdownTableMode,
     convertMarkdownTables,
     record,
-    resolveIrcAccount: vi.fn(() => ({
-      configured: true,
-      accountId: "default",
-      host: "irc.example.com",
-      nick: "openclaw",
-      port: 6697,
-      tls: true,
-    })),
     normalizeIrcMessagingTarget: vi.fn((value: string) => value.trim()),
     connectIrcClient: vi.fn(),
     buildIrcConnectOptions: vi.fn(() => ({})),
   };
 });
-
-vi.mock("./runtime.js", () => ({
-  getIrcRuntime: () => ({
-    config: {
-      loadConfig: hoisted.loadConfig,
-    },
-    channel: {
-      text: {
-        resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
-        convertMarkdownTables: hoisted.convertMarkdownTables,
-      },
-      activity: {
-        record: hoisted.record,
-      },
-    },
-  }),
-}));
-
-vi.mock("./accounts.js", () => ({
-  resolveIrcAccount: hoisted.resolveIrcAccount,
-}));
 
 vi.mock("./normalize.js", () => ({
   normalizeIrcMessagingTarget: hoisted.normalizeIrcMessagingTarget,
@@ -67,15 +40,45 @@ vi.mock("./protocol.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    convertMarkdownTables: hoisted.convertMarkdownTables,
+  };
+});
+
 import { sendMessageIrc } from "./send.js";
 
 describe("sendMessageIrc cfg threading", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
   });
 
   it("uses explicitly provided cfg without loading runtime config", async () => {
-    const providedCfg = { source: "provided" } as unknown as CoreConfig;
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+          accounts: {
+            work: {
+              host: "irc.example.com",
+              nick: "workbot",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
     const client = {
       isReady: vi.fn(() => true),
       sendPrivmsg: vi.fn(),
@@ -88,16 +91,26 @@ describe("sendMessageIrc cfg threading", () => {
     });
 
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
-    expect(hoisted.resolveIrcAccount).toHaveBeenCalledWith({
-      cfg: providedCfg,
-      accountId: "work",
-    });
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
-    expect(result).toEqual({ messageId: "irc-msg-1", target: "#room" });
+    expect(hoisted.record).toHaveBeenCalledWith({
+      channel: "irc",
+      accountId: "work",
+      direction: "outbound",
+    });
+    expect(result.target).toBe("#room");
+    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId.length).toBeGreaterThan(0);
   });
 
   it("falls back to runtime config when cfg is omitted", async () => {
-    const runtimeCfg = { source: "runtime" } as unknown as CoreConfig;
+    const runtimeCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
     hoisted.loadConfig.mockReturnValueOnce(runtimeCfg);
     const client = {
       isReady: vi.fn(() => true),
@@ -107,10 +120,40 @@ describe("sendMessageIrc cfg threading", () => {
     await sendMessageIrc("#ops", "ping", { client });
 
     expect(hoisted.loadConfig).toHaveBeenCalledTimes(1);
-    expect(hoisted.resolveIrcAccount).toHaveBeenCalledWith({
-      cfg: runtimeCfg,
-      accountId: undefined,
-    });
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#ops", "ping");
+    expect(hoisted.record).toHaveBeenCalledWith({
+      channel: "irc",
+      accountId: "default",
+      direction: "outbound",
+    });
+  });
+
+  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    const client = {
+      isReady: vi.fn(() => true),
+      sendPrivmsg: vi.fn(),
+    } as unknown as IrcClient;
+    hoisted.record.mockImplementation(() => {
+      throw new Error("IRC runtime not initialized");
+    });
+
+    const result = await sendMessageIrc("#room", "hello", {
+      cfg: providedCfg,
+      client,
+    });
+
+    expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
+    expect(result.target).toBe("#room");
+    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId.length).toBeGreaterThan(0);
   });
 });
