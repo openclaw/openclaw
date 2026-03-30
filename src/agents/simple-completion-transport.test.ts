@@ -2,31 +2,32 @@ import type { Model } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
-const createAnthropicVertexStreamFnForModel = vi.hoisted(() => vi.fn());
-const ensureCustomApiRegistered = vi.hoisted(() => vi.fn());
-const createConfiguredOllamaStreamFn = vi.hoisted(() => vi.fn());
+const createAnthropicVertexStreamFnForModel = vi.fn();
+const ensureCustomApiRegistered = vi.fn();
+const resolveProviderStreamFn = vi.fn();
 
-vi.mock("./anthropic-vertex-stream.js", () => ({
-  createAnthropicVertexStreamFnForModel,
-}));
-
-vi.mock("./custom-api-registry.js", () => ({
-  ensureCustomApiRegistered,
-}));
-
-vi.mock("./ollama-stream.js", () => ({
-  createConfiguredOllamaStreamFn,
-}));
-
-import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
+let prepareModelForSimpleCompletion: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 
 describe("prepareModelForSimpleCompletion", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     createAnthropicVertexStreamFnForModel.mockReset();
     ensureCustomApiRegistered.mockReset();
-    createConfiguredOllamaStreamFn.mockReset();
+    resolveProviderStreamFn.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
-    createConfiguredOllamaStreamFn.mockReturnValue("ollama-stream");
+    resolveProviderStreamFn.mockReturnValue("ollama-stream");
+
+    vi.doMock("./anthropic-vertex-stream.js", () => ({
+      createAnthropicVertexStreamFnForModel,
+    }));
+    vi.doMock("./custom-api-registry.js", () => ({
+      ensureCustomApiRegistered,
+    }));
+    vi.doMock("../plugins/provider-runtime.js", () => ({
+      resolveProviderStreamFn,
+    }));
+
+    ({ prepareModelForSimpleCompletion } = await import("./simple-completion-transport.js"));
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {
@@ -59,10 +60,17 @@ describe("prepareModelForSimpleCompletion", () => {
       cfg,
     });
 
-    expect(createConfiguredOllamaStreamFn).toHaveBeenCalledWith({
-      model,
-      providerBaseUrl: "http://remote-ollama:11434",
-    });
+    expect(resolveProviderStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        config: cfg,
+        context: expect.objectContaining({
+          provider: "ollama",
+          modelId: "llama3",
+          model,
+        }),
+      }),
+    );
     expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", "ollama-stream");
     expect(result).toBe(model);
   });
@@ -80,6 +88,8 @@ describe("prepareModelForSimpleCompletion", () => {
       contextWindow: 200000,
       maxTokens: 8192,
     };
+
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
 
     const result = prepareModelForSimpleCompletion({ model });
 

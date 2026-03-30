@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  compareReleaseVersions,
   collectControlUiPackErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
   parseReleaseTagVersion,
   parseReleaseVersion,
+  resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
@@ -69,6 +71,66 @@ describe("parseReleaseTagVersion", () => {
   it("rejects beta correction tags and malformed correction tags", () => {
     expect(parseReleaseTagVersion("2026.3.10-beta.1-1")).toBeNull();
     expect(parseReleaseTagVersion("2026.3.10-0")).toBeNull();
+  });
+});
+
+describe("resolveNpmPublishPlan", () => {
+  it("publishes beta prereleases to beta only", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-beta.2")).toEqual({
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    });
+  });
+
+  it("publishes stable releases to latest and mirrors beta", () => {
+    expect(resolveNpmPublishPlan("2026.3.29")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: ["beta"],
+    });
+  });
+
+  it("mirrors beta for stable correction releases too", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-2")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: ["beta"],
+    });
+  });
+
+  it("does not mirror beta when beta already points at a newer prerelease", () => {
+    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.30-beta.1")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: [],
+    });
+  });
+
+  it("still mirrors beta when beta points at the same release line", () => {
+    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.29-beta.2")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: ["beta"],
+    });
+  });
+});
+
+describe("compareReleaseVersions", () => {
+  it("treats stable as newer than same-day beta", () => {
+    expect(compareReleaseVersions("2026.3.29", "2026.3.29-beta.2")).toBe(1);
+  });
+
+  it("treats a newer beta day as newer than an older stable day", () => {
+    expect(compareReleaseVersions("2026.3.30-beta.1", "2026.3.29")).toBe(1);
+  });
+
+  it("orders stable correction releases after the base stable release", () => {
+    expect(compareReleaseVersions("2026.3.29-2", "2026.3.29")).toBe(1);
+  });
+
+  it("returns null when either version is not release-shaped", () => {
+    expect(compareReleaseVersions("latest", "2026.3.29")).toBeNull();
   });
 });
 
@@ -225,7 +287,7 @@ describe("collectReleasePackageMetadataErrors", () => {
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.16.2" },
+        peerDependencies: { "node-llama-cpp": "3.18.1" },
         peerDependenciesMeta: { "node-llama-cpp": { optional: true } },
       }),
     ).toEqual([]);
@@ -239,7 +301,7 @@ describe("collectReleasePackageMetadataErrors", () => {
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
-        peerDependencies: { "node-llama-cpp": "3.16.2" },
+        peerDependencies: { "node-llama-cpp": "3.18.1" },
       }),
     ).toContain('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
   });

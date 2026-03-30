@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
+const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
+const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -180,15 +184,18 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
   }));
   vi.doMock("../auto-reply/reply/queue.js", () => ({
     getFollowupQueueDepth: () => 0,
-    resolveQueueSettings: () => ({ mode: "interrupt" }),
+    resolveQueueSettings: resolveQueueSettingsMock,
   }));
   vi.doMock("../auto-reply/status.js", () => ({
-    buildStatusMessage: () => "OpenClaw\n🧠 Model: GPT-5.4",
+    buildStatusMessage: buildStatusMessageMock,
   }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
 
-function resetSessionStore(store: Record<string, unknown>) {
+function resetSessionStore(store: Record<string, SessionEntry>) {
+  buildStatusMessageMock.mockClear();
+  resolveQueueSettingsMock.mockClear();
+  resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
@@ -198,7 +205,35 @@ function resetSessionStore(store: Record<string, unknown>) {
     storePath: "(multiple)",
     store,
   });
-  callGatewayMock.mockResolvedValue({});
+  callGatewayMock.mockImplementation(async (opts: unknown) => {
+    const request = opts as { method?: string; params?: Record<string, unknown> };
+    if (request.method === "sessions.resolve") {
+      const key = typeof request.params?.key === "string" ? request.params.key.trim() : "";
+      if (key && store[key]) {
+        return { key };
+      }
+      const sessionId =
+        typeof request.params?.sessionId === "string" ? request.params.sessionId.trim() : "";
+      if (!sessionId) {
+        return {};
+      }
+      const spawnedBy =
+        typeof request.params?.spawnedBy === "string" ? request.params.spawnedBy.trim() : "";
+      const matches = Object.entries(store).filter((entry): entry is [string, SessionEntry] => {
+        return (
+          entry[1].sessionId === sessionId &&
+          (!spawnedBy ||
+            entry[1].spawnedBy === spawnedBy ||
+            entry[1].parentSessionKey === spawnedBy)
+        );
+      });
+      return { key: resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId) };
+    }
+    if (request.method === "sessions.list") {
+      return { sessions: [] };
+    }
+    return {};
+  });
   mockConfig = createMockConfig();
 }
 
@@ -237,7 +272,6 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
     params: {
       includeGlobal: false,
       includeUnknown: false,
-      limit: 500,
       spawnedBy,
     },
   };
@@ -258,6 +292,7 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
 
 describe("session_status tool", () => {
   beforeEach(async () => {
+    buildStatusMessageMock.mockClear();
     await loadFreshOpenClawToolsForSessionStatusTest();
   });
 
@@ -351,6 +386,19 @@ describe("session_status tool", () => {
         updatedAt: 20,
       },
     });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
 
     const tool = getSessionStatusTool();
 
@@ -393,6 +441,129 @@ describe("session_status tool", () => {
     );
   });
 
+  it("uses the runtime session model as the selected card model when no override is set", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "runtime-model",
+        updatedAt: 10,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-runtime-model", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "anthropic/claude-opus-4-6",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("preserves an unknown runtime provider in the selected status card model", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "legacy-runtime-model",
+        updatedAt: 10,
+        model: "legacy-runtime-model",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-legacy-runtime-model", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "legacy-runtime-model",
+          }),
+        }),
+        sessionEntry: expect.objectContaining({
+          model: "legacy-runtime-model",
+          providerOverride: "",
+        }),
+        modelAuth: undefined,
+      }),
+    );
+  });
+
+  it("passes per-agent thinkingDefault through to the status card", async () => {
+    resetSessionStore({
+      "agent:kira:main": {
+        sessionId: "agent-thinking",
+        updatedAt: 10,
+      },
+    });
+    const savedConfig = mockConfig;
+    try {
+      mockConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+          },
+          list: [
+            {
+              id: "kira",
+              model: "openai/gpt-5.4",
+              thinkingDefault: "xhigh",
+            },
+          ],
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+
+      const tool = getSessionStatusTool("agent:kira:main");
+
+      await tool.execute("call-agent-thinking", {});
+
+      expect(buildStatusMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "kira",
+          agent: expect.objectContaining({
+            thinkingDefault: "xhigh",
+          }),
+        }),
+      );
+    } finally {
+      mockConfig = savedConfig;
+    }
+  });
+
+  it("falls back to origin.provider when resolving queue settings", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "status-origin-provider",
+        updatedAt: 10,
+        origin: { provider: "discord" },
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-origin-provider", {});
+
+    expect(resolveQueueSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        sessionEntry: expect.objectContaining({
+          origin: { provider: "discord" },
+        }),
+      }),
+    );
+  });
+
   it("resolves sessionId inputs", async () => {
     const sessionId = "sess-main";
     resetSessionStore({
@@ -425,6 +596,19 @@ describe("session_status tool", () => {
         updatedAt: 100,
       },
     });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
 
     const tool = getSessionStatusTool();
 
@@ -465,6 +649,193 @@ describe("session_status tool", () => {
     );
   });
 
+  it("blocks unsandboxed same-agent session_status outside self visibility", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "self" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    await expect(
+      tool.execute("call-self-visibility", {
+        sessionKey: "agent:main:main",
+        model: "default",
+      }),
+    ).rejects.toThrow(
+      "Session status visibility is restricted to the current session (tools.sessions.visibility=self).",
+    );
+
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsandboxed same-agent session_status outside tree visibility before mutation", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "tree" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+    mockSpawnedSessionList(() => []);
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    await expect(
+      tool.execute("call-tree-visibility", {
+        sessionKey: "agent:main:main",
+        model: "default",
+      }),
+    ).rejects.toThrow(
+      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+    );
+
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:main:subagent:child",
+      },
+    });
+  });
+
+  it("allows unsandboxed same-agent session_status under agent visibility", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "agent" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    const result = await tool.execute("call-agent-visibility", {
+      sessionKey: "agent:main:main",
+      model: "default",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+    expect(updateSessionStoreMock).toHaveBeenCalled();
+  });
+
+  it("blocks unsandboxed sessionId session_status outside tree visibility before mutation", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "tree" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        if (request.params?.sessionId === "s-parent") {
+          return { key: "agent:main:main" };
+        }
+        return {};
+      }
+      if (request.method === "sessions.list") {
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    const tool = getSessionStatusTool("agent:main:subagent:child");
+
+    await expect(
+      tool.execute("call-tree-session-id-visibility", {
+        sessionKey: "s-parent",
+        model: "default",
+      }),
+    ).rejects.toThrow(
+      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+    );
+
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
   it("blocks sandboxed child session_status access outside its tree before store lookup", async () => {
     resetSessionStore({
       "agent:main:subagent:child": {
@@ -500,6 +871,153 @@ describe("session_status tool", () => {
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expectSpawnedSessionLookupCalls("agent:main:subagent:child");
+  });
+
+  it("blocks sandboxed child bare main session_status access outside its tree", async () => {
+    resetSessionStore({
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+    });
+    installSandboxedSessionStatusConfig();
+    mockSpawnedSessionList(() => []);
+
+    const tool = getSessionStatusTool("agent:main:subagent:child", {
+      sandboxed: true,
+    });
+    const expectedError = "Session status visibility is restricted to the current session tree";
+
+    await expect(
+      tool.execute("call6-bare-main", {
+        sessionKey: "main",
+        model: "default",
+      }),
+    ).rejects.toThrow(expectedError);
+
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:main:subagent:child",
+      },
+    });
+  });
+
+  it("blocks sandboxed child session_status sessionId access outside its tree before store lookup", async () => {
+    resetSessionStore({
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+      },
+      "agent:other:main": {
+        sessionId: "s-other",
+        updatedAt: 30,
+      },
+    });
+    installSandboxedSessionStatusConfig();
+    mockSpawnedSessionList(() => []);
+
+    const tool = getSessionStatusTool("agent:main:subagent:child", {
+      sandboxed: true,
+    });
+    const expectedError = "Session status visibility is restricted to the current session tree";
+
+    await expect(
+      tool.execute("call6-session-id", {
+        sessionKey: "s-other",
+      }),
+    ).rejects.toThrow(expectedError);
+
+    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(3);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.resolve",
+        params: {
+          sessionId: "s-other",
+          spawnedBy: "agent:main:subagent:child",
+          includeGlobal: false,
+          includeUnknown: false,
+        },
+      },
+    ]);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.list",
+        params: {
+          includeGlobal: false,
+          includeUnknown: false,
+          spawnedBy: "agent:main:subagent:child",
+        },
+      },
+    ]);
+  });
+
+  it("blocks sandboxed child session_status parent sessionId access outside its tree", async () => {
+    resetSessionStore({
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+      },
+    });
+    installSandboxedSessionStatusConfig();
+    mockSpawnedSessionList(() => []);
+
+    const tool = getSessionStatusTool("agent:main:subagent:child", {
+      sandboxed: true,
+    });
+
+    await expect(
+      tool.execute("call7-parent-session-id", {
+        sessionKey: "s-parent",
+      }),
+    ).rejects.toThrow("Session status visibility is restricted to the current session tree");
+
+    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(3);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.resolve",
+        params: {
+          sessionId: "s-parent",
+          spawnedBy: "agent:main:subagent:child",
+          includeGlobal: false,
+          includeUnknown: false,
+        },
+      },
+    ]);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.list",
+        params: {
+          includeGlobal: false,
+          includeUnknown: false,
+          spawnedBy: "agent:main:subagent:child",
+        },
+      },
+    ]);
   });
 
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {

@@ -1,11 +1,15 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import { createWhatsAppLoginTool } from "./agent-tools-login.js";
+import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
@@ -64,7 +68,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     },
     outbound: {
       ...createWhatsAppOutboundBase({
-        chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkText,
         sendMessageWhatsApp: async (...args) =>
           await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
         sendPollWhatsApp: async (...args) =>
@@ -90,7 +94,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         isConfigured: async (account) =>
           await getWhatsAppRuntime().channel.whatsapp.webAuthExists(account.authDir),
       }),
-      agentTools: () => [getWhatsAppRuntime().channel.whatsapp.createLoginTool()],
+      agentTools: () => [createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,
@@ -151,13 +155,39 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           return { actions: Array.from(actions) };
         },
         supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ action, params, cfg, accountId }) => {
+        handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
           if (action !== "react") {
             throw new Error(`Action ${action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
           }
-          const messageId = readStringParam(params, "messageId", {
-            required: true,
+          // Only fall back to the inbound message id when the current turn
+          // originates from WhatsApp and targets the same chat. Skip the
+          // fallback when the source is another provider (the message id
+          // would be meaningless) or when the caller routes to a different
+          // WhatsApp chat (the id would belong to the wrong conversation).
+          const isWhatsAppSource = toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
+          const explicitTarget =
+            readStringParam(params, "chatJid") ?? readStringParam(params, "to");
+          const normalizedTarget = explicitTarget ? normalizeWhatsAppTarget(explicitTarget) : null;
+          const normalizedCurrent =
+            isWhatsAppSource && toolContext?.currentChannelId
+              ? normalizeWhatsAppTarget(toolContext.currentChannelId)
+              : null;
+          // When an explicit target is provided, require a known current chat
+          // to compare against. If currentChannelId is missing/unparseable,
+          // treat it as ineligible for fallback to avoid cross-chat leaks.
+          const isCrossChat =
+            normalizedTarget != null &&
+            (normalizedCurrent == null || normalizedTarget !== normalizedCurrent);
+          const scopedContext = !isWhatsAppSource || isCrossChat ? undefined : toolContext;
+          const messageIdRaw = resolveReactionMessageId({
+            args: params,
+            toolContext: scopedContext,
           });
+          if (messageIdRaw == null) {
+            // Delegate to readStringParam so the gateway maps the error to 400.
+            readStringParam(params, "messageId", { required: true });
+          }
+          const messageId = String(messageIdRaw);
           const emoji = readStringParam(params, "emoji", { allowEmpty: true });
           const remove = typeof params.remove === "boolean" ? params.remove : undefined;
           return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
@@ -178,6 +208,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
       },
       auth: {
+        ...whatsappApprovalAuth,
         login: async ({ cfg, accountId, runtime, verbose }) => {
           const resolvedAccountId =
             accountId?.trim() ||

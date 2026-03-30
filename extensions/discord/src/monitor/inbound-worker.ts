@@ -1,7 +1,6 @@
 import { createRunStateMachine } from "openclaw/plugin-sdk/channel-lifecycle";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
-import { formatDurationSeconds } from "openclaw/plugin-sdk/infra-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
@@ -15,11 +14,17 @@ type DiscordInboundWorkerParams = {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   runTimeoutMs?: number;
+  __testing?: DiscordInboundWorkerTestingHooks;
 };
 
 export type DiscordInboundWorker = {
   enqueue: (job: DiscordInboundJob) => void;
   deactivate: () => void;
+};
+
+export type DiscordInboundWorkerTestingHooks = {
+  processDiscordMessage?: typeof processDiscordMessage;
+  deliverDiscordReply?: typeof deliverDiscordReply;
 };
 
 function formatDiscordRunContextSuffix(job: DiscordInboundJob): string {
@@ -40,15 +45,17 @@ async function processDiscordInboundJob(params: {
   runtime: RuntimeEnv;
   lifecycleSignal?: AbortSignal;
   runTimeoutMs?: number;
+  testing?: DiscordInboundWorkerTestingHooks;
 }) {
   const timeoutMs = normalizeDiscordInboundWorkerTimeoutMs(params.runTimeoutMs);
   const contextSuffix = formatDiscordRunContextSuffix(params.job);
   let finalReplyStarted = false;
   let createdThreadId: string | undefined;
   let sessionKey: string | undefined;
+  const processDiscordMessageImpl = params.testing?.processDiscordMessage ?? processDiscordMessage;
   await runDiscordTaskWithTimeout({
     run: async (abortSignal) => {
-      await processDiscordMessage(materializeDiscordInboundJob(params.job, abortSignal), {
+      await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal), {
         onFinalReplyStart: () => {
           finalReplyStarted = true;
         },
@@ -81,6 +88,7 @@ async function processDiscordInboundJob(params: {
         contextSuffix,
         createdThreadId,
         sessionKey,
+        deliverDiscordReplyImpl: params.testing?.deliverDiscordReply,
       });
     },
     onErrorAfterTimeout: (error) => {
@@ -97,6 +105,7 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
   contextSuffix: string;
   createdThreadId?: string;
   sessionKey?: string;
+  deliverDiscordReplyImpl?: typeof deliverDiscordReply;
 }) {
   const messageChannelId = params.job.payload.messageChannelId?.trim();
   const messageId = params.job.payload.message?.id?.trim();
@@ -119,7 +128,7 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
   });
 
   try {
-    await deliverDiscordReply({
+    await (params.deliverDiscordReplyImpl ?? deliverDiscordReply)({
       cfg: params.job.payload.cfg,
       replies: [{ text: "Discord inbound worker timed out.", isError: true }],
       target: deliveryPlan.deliverTarget,
@@ -171,6 +180,7 @@ export function createDiscordInboundWorker(
               runtime: params.runtime,
               lifecycleSignal: params.abortSignal,
               runTimeoutMs: params.runTimeoutMs,
+              testing: params.__testing,
             });
           } finally {
             runState.onRunEnd();

@@ -173,23 +173,118 @@ async function expectDedupedInteractiveDispatch(params: {
   handler: ReturnType<typeof vi.fn>;
   expectedCall: unknown;
 }) {
-  const dispatch = async (baseParams: InteractiveDispatchParams) => {
-    if (baseParams.channel === "telegram") {
-      return await dispatchPluginInteractiveHandler(baseParams);
-    }
-    if (baseParams.channel === "discord") {
-      return await dispatchPluginInteractiveHandler(baseParams);
-    }
-    return await dispatchPluginInteractiveHandler(baseParams);
-  };
-
-  const first = await dispatch(params.baseParams);
-  const duplicate = await dispatch(params.baseParams);
+  const first = await dispatchInteractive(params.baseParams);
+  const duplicate = await dispatchInteractive(params.baseParams);
 
   expect(first).toEqual({ matched: true, handled: true, duplicate: false });
   expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
   expect(params.handler).toHaveBeenCalledTimes(1);
   expect(params.handler).toHaveBeenCalledWith(expect.objectContaining(params.expectedCall));
+}
+
+async function dispatchInteractive(params: InteractiveDispatchParams) {
+  if (params.channel === "telegram") {
+    return await dispatchPluginInteractiveHandler(params);
+  }
+  if (params.channel === "discord") {
+    return await dispatchPluginInteractiveHandler(params);
+  }
+  return await dispatchPluginInteractiveHandler(params);
+}
+
+function registerInteractiveHandler(params: {
+  channel: "telegram" | "discord" | "slack";
+  namespace: string;
+  handler: ReturnType<typeof vi.fn>;
+}) {
+  return registerPluginInteractiveHandler("codex-plugin", {
+    channel: params.channel,
+    namespace: params.namespace,
+    handler: params.handler as never,
+  });
+}
+
+type BindingHelperCase = {
+  name: string;
+  registerParams: { channel: "telegram" | "discord" | "slack"; namespace: string };
+  dispatchParams: InteractiveDispatchParams;
+  requestResult: {
+    status: "bound";
+    binding: {
+      bindingId: string;
+      pluginId: string;
+      pluginName: string;
+      pluginRoot: string;
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+      threadId?: string | number;
+      boundAt: number;
+    };
+  };
+  requestSummary: string;
+  expectedConversation: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+    threadId?: string | number;
+  };
+};
+
+async function expectBindingHelperWiring(params: BindingHelperCase) {
+  const currentBinding = {
+    ...params.requestResult.binding,
+    boundAt: params.requestResult.binding.boundAt + 1,
+  };
+  requestPluginConversationBindingMock.mockResolvedValueOnce(params.requestResult);
+  getCurrentPluginConversationBindingMock.mockResolvedValueOnce(currentBinding);
+
+  const handler = vi.fn(async (ctx) => {
+    await expect(
+      ctx.requestConversationBinding({ summary: params.requestSummary }),
+    ).resolves.toEqual(params.requestResult);
+    await expect(ctx.detachConversationBinding()).resolves.toEqual({ removed: true });
+    await expect(ctx.getCurrentConversationBinding()).resolves.toEqual(currentBinding);
+    return { handled: true };
+  });
+
+  expect(
+    registerPluginInteractiveHandler(
+      "codex-plugin",
+      {
+        ...params.registerParams,
+        handler: handler as never,
+      },
+      { pluginName: "Codex", pluginRoot: "/plugins/codex" },
+    ),
+  ).toEqual({ ok: true });
+
+  await expect(dispatchInteractive(params.dispatchParams)).resolves.toEqual({
+    matched: true,
+    handled: true,
+    duplicate: false,
+  });
+
+  expect(requestPluginConversationBindingMock).toHaveBeenCalledWith({
+    pluginId: "codex-plugin",
+    pluginName: "Codex",
+    pluginRoot: "/plugins/codex",
+    requestedBySenderId: "user-1",
+    conversation: params.expectedConversation,
+    binding: {
+      summary: params.requestSummary,
+    },
+  });
+  expect(detachPluginConversationBindingMock).toHaveBeenCalledWith({
+    pluginRoot: "/plugins/codex",
+    conversation: params.expectedConversation,
+  });
+  expect(getCurrentPluginConversationBindingMock).toHaveBeenCalledWith({
+    pluginRoot: "/plugins/codex",
+    conversation: params.expectedConversation,
+  });
 }
 
 describe("plugin interactive handlers", () => {
@@ -235,24 +330,14 @@ describe("plugin interactive handlers", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes Telegram callbacks by namespace and dedupes callback ids", async () => {
-    const handler = vi.fn(async () => ({ handled: true }));
-    expect(
-      registerPluginInteractiveHandler("codex-plugin", {
-        channel: "telegram",
-        namespace: "codex",
-        handler,
+  it.each([
+    {
+      name: "routes Telegram callbacks by namespace and dedupes callback ids",
+      channel: "telegram" as const,
+      baseParams: createTelegramDispatchParams({
+        data: "codex:resume:thread-1",
+        callbackId: "cb-1",
       }),
-    ).toEqual({ ok: true });
-
-    const baseParams = createTelegramDispatchParams({
-      data: "codex:resume:thread-1",
-      callbackId: "cb-1",
-    });
-
-    await expectDedupedInteractiveDispatch({
-      baseParams,
-      handler,
       expectedCall: {
         channel: "telegram",
         conversationId: "-10099:topic:77",
@@ -263,6 +348,56 @@ describe("plugin interactive handlers", () => {
           messageId: 55,
         }),
       },
+    },
+    {
+      name: "routes Discord interactions by namespace and dedupes interaction ids",
+      channel: "discord" as const,
+      baseParams: createDiscordDispatchParams({
+        data: "codex:approve:thread-1",
+        interactionId: "ix-1",
+        interaction: { kind: "button", values: ["allow"] },
+      }),
+      expectedCall: {
+        channel: "discord",
+        conversationId: "channel-1",
+        interaction: expect.objectContaining({
+          namespace: "codex",
+          payload: "approve:thread-1",
+          messageId: "message-1",
+          values: ["allow"],
+        }),
+      },
+    },
+    {
+      name: "routes Slack interactions by namespace and dedupes interaction ids",
+      channel: "slack" as const,
+      baseParams: createSlackDispatchParams({
+        data: "codex:approve:thread-1",
+        interactionId: "slack-ix-1",
+        interaction: { kind: "button" },
+      }),
+      expectedCall: {
+        channel: "slack",
+        conversationId: "C123",
+        threadId: "1710000000.000100",
+        interaction: expect.objectContaining({
+          namespace: "codex",
+          payload: "approve:thread-1",
+          actionId: "codex",
+          messageTs: "1710000000.000200",
+        }),
+      },
+    },
+  ] as const)("$name", async ({ channel, baseParams, expectedCall }) => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    expect(registerInteractiveHandler({ channel, namespace: "codex", handler })).toEqual({
+      ok: true,
+    });
+
+    await expectDedupedInteractiveDispatch({
+      baseParams,
+      handler,
+      expectedCall,
     });
   });
 
@@ -322,38 +457,6 @@ describe("plugin interactive handlers", () => {
     });
   });
 
-  it("routes Discord interactions by namespace and dedupes interaction ids", async () => {
-    const handler = vi.fn(async () => ({ handled: true }));
-    expect(
-      registerPluginInteractiveHandler("codex-plugin", {
-        channel: "discord",
-        namespace: "codex",
-        handler,
-      }),
-    ).toEqual({ ok: true });
-
-    const baseParams = createDiscordDispatchParams({
-      data: "codex:approve:thread-1",
-      interactionId: "ix-1",
-      interaction: { kind: "button", values: ["allow"] },
-    });
-
-    await expectDedupedInteractiveDispatch({
-      baseParams,
-      handler,
-      expectedCall: {
-        channel: "discord",
-        conversationId: "channel-1",
-        interaction: expect.objectContaining({
-          namespace: "codex",
-          payload: "approve:thread-1",
-          messageId: "message-1",
-          values: ["allow"],
-        }),
-      },
-    });
-  });
-
   it("acknowledges matched Discord interactions before awaiting plugin handlers", async () => {
     const callOrder: string[] = [];
     const handler = vi.fn(async () => {
@@ -387,326 +490,107 @@ describe("plugin interactive handlers", () => {
     });
   });
 
-  it("routes Slack interactions by namespace and dedupes interaction ids", async () => {
-    const handler = vi.fn(async () => ({ handled: true }));
-    expect(
-      registerPluginInteractiveHandler("codex-plugin", {
-        channel: "slack",
-        namespace: "codex",
-        handler,
+  it.each([
+    {
+      name: "wires Telegram conversation binding helpers with topic context",
+      registerParams: { channel: "telegram", namespace: "codex" },
+      dispatchParams: createTelegramDispatchParams({
+        data: "codex:bind",
+        callbackId: "cb-bind",
       }),
-    ).toEqual({ ok: true });
-
-    const baseParams = createSlackDispatchParams({
-      data: "codex:approve:thread-1",
-      interactionId: "slack-ix-1",
-      interaction: { kind: "button" },
-    });
-
-    await expectDedupedInteractiveDispatch({
-      baseParams,
-      handler,
-      expectedCall: {
-        channel: "slack",
-        conversationId: "C123",
-        threadId: "1710000000.000100",
-        interaction: expect.objectContaining({
-          namespace: "codex",
-          payload: "approve:thread-1",
-          actionId: "codex",
-          messageTs: "1710000000.000200",
-        }),
-      },
-    });
-  });
-
-  it("wires Telegram conversation binding helpers with topic context", async () => {
-    const requestResult = {
-      status: "bound" as const,
-      binding: {
-        bindingId: "binding-telegram",
-        pluginId: "codex-plugin",
-        pluginName: "Codex",
-        pluginRoot: "/plugins/codex",
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-10099:topic:77",
-        parentConversationId: "-10099",
-        threadId: 77,
-        boundAt: 1,
-      },
-    };
-    const currentBinding = {
-      ...requestResult.binding,
-      boundAt: 2,
-    };
-    requestPluginConversationBindingMock.mockResolvedValueOnce(requestResult);
-    getCurrentPluginConversationBindingMock.mockResolvedValueOnce(currentBinding);
-
-    const handler = vi.fn(async (ctx) => {
-      await expect(
-        ctx.requestConversationBinding({
-          summary: "Bind this topic",
-          detachHint: "Use /new to detach",
-        }),
-      ).resolves.toEqual(requestResult);
-      await expect(ctx.detachConversationBinding()).resolves.toEqual({ removed: true });
-      await expect(ctx.getCurrentConversationBinding()).resolves.toEqual(currentBinding);
-      return { handled: true };
-    });
-    expect(
-      registerPluginInteractiveHandler(
-        "codex-plugin",
-        {
+      requestResult: {
+        status: "bound" as const,
+        binding: {
+          bindingId: "binding-telegram",
+          pluginId: "codex-plugin",
+          pluginName: "Codex",
+          pluginRoot: "/plugins/codex",
           channel: "telegram",
-          namespace: "codex",
-          handler,
+          accountId: "default",
+          conversationId: "-10099:topic:77",
+          parentConversationId: "-10099",
+          threadId: 77,
+          boundAt: 1,
         },
-        { pluginName: "Codex", pluginRoot: "/plugins/codex" },
-      ),
-    ).toEqual({ ok: true });
-
-    await expect(
-      dispatchPluginInteractiveHandler(
-        createTelegramDispatchParams({
-          data: "codex:bind",
-          callbackId: "cb-bind",
-        }),
-      ),
-    ).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: false,
-    });
-
-    expect(requestPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginId: "codex-plugin",
-      pluginName: "Codex",
-      pluginRoot: "/plugins/codex",
-      requestedBySenderId: "user-1",
-      conversation: {
+      },
+      requestSummary: "Bind this topic",
+      expectedConversation: {
         channel: "telegram",
         accountId: "default",
         conversationId: "-10099:topic:77",
         parentConversationId: "-10099",
         threadId: 77,
       },
-      binding: {
-        summary: "Bind this topic",
-        detachHint: "Use /new to detach",
-      },
-    });
-    expect(detachPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginRoot: "/plugins/codex",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-10099:topic:77",
-        parentConversationId: "-10099",
-        threadId: 77,
-      },
-    });
-    expect(getCurrentPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginRoot: "/plugins/codex",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-10099:topic:77",
-        parentConversationId: "-10099",
-        threadId: 77,
-      },
-    });
-  });
-
-  it("wires Discord conversation binding helpers with parent channel context", async () => {
-    const requestResult = {
-      status: "bound" as const,
-      binding: {
-        bindingId: "binding-discord",
-        pluginId: "codex-plugin",
-        pluginName: "Codex",
-        pluginRoot: "/plugins/codex",
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel-1",
-        parentConversationId: "parent-1",
-        boundAt: 1,
-      },
-    };
-    const currentBinding = {
-      ...requestResult.binding,
-      boundAt: 2,
-    };
-    requestPluginConversationBindingMock.mockResolvedValueOnce(requestResult);
-    getCurrentPluginConversationBindingMock.mockResolvedValueOnce(currentBinding);
-
-    const handler = vi.fn(async (ctx) => {
-      await expect(ctx.requestConversationBinding({ summary: "Bind Discord" })).resolves.toEqual(
-        requestResult,
-      );
-      await expect(ctx.detachConversationBinding()).resolves.toEqual({ removed: true });
-      await expect(ctx.getCurrentConversationBinding()).resolves.toEqual(currentBinding);
-      return { handled: true };
-    });
-    expect(
-      registerPluginInteractiveHandler(
-        "codex-plugin",
-        {
+    },
+    {
+      name: "wires Discord conversation binding helpers with parent channel context",
+      registerParams: { channel: "discord", namespace: "codex" },
+      dispatchParams: createDiscordDispatchParams({
+        data: "codex:bind",
+        interactionId: "ix-bind",
+        interaction: { kind: "button", values: ["allow"] },
+      }),
+      requestResult: {
+        status: "bound" as const,
+        binding: {
+          bindingId: "binding-discord",
+          pluginId: "codex-plugin",
+          pluginName: "Codex",
+          pluginRoot: "/plugins/codex",
           channel: "discord",
-          namespace: "codex",
-          handler,
+          accountId: "default",
+          conversationId: "channel-1",
+          parentConversationId: "parent-1",
+          boundAt: 1,
         },
-        { pluginName: "Codex", pluginRoot: "/plugins/codex" },
-      ),
-    ).toEqual({ ok: true });
-
-    await expect(
-      dispatchPluginInteractiveHandler(
-        createDiscordDispatchParams({
-          data: "codex:bind",
-          interactionId: "ix-bind",
-          interaction: { kind: "button", values: ["allow"] },
-        }),
-      ),
-    ).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: false,
-    });
-
-    expect(requestPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginId: "codex-plugin",
-      pluginName: "Codex",
-      pluginRoot: "/plugins/codex",
-      requestedBySenderId: "user-1",
-      conversation: {
+      },
+      requestSummary: "Bind Discord",
+      expectedConversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "channel-1",
         parentConversationId: "parent-1",
       },
-      binding: {
-        summary: "Bind Discord",
-      },
-    });
-    expect(detachPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginRoot: "/plugins/codex",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel-1",
-        parentConversationId: "parent-1",
-      },
-    });
-    expect(getCurrentPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginRoot: "/plugins/codex",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel-1",
-        parentConversationId: "parent-1",
-      },
-    });
-  });
-
-  it("wires Slack conversation binding helpers with thread context", async () => {
-    const requestResult = {
-      status: "bound" as const,
-      binding: {
-        bindingId: "binding-slack",
-        pluginId: "codex-plugin",
-        pluginName: "Codex",
-        pluginRoot: "/plugins/codex",
-        channel: "slack",
-        accountId: "default",
-        conversationId: "C123",
-        parentConversationId: "C123",
-        threadId: "1710000000.000100",
-        boundAt: 1,
-      },
-    };
-    const currentBinding = {
-      ...requestResult.binding,
-      boundAt: 2,
-    };
-    requestPluginConversationBindingMock.mockResolvedValueOnce(requestResult);
-    getCurrentPluginConversationBindingMock.mockResolvedValueOnce(currentBinding);
-
-    const handler = vi.fn(async (ctx) => {
-      await expect(ctx.requestConversationBinding({ summary: "Bind Slack" })).resolves.toEqual(
-        requestResult,
-      );
-      await expect(ctx.detachConversationBinding()).resolves.toEqual({ removed: true });
-      await expect(ctx.getCurrentConversationBinding()).resolves.toEqual(currentBinding);
-      return { handled: true };
-    });
-    expect(
-      registerPluginInteractiveHandler(
-        "codex-plugin",
-        {
+    },
+    {
+      name: "wires Slack conversation binding helpers with thread context",
+      registerParams: { channel: "slack", namespace: "codex" },
+      dispatchParams: createSlackDispatchParams({
+        data: "codex:bind",
+        interactionId: "slack-bind",
+        interaction: {
+          kind: "button",
+          value: "bind",
+          selectedValues: ["bind"],
+          selectedLabels: ["Bind"],
+        },
+      }),
+      requestResult: {
+        status: "bound" as const,
+        binding: {
+          bindingId: "binding-slack",
+          pluginId: "codex-plugin",
+          pluginName: "Codex",
+          pluginRoot: "/plugins/codex",
           channel: "slack",
-          namespace: "codex",
-          handler,
+          accountId: "default",
+          conversationId: "C123",
+          parentConversationId: "C123",
+          threadId: "1710000000.000100",
+          boundAt: 1,
         },
-        { pluginName: "Codex", pluginRoot: "/plugins/codex" },
-      ),
-    ).toEqual({ ok: true });
-
-    await expect(
-      dispatchPluginInteractiveHandler(
-        createSlackDispatchParams({
-          data: "codex:bind",
-          interactionId: "slack-bind",
-          interaction: {
-            kind: "button",
-            value: "bind",
-            selectedValues: ["bind"],
-            selectedLabels: ["Bind"],
-          },
-        }),
-      ),
-    ).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: false,
-    });
-
-    expect(requestPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginId: "codex-plugin",
-      pluginName: "Codex",
-      pluginRoot: "/plugins/codex",
-      requestedBySenderId: "user-1",
-      conversation: {
+      },
+      requestSummary: "Bind Slack",
+      expectedConversation: {
         channel: "slack",
         accountId: "default",
         conversationId: "C123",
         parentConversationId: "C123",
         threadId: "1710000000.000100",
       },
-      binding: {
-        summary: "Bind Slack",
-      },
-    });
-    expect(detachPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginRoot: "/plugins/codex",
-      conversation: {
-        channel: "slack",
-        accountId: "default",
-        conversationId: "C123",
-        parentConversationId: "C123",
-        threadId: "1710000000.000100",
-      },
-    });
-    expect(getCurrentPluginConversationBindingMock).toHaveBeenCalledWith({
-      pluginRoot: "/plugins/codex",
-      conversation: {
-        channel: "slack",
-        accountId: "default",
-        conversationId: "C123",
-        parentConversationId: "C123",
-        threadId: "1710000000.000100",
-      },
-    });
+    },
+  ] as const)("$name", async (testCase) => {
+    await expectBindingHelperWiring(testCase);
   });
 
   it("does not consume dedupe keys when a handler throws", async () => {

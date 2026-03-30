@@ -7,7 +7,7 @@ import {
   normalizeBaseUrl,
   postTranscriptionRequest,
   requireTranscriptionText,
-} from "openclaw/plugin-sdk/media-understanding";
+} from "openclaw/plugin-sdk/provider-http";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";

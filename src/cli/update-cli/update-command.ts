@@ -7,11 +7,13 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   resolveGatewayPort,
-  writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -20,6 +22,7 @@ import {
 } from "../../infra/update-channels.js";
 import {
   compareSemverStrings,
+  fetchNpmPackageTargetStatus,
   resolveNpmChannelTag,
   checkUpdateStatus,
 } from "../../infra/update-check.js";
@@ -131,6 +134,38 @@ function tryResolveInvocationCwd(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function resolvePackageRuntimePreflightError(params: {
+  tag: string;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
+    return null;
+  }
+  const target = params.tag.trim();
+  if (!target) {
+    return null;
+  }
+  const status = await fetchNpmPackageTargetStatus({
+    target,
+    timeoutMs: params.timeoutMs,
+  });
+  if (status.error) {
+    return null;
+  }
+  const satisfies = nodeVersionSatisfiesEngine(process.versions.node ?? null, status.nodeEngine);
+  if (satisfies !== false) {
+    return null;
+  }
+  const targetLabel = status.version ?? target;
+  return [
+    `Node ${process.versions.node ?? "unknown"} is too old for openclaw@${targetLabel}.`,
+    `The requested package requires ${status.nodeEngine}.`,
+    "Upgrade Node to 22.14+ or Node 24, then rerun `openclaw update`.",
+    "Bare `npm i -g openclaw` can silently install an older compatible release.",
+    "After upgrading Node, use `npm i -g openclaw@latest`.",
+  ].join("\n");
 }
 
 function resolveServiceRefreshEnv(
@@ -515,7 +550,10 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginConfig = npmResult.config;
 
   if (syncResult.changed || npmResult.changed) {
-    await writeConfigFile(pluginConfig);
+    await replaceConfigFile({
+      nextConfig: pluginConfig,
+      baseHash: params.configSnapshot.hash,
+    });
   }
 
   if (params.opts.json) {
@@ -881,6 +919,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     );
   }
 
+  if (updateInstallKind === "package") {
+    const runtimePreflightError = await resolvePackageRuntimePreflightError({
+      tag,
+      timeoutMs,
+    });
+    if (runtimePreflightError) {
+      defaultRuntime.error(runtimePreflightError);
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
+
   const showProgress = !opts.json && process.stdout.isTTY;
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating OpenClaw..."));
@@ -973,12 +1023,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         channel: requestedChannel,
       },
     };
-    await writeConfigFile(next);
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: configSnapshot.hash,
+    });
     postUpdateConfigSnapshot = {
       ...configSnapshot,
+      hash: undefined,
       parsed: next,
-      resolved: next,
-      config: next,
+      sourceConfig: asResolvedSourceConfig(next),
+      resolved: asResolvedSourceConfig(next),
+      runtimeConfig: asRuntimeConfig(next),
+      config: asRuntimeConfig(next),
     };
     if (!opts.json) {
       defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));

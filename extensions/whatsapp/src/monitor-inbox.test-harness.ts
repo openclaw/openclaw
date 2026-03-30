@@ -115,6 +115,25 @@ type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
 let monitorWebInbox: MonitorWebInbox;
 
+function expectInboxPairingReplyText(
+  text: string,
+  params: {
+    channel: string;
+    idLine: string;
+    code?: string;
+  },
+): string {
+  const code = text.match(/Pairing code:\s*```[\r\n]+([A-Z2-9]{6,})/)?.[1];
+  expect(code).toBeDefined();
+  const resolvedCode = params.code ?? code ?? "";
+  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain(params.idLine);
+  expect(text).toContain("Pairing code:");
+  expect(text).toContain(`\n\`\`\`\n${resolvedCode}\n\`\`\`\n`);
+  expect(text).toContain(`pairing approve ${params.channel} ${resolvedCode}`);
+  return resolvedCode;
+}
+
 export function getMonitorWebInbox(): MonitorWebInbox {
   if (!monitorWebInbox) {
     throw new Error("monitorWebInbox not initialized");
@@ -177,12 +196,16 @@ export function buildNotifyMessageUpsert(params: {
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining(`Your WhatsApp phone number: ${senderE164}`),
-  });
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining("Pairing code: PAIRCODE"),
-  });
+  const sendCall = sock.sendMessage.mock.calls[0];
+  expect(sendCall?.[0]).toBe(jid);
+  expectInboxPairingReplyText(
+    String((sendCall?.[1] as { text?: string } | undefined)?.text ?? ""),
+    {
+      channel: "whatsapp",
+      idLine: `Your WhatsApp phone number: ${senderE164}`,
+      code: "PAIRCODE",
+    },
+  );
 }
 
 let authDir: string | undefined;

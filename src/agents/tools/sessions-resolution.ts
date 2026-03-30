@@ -57,14 +57,14 @@ export async function listSpawnedSessionKeys(params: {
   const limit =
     typeof params.limit === "number" && Number.isFinite(params.limit)
       ? Math.max(1, Math.floor(params.limit))
-      : 500;
+      : undefined;
   try {
     const list = await sessionsResolutionDeps.callGateway<{ sessions: Array<{ key?: unknown }> }>({
       method: "sessions.list",
       params: {
         includeGlobal: false,
         includeUnknown: false,
-        limit,
+        ...(limit !== undefined ? { limit } : {}),
         spawnedBy: params.requesterSessionKey,
       },
     });

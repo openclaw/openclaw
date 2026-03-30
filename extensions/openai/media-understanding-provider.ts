@@ -5,7 +5,7 @@ import {
   type AudioTranscriptionRequest,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
-import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "openclaw/plugin-sdk/provider-models";
+import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 
 export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
 
@@ -23,4 +23,11 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   transcribeAudio: transcribeOpenAiAudio,
+};
+
+export const openaiCodexMediaUnderstandingProvider: MediaUnderstandingProvider = {
+  id: "openai-codex",
+  capabilities: ["image"],
+  describeImage: describeImageWithModel,
+  describeImages: describeImagesWithModel,
 };

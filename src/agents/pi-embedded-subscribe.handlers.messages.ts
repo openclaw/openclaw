@@ -1,7 +1,7 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -296,6 +296,10 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistant = next;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
+    if (ctx.params.silentExpected) {
+      shouldEmit = false;
+    }
+
     if (shouldEmit) {
       const data = buildAssistantStreamData({
         text: cleanedText,
@@ -318,11 +322,20 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.params.onBlockReply && ctx.blockChunking && ctx.state.blockReplyBreak === "text_end") {
+  if (
+    !ctx.params.silentExpected &&
+    ctx.params.onBlockReply &&
+    ctx.blockChunking &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
     ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
   }
 
-  if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
+  if (
+    !ctx.params.silentExpected &&
+    evtType === "text_end" &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
     ctx.flushBlockReplyBuffer();
   }
 }
@@ -379,7 +392,11 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  if (
+    !ctx.params.silentExpected &&
+    !ctx.state.emittedAssistantUpdate &&
+    (cleanedText || hasMedia)
+  ) {
     const data = buildAssistantStreamData({
       text: cleanedText,
       delta: cleanedText,
@@ -397,9 +414,16 @@ export function handleMessageEnd(
     ctx.state.emittedAssistantUpdate = true;
   }
 
+  const silentExpectedWithoutSentinel =
+    ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
+  const finalAssistantText = silentExpectedWithoutSentinel ? "" : text;
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  ctx.finalizeAssistantTexts({
+    text: finalAssistantText,
+    addedDuringMessage,
+    chunkerHasBuffered,
+  });
 
   const onBlockReply = ctx.params.onBlockReply;
   const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
@@ -413,6 +437,7 @@ export function handleMessageEnd(
       });
   };
   const shouldEmitReasoning = Boolean(
+    !ctx.params.silentExpected &&
     ctx.state.includeReasoning &&
     formattedReasoning &&
     onBlockReply &&
@@ -460,6 +485,7 @@ export function handleMessageEnd(
   };
 
   if (
+    !ctx.params.silentExpected &&
     (ctx.state.blockReplyBreak === "message_end" ||
       (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&
@@ -490,11 +516,11 @@ export function handleMessageEnd(
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
   }
-  if (ctx.state.streamReasoning && rawThinking) {
+  if (!ctx.params.silentExpected && ctx.state.streamReasoning && rawThinking) {
     ctx.emitReasoningStream(rawThinking);
   }
 
-  if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
+  if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 

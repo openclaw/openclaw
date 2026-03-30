@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSlackAutoThreadId } from "../../plugin-sdk/slack.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -25,51 +24,6 @@ function createToolContext(
     replyToMode: "all",
     ...overrides,
   };
-}
-
-function resolveSlackAutoThreadId(params: {
-  to: string;
-  toolContext?: {
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    replyToMode?: "off" | "first" | "all";
-    hasRepliedRef?: { value: boolean };
-  };
-}): string | undefined {
-  const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
-  }
-  if (context.replyToMode !== "all" && context.replyToMode !== "first") {
-    return undefined;
-  }
-  const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return undefined;
-  }
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
-    return undefined;
-  }
-  if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
-    return undefined;
-  }
-  return context.currentThreadTs;
-}
-
-function resolveTelegramAutoThreadId(params: {
-  to: string;
-  toolContext?: { currentThreadTs?: string; currentChannelId?: string };
-}): string | undefined {
-  const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
-  }
-  const parsedTo = parseTelegramTarget(params.to);
-  const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
-    return undefined;
-  }
-  return context.currentThreadTs;
 }
 
 describe("message action threading helpers", () => {
@@ -114,31 +68,6 @@ describe("message action threading helpers", () => {
       resolveSlackAutoThreadId({
         to: "C123",
         toolContext: createToolContext({ currentThreadTs: undefined }),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("resolves Telegram auto-thread ids for matching chats across target formats", () => {
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "telegram:group:-100123:topic:77",
-        toolContext: createToolContext({
-          currentChannelId: "tg:group:-100123",
-        }),
-      }),
-    ).toBe("thread-1");
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "-100999:77",
-        toolContext: createToolContext({
-          currentChannelId: "-100123",
-        }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "-100123",
-        toolContext: createToolContext({ currentChannelId: undefined }),
       }),
     ).toBeUndefined();
   });

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
+import { parseReleaseVersion, resolveNpmPublishPlan } from "../openclaw-npm-release-check.ts";
 
 export type PluginPackageJson = {
   name?: string;
@@ -235,7 +235,7 @@ export function collectPublishablePluginPackages(
       packageName: packageJson.name!.trim(),
       version,
       channel: parsedVersion.channel,
-      publishTag: parsedVersion.channel === "beta" ? "beta" : "latest",
+      publishTag: resolveNpmPublishPlan(version).publishTag,
       installNpmSpec: packageJson.openclaw?.install?.npmSpec?.trim() || undefined,
     });
   }

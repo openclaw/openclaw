@@ -9,6 +9,9 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
+import { describeToolForVerbose } from "../agents/tool-description-summary.js";
+import { normalizeToolName } from "../agents/tool-policy-shared.js";
+import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
@@ -25,14 +28,7 @@ import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  getTtsMaxLength,
-  getTtsProvider,
-  isSummarizationEnabled,
-  resolveTtsAutoMode,
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-} from "../tts/tts.js";
+import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
   formatTokenCount as formatTokenCountShared,
@@ -395,20 +391,14 @@ const formatVoiceModeLine = (
   if (!config) {
     return null;
   }
-  const ttsConfig = resolveTtsConfig(config);
-  const prefsPath = resolveTtsPrefsPath(ttsConfig);
-  const autoMode = resolveTtsAutoMode({
-    config: ttsConfig,
-    prefsPath,
+  const snapshot = resolveStatusTtsSnapshot({
+    cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
   });
-  if (autoMode === "off") {
+  if (!snapshot) {
     return null;
   }
-  const provider = getTtsProvider(ttsConfig, prefsPath);
-  const maxLength = getTtsMaxLength(prefsPath);
-  const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
-  return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
+  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -439,6 +429,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: selectionConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
@@ -547,11 +538,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: contextConfig,
     provider: selectedProvider,
     model: selectedModel,
+    allowAsyncLoad: false,
   });
   const activeContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
     model: contextLookupModel,
+    allowAsyncLoad: false,
   });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
@@ -620,6 +613,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         model: contextLookupModel,
         contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+        allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
@@ -710,6 +704,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         provider: activeProvider,
         model: activeModel,
         config: args.config,
+        allowPluginNormalization: false,
       })
     : undefined;
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
@@ -747,11 +742,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     const aliasIndex = buildModelAliasIndex({
       cfg: args.config,
       defaultProvider: DEFAULT_PROVIDER,
+      allowPluginNormalization: false,
     });
     const resolvedOverride = resolveModelRefFromString({
       raw: channelOverride.model,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
+      allowPluginNormalization: false,
     });
     if (!resolvedOverride) {
       return undefined;
@@ -845,7 +842,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
+  const optionParts = ["/think <level>", "/model <id>", "/fast status|on|off", "/verbose on|off"];
   if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }
@@ -864,7 +861,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /skill <name> [input]");
 
   lines.push("");
-  lines.push("More: /commands for full list");
+  lines.push("More: /commands for full list, /tools for available capabilities");
 
   return lines.join("\n");
 }
@@ -883,6 +880,91 @@ export type CommandsMessageResult = {
   hasNext: boolean;
   hasPrev: boolean;
 };
+
+type ToolsMessageItem = {
+  id: string;
+  name: string;
+  description: string;
+  rawDescription: string;
+  source: EffectiveToolInventoryResult["groups"][number]["source"];
+  pluginId?: string;
+  channelId?: string;
+};
+
+function sortToolsMessageItems(items: ToolsMessageItem[]): ToolsMessageItem[] {
+  return items.toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+function formatCompactToolEntry(tool: ToolsMessageItem): string {
+  if (tool.source === "plugin") {
+    return tool.pluginId ? `${tool.id} (${tool.pluginId})` : tool.id;
+  }
+  if (tool.source === "channel") {
+    return tool.channelId ? `${tool.id} (${tool.channelId})` : tool.id;
+  }
+  return tool.id;
+}
+
+function formatVerboseToolDescription(tool: ToolsMessageItem): string {
+  return describeToolForVerbose({
+    rawDescription: tool.rawDescription,
+    fallback: tool.description,
+  });
+}
+
+export function buildToolsMessage(
+  result: EffectiveToolInventoryResult,
+  options?: { verbose?: boolean },
+): string {
+  const groups = result.groups
+    .map((group) => ({
+      label: group.label,
+      tools: sortToolsMessageItems(
+        group.tools.map((tool) => ({
+          id: normalizeToolName(tool.id),
+          name: tool.label,
+          description: tool.description || "Tool",
+          rawDescription: tool.rawDescription || tool.description || "Tool",
+          source: tool.source,
+          pluginId: tool.pluginId,
+          channelId: tool.channelId,
+        })),
+      ),
+    }))
+    .filter((group) => group.tools.length > 0);
+
+  if (groups.length === 0) {
+    const lines = [
+      "No tools are available for this agent right now.",
+      "",
+      `Profile: ${result.profile}`,
+    ];
+    return lines.join("\n");
+  }
+
+  const verbose = options?.verbose === true;
+  const lines = verbose
+    ? ["Available tools", "", `Profile: ${result.profile}`, "What this agent can use right now:"]
+    : ["Available tools", "", `Profile: ${result.profile}`];
+
+  for (const group of groups) {
+    lines.push("", group.label);
+    if (verbose) {
+      for (const tool of group.tools) {
+        lines.push(`  ${tool.name} - ${formatVerboseToolDescription(tool)}`);
+      }
+      continue;
+    }
+    lines.push(`  ${group.tools.map((tool) => formatCompactToolEntry(tool)).join(", ")}`);
+  }
+
+  if (verbose) {
+    lines.push("", "Tool availability depends on this agent's configuration.");
+  } else {
+    lines.push("", "Use /tools verbose for descriptions.");
+  }
+  return lines.join("\n");
+}
 
 function formatCommandEntry(command: ChatCommandDefinition): string {
   const primary = command.nativeName
@@ -985,6 +1067,7 @@ export function buildCommandsMessagePaginated(
   if (!isTelegram) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
+    lines.push("", "More: /tools for available capabilities");
     return {
       text: lines.join("\n").trim(),
       totalPages: 1,

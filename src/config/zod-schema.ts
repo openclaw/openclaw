@@ -218,6 +218,12 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+    headers: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
   })
   .catchall(z.unknown());
 
@@ -431,6 +437,7 @@ export const OpenClawSchema = z
                 provider: z.string(),
                 mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
                 email: z.string().optional(),
+                displayName: z.string().optional(),
               })
               .strict(),
           )
