@@ -30,11 +30,34 @@ export type ModelRef = {
   model: string;
 };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive";
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
+};
+
+/**
+ * OpenRouter compatibility aliases for bare `openrouter:<suffix>` shorthand
+ * strings (no slash). These are resolved before provider/model splitting so
+ * they are never misattributed to the default provider (e.g. anthropic).
+ *
+ * - `openrouter:free`  → a well-known free-tier model on OpenRouter
+ * - `openrouter:auto`  → OpenRouter's internal auto-routing model
+ */
+const OPENROUTER_COMPAT_ALIASES: Record<string, ModelRef> = {
+  "openrouter:free": {
+    provider: "openrouter",
+    model: "meta-llama/llama-3.3-70b-instruct:free",
+  },
+  "openrouter:auto": { provider: "openrouter", model: "auto" },
 };
 
 function normalizeAliasKey(value: string): string {
@@ -82,7 +105,9 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
+  return Object.keys(backends).some(
+    (key) => normalizeProviderId(key) === normalized,
+  );
 }
 
 function normalizeAnthropicModelId(model: string): string {
@@ -133,14 +158,27 @@ function normalizeProviderModelId(provider: string, model: string): string {
 
 export function normalizeModelRef(provider: string, model: string): ModelRef {
   const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
+  const normalizedModel = normalizeProviderModelId(
+    normalizedProvider,
+    model.trim(),
+  );
   return { provider: normalizedProvider, model: normalizedModel };
 }
 
-export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
+export function parseModelRef(
+  raw: string,
+  defaultProvider: string,
+): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
+  }
+  // Resolve OpenRouter compatibility aliases (e.g. "openrouter:free") before
+  // any slash-split logic, so they are never misattributed to the default
+  // provider. (#57066)
+  const compatAlias = OPENROUTER_COMPAT_ALIASES[trimmed.toLowerCase()];
+  if (compatAlias) {
+    return compatAlias;
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
@@ -190,7 +228,10 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
-export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
+export function resolveAllowlistModelKey(
+  raw: string,
+  defaultProvider: string,
+): string | null {
   const parsed = parseModelRef(raw, defaultProvider);
   if (!parsed) {
     return null;
@@ -209,7 +250,10 @@ export function buildConfiguredAllowlistKeys(params: {
 
   const keys = new Set<string>();
   for (const raw of rawAllowlist) {
-    const key = resolveAllowlistModelKey(String(raw ?? ""), params.defaultProvider);
+    const key = resolveAllowlistModelKey(
+      String(raw ?? ""),
+      params.defaultProvider,
+    );
     if (key) {
       keys.add(key);
     }
@@ -230,7 +274,9 @@ export function buildModelAliasIndex(params: {
     if (!parsed) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias = String(
+      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
+    ).trim();
     if (!alias) {
       continue;
     }
@@ -273,7 +319,8 @@ export function resolveConfiguredModelRef(params: {
   defaultProvider: string;
   defaultModel: string;
 }): ModelRef {
-  const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
+  const rawModel =
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
   if (rawModel) {
     const trimmed = rawModel.trim();
     const aliasIndex = buildModelAliasIndex({
@@ -281,6 +328,13 @@ export function resolveConfiguredModelRef(params: {
       defaultProvider: params.defaultProvider,
     });
     if (!trimmed.includes("/")) {
+      // Check OpenRouter compatibility aliases (e.g. "openrouter:free") before
+      // any user-defined alias or provider-fallback logic. (#57066)
+      const compatAlias = OPENROUTER_COMPAT_ALIASES[trimmed.toLowerCase()];
+      if (compatAlias) {
+        return compatAlias;
+      }
+
       const aliasKey = normalizeAliasKey(trimmed);
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
@@ -306,8 +360,12 @@ export function resolveConfiguredModelRef(params: {
 
     // User specified a model but it could not be resolved — warn before falling back.
     const safe = sanitizeForLog(trimmed);
-    const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
-    log.warn(`Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`);
+    const safeFallback = sanitizeForLog(
+      `${params.defaultProvider}/${params.defaultModel}`,
+    );
+    log.warn(
+      `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
+    );
   }
   // Before falling back to the hardcoded default, check if the default provider
   // is actually available. If it isn't but other providers are configured, prefer
@@ -315,7 +373,9 @@ export function resolveConfiguredModelRef(params: {
   // from a removed provider. (See #38880)
   const configuredProviders = params.cfg.models?.providers;
   if (configuredProviders && typeof configuredProviders === "object") {
-    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
+    const hasDefaultProvider = Boolean(
+      configuredProviders[params.defaultProvider],
+    );
     if (!hasDefaultProvider) {
       const availableProvider = Object.entries(configuredProviders).find(
         ([, providerCfg]) =>
@@ -364,9 +424,15 @@ export function resolveDefaultModelForAgent(params: {
   });
 }
 
-function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
+function resolveAllowedFallbacks(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): string[] {
   if (params.agentId) {
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+    const override = resolveAgentModelFallbacksOverride(
+      params.cfg,
+      params.agentId,
+    );
     if (override !== undefined) {
       return override;
     }
@@ -401,7 +467,9 @@ export function resolveSubagentSpawnModelSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }) ??
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
+    normalizeModelSelection(
+      resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model),
+    ) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );
 }
@@ -427,8 +495,12 @@ export function buildAllowedModelSet(params: {
     defaultModel && params.defaultProvider
       ? parseModelRef(defaultModel, params.defaultProvider)
       : null;
-  const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(params.catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const defaultKey = defaultRef
+    ? modelKey(defaultRef.provider, defaultRef.model)
+    : undefined;
+  const catalogKeys = new Set(
+    params.catalog.map((entry) => modelKey(entry.provider, entry.id)),
+  );
 
   if (allowAny) {
     if (defaultKey) {
@@ -486,7 +558,9 @@ export function buildAllowedModelSet(params: {
   }
 
   const allowedCatalog = [
-    ...params.catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
+    ...params.catalog.filter((entry) =>
+      allowedKeys.has(modelKey(entry.provider, entry.id)),
+    ),
     ...syntheticCatalogEntries.values(),
   ];
 
@@ -527,7 +601,9 @@ export function getModelRefStatus(params: {
   const key = modelKey(params.ref.provider, params.ref.model);
   return {
     key,
-    inCatalog: params.catalog.some((entry) => modelKey(entry.provider, entry.id) === key),
+    inCatalog: params.catalog.some(
+      (entry) => modelKey(entry.provider, entry.id) === key,
+    ),
     allowAny: allowed.allowAny,
     allowed: allowed.allowAny || allowed.allowedKeys.has(key),
   };

@@ -83,7 +83,10 @@ function createAgentFallbackConfig(params: {
   } as OpenClawConfig;
 }
 
-function createProviderWithModelsConfig(provider: string, models: Array<Record<string, unknown>>) {
+function createProviderWithModelsConfig(
+  provider: string,
+  models: Array<Record<string, unknown>>,
+) {
   return {
     models: {
       providers: {
@@ -130,7 +133,9 @@ describe("model-selection", () => {
 
   describe("modelKey", () => {
     it("keeps canonical OpenRouter native ids without duplicating the provider", () => {
-      expect(modelKey("openrouter", "openrouter/hunter-alpha")).toBe("openrouter/hunter-alpha");
+      expect(modelKey("openrouter", "openrouter/hunter-alpha")).toBe(
+        "openrouter/hunter-alpha",
+      );
     });
   });
 
@@ -178,13 +183,19 @@ describe("model-selection", () => {
       },
       {
         name: "keeps dated anthropic model ids unchanged",
-        variants: ["anthropic/claude-sonnet-4-20250514", "claude-sonnet-4-20250514"],
+        variants: [
+          "anthropic/claude-sonnet-4-20250514",
+          "claude-sonnet-4-20250514",
+        ],
         defaultProvider: "anthropic",
         expected: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
       },
       {
         name: "normalizes deprecated google flash preview ids",
-        variants: ["google/gemini-3.1-flash-preview", "gemini-3.1-flash-preview"],
+        variants: [
+          "google/gemini-3.1-flash-preview",
+          "gemini-3.1-flash-preview",
+        ],
         defaultProvider: "google",
         expected: { provider: "google", model: "gemini-3-flash-preview" },
       },
@@ -192,7 +203,10 @@ describe("model-selection", () => {
         name: "normalizes gemini 3.1 flash-lite ids",
         variants: ["google/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google",
-        expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
+        expected: {
+          provider: "google",
+          model: "gemini-3.1-flash-lite-preview",
+        },
       },
       {
         name: "keeps OpenAI codex refs on the openai provider",
@@ -210,25 +224,52 @@ describe("model-selection", () => {
         name: "passes through openrouter upstream provider ids",
         variants: ["openrouter/anthropic/claude-sonnet-4-5"],
         defaultProvider: "openai",
-        expected: { provider: "openrouter", model: "anthropic/claude-sonnet-4-5" },
+        expected: {
+          provider: "openrouter",
+          model: "anthropic/claude-sonnet-4-5",
+        },
+      },
+      {
+        name: "resolves openrouter:free compatibility alias to openrouter provider",
+        variants: ["openrouter:free", " openrouter:free ", "OPENROUTER:FREE"],
+        defaultProvider: "anthropic",
+        expected: {
+          provider: "openrouter",
+          model: "meta-llama/llama-3.3-70b-instruct:free",
+        },
+      },
+      {
+        name: "resolves openrouter:auto compatibility alias to openrouter provider",
+        variants: ["openrouter:auto", " openrouter:auto "],
+        defaultProvider: "anthropic",
+        expected: { provider: "openrouter", model: "auto" },
       },
       {
         name: "normalizes Vercel Claude shorthand to anthropic-prefixed model ids",
         variants: ["vercel-ai-gateway/claude-opus-4.6"],
         defaultProvider: "openai",
-        expected: { provider: "vercel-ai-gateway", model: "anthropic/claude-opus-4.6" },
+        expected: {
+          provider: "vercel-ai-gateway",
+          model: "anthropic/claude-opus-4.6",
+        },
       },
       {
         name: "normalizes Vercel Anthropic aliases without double-prefixing",
         variants: ["vercel-ai-gateway/opus-4.6"],
         defaultProvider: "openai",
-        expected: { provider: "vercel-ai-gateway", model: "anthropic/claude-opus-4-6" },
+        expected: {
+          provider: "vercel-ai-gateway",
+          model: "anthropic/claude-opus-4-6",
+        },
       },
       {
         name: "keeps already-prefixed Vercel Anthropic models unchanged",
         variants: ["vercel-ai-gateway/anthropic/claude-opus-4.6"],
         defaultProvider: "openai",
-        expected: { provider: "vercel-ai-gateway", model: "anthropic/claude-opus-4.6" },
+        expected: {
+          provider: "vercel-ai-gateway",
+          model: "anthropic/claude-opus-4.6",
+        },
       },
       {
         name: "passes through non-Claude Vercel model ids unchanged",
@@ -244,9 +285,15 @@ describe("model-selection", () => {
       },
       {
         name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
-        variants: ["google-vertex/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
+        variants: [
+          "google-vertex/gemini-3.1-flash-lite",
+          "gemini-3.1-flash-lite",
+        ],
         defaultProvider: "google-vertex",
-        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
+        expected: {
+          provider: "google-vertex",
+          model: "gemini-3.1-flash-lite-preview",
+        },
       },
     ])("$name", ({ variants, defaultProvider, expected }) => {
       expectParsedModelVariants(variants, defaultProvider, expected);
@@ -254,14 +301,20 @@ describe("model-selection", () => {
 
     it("round-trips normalized refs through modelKey", () => {
       const parsed = parseModelRef(" opus-4.6 ", "anthropic");
-      expect(parsed).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+      expect(parsed).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
       expect(modelKey(parsed?.provider ?? "", parsed?.model ?? "")).toBe(
         "anthropic/claude-opus-4-6",
       );
     });
-    it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
-      expect(parseModelRef(raw, "anthropic")).toBeNull();
-    });
+    it.each(["", "  ", "/", "anthropic/", "/model"])(
+      "returns null for invalid ref %j",
+      (raw) => {
+        expect(parseModelRef(raw, "anthropic")).toBeNull();
+      },
+    );
   });
 
   describe("inferUniqueProviderFromConfiguredModels", () => {
@@ -365,8 +418,13 @@ describe("model-selection", () => {
         provider: "anthropic",
         model: "claude-3-5-sonnet",
       });
-      expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
-      expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+      expect(index.byAlias.get("smart")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-4o",
+      });
+      expect(
+        index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet")),
+      ).toEqual(["fast"]);
     });
   });
 
@@ -381,7 +439,11 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
       expect(result.allowedCatalog).toEqual([
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: "claude-sonnet-4-6",
+        },
       ]);
     });
 
@@ -483,7 +545,10 @@ describe("model-selection", () => {
     it("should resolve from string with alias", () => {
       const index = {
         byAlias: new Map([
-          ["fast", { alias: "fast", ref: { provider: "anthropic", model: "sonnet" } }],
+          [
+            "fast",
+            { alias: "fast", ref: { provider: "anthropic", model: "sonnet" } },
+          ],
         ]),
         byKey: new Map(),
       };
@@ -561,7 +626,13 @@ describe("model-selection", () => {
     it("strips profile suffix before alias resolution", () => {
       const index = {
         byAlias: new Map([
-          ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" } }],
+          [
+            "kimi",
+            {
+              alias: "kimi",
+              ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" },
+            },
+          ],
         ]),
         byKey: new Map(),
       };
@@ -598,9 +669,14 @@ describe("model-selection", () => {
           defaultModel: "gemini-pro",
         });
 
-        expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
+        expect(result).toEqual({
+          provider: "anthropic",
+          model: "claude-3-5-sonnet",
+        });
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
+          expect.stringContaining(
+            'Falling back to "anthropic/claude-3-5-sonnet"',
+          ),
         );
       } finally {
         setLoggerOverride(null);
@@ -631,7 +707,9 @@ describe("model-selection", () => {
           model: "\u001B[31mclaude-3-5-sonnet\nspoof",
         });
         const warning = warnSpy.mock.calls[0]?.[0] as string;
-        expect(warning).toContain('Falling back to "anthropic/claude-3-5-sonnet"');
+        expect(warning).toContain(
+          'Falling back to "anthropic/claude-3-5-sonnet"',
+        );
         expect(warning).not.toContain("\u001B");
         expect(warning).not.toContain("\n");
       } finally {
@@ -680,13 +758,54 @@ describe("model-selection", () => {
         },
       ]);
       const result = resolveConfiguredRefForTest(cfg);
-      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+      expect(result).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
     });
 
     it("should fall back to hardcoded default when no custom providers have models", () => {
       const cfg = createProviderWithModelsConfig("empty-provider", []);
       const result = resolveConfiguredRefForTest(cfg);
-      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+      expect(result).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+    });
+
+    it("resolves openrouter:free alias without misattributing to anthropic", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:free" },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({
+        provider: "openrouter",
+        model: "meta-llama/llama-3.3-70b-instruct:free",
+      });
+    });
+
+    it("resolves openrouter:auto alias without misattributing to anthropic", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:auto" },
+          },
+        },
+      };
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+      expect(result).toEqual({ provider: "openrouter", model: "auto" });
     });
 
     it("should warn when specified model cannot be resolved and falls back to default", () => {
@@ -707,9 +826,14 @@ describe("model-selection", () => {
           defaultModel: "claude-opus-4-6",
         });
 
-        expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+        expect(result).toEqual({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+        });
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to default "anthropic/claude-opus-4-6"'),
+          expect.stringContaining(
+            'Falling back to default "anthropic/claude-opus-4-6"',
+          ),
         );
       } finally {
         warnSpy.mockRestore();
@@ -801,7 +925,9 @@ describe("model-selection", () => {
 
 describe("normalizeModelSelection", () => {
   it("returns trimmed string for string input", () => {
-    expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe("ollama/llama3.2:3b");
+    expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe(
+      "ollama/llama3.2:3b",
+    );
   });
 
   it("returns undefined for empty/whitespace string", () => {
@@ -810,9 +936,9 @@ describe("normalizeModelSelection", () => {
   });
 
   it("extracts primary from object", () => {
-    expect(normalizeModelSelection({ primary: "google/gemini-2.5-flash" })).toBe(
-      "google/gemini-2.5-flash",
-    );
+    expect(
+      normalizeModelSelection({ primary: "google/gemini-2.5-flash" }),
+    ).toBe("google/gemini-2.5-flash");
   });
 
   it("returns undefined for object without primary", () => {
