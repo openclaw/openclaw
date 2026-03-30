@@ -56,7 +56,7 @@ describe("resolveConfigOpenCommand", () => {
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        String.raw`Start-Process -FilePath 'C:\tmp\o''hai & calc.json'`,
+        String.raw`Start-Process -LiteralPath 'C:\tmp\o''hai & calc.json'`,
       ],
     });
   });
