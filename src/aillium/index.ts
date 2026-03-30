@@ -12,3 +12,5 @@ export type {
 } from "./contracts.js";
 
 export { createDefaultAilliumBoundary } from "./defaults.js";
+export { createLiveAilliumBoundary } from "./live-boundary.js";
+export type { AilliumCoreConnectionConfig } from "./live-boundary.js";
