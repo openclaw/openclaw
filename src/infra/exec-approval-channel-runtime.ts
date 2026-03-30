@@ -112,7 +112,7 @@ export function createExecApprovalChannelRuntime<
 
     const timeoutMs = Math.max(0, request.expiresAtMs - nowMs());
     const timeoutId = setTimeout(() => {
-      void handleExpired(request.id);
+      spawn("error handling approval expiration", handleExpired(request.id));
     }, timeoutMs);
     timeoutId.unref?.();
 

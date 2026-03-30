@@ -202,6 +202,39 @@ describe("createExecApprovalChannelRuntime", () => {
     });
   });
 
+  it("logs async expiration handling failures", async () => {
+    vi.useFakeTimers();
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/plugin-approvals",
+      clientDisplayName: "Test Plugin Approvals",
+      cfg: {} as never,
+      nowMs: () => 1000,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async (request) => [{ id: request.id }],
+      finalizeResolved: async () => undefined,
+      finalizeExpired: async () => {
+        throw new Error("expire failed");
+      },
+    });
+
+    await runtime.handleRequested({
+      id: "plugin:abc",
+      request: {
+        title: "Plugin approval",
+        description: "Let plugin proceed",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 1001,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(loggerMocks.error).toHaveBeenCalledWith(
+      "error handling approval expiration: expire failed",
+    );
+  });
+
   it("subscribes to plugin approval events when requested", async () => {
     const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
     const finalizeResolved = vi.fn(async () => undefined);
