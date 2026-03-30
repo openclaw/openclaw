@@ -90,6 +90,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 import {
@@ -548,10 +549,13 @@ export function attachGatewayWsMessageHandler(params: {
           // allow path, including trusted token-authenticated backend operators.
           if (
             !device &&
-            (decision.kind !== "allow" ||
-              (!controlUiAuthPolicy.allowBypass &&
-                !preserveInsecureLocalControlUiScopes &&
-                (authMethod === "token" || authMethod === "password" || trustedProxyAuthOk)))
+            shouldClearUnboundScopesForMissingDeviceIdentity({
+              decision,
+              controlUiAuthPolicy,
+              preserveInsecureLocalControlUiScopes,
+              authMethod,
+              trustedProxyAuthOk,
+            })
           ) {
             clearUnboundScopes();
           }
