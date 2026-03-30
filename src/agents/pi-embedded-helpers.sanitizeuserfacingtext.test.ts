@@ -20,6 +20,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips leaked tool_call scaffolding", () => {
+    expect(
+      sanitizeUserFacingText(
+        'Here is my response <tool_call>{"name":"exec","arguments":{"command":"echo test"}}</tool_call>',
+      ),
+    ).toBe("Here is my response ");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {

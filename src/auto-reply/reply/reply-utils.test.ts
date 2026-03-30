@@ -125,6 +125,14 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).not.toContain("NO_REPLY");
   });
 
+  it("strips leaked tool_call scaffolding from final replies", () => {
+    const result = normalizeReplyPayload({
+      text: 'Here is my response <tool_call>{"name":"exec","arguments":{"command":"echo test"}}</tool_call>',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Here is my response ");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(result).not.toBeNull();
