@@ -2,17 +2,40 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
-import { discordPlugin } from "../../../extensions/discord/index.js";
-import { slackPlugin } from "../../../extensions/slack/index.js";
-import { telegramPlugin } from "../../../extensions/telegram/index.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/index.js";
+
+const { discordPlugin } = loadBundledPluginPublicSurfaceSync<{
+  discordPlugin: ChannelPlugin;
+}>({
+  pluginId: "discord",
+  artifactBasename: "index.ts",
+});
+const { slackPlugin } = loadBundledPluginPublicSurfaceSync<{
+  slackPlugin: ChannelPlugin;
+}>({
+  pluginId: "slack",
+  artifactBasename: "index.ts",
+});
+const { telegramPlugin } = loadBundledPluginPublicSurfaceSync<{
+  telegramPlugin: ChannelPlugin;
+}>({
+  pluginId: "telegram",
+  artifactBasename: "index.ts",
+});
+const { whatsappPlugin } = loadBundledPluginPublicSurfaceSync<{
+  whatsappPlugin: ChannelPlugin;
+}>({
+  pluginId: "whatsapp",
+  artifactBasename: "index.ts",
+});
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
