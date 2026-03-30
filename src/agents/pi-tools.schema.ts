@@ -50,7 +50,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
         continue;
       }
       const record = source as Record<string, unknown>;
-      for (const key of ["title", "description", "default"]) {
+      for (const key of ["title", "description", "default", "optional"]) {
         if (!(key in merged) && key in record) {
           merged[key] = record[key];
         }
