@@ -34,26 +34,88 @@ const ALLOWED_METHODS = new Set([
   "SetMotors",
 ]);
 
+function parseBridgeJsonOutput(rawOut) {
+  const tryParse = (text) => {
+    const t = String(text || "").trim();
+    if (!t) return null;
+
+    try {
+      return JSON.parse(t);
+    } catch {
+      // Some shells may surface escaped JSON fragments, e.g. {\"success\":true}
+      if (t.includes('\\"') || t.includes("\\n") || t.includes("\\r")) {
+        const unescaped = t
+          .replace(/\\"/g, '"')
+          .replace(/\\r\\n/g, "\n")
+          .replace(/\\n/g, "\n")
+          .replace(/\\r/g, "\r");
+        try {
+          return JSON.parse(unescaped);
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
+  };
+
+  const out = String(rawOut || "").trim();
+  if (!out) return null;
+
+  const direct = tryParse(out);
+  if (direct) return direct;
+
+  // Some ABB SDK calls may emit diagnostic lines before the final JSON object.
+  for (let i = out.lastIndexOf("{"); i >= 0; i = out.lastIndexOf("{", i - 1)) {
+    const candidate = out.slice(i).trim();
+    const parsed = tryParse(candidate);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 function result(text, details = {}) {
   return { content: [{ type: "text", text }], details };
 }
 
 function buildLogDiagnosis(logEntries, status, tasks, errorHint) {
-  const lines = (logEntries || []).map((e) => `${e.number || ""} ${e.title || ""} ${e.type || ""}`.trim());
+  const lines = (logEntries || []).map((e) =>
+    `${e.number || ""} ${e.title || ""} ${e.type || ""}`.trim(),
+  );
   const joined = `${lines.join("\n")}\n${String(errorHint || "")}`.toLowerCase();
   const issues = [];
   const recommendations = [];
 
-  if (joined.includes("semantic") || joined.includes("openclawmotionmod") || joined.includes("resetpp") || joined.includes("行") || joined.includes("错误")) {
-    issues.push("RAPID semantic error detected (likely module/task syntax or pointer target mismatch).");
-    recommendations.push("Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.");
-    recommendations.push("If OpenClawMotionMod has syntax errors, fix RAPID source and use load_rapid before start_program.");
-    recommendations.push("Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.");
+  if (
+    joined.includes("semantic") ||
+    joined.includes("openclawmotionmod") ||
+    joined.includes("resetpp") ||
+    joined.includes("行") ||
+    joined.includes("错误")
+  ) {
+    issues.push(
+      "RAPID semantic error detected (likely module/task syntax or pointer target mismatch).",
+    );
+    recommendations.push(
+      "Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.",
+    );
+    recommendations.push(
+      "If OpenClawMotionMod has syntax errors, fix RAPID source and use load_rapid before start_program.",
+    );
+    recommendations.push(
+      "Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.",
+    );
   }
 
-  if (joined.includes("mastership") || joined.includes("nomaster") || joined.includes("demandgrant")) {
+  if (
+    joined.includes("mastership") ||
+    joined.includes("nomaster") ||
+    joined.includes("demandgrant")
+  ) {
     issues.push("Mastership/authorization related issue detected.");
-    recommendations.push("Retry command after ensuring controller is in Auto and user has ExecuteRapid grant.");
+    recommendations.push(
+      "Retry command after ensuring controller is in Auto and user has ExecuteRapid grant.",
+    );
   }
 
   const mode = String(status?.operationMode || "");
@@ -70,7 +132,9 @@ function buildLogDiagnosis(logEntries, status, tasks, errorHint) {
   if (Array.isArray(tasks) && tasks.length > 0) {
     const first = tasks[0];
     if (Array.isArray(first.modules) && first.modules.length > 0) {
-      recommendations.push(`Preferred task/module candidate: ${first.taskName} / ${first.modules[0]}`);
+      recommendations.push(
+        `Preferred task/module candidate: ${first.taskName} / ${first.modules[0]}`,
+      );
     }
   }
 
@@ -104,14 +168,30 @@ function maxJointDiff(a, b) {
 async function fetchStatusAndLogs(host, port, bridgeDllPath, logLimit = 8) {
   const [status, log] = await Promise.all([
     invokeBridge("GetStatus", {}, host, port, bridgeDllPath),
-    invokeBridge("GetEventLogEntries", { limit: logLimit, categoryId: 0 }, host, port, bridgeDllPath),
+    invokeBridge(
+      "GetEventLogEntries",
+      { limit: logLimit, categoryId: 0 },
+      host,
+      port,
+      bridgeDllPath,
+    ),
   ]);
 
   const categoryLogs = [];
   for (const categoryId of [0, 1, 2, 3, 4, 5, 6]) {
-    const entry = await invokeBridge("GetEventLogEntries", { limit: Math.min(logLimit, 5), categoryId }, host, port, bridgeDllPath);
+    const entry = await invokeBridge(
+      "GetEventLogEntries",
+      { limit: Math.min(logLimit, 5), categoryId },
+      host,
+      port,
+      bridgeDllPath,
+    );
     if (entry?.success) {
-      categoryLogs.push({ categoryId, categoryName: entry.categoryName, entries: entry.entries || [] });
+      categoryLogs.push({
+        categoryId,
+        categoryName: entry.categoryName,
+        entries: entry.entries || [],
+      });
     }
   }
 
@@ -204,7 +284,12 @@ async function waitRapidIdle(host, port, bridgeDllPath, timeoutMs = 60000, pollM
     await sleep(pollMs);
   }
   const { status, log } = await fetchStatusAndLogs(host, port, bridgeDllPath);
-  return { success: false, durationMs: Date.now() - startedAt, status: status.success ? status : lastStatus, log };
+  return {
+    success: false,
+    durationMs: Date.now() - startedAt,
+    status: status.success ? status : lastStatus,
+    log,
+  };
 }
 
 function runPowerShell(script, timeoutMs = 15000) {
@@ -213,20 +298,31 @@ function runPowerShell(script, timeoutMs = 15000) {
     : "powershell.exe";
 
   return new Promise((resolve, reject) => {
-    const child = spawn(psExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true });
+    const child = spawn(psExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      windowsHide: true,
+    });
     let stdout = "";
     let stderr = "";
     let settled = false;
 
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try { child.kill(); } catch {}
-      reject(new Error(`PowerShell bridge timeout after ${timeoutMs}ms`));
-    }, Math.max(1000, Number(timeoutMs) || 15000));
+    const timer = setTimeout(
+      () => {
+        if (settled) return;
+        settled = true;
+        try {
+          child.kill();
+        } catch {}
+        reject(new Error(`PowerShell bridge timeout after ${timeoutMs}ms`));
+      },
+      Math.max(1000, Number(timeoutMs) || 15000),
+    );
 
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
@@ -272,7 +368,22 @@ if ('${method}' -ne 'ScanControllers') {
   }
 }
 $payloadJson = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${payloadB64}'))
-$payload = if ([string]::IsNullOrWhiteSpace($payloadJson)) { @{} } else { ConvertFrom-Json -InputObject $payloadJson }
+$payload = if ([string]::IsNullOrWhiteSpace($payloadJson)) {
+  @{}
+} else {
+  $tmp = ConvertFrom-Json -InputObject $payloadJson
+  if ($tmp -is [System.Collections.IDictionary]) {
+    $tmp
+  } elseif ($tmp -is [psobject]) {
+    $h = @{}
+    foreach ($p in $tmp.PSObject.Properties) {
+      $h[$p.Name] = $p.Value
+    }
+    $h
+  } else {
+    @{}
+  }
+}
 $result = $bridge.${method}($payload).GetAwaiter().GetResult()
 try { $bridge.Disconnect(@{}).GetAwaiter().GetResult() | Out-Null } catch {}
 $result | ConvertTo-Json -Depth 20 -Compress
@@ -280,11 +391,10 @@ $result | ConvertTo-Json -Depth 20 -Compress
 
   const out = await runPowerShell(script, 15000);
   if (!out) return { success: false, error: "No output from bridge" };
-  try {
-    return JSON.parse(out);
-  } catch {
-    return { success: false, error: `Unexpected bridge output: ${out}` };
-  }
+
+  const parsed = parseBridgeJsonOutput(out);
+  if (parsed) return parsed;
+  return { success: false, error: `Unexpected bridge output: ${out}` };
 }
 
 async function handleAction(action, params, config) {
@@ -298,16 +408,24 @@ async function handleAction(action, params, config) {
 
     case "scan_controllers": {
       const scan = await invokeBridge("ScanControllers", {}, host, port, bridgeDllPath);
-      if (!scan.success) return result(`Scan failed: ${scan.error || "unknown"}`, { success: false, result: scan });
+      if (!scan.success)
+        return result(`Scan failed: ${scan.error || "unknown"}`, { success: false, result: scan });
       return result(`Scanned controllers: ${scan.total}`, { success: true, result: scan });
     }
 
     case "connect": {
-      const allowVirtualController = params.allowVirtualController === true;
+      const allowVirtualController =
+        params.allowVirtualController === true ||
+        String(params.allowVirtualController || "")
+          .trim()
+          .toLowerCase() === "true";
       const conn = await invokeBridge("GetStatus", {}, host, port, bridgeDllPath);
       if (!conn.success) {
         state.connected = false;
-        return result(`Real connect failed: ${conn.error || "unknown"}`, { success: false, result: conn });
+        return result(`Real connect failed: ${conn.error || "unknown"}`, {
+          success: false,
+          result: conn,
+        });
       }
 
       // Guardrail: real plugin should not silently attach to virtual controllers.
@@ -320,7 +438,13 @@ async function handleAction(action, params, config) {
             const sys = String(c?.systemId || "").toLowerCase();
             const name = String(c?.systemName || "").toLowerCase();
             const target = host.toLowerCase();
-            return ip === target || id === target || sys === target || name === target || (localHostRequested && c?.isVirtual);
+            return (
+              ip === target ||
+              id === target ||
+              sys === target ||
+              name === target ||
+              (localHostRequested && c?.isVirtual)
+            );
           })
         : null;
 
@@ -328,7 +452,7 @@ async function handleAction(action, params, config) {
         state.connected = false;
         return result(
           `Real connect rejected: target '${host}' resolves to a virtual controller (${matchedController.systemName || "unknown"}). ` +
-          `Use real controller IP/ID, or set allowVirtualController=true only for debugging.`,
+            `Use real controller IP/ID, or set allowVirtualController=true only for debugging.`,
           {
             success: false,
             virtualControllerDetected: true,
@@ -336,7 +460,7 @@ async function handleAction(action, params, config) {
             port,
             matchedController,
             scan,
-          }
+          },
         );
       }
 
@@ -365,57 +489,122 @@ async function handleAction(action, params, config) {
   switch (action) {
     case "get_status": {
       const r = await invokeBridge("GetStatus", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? "Real status fetched." : `Real status failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(
+        r.success ? "Real status fetched." : `Real status failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "get_system_info": {
       const r = await invokeBridge("GetSystemInfo", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? "System info fetched." : `System info failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(
+        r.success ? "System info fetched." : `System info failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "get_service_info": {
       const r = await invokeBridge("GetServiceInfo", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? "Service info fetched." : `Service info failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(
+        r.success ? "Service info fetched." : `Service info failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "get_speed": {
       const r = await invokeBridge("GetSpeedRatio", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Speed ratio: ${r.speedRatio}` : `Get speed failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(
+        r.success ? `Speed ratio: ${r.speedRatio}` : `Get speed failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "set_speed": {
       const speed = Number(params.speed || 100);
-      const r = await invokeBridge("SetSpeedRatio", { speed }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Speed ratio set: ${r.speedRatio}` : `Set speed failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "SetSpeedRatio",
+        { speed },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(
+        r.success
+          ? `Speed ratio set: ${r.speedRatio}`
+          : `Set speed failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "get_joints": {
       const r = await invokeBridge("GetJointPositions", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Joints: [${(r.joints || []).join(", ")}]` : `Get joints failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(
+        r.success
+          ? `Joints: [${(r.joints || []).join(", ")}]`
+          : `Get joints failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "get_world_position": {
       const r = await invokeBridge("GetWorldPosition", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? "World position fetched." : `World position failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(
+        r.success ? "World position fetched." : `World position failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "get_event_log": {
       const limit = Number(params.limit || 20);
       const categoryId = Number(params.categoryId || 0);
-      const r = await invokeBridge("GetEventLogEntries", { limit, categoryId }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Event log entries: ${r.count}` : `Event log failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "GetEventLogEntries",
+        { limit, categoryId },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(
+        r.success ? `Event log entries: ${r.count}` : `Event log failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "query_logs": {
       const limit = Number(params.limit || 20);
       const categoryId = Number(params.categoryId || 0);
-      const r = await invokeBridge("GetEventLogEntries", { limit, categoryId }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Event log entries: ${r.count}` : `Event log failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "GetEventLogEntries",
+        { limit, categoryId },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(
+        r.success ? `Event log entries: ${r.count}` : `Event log failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "analyze_logs": {
       const limit = Number(params.limit || 20);
       const categoryId = Number(params.categoryId || 0);
-      const log = await invokeBridge("GetEventLogEntries", { limit, categoryId }, state.host, state.port, bridgeDllPath);
+      const log = await invokeBridge(
+        "GetEventLogEntries",
+        { limit, categoryId },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
       const status = await invokeBridge("GetStatus", {}, state.host, state.port, bridgeDllPath);
       const tasks = await invokeBridge("ListTasks", {}, state.host, state.port, bridgeDllPath);
 
       if (!log.success) {
-        return result(`Analyze logs failed: ${log.error || "unknown"}`, { success: false, log, status, tasks });
+        return result(`Analyze logs failed: ${log.error || "unknown"}`, {
+          success: false,
+          log,
+          status,
+          tasks,
+        });
       }
 
-      const diagnosis = buildLogDiagnosis(log.entries || [], status, tasks.tasks || [], params.error_hint);
+      const diagnosis = buildLogDiagnosis(
+        log.entries || [],
+        status,
+        tasks.tasks || [],
+        params.error_hint,
+      );
       const text = [
         `Log analysis complete (${log.count} entries).`,
         `Issues:`,
@@ -434,24 +623,50 @@ async function handleAction(action, params, config) {
     }
     case "list_tasks": {
       const r = await invokeBridge("ListTasks", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Tasks discovered: ${r.count}` : `List tasks failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(
+        r.success ? `Tasks discovered: ${r.count}` : `List tasks failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "backup_module": {
       const moduleName = String(params.moduleName || "");
       const taskName = String(params.taskName || "");
       const outputDir = String(params.outputDir || process.cwd());
-      const r = await invokeBridge("BackupModule", { moduleName, taskName, outputDir }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Module backup done: ${moduleName}` : `Backup failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "BackupModule",
+        { moduleName, taskName, outputDir },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(
+        r.success ? `Module backup done: ${moduleName}` : `Backup failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "reset_program_pointer": {
       const taskName = String(params.taskName || "T_ROB1");
-      const r = await invokeBridge("ResetProgramPointer", { taskName }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Program pointer reset: ${taskName}` : `Reset pointer failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "ResetProgramPointer",
+        { taskName },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(
+        r.success
+          ? `Program pointer reset: ${taskName}`
+          : `Reset pointer failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "set_joints":
     case "movj": {
-      const joints = Array.isArray(params.joints) ? params.joints.map((x) => Number(x) || 0).slice(0, 6) : null;
-      if (!joints || joints.length !== 6) return result("movj/set_joints requires exactly 6 joint values.", { success: false });
+      const joints = Array.isArray(params.joints)
+        ? params.joints.map((x) => Number(x) || 0).slice(0, 6)
+        : null;
+      if (!joints || joints.length !== 6)
+        return result("movj/set_joints requires exactly 6 joint values.", { success: false });
       const speed = Number(params.speed || 20);
       const zone = String(params.zone || "fine");
       const timeoutMs = Math.max(3000, Math.min(120000, Number(params.motionTimeoutMs || 30000)));
@@ -459,10 +674,22 @@ async function handleAction(action, params, config) {
       const toleranceDeg = Math.max(0.05, Math.min(5, Number(params.toleranceDeg || 0.4)));
       const motionDetectDeg = Math.max(0.05, Math.min(5, Number(params.motionDetectDeg || 0.2)));
 
-      const before = await invokeBridge("GetJointPositions", {}, state.host, state.port, bridgeDllPath);
+      const before = await invokeBridge(
+        "GetJointPositions",
+        {},
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
       const baselineJoints = Array.isArray(before?.joints) ? before.joints : null;
 
-      const r = await invokeBridge("MoveToJoints", { joints, speed, zone }, state.host, state.port, bridgeDllPath);
+      const r = await invokeBridge(
+        "MoveToJoints",
+        { joints, speed, zone },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
       if (!r.success) {
         const diag = await fetchStatusAndLogs(state.host, state.port, bridgeDllPath);
         return result(`Move failed: ${r.error || "unknown"}`, {
@@ -486,7 +713,9 @@ async function handleAction(action, params, config) {
       });
 
       if (!verify.success) {
-        const noMotion = !verify.observedMovement && maxJointDiff(joints, baselineJoints || joints) > motionDetectDeg;
+        const noMotion =
+          !verify.observedMovement &&
+          maxJointDiff(joints, baselineJoints || joints) > motionDetectDeg;
         const reason = noMotion
           ? "No robot motion observed after command dispatch"
           : `Motion did not settle within timeout (${timeoutMs}ms)`;
@@ -509,8 +738,11 @@ async function handleAction(action, params, config) {
     }
     case "movj_rapid": {
       // 方案B: load_rapid → start_program → wait (默认推荐方案)
-      const joints = Array.isArray(params.joints) ? params.joints.map((x) => Number(x) || 0).slice(0, 6) : null;
-      if (!joints || joints.length !== 6) return result("movj_rapid requires exactly 6 joint values.", { success: false });
+      const joints = Array.isArray(params.joints)
+        ? params.joints.map((x) => Number(x) || 0).slice(0, 6)
+        : null;
+      if (!joints || joints.length !== 6)
+        return result("movj_rapid requires exactly 6 joint values.", { success: false });
       const speed = Math.max(1, Math.min(100, Number(params.speed || 20)));
       const zone = String(params.zone || "fine");
       const taskName = String(params.taskName || "T_ROB1");
@@ -529,38 +761,87 @@ async function handleAction(action, params, config) {
       ].join("\n");
 
       // 读取运动前关节角
-      const before = await invokeBridge("GetJointPositions", {}, state.host, state.port, bridgeDllPath);
+      const before = await invokeBridge(
+        "GetJointPositions",
+        {},
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
 
       // 加载程序
-      const loadR = await invokeBridge("LoadRapidProgram", { code: rapidCode, moduleName, taskName }, state.host, state.port, bridgeDllPath);
+      const loadR = await invokeBridge(
+        "LoadRapidProgram",
+        { code: rapidCode, moduleName, taskName },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
       if (!loadR.success) {
-        return result(`movj_rapid load failed: ${loadR.error || "unknown"}`, { success: false, result: loadR, rapidCode });
+        return result(`movj_rapid load failed: ${loadR.error || "unknown"}`, {
+          success: false,
+          result: loadR,
+          rapidCode,
+        });
       }
 
       // 复位程序指针
-      await invokeBridge("ResetProgramPointer", { taskName }, state.host, state.port, bridgeDllPath);
+      await invokeBridge(
+        "ResetProgramPointer",
+        { taskName },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
 
       // 启动程序
-      const startR = await invokeBridge("StartRapid", { allowRealExecution: true }, state.host, state.port, bridgeDllPath);
+      const startR = await invokeBridge(
+        "StartRapid",
+        { allowRealExecution: true },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
       if (!startR.success) {
         const diag = await fetchStatusAndLogs(state.host, state.port, bridgeDllPath);
-        return result(`movj_rapid start failed: ${startR.error || "unknown"}`, { success: false, result: startR, rapidCode, ...diag });
+        return result(`movj_rapid start failed: ${startR.error || "unknown"}`, {
+          success: false,
+          result: startR,
+          rapidCode,
+          ...diag,
+        });
       }
 
       // 等待程序执行完成
       const idle = await waitRapidIdle(state.host, state.port, bridgeDllPath, waitMs, 400);
-      const after = await invokeBridge("GetJointPositions", {}, state.host, state.port, bridgeDllPath);
+      const after = await invokeBridge(
+        "GetJointPositions",
+        {},
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
 
       if (!idle.success) {
         return result(`movj_rapid: program did not finish within timeout (${waitMs}ms).`, {
-          success: false, before, after, startResult: startR, waitResult: idle, rapidCode,
+          success: false,
+          before,
+          after,
+          startResult: startR,
+          waitResult: idle,
+          rapidCode,
         });
       }
 
       return result("movj_rapid executed and completed.", {
-        success: true, before, after,
+        success: true,
+        before,
+        after,
         finalJoints: Array.isArray(after?.joints) ? after.joints : null,
-        rapidCode, loadResult: loadR, startResult: startR, waitResult: idle,
+        rapidCode,
+        loadResult: loadR,
+        startResult: startR,
+        waitResult: idle,
       });
     }
 
@@ -569,27 +850,58 @@ async function handleAction(action, params, config) {
       const moduleName = String(params.moduleName || params.module_name || "OpenClawMotionMod");
       const allowRealExecution = params.allowRealExecution === true;
       if (!code) return result("execute_rapid requires code.", { success: false });
-      const r = await invokeBridge("ExecuteRapidProgram", { code, moduleName, allowRealExecution }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? "RAPID executed." : `RAPID failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "ExecuteRapidProgram",
+        { code, moduleName, allowRealExecution },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(r.success ? "RAPID executed." : `RAPID failed: ${r.error || "unknown"}`, {
+        success: !!r.success,
+        result: r,
+      });
     }
     case "load_rapid": {
       const code = String(params.code || params.rapid_code || "");
       const moduleName = String(params.moduleName || params.module_name || "OpenClawMotionMod");
       if (!code) return result("load_rapid requires code.", { success: false });
-      const r = await invokeBridge("LoadRapidProgram", { code, moduleName }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? "RAPID loaded." : `Load RAPID failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "LoadRapidProgram",
+        { code, moduleName },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(r.success ? "RAPID loaded." : `Load RAPID failed: ${r.error || "unknown"}`, {
+        success: !!r.success,
+        result: r,
+      });
     }
     case "start_program": {
       const allowRealExecution = params.allowRealExecution === true;
-      const r = await invokeBridge("StartRapid", { allowRealExecution }, state.host, state.port, bridgeDllPath);
+      const r = await invokeBridge(
+        "StartRapid",
+        { allowRealExecution },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
       if (!r.success) {
         const diag = await fetchStatusAndLogs(state.host, state.port, bridgeDllPath);
-        return result(`Start failed: ${r.error || "unknown"}`, { success: false, result: r, ...diag });
+        return result(`Start failed: ${r.error || "unknown"}`, {
+          success: false,
+          result: r,
+          ...diag,
+        });
       }
 
       const waitForCompletion = params.waitForCompletion !== false;
       if (!waitForCompletion) {
-        return result("Program started (not waiting for completion).", { success: true, result: r });
+        return result("Program started (not waiting for completion).", {
+          success: true,
+          result: r,
+        });
       }
 
       const waitMs = Math.max(3000, Math.min(300000, Number(params.programTimeoutMs || 60000)));
@@ -609,16 +921,30 @@ async function handleAction(action, params, config) {
     }
     case "stop_program": {
       const r = await invokeBridge("StopRapid", {}, state.host, state.port, bridgeDllPath);
-      return result(r.success ? "Program stopped." : `Stop failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      return result(r.success ? "Program stopped." : `Stop failed: ${r.error || "unknown"}`, {
+        success: !!r.success,
+        result: r,
+      });
     }
     case "motors_on":
     case "motors_off": {
       const motorState = action === "motors_on" ? "ON" : "OFF";
-      const r = await invokeBridge("SetMotors", { state: motorState }, state.host, state.port, bridgeDllPath);
-      return result(r.success ? `Motors ${motorState}` : `Set motors failed: ${r.error || "unknown"}`, { success: !!r.success, result: r });
+      const r = await invokeBridge(
+        "SetMotors",
+        { state: motorState },
+        state.host,
+        state.port,
+        bridgeDllPath,
+      );
+      return result(
+        r.success ? `Motors ${motorState}` : `Set motors failed: ${r.error || "unknown"}`,
+        { success: !!r.success, result: r },
+      );
     }
     case "list_robots":
-      return result("Real plugin supports controller scanning via scan_controllers.", { success: true });
+      return result("Real plugin supports controller scanning via scan_controllers.", {
+        success: true,
+      });
     default:
       return result(`Unsupported real action: ${action}`, { success: false });
   }
@@ -648,6 +974,7 @@ const plugin = {
           action: { type: "string" },
           host: { type: "string" },
           port: { type: "number" },
+          allowVirtualController: { type: "boolean" },
           joints: { type: "array", items: { type: "number" } },
           speed: { type: "number" },
           zone: { type: "string" },
@@ -663,7 +990,7 @@ const plugin = {
           categoryId: { type: "number" },
           allowRealExecution: { type: "boolean" },
           autoFix: { type: "boolean" },
-          error_hint: { type: "string" }
+          error_hint: { type: "string" },
         },
         required: ["action"],
       },
@@ -671,7 +998,9 @@ const plugin = {
         try {
           return await handleAction(String(params.action || ""), params || {}, config || {});
         } catch (err) {
-          return result(`abb_robot_real failed: ${String(err?.message || err)}`, { success: false });
+          return result(`abb_robot_real failed: ${String(err?.message || err)}`, {
+            success: false,
+          });
         }
       },
     });

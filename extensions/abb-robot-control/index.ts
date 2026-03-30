@@ -1,6 +1,6 @@
 /**
  * index.ts — OpenClaw extension entry point for ABB robot control plugin
- * 
+ *
  * Registers the abb_robot MCP tool for controlling actual ABB robots via PC SDK
  */
 
@@ -41,21 +41,37 @@ const plugin = {
         type: "string",
         description: "Path on controller to store generated RAPID programs",
       },
+      defaultMode: {
+        type: "string",
+        description: "Default operation mode: virtual, real, or auto",
+        enum: ["virtual", "real", "auto"],
+      },
+      wsBridgePort: {
+        type: "number",
+        description: "WebSocket bridge port for virtual mode",
+        minimum: 1,
+        maximum: 65535,
+      },
     },
   },
 
-  register(api: OpenClawPluginApi, config?: Record<string, unknown>) { config = config || {};
+  register(api: OpenClawPluginApi, config?: Record<string, unknown>) {
+    config = config || {};
     const tool = createABBRobotTool(config);
     api.registerTool(tool);
-    
+
     // Auto-connect if configured
     if (config.autoConnect && config.controllerHost) {
       setTimeout(async () => {
         try {
           await tool.execute("auto-connect", {
             action: "connect",
+            mode: config.defaultMode || "real",
             host: config.controllerHost,
-            port: config.controllerPort || 7000,
+            port:
+              config.defaultMode === "virtual"
+                ? config.wsBridgePort || 9877
+                : config.controllerPort || 7000,
             robot_id: config.defaultRobot,
           });
           console.log("[abb-robot-control] Auto-connected to controller");

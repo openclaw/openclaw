@@ -1,229 +1,237 @@
-﻿[
-    {
-        "action":  "scan_controllers",
-        "ok":  true,
-        "text":  "Scanned controllers: 1",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "total":  1,
-                                       "controllers":  [
-                                                           {
-                                                               "ip":  "127.0.0.1",
-                                                               "id":  "",
-                                                               "isVirtual":  true,
-                                                               "version":  "6.8.0.1",
-                                                               "systemId":  "a30a86d0-545b-42c7-815f-3f4479226f6a",
-                                                               "systemName":  "1JiaX_ABB_6_08",
-                                                               "hostName":  "",
-                                                               "controllerName":  "DESKTOP-A38HIOI"
-                                                           }
-                                                       ]
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"scan_controllers\",\"text\":\"Scanned controllers: 1\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"total\":1,\"controllers\":[{\"ip\":\"127.0.0.1\",\"id\":\"\",\"isVirtual\":true,\"version\":\"6.8.0.1\",\"systemId\":\"a30a86d0-545b-42c7-815f-3f4479226f6a\",\"systemName\":\"1JiaX_ABB_6_08\",\"hostName\":\"\",\"controllerName\":\"DESKTOP-A38HIOI\"}]}}}"
+[
+  {
+    "action": "scan_controllers",
+    "ok": true,
+    "text": "Scanned controllers: 1",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "total": 1,
+        "controllers": [
+          {
+            "ip": "127.0.0.1",
+            "id": "",
+            "isVirtual": true,
+            "version": "6.8.0.1",
+            "systemId": "a30a86d0-545b-42c7-815f-3f4479226f6a",
+            "systemName": "1JiaX_ABB_6_08",
+            "hostName": "",
+            "controllerName": "DESKTOP-A38HIOI"
+          }
+        ]
+      }
     },
-    {
-        "action":  "connect",
-        "ok":  true,
-        "text":  "Real connected (127.0.0.1:7000)",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "connected":  true,
-                        "host":  "127.0.0.1",
-                        "port":  7000,
-                        "status":  {
-                                       "success":  true,
-                                       "connected":  true,
-                                       "operationMode":  "Auto",
-                                       "motorState":  "MotorsOn",
-                                       "rapidRunning":  false,
-                                       "rapidExecutionStatus":  "Ready"
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"connect\",\"text\":\"Real connected (127.0.0.1:7000)\",\"details\":{\"success\":true,\"connected\":true,\"host\":\"127.0.0.1\",\"port\":7000,\"status\":{\"success\":true,\"connected\":true,\"operationMode\":\"Auto\",\"motorState\":\"MotorsOn\",\"rapidRunning\":false,\"rapidExecutionStatus\":\"Ready\"}}}"
+    "raw": "{\"ok\":true,\"action\":\"scan_controllers\",\"text\":\"Scanned controllers: 1\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"total\":1,\"controllers\":[{\"ip\":\"127.0.0.1\",\"id\":\"\",\"isVirtual\":true,\"version\":\"6.8.0.1\",\"systemId\":\"a30a86d0-545b-42c7-815f-3f4479226f6a\",\"systemName\":\"1JiaX_ABB_6_08\",\"hostName\":\"\",\"controllerName\":\"DESKTOP-A38HIOI\"}]}}}"
+  },
+  {
+    "action": "connect",
+    "ok": true,
+    "text": "Real connected (127.0.0.1:7000)",
+    "error": "",
+    "details": {
+      "success": true,
+      "connected": true,
+      "host": "127.0.0.1",
+      "port": 7000,
+      "status": {
+        "success": true,
+        "operationMode": "Auto",
+        "motorState": "MotorsOn",
+        "rapidRunning": false,
+        "rapidExecutionStatus": "Stopped"
+      },
+      "controller": {
+        "ip": "127.0.0.1",
+        "id": "",
+        "isVirtual": true,
+        "version": "6.8.0.1",
+        "systemId": "a30a86d0-545b-42c7-815f-3f4479226f6a",
+        "systemName": "1JiaX_ABB_6_08",
+        "hostName": "",
+        "controllerName": "DESKTOP-A38HIOI"
+      }
     },
-    {
-        "action":  "get_status",
-        "ok":  true,
-        "text":  "Real status fetched.",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "connected":  true,
-                                       "operationMode":  "Auto",
-                                       "motorState":  "MotorsOn",
-                                       "rapidRunning":  false,
-                                       "rapidExecutionStatus":  "Ready"
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"get_status\",\"text\":\"Real status fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"connected\":true,\"operationMode\":\"Auto\",\"motorState\":\"MotorsOn\",\"rapidRunning\":false,\"rapidExecutionStatus\":\"Ready\"}}}"
+    "raw": "{\"ok\":true,\"action\":\"connect\",\"text\":\"Real connected (127.0.0.1:7000)\",\"details\":{\"success\":true,\"connected\":true,\"host\":\"127.0.0.1\",\"port\":7000,\"status\":{\"success\":true,\"operationMode\":\"Auto\",\"motorState\":\"MotorsOn\",\"rapidRunning\":false,\"rapidExecutionStatus\":\"Stopped\"},\"controller\":{\"ip\":\"127.0.0.1\",\"id\":\"\",\"isVirtual\":true,\"version\":\"6.8.0.1\",\"systemId\":\"a30a86d0-545b-42c7-815f-3f4479226f6a\",\"systemName\":\"1JiaX_ABB_6_08\",\"hostName\":\"\",\"controllerName\":\"DESKTOP-A38HIOI\"}}}"
+  },
+  {
+    "action": "get_status",
+    "ok": true,
+    "text": "Real status fetched.",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "operationMode": "Auto",
+        "motorState": "MotorsOn",
+        "rapidRunning": false,
+        "rapidExecutionStatus": "Stopped"
+      }
     },
-    {
-        "action":  "get_system_info",
-        "ok":  true,
-        "text":  "System info fetched.",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "systemName":  "1JiaX_ABB_6_08",
-                                       "controllerName":  "DESKTOP-A38HIOI",
-                                       "robotWareName":  "1JiaX_ABB_6_08",
-                                       "robotWareVersion":  "6.8.1040.1",
-                                       "isVirtual":  true,
-                                       "systemId":  "a30a86d0-545b-42c7-815f-3f4479226f6a"
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"get_system_info\",\"text\":\"System info fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"systemName\":\"1JiaX_ABB_6_08\",\"controllerName\":\"DESKTOP-A38HIOI\",\"robotWareName\":\"1JiaX_ABB_6_08\",\"robotWareVersion\":\"6.8.1040.1\",\"isVirtual\":true,\"systemId\":\"a30a86d0-545b-42c7-815f-3f4479226f6a\"}}}"
+    "raw": "{\"ok\":true,\"action\":\"get_status\",\"text\":\"Real status fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"operationMode\":\"Auto\",\"motorState\":\"MotorsOn\",\"rapidRunning\":false,\"rapidExecutionStatus\":\"Stopped\"}}}"
+  },
+  {
+    "action": "get_system_info",
+    "ok": true,
+    "text": "System info fetched.",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "systemName": "1JiaX_ABB_6_08",
+        "controllerName": "DESKTOP-A38HIOI",
+        "robotWareName": "1JiaX_ABB_6_08",
+        "robotWareVersion": "6.8.1040.1",
+        "isVirtual": true,
+        "systemId": "a30a86d0-545b-42c7-815f-3f4479226f6a"
+      }
     },
-    {
-        "action":  "get_service_info",
-        "ok":  true,
-        "text":  "Service info fetched.",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "elapsedProductionHours":  0,
-                                       "lastStart":  "0001-01-01T00:00:00.0000000"
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"get_service_info\",\"text\":\"Service info fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"elapsedProductionHours\":0,\"lastStart\":\"0001-01-01T00:00:00.0000000\"}}}"
+    "raw": "{\"ok\":true,\"action\":\"get_system_info\",\"text\":\"System info fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"systemName\":\"1JiaX_ABB_6_08\",\"controllerName\":\"DESKTOP-A38HIOI\",\"robotWareName\":\"1JiaX_ABB_6_08\",\"robotWareVersion\":\"6.8.1040.1\",\"isVirtual\":true,\"systemId\":\"a30a86d0-545b-42c7-815f-3f4479226f6a\"}}}"
+  },
+  {
+    "action": "get_service_info",
+    "ok": true,
+    "text": "Service info fetched.",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "elapsedProductionHours": 0,
+        "lastStart": "0001-01-01T00:00:00"
+      }
     },
-    {
-        "action":  "get_speed",
-        "ok":  true,
-        "text":  "Speed ratio: 25",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "speedRatio":  25
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"get_speed\",\"text\":\"Speed ratio: 25\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"speedRatio\":25}}}"
+    "raw": "{\"ok\":true,\"action\":\"get_service_info\",\"text\":\"Service info fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"elapsedProductionHours\":0,\"lastStart\":\"0001-01-01T00:00:00.0000000\"}}}"
+  },
+  {
+    "action": "get_speed",
+    "ok": true,
+    "text": "Speed ratio: 100",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "speedRatio": 100
+      }
     },
-    {
-        "action":  "set_speed",
-        "ok":  true,
-        "text":  "Speed ratio set: 25",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "speedRatio":  25
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"set_speed\",\"text\":\"Speed ratio set: 25\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"speedRatio\":25}}}"
+    "raw": "{\"ok\":true,\"action\":\"get_speed\",\"text\":\"Speed ratio: 100\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"speedRatio\":100}}}"
+  },
+  {
+    "action": "set_speed",
+    "ok": true,
+    "text": "Speed ratio set: 100",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "speedRatio": 100
+      }
     },
-    {
-        "action":  "get_joints",
-        "ok":  true,
-        "text":  "Joints: [16.95309829711914, -11.862753868103027, 25.576452255249023, 0, 117.50260162353516, -40.76173782348633]",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "joints":  [
-                                                      16.95309829711914,
-                                                      -11.862753868103027,
-                                                      25.576452255249023,
-                                                      0,
-                                                      117.50260162353516,
-                                                      -40.76173782348633
-                                                  ]
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"get_joints\",\"text\":\"Joints: [16.95309829711914, -11.862753868103027, 25.576452255249023, 0, 117.50260162353516, -40.76173782348633]\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"joints\":[16.95309829711914,-11.862753868103027,25.576452255249023,0,117.50260162353516,-40.76173782348633]}}}"
+    "raw": "{\"ok\":true,\"action\":\"set_speed\",\"text\":\"Speed ratio set: 100\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"speedRatio\":100}}}"
+  },
+  {
+    "action": "get_joints",
+    "ok": true,
+    "text": "Joints: [-1.125717e-14, -2.41159862e-16, 2.8766475e-19, 2.67731642e-20, -2.753682e-20, 0]",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "joints": [
+          -1.125717E-14,
+          -2.41159862E-16,
+          2.8766475E-19,
+          2.67731642E-20,
+          -2.753682E-20,
+          0
+        ]
+      }
     },
-    {
-        "action":  "get_world_position",
-        "ok":  true,
-        "text":  "World position fetched.",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "x":  198.044,
-                                       "y":  60.3709,
-                                       "z":  496.482422,
-                                       "rx":  150.23423972519797,
-                                       "ry":  -29.9387617941524,
-                                       "rz":  -114.1561961168543
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"get_world_position\",\"text\":\"World position fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"x\":198.044,\"y\":60.3709,\"z\":496.482422,\"rx\":150.23423972519797,\"ry\":-29.9387617941524,\"rz\":-114.1561961168543}}}"
+    "raw": "{\"ok\":true,\"action\":\"get_joints\",\"text\":\"Joints: [-1.125717e-14, -2.41159862e-16, 2.8766475e-19, 2.67731642e-20, -2.753682e-20, 0]\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"joints\":[-1.125717e-14,-2.41159862e-16,2.8766475e-19,2.67731642e-20,-2.753682e-20,0]}}}"
+  },
+  {
+    "action": "get_world_position",
+    "ok": true,
+    "text": "World position fetched.",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "x": 373.999969,
+        "y": -7.348154E-14,
+        "z": 630.0001,
+        "rx": 1.1257170174590269E-14,
+        "ry": 89.99999803884896,
+        "rz": 0
+      }
     },
-    {
-        "action":  "get_event_log",
-        "ok":  false,
-        "text":  "",
-        "error":  "invalid-json-output",
-        "details":  null,
-        "raw":  "{\"ok\":true,\"action\":\"get_event_log\",\"text\":\"Event log entries: 10\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"categoryId\":0,\"categoryName\":\"鍏敤\",\"count\":10,\"entries\":[{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:47.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:41.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:37.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:34.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:30.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:25.0000000\"},{\"number\":140,\"title\":\"璋冩暣閫熷害\",\"type\":\"Information\",\"timestamp\":\"2026-03-17T12:23:24.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:23.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:14.0000000\"},{\"number\":140,\"title\":\"璋冩暣閫熷害\",\"type\":\"Information\",\"timestamp\":\"2026-03-17T12:22:58.0000000\"}]}}}"
+    "raw": "{\"ok\":true,\"action\":\"get_world_position\",\"text\":\"World position fetched.\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"x\":373.999969,\"y\":-7.348154e-14,\"z\":630.0001,\"rx\":1.1257170174590269e-14,\"ry\":89.99999803884896,\"rz\":0}}}"
+  },
+  {
+    "action": "get_event_log",
+    "ok": false,
+    "text": "",
+    "error": "invalid-json-output",
+    "details": null,
+    "raw": "{\"ok\":true,\"action\":\"get_event_log\",\"text\":\"Event log entries: 20\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"categoryId\":0,\"categoryName\":\"鍏敤\",\"count\":20,\"entries\":[{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:18:06.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:18:00.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:54.0000000\"},{\"number\":140,\"title\":\"璋冩暣閫熷害\",\"type\":\"Information\",\"timestamp\":\"2026-03-29T10:17:53.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:48.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:42.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:36.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:30.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:23.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:17.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:11.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:05.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:59.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:53.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:47.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:41.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:35.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:29.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:23.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:17.0000000\"}]}}}"
+  },
+  {
+    "action": "list_tasks",
+    "ok": true,
+    "text": "Tasks discovered: 2",
+    "error": "",
+    "details": {
+      "success": true,
+      "result": {
+        "success": true,
+        "count": 2,
+        "tasks": [
+          {
+            "taskName": "T_ROB1",
+            "executionStatus": "Stopped",
+            "modules": [
+              "user",
+              "BASE",
+              "OpenClawMotionMod"
+            ]
+          },
+          {
+            "taskName": "com",
+            "executionStatus": "Running",
+            "modules": [
+              "user",
+              "BASE",
+              "ComModule"
+            ]
+          }
+        ]
+      }
     },
-    {
-        "action":  "list_tasks",
-        "ok":  true,
-        "text":  "Tasks discovered: 2",
-        "error":  "",
-        "details":  {
-                        "success":  true,
-                        "result":  {
-                                       "success":  true,
-                                       "count":  2,
-                                       "tasks":  [
-                                                     {
-                                                         "taskName":  "T_ROB1",
-                                                         "executionStatus":  "Ready",
-                                                         "modules":  [
-                                                                         "user",
-                                                                         "BASE",
-                                                                         "Communicate"
-                                                                     ]
-                                                     },
-                                                     {
-                                                         "taskName":  "com",
-                                                         "executionStatus":  "Running",
-                                                         "modules":  [
-                                                                         "user",
-                                                                         "BASE",
-                                                                         "ComModule"
-                                                                     ]
-                                                     }
-                                                 ]
-                                   }
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"list_tasks\",\"text\":\"Tasks discovered: 2\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"count\":2,\"tasks\":[{\"taskName\":\"T_ROB1\",\"executionStatus\":\"Ready\",\"modules\":[\"user\",\"BASE\",\"Communicate\"]},{\"taskName\":\"com\",\"executionStatus\":\"Running\",\"modules\":[\"user\",\"BASE\",\"ComModule\"]}]}}}"
+    "raw": "{\"ok\":true,\"action\":\"list_tasks\",\"text\":\"Tasks discovered: 2\",\"details\":{\"success\":true,\"result\":{\"success\":true,\"count\":2,\"tasks\":[{\"taskName\":\"T_ROB1\",\"executionStatus\":\"Stopped\",\"modules\":[\"user\",\"BASE\",\"OpenClawMotionMod\"]},{\"taskName\":\"com\",\"executionStatus\":\"Running\",\"modules\":[\"user\",\"BASE\",\"ComModule\"]}]}}}"
+  },
+  {
+    "action": "analyze_logs",
+    "ok": false,
+    "text": "",
+    "error": "invalid-json-output",
+    "details": null,
+    "raw": "{\"ok\":true,\"action\":\"analyze_logs\",\"text\":\"Log analysis complete (20 entries).\\nIssues:\\n- RAPID semantic error detected (likely module/task syntax or pointer target mismatch).\\nRecommended next actions:\\n- Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.\\n- If OpenClawMotionMod has syntax errors, fix RAPID source and use load_rapid before start_program.\\n- Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.\\n- Preferred task/module candidate: T_ROB1 / user\",\"details\":{\"success\":true,\"diagnosis\":{\"issues\":[\"RAPID semantic error detected (likely module/task syntax or pointer target mismatch).\"],\"recommendations\":[\"Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.\",\"If OpenClawMotionMod has syntax errors, fix RAPID source and use load_rapid before start_program.\",\"Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.\",\"Preferred task/module candidate: T_ROB1 / user\"]},\"log\":{\"success\":true,\"categoryId\":0,\"categoryName\":\"鍏敤\",\"count\":20,\"entries\":[{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:18:18.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:18:12.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:18:06.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:18:00.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:54.0000000\"},{\"number\":140,\"title\":\"璋冩暣閫熷害\",\"type\":\"Information\",\"timestamp\":\"2026-03-29T10:17:53.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:48.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:42.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:36.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:30.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:23.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:17.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:11.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:17:05.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:59.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:53.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:47.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:41.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:35.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-29T10:16:29.0000000\"}]},\"status\":{\"success\":true,\"operationMode\":\"Auto\",\"motorState\":\"MotorsOn\",\"rapidRunning\":false,\"rapidExecutionStatus\":\"Stopped\"},\"tasks\":{\"success\":true,\"count\":2,\"tasks\":[{\"taskName\":\"T_ROB1\",\"executionStatus\":\"Stopped\",\"modules\":[\"user\",\"BASE\",\"OpenClawMotionMod\"]},{\"taskName\":\"com\",\"executionStatus\":\"Running\",\"modules\":[\"user\",\"BASE\",\"ComModule\"]}]}}}"
+  },
+  {
+    "action": "movj",
+    "ok": false,
+    "text": "movj/set_joints requires exactly 6 joint values.",
+    "error": "",
+    "details": {
+      "success": false
     },
-    {
-        "action":  "analyze_logs",
-        "ok":  false,
-        "text":  "",
-        "error":  "invalid-json-output",
-        "details":  null,
-        "raw":  "{\"ok\":true,\"action\":\"analyze_logs\",\"text\":\"Log analysis complete (10 entries).\\nIssues:\\n- RAPID semantic error detected (likely module/task syntax or pointer target mismatch).\\nRecommended next actions:\\n- Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.\\n- If MainModule has syntax errors, fix RAPID source and use load_rapid before start_program.\\n- Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.\\n- Preferred task/module candidate: T_ROB1 / user\",\"details\":{\"success\":true,\"diagnosis\":{\"issues\":[\"RAPID semantic error detected (likely module/task syntax or pointer target mismatch).\"],\"recommendations\":[\"Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.\",\"If MainModule has syntax errors, fix RAPID source and use load_rapid before start_program.\",\"Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.\",\"Preferred task/module candidate: T_ROB1 / user\"]},\"log\":{\"success\":true,\"categoryId\":0,\"categoryName\":\"鍏敤\",\"count\":10,\"entries\":[{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:24:11.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:24:10.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:24:08.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:24:06.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:24:00.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:47.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:41.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:37.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:34.0000000\"},{\"number\":1595,\"title\":\"濂楁帴瀛楅敊璇?,\"type\":\"Warning\",\"timestamp\":\"2026-03-17T12:23:30.0000000\"}]},\"status\":{\"success\":true,\"connected\":true,\"operationMode\":\"Auto\",\"motorState\":\"MotorsOn\",\"rapidRunning\":false,\"rapidExecutionStatus\":\"Ready\"},\"tasks\":{\"success\":true,\"count\":2,\"tasks\":[{\"taskName\":\"T_ROB1\",\"executionStatus\":\"Ready\",\"modules\":[\"user\",\"BASE\",\"Communicate\"]},{\"taskName\":\"com\",\"executionStatus\":\"Running\",\"modules\":[\"user\",\"BASE\",\"ComModule\"]}]}}}"
-    },
-    {
-        "action":  "movj",
-        "ok":  true,
-        "text":  "movj/set_joints requires exactly 6 joint values.",
-        "error":  "",
-        "details":  {
-                        "success":  false
-                    },
-        "raw":  "{\"ok\":true,\"action\":\"movj\",\"text\":\"movj/set_joints requires exactly 6 joint values.\",\"details\":{\"success\":false}}"
-    }
+    "raw": "{\"ok\":true,\"action\":\"movj\",\"text\":\"movj/set_joints requires exactly 6 joint values.\",\"details\":{\"success\":false}}"
+  }
 ]

@@ -1,0 +1,28 @@
+{
+  "entries": {
+    "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\openclaw.json": {
+      "lastKnownGood": {
+        "hash": "8dc9fc56a86aaa6123b1ac7a63cec17146a2bb057f2ef0d4b1e1aad289504332",
+        "bytes": 1729,
+        "mtimeMs": 1774785085346.7146,
+        "ctimeMs": 1774785085346.7146,
+        "hasMeta": true,
+        "gatewayMode": null,
+        "observedAt": "2026-03-29T11:51:26.057Z"
+      },
+      "lastObservedSuspiciousSignature": null
+    },
+    "D:\\OpenClaw\\Develop\\openclaw\\config.runtime.json": {
+      "lastKnownGood": {
+        "hash": "9647d1f3647166414915403f71ba02b6681cdd49e064624dbbdc3ecb5bf0c946",
+        "bytes": 21879,
+        "mtimeMs": 1774779173703.5427,
+        "ctimeMs": 1774779173703.5427,
+        "hasMeta": true,
+        "gatewayMode": "local",
+        "observedAt": "2026-03-29T11:48:51.759Z"
+      },
+      "lastObservedSuspiciousSignature": null
+    }
+  }
+}

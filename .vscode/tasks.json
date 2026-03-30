@@ -3,14 +3,14 @@
 	"tasks": [
 		{
 			"label": "compile abb bridge",
-			"type": "shell",
-			"command": "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\MSBuild\\Current\\Bin\\Roslyn\\csc.exe\"",
+			"type": "process",
+			"command": "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\MSBuild\\Current\\Bin\\Roslyn\\csc.exe",
 			"args": [
 				"/nologo",
 				"/target:library",
-				"/out:\"d:\\OpenClaw\\Develop\\openclaw\\extensions\\abb-robot-control\\src\\ABBBridge.dll\"",
-				"/reference:\"C:\\Program Files (x86)\\ABB\\SDK\\PCSDK 2025\\ABB.Robotics.Controllers.PC.dll\"",
-				"\"d:\\OpenClaw\\Develop\\openclaw\\extensions\\abb-robot-control\\src\\ABBBridge.cs\""
+				"/out:d:\\OpenClaw\\Develop\\openclaw\\extensions\\abb-robot-control\\src\\ABBBridge.dll",
+				"/reference:C:\\Program Files (x86)\\ABB\\SDK\\PCSDK 2025\\ABB.Robotics.Controllers.PC.dll",
+				"d:\\OpenClaw\\Develop\\openclaw\\extensions\\abb-robot-control\\src\\ABBBridge.cs"
 			],
 			"isBackground": false
 		}

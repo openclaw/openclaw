@@ -1,0 +1,492 @@
+{
+  "summary": {
+    "total": 13,
+    "pass": 13,
+    "fail": 0
+  },
+  "report": [
+    {
+      "action": "scan_controllers",
+      "ok": true,
+      "text": "Scanned controllers: 1",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "total": 1,
+          "controllers": [
+            {
+              "ip": "127.0.0.1",
+              "id": "",
+              "isVirtual": true,
+              "version": "6.8.0.1",
+              "systemId": "a30a86d0-545b-42c7-815f-3f4479226f6a",
+              "systemName": "1JiaX_ABB_6_08",
+              "hostName": "",
+              "controllerName": "DESKTOP-A38HIOI"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "connect",
+      "ok": true,
+      "text": "Real connected (127.0.0.1:7000)",
+      "details": {
+        "success": true,
+        "connected": true,
+        "host": "127.0.0.1",
+        "port": 7000,
+        "status": {
+          "success": true,
+          "operationMode": "Auto",
+          "motorState": "MotorsOn",
+          "rapidRunning": false,
+          "rapidExecutionStatus": "Stopped"
+        },
+        "controller": {
+          "ip": "127.0.0.1",
+          "id": "",
+          "isVirtual": true,
+          "version": "6.8.0.1",
+          "systemId": "a30a86d0-545b-42c7-815f-3f4479226f6a",
+          "systemName": "1JiaX_ABB_6_08",
+          "hostName": "",
+          "controllerName": "DESKTOP-A38HIOI"
+        }
+      }
+    },
+    {
+      "action": "get_status",
+      "ok": true,
+      "text": "Real status fetched.",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "operationMode": "Auto",
+          "motorState": "MotorsOn",
+          "rapidRunning": false,
+          "rapidExecutionStatus": "Stopped"
+        }
+      }
+    },
+    {
+      "action": "get_system_info",
+      "ok": true,
+      "text": "System info fetched.",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "systemName": "1JiaX_ABB_6_08",
+          "controllerName": "DESKTOP-A38HIOI",
+          "robotWareName": "1JiaX_ABB_6_08",
+          "robotWareVersion": "6.8.1040.1",
+          "isVirtual": true,
+          "systemId": "a30a86d0-545b-42c7-815f-3f4479226f6a"
+        }
+      }
+    },
+    {
+      "action": "get_service_info",
+      "ok": true,
+      "text": "Service info fetched.",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "elapsedProductionHours": 0,
+          "lastStart": "0001-01-01T00:00:00.0000000"
+        }
+      }
+    },
+    {
+      "action": "get_speed",
+      "ok": true,
+      "text": "Speed ratio: 25",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "speedRatio": 25
+        }
+      }
+    },
+    {
+      "action": "set_speed",
+      "ok": true,
+      "text": "Speed ratio set: 25",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "speedRatio": 25
+        }
+      }
+    },
+    {
+      "action": "get_joints",
+      "ok": true,
+      "text": "Joints: [-2.10083775e-17, -3.031676e-17, -5.13994523e-20, 8.63859158e-20, 1.00314115e-20, 0]",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "joints": [
+            -2.10083775e-17,
+            -3.031676e-17,
+            -5.13994523e-20,
+            8.63859158e-20,
+            1.00314115e-20,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "action": "get_world_position",
+      "ok": true,
+      "text": "World position fetched.",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "x": 373.999969,
+          "y": -1.37132861e-16,
+          "z": 630.0001,
+          "rx": 2.100837672244417e-17,
+          "ry": 89.99999803884896,
+          "rz": 0
+        }
+      }
+    },
+    {
+      "action": "get_event_log",
+      "ok": true,
+      "text": "Event log entries: 10",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "categoryId": 0,
+          "categoryName": "公用",
+          "count": 10,
+          "entries": [
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T11:00:15.0000000"
+            },
+            {
+              "number": 140,
+              "title": "调整速度",
+              "type": "Information",
+              "timestamp": "2026-03-29T11:00:13.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T11:00:09.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T11:00:03.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:57.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:51.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:45.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:39.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:33.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:27.0000000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "list_tasks",
+      "ok": true,
+      "text": "Tasks discovered: 2",
+      "details": {
+        "success": true,
+        "result": {
+          "success": true,
+          "count": 2,
+          "tasks": [
+            {
+              "taskName": "T_ROB1",
+              "executionStatus": "Stopped",
+              "modules": [
+                "user",
+                "BASE",
+                "OpenClawMotionMod"
+              ]
+            },
+            {
+              "taskName": "com",
+              "executionStatus": "Running",
+              "modules": [
+                "user",
+                "BASE",
+                "ComModule"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "analyze_logs",
+      "ok": true,
+      "text": "Log analysis complete (10 entries).\nIssues:\n- RAPID semantic error detected (likely module/task syntax or pointer target mismatch).\nRecommended next actions:\n- Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.\n- If OpenClawMotionMod has syntax errors, fix RAPID source and use load_rapid before start_program.\n- Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.\n- Preferred task/module candidate: T_ROB1 / user",
+      "details": {
+        "success": true,
+        "diagnosis": {
+          "issues": [
+            "RAPID semantic error detected (likely module/task syntax or pointer target mismatch)."
+          ],
+          "recommendations": [
+            "Run: abb_robot_real action:list_tasks and pick task/module that actually exists before reset or backup.",
+            "If OpenClawMotionMod has syntax errors, fix RAPID source and use load_rapid before start_program.",
+            "Avoid blind reset on T_ROB1 when semantic errors exist; inspect event log details first.",
+            "Preferred task/module candidate: T_ROB1 / user"
+          ]
+        },
+        "log": {
+          "success": true,
+          "categoryId": 0,
+          "categoryName": "公用",
+          "count": 10,
+          "entries": [
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T11:00:21.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T11:00:15.0000000"
+            },
+            {
+              "number": 140,
+              "title": "调整速度",
+              "type": "Information",
+              "timestamp": "2026-03-29T11:00:13.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T11:00:09.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T11:00:03.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:57.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:51.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:45.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:39.0000000"
+            },
+            {
+              "number": 1595,
+              "title": "套接字错误",
+              "type": "Warning",
+              "timestamp": "2026-03-29T10:59:33.0000000"
+            }
+          ]
+        },
+        "status": {
+          "success": true,
+          "operationMode": "Auto",
+          "motorState": "MotorsOn",
+          "rapidRunning": false,
+          "rapidExecutionStatus": "Stopped"
+        },
+        "tasks": {
+          "success": true,
+          "count": 2,
+          "tasks": [
+            {
+              "taskName": "T_ROB1",
+              "executionStatus": "Stopped",
+              "modules": [
+                "user",
+                "BASE",
+                "OpenClawMotionMod"
+              ]
+            },
+            {
+              "taskName": "com",
+              "executionStatus": "Running",
+              "modules": [
+                "user",
+                "BASE",
+                "ComModule"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": "movj",
+      "ok": true,
+      "text": "Move executed and verified complete.",
+      "details": {
+        "success": true,
+        "before": {
+          "success": true,
+          "joints": [
+            -2.10083775e-17,
+            -3.031676e-17,
+            -5.13994523e-20,
+            8.63859158e-20,
+            1.00314115e-20,
+            0
+          ]
+        },
+        "commandResult": {
+          "success": true
+        },
+        "verification": {
+          "success": true,
+          "observedMovement": false,
+          "settled": true,
+          "durationMs": 18712,
+          "targetErrorDeg": 0,
+          "finalJoints": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status": {
+            "success": true,
+            "operationMode": "Auto",
+            "motorState": "MotorsOn",
+            "rapidRunning": false,
+            "rapidExecutionStatus": "Stopped"
+          },
+          "log": {
+            "success": true,
+            "categoryId": 0,
+            "categoryName": "公用",
+            "count": 8,
+            "entries": [
+              {
+                "number": 1595,
+                "title": "套接字错误",
+                "type": "Warning",
+                "timestamp": "2026-03-29T11:00:33.0000000"
+              },
+              {
+                "number": 122,
+                "title": "程序已停止",
+                "type": "Information",
+                "timestamp": "2026-03-29T11:00:33.0000000"
+              },
+              {
+                "number": 151,
+                "title": "程序已启动",
+                "type": "Information",
+                "timestamp": "2026-03-29T11:00:32.0000000"
+              },
+              {
+                "number": 53,
+                "title": "返回就绪",
+                "type": "Information",
+                "timestamp": "2026-03-29T11:00:32.0000000"
+              },
+              {
+                "number": 52,
+                "title": "返回启动",
+                "type": "Information",
+                "timestamp": "2026-03-29T11:00:32.0000000"
+              },
+              {
+                "number": 149,
+                "title": "程序指针移至例行程序",
+                "type": "Information",
+                "timestamp": "2026-03-29T11:00:32.0000000"
+              },
+              {
+                "number": 40,
+                "title": "程序已加载",
+                "type": "Information",
+                "timestamp": "2026-03-29T11:00:32.0000000"
+              },
+              {
+                "number": 64,
+                "title": "已删除模块。 ",
+                "type": "Information",
+                "timestamp": "2026-03-29T11:00:32.0000000"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

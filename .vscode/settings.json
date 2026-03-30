@@ -19,5 +19,8 @@
   "typescript.updateImportsOnFileMove.enabled": "always",
   "typescript.tsdk": "node_modules/typescript/lib",
   "typescript.experimental.useTsgo": true,
-  "java.configuration.updateBuildConfiguration": "interactive"
+  "java.configuration.updateBuildConfiguration": "interactive",
+  "githubPullRequests.ignoredPullRequestBranches": [
+    "main"
+  ]
 }

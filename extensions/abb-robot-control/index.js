@@ -1,11 +1,11 @@
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-};
+var __esm = (fn, res) =>
+  function __init() {
+    return (fn && (res = (0, fn[__getOwnPropNames(fn)[0]])((fn = 0))), res);
+  };
 var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
+  for (var name in all) __defProp(target, name, { get: all[name], enumerable: true });
 };
 
 // src/robot-config-loader.ts
@@ -17,7 +17,7 @@ __export(robot_config_loader_exports, {
   loadRobotConfig: () => loadRobotConfig,
   resolvePreset: () => resolvePreset,
   resolveSequence: () => resolveSequence,
-  validateJointValues: () => validateJointValues
+  validateJointValues: () => validateJointValues,
 });
 import fs from "node:fs";
 import path2 from "node:path";
@@ -27,7 +27,10 @@ function listRobots() {
     if (!fs.existsSync(ROBOTS_DIR)) {
       return [];
     }
-    return fs.readdirSync(ROBOTS_DIR).filter((f) => f.endsWith(".json") && !f.startsWith("robot-config")).map((f) => f.replace(/\.json$/, ""));
+    return fs
+      .readdirSync(ROBOTS_DIR)
+      .filter((f) => f.endsWith(".json") && !f.startsWith("robot-config"))
+      .map((f) => f.replace(/\.json$/, ""));
   } catch {
     return [];
   }
@@ -38,7 +41,7 @@ function loadRobotConfig(robotId) {
   if (!fs.existsSync(filePath)) {
     const available = listRobots();
     throw new Error(
-      `Robot config not found: "${robotId}". Available: ${available.join(", ") || "(none)"}`
+      `Robot config not found: "${robotId}". Available: ${available.join(", ") || "(none)"}`,
     );
   }
   let raw;
@@ -59,7 +62,10 @@ function identifyRobot(joints, dhParams) {
       for (let i = 0; i < joints.length; i++) {
         const configJoint = config.joints[i];
         const testJoint = joints[i];
-        if (Math.abs(configJoint.min - testJoint.min) > 1 || Math.abs(configJoint.max - testJoint.max) > 1) {
+        if (
+          Math.abs(configJoint.min - testJoint.min) > 1 ||
+          Math.abs(configJoint.max - testJoint.max) > 1
+        ) {
           limitsMatch = false;
           break;
         }
@@ -70,7 +76,11 @@ function identifyRobot(joints, dhParams) {
         for (let i = 0; i < dhParams.length; i++) {
           const configDH = config.dhParameters[i];
           const testDH = dhParams[i];
-          if (Math.abs(configDH.d - testDH.d) > 0.01 || Math.abs(configDH.a - testDH.a) > 0.01 || Math.abs(configDH.alpha - testDH.alpha) > 0.01) {
+          if (
+            Math.abs(configDH.d - testDH.d) > 0.01 ||
+            Math.abs(configDH.a - testDH.a) > 0.01 ||
+            Math.abs(configDH.alpha - testDH.alpha) > 0.01
+          ) {
             dhMatch = false;
             break;
           }
@@ -93,7 +103,7 @@ function validateJointValues(config, values) {
     const raw = values[i] ?? joint.home;
     if (raw < joint.min || raw > joint.max) {
       violations.push(
-        `${joint.label ?? joint.id}: ${raw.toFixed(2)} out of range [${joint.min}, ${joint.max}]`
+        `${joint.label ?? joint.id}: ${raw.toFixed(2)} out of range [${joint.min}, ${joint.max}]`,
       );
     }
     return clampJoint(joint, raw);
@@ -104,7 +114,7 @@ function resolvePreset(config, presetName) {
   const presets = config.presets ?? {};
   if (!(presetName in presets)) {
     throw new Error(
-      `Unknown preset "${presetName}" for robot "${config.id}". Available: ${Object.keys(presets).join(", ") || "(none)"}`
+      `Unknown preset "${presetName}" for robot "${config.id}". Available: ${Object.keys(presets).join(", ") || "(none)"}`,
     );
   }
   const { values } = validateJointValues(config, presets[presetName]);
@@ -114,7 +124,7 @@ function resolveSequence(config, sequenceName) {
   const sequences = config.sequences ?? {};
   if (!(sequenceName in sequences)) {
     throw new Error(
-      `Unknown sequence "${sequenceName}" for robot "${config.id}". Available: ${Object.keys(sequences).join(", ") || "(none)"}`
+      `Unknown sequence "${sequenceName}" for robot "${config.id}". Available: ${Object.keys(sequences).join(", ") || "(none)"}`,
     );
   }
   const seq = sequences[sequenceName];
@@ -122,8 +132,8 @@ function resolveSequence(config, sequenceName) {
     ...seq,
     steps: seq.steps.map((step) => ({
       ...step,
-      joints: validateJointValues(config, step.joints).values
-    }))
+      joints: validateJointValues(config, step.joints).values,
+    })),
   };
 }
 function validateConfig(raw, id) {
@@ -140,9 +150,7 @@ function validateConfig(raw, id) {
       throw new Error(`Robot config "${id}": joint "${j.id}" missing numeric min/max`);
     }
     if (j.min > j.max) {
-      throw new Error(
-        `Robot config "${id}": joint "${j.id}" min (${j.min}) > max (${j.max})`
-      );
+      throw new Error(`Robot config "${id}": joint "${j.id}" min (${j.min}) > max (${j.max})`);
     }
   }
   return obj;
@@ -152,18 +160,24 @@ var init_robot_config_loader = __esm({
   "src/robot-config-loader.ts"() {
     "use strict";
     __dirname2 = path2.dirname(fileURLToPath2(import.meta.url));
-    ROBOTS_DIR = path2.resolve(__dirname2, "../robots");
-  }
+    const ROBOTS_DIR_CANDIDATES = [
+      path2.resolve(__dirname2, "../robots"),
+      path2.resolve(__dirname2, "./robots"),
+    ];
+    ROBOTS_DIR =
+      ROBOTS_DIR_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ??
+      ROBOTS_DIR_CANDIDATES[0];
+  },
 });
 
 // src/abb-controller.ts
 import { EventEmitter as EventEmitter2 } from "node:events";
-
-// src/abb-csharp-bridge.ts
-import * as edge from "edge-js";
 import { EventEmitter } from "node:events";
+import fs2 from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+// src/abb-csharp-bridge.ts
+import * as edge from "edge-js";
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path.dirname(__filename);
 var ABBCSharpBridge = class extends EventEmitter {
@@ -177,7 +191,12 @@ var ABBCSharpBridge = class extends EventEmitter {
   }
   // ── Init ─────────────────────────────────────────────────────────────────────────────
   _initBridge() {
-    const dllPath = path.join(__dirname, "ABBBridge.dll");
+    const dllCandidates = [
+      path.join(__dirname, "ABBBridge.dll"),
+      path.join(__dirname, "src", "ABBBridge.dll"),
+    ];
+    const dllPath =
+      dllCandidates.find((candidate) => fs2.existsSync(candidate)) ?? dllCandidates[0];
     const methods = [
       "Connect",
       "Disconnect",
@@ -205,22 +224,26 @@ var ABBCSharpBridge = class extends EventEmitter {
       "ListRapidVariables",
       "MoveLinear",
       "MoveCircular",
-      "SetRapidVariable"
+      "SetRapidVariable",
     ];
     for (const methodName of methods) {
       try {
         this.fn[methodName] = edge.func({
           assemblyFile: dllPath,
           typeName: "ABBBridge",
-          methodName
+          methodName,
         });
-      } catch {
-      }
+      } catch {}
     }
   }
   _call(methodName, payload) {
     const fn = this.fn[methodName];
-    if (!fn) return Promise.reject(new Error(`C# bridge method '${methodName}' not initialised \u2014 is ABBBridge.dll present?`));
+    if (!fn)
+      return Promise.reject(
+        new Error(
+          `C# bridge method '${methodName}' not initialised \u2014 is ABBBridge.dll present?`,
+        ),
+      );
     return new Promise((resolve, reject) => {
       fn(payload, (err, result) => {
         if (err) reject(err);
@@ -392,7 +415,7 @@ var ABBController = class extends EventEmitter2 {
       motorState: String(r.motorState ?? ""),
       rapidRunning: Boolean(r.rapidRunning),
       rapidExecutionStatus: String(r.rapidExecutionStatus ?? ""),
-      systemName: this._systemName
+      systemName: this._systemName,
     };
   }
   async getSystemInfo() {
@@ -431,7 +454,7 @@ var ABBController = class extends EventEmitter2 {
       z: Number(r.z),
       rx: Number(r.rx),
       ry: Number(r.ry),
-      rz: Number(r.rz)
+      rz: Number(r.rz),
     };
   }
   // ── Event Log ──────────────────────────────────────────────────────────────
@@ -552,7 +575,7 @@ var ABBController = class extends EventEmitter2 {
       `    MoveAbsJ jt, ${speedData}, ${zone}, tool0;`,
       "    Stop;",
       "  ENDPROC",
-      "ENDMODULE"
+      "ENDMODULE",
     ].join("\r\n");
   }
   /**
@@ -561,16 +584,13 @@ var ABBController = class extends EventEmitter2 {
    */
   generateRapidSequence(positions, moduleName = "OpenClawMotionMod") {
     const declarations = [];
-    const moves = [
-      "    ConfJ \\Off;",
-      "    ConfL \\Off;"
-    ];
+    const moves = ["    ConfJ \\Off;", "    ConfL \\Off;"];
     positions.forEach((pos, i) => {
       const jointsStr = pos.joints.map((j) => j.toFixed(4)).join(", ");
       const speed = pos.speed ?? 100;
       const zone = pos.zone ?? (i === positions.length - 1 ? "fine" : "z10");
       declarations.push(
-        `    VAR jointtarget p${i} := [[${jointsStr}],[9E+09,9E+09,9E+09,9E+09,9E+09,9E+09]];`
+        `    VAR jointtarget p${i} := [[${jointsStr}],[9E+09,9E+09,9E+09,9E+09,9E+09,9E+09]];`,
       );
       moves.push(`    MoveAbsJ p${i}, ${this._formatSpeedData(speed)}, ${zone}, tool0;`);
     });
@@ -581,7 +601,7 @@ var ABBController = class extends EventEmitter2 {
       ...declarations,
       ...moves,
       "  ENDPROC",
-      "ENDMODULE"
+      "ENDMODULE",
     ].join("\r\n");
   }
   // ── Internals ─────────────────────────────────────────────────────────────
@@ -637,7 +657,7 @@ function interpolateJoints(from, to, maxJointStep, minSamples = 2, mode = "cosin
       to.map((target, idx) => {
         const start = from[idx] ?? 0;
         return start + (target - start) * t;
-      })
+      }),
     );
   }
   return out;
@@ -645,9 +665,9 @@ function interpolateJoints(from, to, maxJointStep, minSamples = 2, mode = "cosin
 function pushHistory(motionState2, joints, source) {
   motionState2.lastTarget = [...joints];
   motionState2.history.push({
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    timestamp: /* @__PURE__ */ new Date().toISOString(),
     joints: [...joints],
-    source
+    source,
   });
   const MAX_HISTORY = 200;
   if (motionState2.history.length > MAX_HISTORY) {
@@ -697,7 +717,7 @@ async function executeContinuousDance(controller2, cfg, motionState2, options) {
     autoConnect,
     returnToA,
     moduleName,
-    source
+    source,
   } = options;
   let continuityFrom = null;
   if (autoConnect) {
@@ -707,7 +727,9 @@ async function executeContinuousDance(controller2, cfg, motionState2, options) {
   const waypoints = [];
   let cursor = pointA;
   if (continuityFrom && !equalJoints(continuityFrom, pointA)) {
-    waypoints.push(...interpolateJoints(continuityFrom, pointA, maxJointStep, minSamples, interpolation));
+    waypoints.push(
+      ...interpolateJoints(continuityFrom, pointA, maxJointStep, minSamples, interpolation),
+    );
   } else if (!continuityFrom) {
     waypoints.push([...pointA]);
   }
@@ -726,7 +748,7 @@ async function executeContinuousDance(controller2, cfg, motionState2, options) {
   const rapidPoints = waypoints.map((joints, idx) => ({
     joints,
     speed,
-    zone: idx === waypoints.length - 1 ? "fine" : "z10"
+    zone: idx === waypoints.length - 1 ? "fine" : "z10",
   }));
   const rapidCode = controller2.generateRapidSequence(rapidPoints, moduleName);
   await controller2.executeRapidProgram(rapidCode, moduleName);
@@ -740,7 +762,7 @@ async function executeContinuousDance(controller2, cfg, motionState2, options) {
     waypoints: waypoints.length,
     start: pointA,
     end: cursor,
-    moduleName
+    moduleName,
   };
 }
 function speedToRapidConst(speed) {
@@ -749,12 +771,24 @@ function speedToRapidConst(speed) {
   if (speed <= 50) return "v50";
   return "v100";
 }
-async function handleAction(action, params, controller2, currentConfig2, pluginConfig, getCfg2, errorResult2, motionState2) {
+async function handleAction(
+  action,
+  params,
+  controller2,
+  currentConfig2,
+  pluginConfig,
+  getCfg2,
+  errorResult2,
+  motionState2,
+) {
   if (action === "disconnect") {
     if (!controller2?.isConnected()) return errorResult2("Not connected");
     try {
       await controller2.disconnect();
-      return { content: [{ type: "text", text: "\u2713 Disconnected" }], details: { connected: false } };
+      return {
+        content: [{ type: "text", text: "\u2713 Disconnected" }],
+        details: { connected: false },
+      };
     } catch (err) {
       return errorResult2(`Disconnect failed: ${String(err)}`);
     }
@@ -765,11 +799,16 @@ async function handleAction(action, params, controller2, currentConfig2, pluginC
     try {
       const s = await controller2.getStatus();
       return {
-        content: [{ type: "text", text: `Status:
+        content: [
+          {
+            type: "text",
+            text: `Status:
   Mode: ${s.operationMode}
   Motors: ${s.motorState}
-  RAPID: ${s.rapidRunning} (${s.rapidExecutionStatus})` }],
-        details: s
+  RAPID: ${s.rapidRunning} (${s.rapidExecutionStatus})`,
+          },
+        ],
+        details: s,
       };
     } catch (err) {
       return errorResult2(`get_status failed: ${String(err)}`);
@@ -780,11 +819,16 @@ async function handleAction(action, params, controller2, currentConfig2, pluginC
     try {
       const info = await controller2.getSystemInfo();
       return {
-        content: [{ type: "text", text: `System: ${info.systemName}
+        content: [
+          {
+            type: "text",
+            text: `System: ${info.systemName}
   Controller: ${info.controllerName}
   RobotWare: ${info.robotWareName} v${info.robotWareVersion}
-  Virtual: ${info.isVirtual}` }],
-        details: info
+  Virtual: ${info.isVirtual}`,
+          },
+        ],
+        details: info,
       };
     } catch (err) {
       return errorResult2(`get_system_info failed: ${String(err)}`);
@@ -795,10 +839,15 @@ async function handleAction(action, params, controller2, currentConfig2, pluginC
     try {
       const info = await controller2.getServiceInfo();
       return {
-        content: [{ type: "text", text: `Service Info:
+        content: [
+          {
+            type: "text",
+            text: `Service Info:
   Production Hours: ${info.elapsedProductionHours}
-  Last Start: ${info.lastStart}` }],
-        details: info
+  Last Start: ${info.lastStart}`,
+          },
+        ],
+        details: info,
       };
     } catch (err) {
       return errorResult2(`get_service_info failed: ${String(err)}`);
@@ -808,7 +857,10 @@ async function handleAction(action, params, controller2, currentConfig2, pluginC
     if (!controller2?.isConnected()) return errorResult2("Not connected");
     try {
       const ratio = await controller2.getSpeedRatio();
-      return { content: [{ type: "text", text: `Speed ratio: ${ratio}%` }], details: { speedRatio: ratio } };
+      return {
+        content: [{ type: "text", text: `Speed ratio: ${ratio}%` }],
+        details: { speedRatio: ratio },
+      };
     } catch (err) {
       return errorResult2(`get_speed failed: ${String(err)}`);
     }
@@ -818,7 +870,10 @@ async function handleAction(action, params, controller2, currentConfig2, pluginC
     const speed = clamp(Number(params["speed"] ?? 100), 1, 100);
     try {
       const ratio = await controller2.setSpeedRatio(speed);
-      return { content: [{ type: "text", text: `\u2713 Speed ratio set to ${ratio}%` }], details: { speedRatio: ratio } };
+      return {
+        content: [{ type: "text", text: `\u2713 Speed ratio set to ${ratio}%` }],
+        details: { speedRatio: ratio },
+      };
     } catch (err) {
       return errorResult2(`set_speed failed: ${String(err)}`);
     }
@@ -828,9 +883,20 @@ async function handleAction(action, params, controller2, currentConfig2, pluginC
     try {
       const joints = await controller2.getJointPositions();
       const cfg = currentConfig2 || getCfg2("abb-crb-15000");
-      const lines = cfg.joints.map((j, i) => `  ${j.label ?? j.id}: ${(joints[i] ?? 0).toFixed(2)}\xB0 [${j.min}\u2026${j.max}]`);
-      return { content: [{ type: "text", text: `Joint Positions:
-${lines.join("\n")}` }], details: { joints } };
+      const lines = cfg.joints.map(
+        (j, i) =>
+          `  ${j.label ?? j.id}: ${(joints[i] ?? 0).toFixed(2)}\xB0 [${j.min}\u2026${j.max}]`,
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Joint Positions:
+${lines.join("\n")}`,
+          },
+        ],
+        details: { joints },
+      };
     } catch (err) {
       return errorResult2(`get_joints failed: ${String(err)}`);
     }
@@ -840,10 +906,15 @@ ${lines.join("\n")}` }], details: { joints } };
     try {
       const p = await controller2.getWorldPosition();
       return {
-        content: [{ type: "text", text: `World Pos (mm/deg):
+        content: [
+          {
+            type: "text",
+            text: `World Pos (mm/deg):
   X:${p.x.toFixed(2)} Y:${p.y.toFixed(2)} Z:${p.z.toFixed(2)}
-  Rx:${p.rx.toFixed(2)} Ry:${p.ry.toFixed(2)} Rz:${p.rz.toFixed(2)}` }],
-        details: p
+  Rx:${p.rx.toFixed(2)} Ry:${p.ry.toFixed(2)} Rz:${p.rz.toFixed(2)}`,
+          },
+        ],
+        details: p,
       };
     } catch (err) {
       return errorResult2(`get_world_position failed: ${String(err)}`);
@@ -857,10 +928,18 @@ ${lines.join("\n")}` }], details: { joints } };
       const result = await controller2.getEventLogEntries(categoryId, limit);
       if (!result.success) return errorResult2(String(result.error ?? "get_event_log failed"));
       const lines = result.entries.map(
-        (e) => `  [${e.type}] ${String(e.timestamp).slice(0, 19)} #${e.number}: ${e.title}`
+        (e) => `  [${e.type}] ${String(e.timestamp).slice(0, 19)} #${e.number}: ${e.title}`,
       );
-      return { content: [{ type: "text", text: `Event Log (cat ${categoryId}):
-${lines.join("\n")}` }], details: result };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Event Log (cat ${categoryId}):
+${lines.join("\n")}`,
+          },
+        ],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`get_event_log failed: ${String(err)}`);
     }
@@ -871,10 +950,18 @@ ${lines.join("\n")}` }], details: result };
       const result = await controller2.listTasks();
       if (!result.success) return errorResult2(String(result.error ?? "list_tasks failed"));
       const lines = result.tasks.map(
-        (t) => `  \u2022 ${t.taskName} [${t.executionStatus}] \u2014 ${t.modules.join(", ")}`
+        (t) => `  \u2022 ${t.taskName} [${t.executionStatus}] \u2014 ${t.modules.join(", ")}`,
       );
-      return { content: [{ type: "text", text: `RAPID Tasks (${result.count}):
-${lines.join("\n")}` }], details: result };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `RAPID Tasks (${result.count}):
+${lines.join("\n")}`,
+          },
+        ],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`list_tasks failed: ${String(err)}`);
     }
@@ -887,7 +974,12 @@ ${lines.join("\n")}` }], details: result };
     try {
       const result = await controller2.backupModule(moduleName, taskName, outputDir);
       if (!result.success) return errorResult2(String(result.error ?? "backup_module failed"));
-      return { content: [{ type: "text", text: `\u2713 Backed up '${result.moduleName}' to ${result.outputDir}` }], details: result };
+      return {
+        content: [
+          { type: "text", text: `\u2713 Backed up '${result.moduleName}' to ${result.outputDir}` },
+        ],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`backup_module failed: ${String(err)}`);
     }
@@ -901,7 +993,12 @@ ${lines.join("\n")}` }], details: result };
       const r = await controller2.resetProgramPointer(taskName, moduleName, routineName);
       const method = r?.method ?? "ResetProgramPointer";
       const extra = r?.moduleName ? ` \u2192 ${r.moduleName}.${r.routineName}` : "";
-      return { content: [{ type: "text", text: `\u2713 Program pointer reset (${taskName})${extra} [${method}]` }], details: r ?? { taskName } };
+      return {
+        content: [
+          { type: "text", text: `\u2713 Program pointer reset (${taskName})${extra} [${method}]` },
+        ],
+        details: r ?? { taskName },
+      };
     } catch (err) {
       return errorResult2(`reset_program_pointer failed: ${String(err)}`);
     }
@@ -909,10 +1006,10 @@ ${lines.join("\n")}` }], details: result };
   if (action === "set_joints") {
     if (!controller2?.isConnected()) return errorResult2("Not connected. Use 'connect' first.");
     let rawJ = params["joints"];
-    if (typeof rawJ === "string") try {
-      rawJ = JSON.parse(rawJ);
-    } catch {
-    }
+    if (typeof rawJ === "string")
+      try {
+        rawJ = JSON.parse(rawJ);
+      } catch {}
     if (!Array.isArray(rawJ)) return errorResult2("joints array is required");
     const nums = rawJ.map(Number);
     if (nums.some(isNaN)) return errorResult2("joints must all be numeric");
@@ -924,7 +1021,8 @@ ${lines.join("\n")}` }], details: result };
       const lines = cfg.joints.map((j, i) => `  ${j.label ?? j.id}: ${values[i].toFixed(2)}\xB0`);
       let text = `\u2713 Moving to joints:
 ${lines.join("\n")}`;
-      if (violations.length) text += `
+      if (violations.length)
+        text += `
 
 \u26A0 Clamped:
 ${violations.map((v) => `  ${v}`).join("\n")}`;
@@ -937,10 +1035,10 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
   if (action === "movj") {
     if (!controller2?.isConnected()) return errorResult2("Not connected. Use 'connect' first.");
     let rawTarget = params["joints"];
-    if (typeof rawTarget === "string") try {
-      rawTarget = JSON.parse(rawTarget);
-    } catch {
-    }
+    if (typeof rawTarget === "string")
+      try {
+        rawTarget = JSON.parse(rawTarget);
+      } catch {}
     if (!Array.isArray(rawTarget)) return errorResult2("joints array is required");
     const targetNums = rawTarget.map(Number);
     if (targetNums.some(isNaN)) return errorResult2("joints must all be numeric");
@@ -951,13 +1049,14 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
       const maxJointStep = clamp(Number(params["max_joint_step"] ?? 6), 0.25, 45);
       const minSamples = clamp(Number(params["min_samples"] ?? 2), 2, 50);
       const iRaw = String(params["interpolation"] ?? "cosine").toLowerCase();
-      const interpolation = iRaw === "linear" || iRaw === "smoothstep" || iRaw === "cosine" ? iRaw : "cosine";
+      const interpolation =
+        iRaw === "linear" || iRaw === "smoothstep" || iRaw === "cosine" ? iRaw : "cosine";
       const moduleName = String(params["module_name"] ?? "MoveJSegment");
       let rawStart = params["start_joints"];
-      if (typeof rawStart === "string") try {
-        rawStart = JSON.parse(rawStart);
-      } catch {
-      }
+      if (typeof rawStart === "string")
+        try {
+          rawStart = JSON.parse(rawStart);
+        } catch {}
       let start;
       let sViol = [];
       if (Array.isArray(rawStart)) {
@@ -973,18 +1072,26 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
       }
       const wps = interpolateJoints(start, target, maxJointStep, minSamples, interpolation);
       const rapidCode = controller2.generateRapidSequence(
-        wps.map((joints, idx) => ({ joints, speed, zone: idx === wps.length - 1 ? "fine" : "z10" })),
-        moduleName
+        wps.map((joints, idx) => ({
+          joints,
+          speed,
+          zone: idx === wps.length - 1 ? "fine" : "z10",
+        })),
+        moduleName,
       );
       await controller2.executeRapidProgram(rapidCode, moduleName);
       pushHistory(motionState2, target, "movj");
       const violations = [...sViol, ...tViol];
       let text = `\u2713 MoveJ  speed:${speed}  wpts:${wps.length}  interp:${interpolation}
   End:[${target.map((v) => v.toFixed(2)).join(",")}]`;
-      if (violations.length) text += `
+      if (violations.length)
+        text += `
 \u26A0 Clamped:
 ${violations.map((v) => `  ${v}`).join("\n")}`;
-      return { content: [{ type: "text", text }], details: { speed, waypoints: wps.length, start, end: target, moduleName, violations } };
+      return {
+        content: [{ type: "text", text }],
+        details: { speed, waypoints: wps.length, start, end: target, moduleName, violations },
+      };
     } catch (err) {
       return errorResult2(`movj failed: ${String(err)}`);
     }
@@ -992,10 +1099,10 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
   if (action === "movj_rapid") {
     if (!controller2?.isConnected()) return errorResult2("Not connected. Use 'connect' first.");
     let rawJ = params["joints"];
-    if (typeof rawJ === "string") try {
-      rawJ = JSON.parse(rawJ);
-    } catch {
-    }
+    if (typeof rawJ === "string")
+      try {
+        rawJ = JSON.parse(rawJ);
+      } catch {}
     if (!Array.isArray(rawJ)) return errorResult2("joints array is required");
     const nums = rawJ.map(Number);
     if (nums.some(isNaN)) return errorResult2("joints must all be numeric");
@@ -1008,10 +1115,14 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
       await controller2.executeRapidProgram(rapidCode, "OpenClawMotionMod", true);
       pushHistory(motionState2, values, "movj_rapid");
       let text = `\u2713 movj_rapid  joints:[${values.map((v) => v.toFixed(2)).join(",")}]  speed:${speedToRapidConst(speed)}  zone:${zone}`;
-      if (violations.length) text += `
+      if (violations.length)
+        text += `
 \u26A0 Clamped:
 ${violations.map((v) => `  ${v}`).join("\n")}`;
-      return { content: [{ type: "text", text }], details: { joints: values, speed, zone, violations } };
+      return {
+        content: [{ type: "text", text }],
+        details: { joints: values, speed, zone, violations },
+      };
     } catch (err) {
       return errorResult2(`movj_rapid failed: ${String(err)}`);
     }
@@ -1023,7 +1134,10 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
       const homeJoints = cfg.joints.map((j) => j.home);
       await controller2.moveToJoints(homeJoints);
       pushHistory(motionState2, homeJoints, "go_home");
-      return { content: [{ type: "text", text: "\u2713 Moving to home position" }], details: { joints: homeJoints } };
+      return {
+        content: [{ type: "text", text: "\u2713 Moving to home position" }],
+        details: { joints: homeJoints },
+      };
     } catch (err) {
       return errorResult2(`go_home failed: ${String(err)}`);
     }
@@ -1039,8 +1153,16 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
       await controller2.moveToJoints(joints, speed);
       pushHistory(motionState2, joints, `preset:${presetName}`);
       const lines = cfg.joints.map((j, i) => `  ${j.label ?? j.id}: ${joints[i].toFixed(2)}\xB0`);
-      return { content: [{ type: "text", text: `\u2713 Preset "${presetName}":
-${lines.join("\n")}` }], details: { preset: presetName, joints } };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `\u2713 Preset "${presetName}":
+${lines.join("\n")}`,
+          },
+        ],
+        details: { preset: presetName, joints },
+      };
     } catch (err) {
       return errorResult2(String(err));
     }
@@ -1052,11 +1174,21 @@ ${lines.join("\n")}` }], details: { preset: presetName, joints } };
     try {
       const cfg = currentConfig2 || getCfg2("abb-crb-15000");
       const seq = resolveSequence(cfg, seqName);
-      const positions = seq.steps.map((s) => ({ joints: s.joints, speed: s.speed ?? 100, zone: s.zone ?? "z10" }));
+      const positions = seq.steps.map((s) => ({
+        joints: s.joints,
+        speed: s.speed ?? 100,
+        zone: s.zone ?? "z10",
+      }));
       const rapidCode = controller2.generateRapidSequence(positions);
       await controller2.executeRapidProgram(rapidCode);
-      if (seq.steps.length > 0) pushHistory(motionState2, seq.steps[seq.steps.length - 1].joints, `seq:${seqName}`);
-      return { content: [{ type: "text", text: `\u2713 Sequence "${seqName}" (${seq.steps.length} steps)` }], details: { sequence: seqName, steps: seq.steps.length } };
+      if (seq.steps.length > 0)
+        pushHistory(motionState2, seq.steps[seq.steps.length - 1].joints, `seq:${seqName}`);
+      return {
+        content: [
+          { type: "text", text: `\u2713 Sequence "${seqName}" (${seq.steps.length} steps)` },
+        ],
+        details: { sequence: seqName, steps: seq.steps.length },
+      };
     } catch (err) {
       return errorResult2(String(err));
     }
@@ -1071,16 +1203,34 @@ ${lines.join("\n")}` }], details: { preset: presetName, joints } };
         return `  \u2022 ${r}`;
       }
     });
-    return { content: [{ type: "text", text: `Robots:
-${lines.join("\n")}` }], details: { robots } };
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Robots:
+${lines.join("\n")}`,
+        },
+      ],
+      details: { robots },
+    };
   }
   if (action === "list_presets") {
     const robotId = String(params["robot_id"] ?? currentConfig2?.id ?? "abb-crb-15000");
     try {
       const cfg = getCfg2(robotId);
       const presets = Object.keys(cfg.presets ?? {});
-      return { content: [{ type: "text", text: presets.length ? `Presets for ${robotId}:
-${presets.map((p) => `  \u2022 ${p}`).join("\n")}` : "No presets defined" }], details: { robotId, presets } };
+      return {
+        content: [
+          {
+            type: "text",
+            text: presets.length
+              ? `Presets for ${robotId}:
+${presets.map((p) => `  \u2022 ${p}`).join("\n")}`
+              : "No presets defined",
+          },
+        ],
+        details: { robotId, presets },
+      };
     } catch (err) {
       return errorResult2(String(err));
     }
@@ -1089,9 +1239,21 @@ ${presets.map((p) => `  \u2022 ${p}`).join("\n")}` : "No presets defined" }], de
     const robotId = String(params["robot_id"] ?? currentConfig2?.id ?? "abb-crb-15000");
     try {
       const cfg = getCfg2(robotId);
-      const seqs = Object.entries(cfg.sequences ?? {}).map(([k, v]) => `  \u2022 ${k}${v.description ? ` \u2014 ${v.description}` : ""}`);
-      return { content: [{ type: "text", text: seqs.length ? `Sequences for ${robotId}:
-${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: Object.keys(cfg.sequences ?? {}) } };
+      const seqs = Object.entries(cfg.sequences ?? {}).map(
+        ([k, v]) => `  \u2022 ${k}${v.description ? ` \u2014 ${v.description}` : ""}`,
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: seqs.length
+              ? `Sequences for ${robotId}:
+${seqs.join("\n")}`
+              : "No sequences defined",
+          },
+        ],
+        details: { robotId, sequences: Object.keys(cfg.sequences ?? {}) },
+      };
     } catch (err) {
       return errorResult2(String(err));
     }
@@ -1104,7 +1266,10 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
     const allowReal = params["allow_real_execution"] !== false;
     try {
       await controller2.executeRapidProgram(code, moduleName, allowReal);
-      return { content: [{ type: "text", text: `\u2713 RAPID executed (${moduleName})` }], details: { moduleName } };
+      return {
+        content: [{ type: "text", text: `\u2713 RAPID executed (${moduleName})` }],
+        details: { moduleName },
+      };
     } catch (err) {
       return errorResult2(`execute_rapid failed: ${String(err)}`);
     }
@@ -1116,7 +1281,10 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
     const allowReal = Boolean(params["allow_real_execution"] ?? false);
     try {
       await controller2.loadRapidProgram(code, allowReal);
-      return { content: [{ type: "text", text: "\u2713 RAPID program loaded" }], details: { loaded: true } };
+      return {
+        content: [{ type: "text", text: "\u2713 RAPID program loaded" }],
+        details: { loaded: true },
+      };
     } catch (err) {
       return errorResult2(`load_rapid failed: ${String(err)}`);
     }
@@ -1126,7 +1294,10 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
     const allowReal = Boolean(params["allow_real_execution"] ?? true);
     try {
       await controller2.startRapid(allowReal);
-      return { content: [{ type: "text", text: "\u2713 RAPID program started" }], details: { running: true } };
+      return {
+        content: [{ type: "text", text: "\u2713 RAPID program started" }],
+        details: { running: true },
+      };
     } catch (err) {
       return errorResult2(`start_program failed: ${String(err)}`);
     }
@@ -1135,7 +1306,10 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
     if (!controller2?.isConnected()) return errorResult2("Not connected. Use 'connect' first.");
     try {
       await controller2.stopRapid();
-      return { content: [{ type: "text", text: "\u2713 RAPID program stopped" }], details: { running: false } };
+      return {
+        content: [{ type: "text", text: "\u2713 RAPID program stopped" }],
+        details: { running: false },
+      };
     } catch (err) {
       return errorResult2(`stop_program failed: ${String(err)}`);
     }
@@ -1144,7 +1318,10 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
     if (!controller2?.isConnected()) return errorResult2("Not connected. Use 'connect' first.");
     try {
       await controller2.setMotors(action === "motors_on" ? "ON" : "OFF");
-      return { content: [{ type: "text", text: `\u2713 Motors ${action === "motors_on" ? "ON" : "OFF"}` }], details: { motorState: action === "motors_on" ? "ON" : "OFF" } };
+      return {
+        content: [{ type: "text", text: `\u2713 Motors ${action === "motors_on" ? "ON" : "OFF"}` }],
+        details: { motorState: action === "motors_on" ? "ON" : "OFF" },
+      };
     } catch (err) {
       return errorResult2(`${action} failed: ${String(err)}`);
     }
@@ -1152,41 +1329,77 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
   if (action === "identify_robot") {
     if (!controller2?.isConnected()) return errorResult2("Not connected. Use 'connect' first.");
     try {
-      const { identifyRobot: identifyRobot2 } = await Promise.resolve().then(() => (init_robot_config_loader(), robot_config_loader_exports));
+      const { identifyRobot: identifyRobot2 } = await Promise.resolve().then(
+        () => (init_robot_config_loader(), robot_config_loader_exports),
+      );
       const liveJoints = await controller2.getJointPositions();
       const cfg = currentConfig2 || getCfg2("abb-crb-15000");
-      const jointCfgs = liveJoints.map((_, i) => ({ index: i, id: `joint${i}`, type: "revolute", min: cfg.joints[i]?.min ?? -180, max: cfg.joints[i]?.max ?? 180, home: cfg.joints[i]?.home ?? 0 }));
+      const jointCfgs = liveJoints.map((_, i) => ({
+        index: i,
+        id: `joint${i}`,
+        type: "revolute",
+        min: cfg.joints[i]?.min ?? -180,
+        max: cfg.joints[i]?.max ?? 180,
+        home: cfg.joints[i]?.home ?? 0,
+      }));
       const id = identifyRobot2(jointCfgs);
       if (id) {
         const ic = getCfg2(id);
-        return { content: [{ type: "text", text: `\u2713 Identified: ${ic.manufacturer} ${ic.model} (${id})` }], details: { robotId: id, manufacturer: ic.manufacturer, model: ic.model } };
+        return {
+          content: [
+            { type: "text", text: `\u2713 Identified: ${ic.manufacturer} ${ic.model} (${id})` },
+          ],
+          details: { robotId: id, manufacturer: ic.manufacturer, model: ic.model },
+        };
       }
-      return { content: [{ type: "text", text: `\u26A0 Could not identify robot (${liveJoints.length} DOF). Specify robot_id manually.` }], details: { identified: false } };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `\u26A0 Could not identify robot (${liveJoints.length} DOF). Specify robot_id manually.`,
+          },
+        ],
+        details: { identified: false },
+      };
     } catch (err) {
       return errorResult2(`identify_robot failed: ${String(err)}`);
     }
   }
   if (action === "get_motion_memory") {
     return {
-      content: [{ type: "text", text: `Motion memory:
+      content: [
+        {
+          type: "text",
+          text: `Motion memory:
   Last: ${motionState2.lastTarget ? `[${motionState2.lastTarget.map((v) => v.toFixed(2)).join(",")}]` : "(none)"}
-  History: ${motionState2.history.length} entries` }],
-      details: { lastTarget: motionState2.lastTarget, historyCount: motionState2.history.length, recent: motionState2.history.slice(-10) }
+  History: ${motionState2.history.length} entries`,
+        },
+      ],
+      details: {
+        lastTarget: motionState2.lastTarget,
+        historyCount: motionState2.history.length,
+        recent: motionState2.history.slice(-10),
+      },
     };
   }
   if (action === "reset_motion_memory") {
     motionState2.lastTarget = null;
     motionState2.history = [];
-    return { content: [{ type: "text", text: "\u2713 Motion memory reset" }], details: { reset: true } };
+    return {
+      content: [{ type: "text", text: "\u2713 Motion memory reset" }],
+      details: { reset: true },
+    };
   }
   if (action === "dance_two_points") {
     if (!controller2?.isConnected()) return errorResult2("Not connected. Use 'connect' first.");
     const rawA = params["point_a"];
     const rawB = params["point_b"];
-    if (!Array.isArray(rawA) || !Array.isArray(rawB)) return errorResult2("point_a and point_b arrays are required");
+    if (!Array.isArray(rawA) || !Array.isArray(rawB))
+      return errorResult2("point_a and point_b arrays are required");
     const pA = rawA.map(Number);
     const pB = rawB.map(Number);
-    if (pA.some(isNaN) || pB.some(isNaN)) return errorResult2("point_a and point_b must be numeric");
+    if (pA.some(isNaN) || pB.some(isNaN))
+      return errorResult2("point_a and point_b must be numeric");
     try {
       const cfg = currentConfig2 || getCfg2("abb-crb-15000");
       const { values: pointA, violations: vA } = validateJointValues(cfg, pA);
@@ -1196,7 +1409,8 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
       const maxJointStep = clamp(Number(params["max_joint_step"] ?? 6), 0.25, 45);
       const minSamples = clamp(Number(params["min_samples"] ?? 2), 2, 50);
       const iRaw = String(params["interpolation"] ?? "cosine").toLowerCase();
-      const interpolation = iRaw === "linear" || iRaw === "smoothstep" || iRaw === "cosine" ? iRaw : "cosine";
+      const interpolation =
+        iRaw === "linear" || iRaw === "smoothstep" || iRaw === "cosine" ? iRaw : "cosine";
       const result = await executeContinuousDance(controller2, cfg, motionState2, {
         pointA,
         pointB,
@@ -1208,11 +1422,12 @@ ${seqs.join("\n")}` : "No sequences defined" }], details: { robotId, sequences: 
         autoConnect: params["auto_connect"] !== false,
         returnToA: params["return_to_a"] === true,
         moduleName: String(params["module_name"] ?? "DanceSegment"),
-        source: "dance_two_points"
+        source: "dance_two_points",
       });
       const violations = [...vA, ...vB];
       let text = `\u2713 Dance  repeat:${result.repeat}  wpts:${result.waypoints}  speed:${result.speed}  interp:${result.interpolation}`;
-      if (violations.length) text += `
+      if (violations.length)
+        text += `
 \u26A0 Clamped:
 ${violations.map((v) => `  ${v}`).join("\n")}`;
       return { content: [{ type: "text", text }], details: { ...result, violations } };
@@ -1231,7 +1446,8 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
       const maxJointStep = clamp(Number(params["max_joint_step"] ?? 6), 0.25, 45);
       const minSamples = clamp(Number(params["min_samples"] ?? 2), 2, 50);
       const iRaw = String(params["interpolation"] ?? "cosine").toLowerCase();
-      const interpolation = iRaw === "linear" || iRaw === "smoothstep" || iRaw === "cosine" ? iRaw : "cosine";
+      const interpolation =
+        iRaw === "linear" || iRaw === "smoothstep" || iRaw === "cosine" ? iRaw : "cosine";
       const { pointA, pointB } = buildTemplatePoints(cfg, template, amplitude);
       const repeat = Math.max(1, Math.floor(beats / 2));
       const result = await executeContinuousDance(controller2, cfg, motionState2, {
@@ -1245,11 +1461,16 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
         autoConnect: params["auto_connect"] !== false,
         returnToA: params["return_to_a"] === true,
         moduleName: String(params["module_name"] ?? `DanceTemplate_${template}`),
-        source: `dance_template:${template}`
+        source: `dance_template:${template}`,
       });
       return {
-        content: [{ type: "text", text: `\u2713 Dance template '${template}'  beats:${beats}  repeat:${result.repeat}  wpts:${result.waypoints}` }],
-        details: { template, amplitude, beats, ...result }
+        content: [
+          {
+            type: "text",
+            text: `\u2713 Dance template '${template}'  beats:${beats}  repeat:${result.repeat}  wpts:${result.waypoints}`,
+          },
+        ],
+        details: { template, amplitude, beats, ...result },
       };
     } catch (err) {
       return errorResult2(`dance_template failed: ${String(err)}`);
@@ -1259,12 +1480,21 @@ ${violations.map((v) => `  ${v}`).join("\n")}`;
     if (!controller2?.isConnected()) return errorResult2("Not connected");
     try {
       const result = await controller2.getEventLogCategories();
-      if (!result.success) return errorResult2(String(result.error ?? "get_event_log_categories failed"));
+      if (!result.success)
+        return errorResult2(String(result.error ?? "get_event_log_categories failed"));
       const lines = result.categories.map(
-        (c) => `  cat[${c.categoryId}] ${c.name}: ${c.count} entries`
+        (c) => `  cat[${c.categoryId}] ${c.name}: ${c.count} entries`,
       );
-      return { content: [{ type: "text", text: `Event Log Categories:
-${lines.join("\n")}` }], details: result };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Event Log Categories:
+${lines.join("\n")}`,
+          },
+        ],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`get_event_log_categories failed: ${String(err)}`);
     }
@@ -1278,7 +1508,12 @@ ${lines.join("\n")}` }], details: result };
     try {
       const result = await controller2.getRapidVariable(taskName, varName, moduleName);
       if (!result.success) return errorResult2(String(result.error ?? "get_rapid_variable failed"));
-      return { content: [{ type: "text", text: `${result.varName} (${result.dataType}) = ${result.value}` }], details: result };
+      return {
+        content: [
+          { type: "text", text: `${result.varName} (${result.dataType}) = ${result.value}` },
+        ],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`get_rapid_variable failed: ${String(err)}`);
     }
@@ -1291,10 +1526,18 @@ ${lines.join("\n")}` }], details: result };
       const result = await controller2.getIOSignals(nameFilter, limit);
       if (!result.success) return errorResult2(String(result.error ?? "get_io_signals failed"));
       const lines = result.signals.map(
-        (s) => `  [${s.type}] ${s.name} = ${s.value}${s.unit ? " " + s.unit : ""}`
+        (s) => `  [${s.type}] ${s.name} = ${s.value}${s.unit ? " " + s.unit : ""}`,
       );
-      return { content: [{ type: "text", text: `IO Signals (${result.count}):
-${lines.join("\n")}` }], details: result };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `IO Signals (${result.count}):
+${lines.join("\n")}`,
+          },
+        ],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`get_io_signals failed: ${String(err)}`);
     }
@@ -1306,10 +1549,22 @@ ${lines.join("\n")}` }], details: result };
     const limit = Math.max(1, Math.min(200, Number(params["limit"] ?? 50)));
     try {
       const result = await controller2.listRapidVariables(taskName, moduleName, limit);
-      if (!result.success) return errorResult2(String(result.error ?? "list_rapid_variables failed"));
-      const lines = result.variables.map((v) => `  \u2022 ${v.name} [${v.rapidType ?? "?"}] = ${v.value ?? "?"} (${v.moduleName ?? taskName})`);
-      return { content: [{ type: "text", text: `RAPID Variables (${result.count}):
-${lines.join("\n")}` }], details: result };
+      if (!result.success)
+        return errorResult2(String(result.error ?? "list_rapid_variables failed"));
+      const lines = result.variables.map(
+        (v) =>
+          `  \u2022 ${v.name} [${v.rapidType ?? "?"}] = ${v.value ?? "?"} (${v.moduleName ?? taskName})`,
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `RAPID Variables (${result.count}):
+${lines.join("\n")}`,
+          },
+        ],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`list_rapid_variables failed: ${String(err)}`);
     }
@@ -1329,7 +1584,10 @@ ${lines.join("\n")}` }], details: result };
     const zone = String(params["zone"] ?? "fine");
     try {
       await controller2.moveLinear(x, y, z, rx, ry, rz, speed, zone);
-      return { content: [{ type: "text", text: `\u2713 movl to [${x},${y},${z}] at speed ${speed}` }], details: { x, y, z, rx, ry, rz, speed, zone } };
+      return {
+        content: [{ type: "text", text: `\u2713 movl to [${x},${y},${z}] at speed ${speed}` }],
+        details: { x, y, z, rx, ry, rz, speed, zone },
+      };
     } catch (err) {
       return errorResult2(`movl failed: ${String(err)}`);
     }
@@ -1339,16 +1597,27 @@ ${lines.join("\n")}` }], details: result };
     const rCirc = params["circ_point"];
     const rTo = params["to_point"];
     if (!Array.isArray(rCirc) || !Array.isArray(rTo) || rCirc.length < 6 || rTo.length < 6) {
-      return errorResult2("circ_point and to_point must be arrays of at least 6 numbers [x,y,z,rx,ry,rz]");
+      return errorResult2(
+        "circ_point and to_point must be arrays of at least 6 numbers [x,y,z,rx,ry,rz]",
+      );
     }
     const circPoint = rCirc.map(Number);
     const toPoint = rTo.map(Number);
-    if (circPoint.some(isNaN) || toPoint.some(isNaN)) return errorResult2("circ_point and to_point must be numeric");
+    if (circPoint.some(isNaN) || toPoint.some(isNaN))
+      return errorResult2("circ_point and to_point must be numeric");
     const speed = clamp(Number(params["speed"] ?? 100), 1, 7e3);
     const zone = String(params["zone"] ?? "fine");
     try {
       await controller2.moveCircular(circPoint, toPoint, speed, zone);
-      return { content: [{ type: "text", text: `\u2713 movc through [${circPoint.slice(0, 3).join(",")}] to [${toPoint.slice(0, 3).join(",")}] at speed ${speed}` }], details: { circPoint, toPoint, speed, zone } };
+      return {
+        content: [
+          {
+            type: "text",
+            text: `\u2713 movc through [${circPoint.slice(0, 3).join(",")}] to [${toPoint.slice(0, 3).join(",")}] at speed ${speed}`,
+          },
+        ],
+        details: { circPoint, toPoint, speed, zone },
+      };
     } catch (err) {
       return errorResult2(`movc failed: ${String(err)}`);
     }
@@ -1363,7 +1632,10 @@ ${lines.join("\n")}` }], details: result };
     try {
       const result = await controller2.setRapidVariable(taskName, moduleName, varName, value);
       if (!result.success) return errorResult2(String(result.error ?? "set_rapid_variable failed"));
-      return { content: [{ type: "text", text: `\u2713 Set ${result.varName} = ${result.value}` }], details: result };
+      return {
+        content: [{ type: "text", text: `\u2713 Set ${result.varName} = ${result.value}` }],
+        details: result,
+      };
     } catch (err) {
       return errorResult2(`set_rapid_variable failed: ${String(err)}`);
     }
@@ -1379,7 +1651,7 @@ var currentConfig = null;
 var configCache = /* @__PURE__ */ new Map();
 var motionState = {
   lastTarget: null,
-  history: []
+  history: [],
 };
 function getCfg(robotId) {
   if (!configCache.has(robotId)) {
@@ -1390,14 +1662,15 @@ function getCfg(robotId) {
 function errorResult(message) {
   return {
     content: [{ type: "text", text: `\u274C abb_robot error: ${message}` }],
-    details: { error: message }
+    details: { error: message },
   };
 }
 function createABBRobotTool(pluginConfig) {
   return {
     name: "abb_robot",
     label: "ABB Robot Control",
-    description: "Control ABB robots via PC SDK. Connect to controllers, scan network for controllers, move robots to joint positions, execute RAPID programs, apply presets, run motion sequences, query status and event logs, manage speed ratio, backup modules, and manage RAPID tasks.",
+    description:
+      "Control ABB robots via PC SDK. Connect to controllers, scan network for controllers, move robots to joint positions, execute RAPID programs, apply presets, run motion sequences, query status and event logs, manage speed ratio, backup modules, and manage RAPID tasks.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -1459,69 +1732,132 @@ function createABBRobotTool(pluginConfig) {
             "get_rapid_variable",
             "set_rapid_variable",
             "get_io_signals",
-            "list_rapid_variables"
+            "list_rapid_variables",
           ],
-          description: "The action to perform."
+          description: "The action to perform.",
         },
         // Connection
         host: { type: "string", description: "Controller IP address or hostname" },
         port: { type: "number", description: "Controller port (default: 7000)" },
         robot_id: { type: "string", description: "Robot configuration ID" },
         // Motion
-        joints: { type: "array", items: { type: "number" }, description: "Joint angles in degrees [j1..j6]" },
-        start_joints: { type: "array", items: { type: "number" }, description: "Optional MoveJ start joints in degrees" },
+        joints: {
+          type: "array",
+          items: { type: "number" },
+          description: "Joint angles in degrees [j1..j6]",
+        },
+        start_joints: {
+          type: "array",
+          items: { type: "number" },
+          description: "Optional MoveJ start joints in degrees",
+        },
         x: { type: "number", description: "Cartesian X coordinate" },
         y: { type: "number", description: "Cartesian Y coordinate" },
         z: { type: "number", description: "Cartesian Z coordinate" },
         rx: { type: "number", description: "Euler X angle (deg)" },
         ry: { type: "number", description: "Euler Y angle (deg)" },
         rz: { type: "number", description: "Euler Z angle (deg)" },
-        circ_point: { type: "array", items: { type: "number" }, description: "Midpoint [x,y,z,rx,ry,rz] for movc" },
-        to_point: { type: "array", items: { type: "number" }, description: "End point [x,y,z,rx,ry,rz] for movc" },
-        speed: { type: "number", description: "Speed: 1-100 for motion actions; 1-7000 for set_speed (mm/s TCP)" },
-        zone: { type: "string", description: "Motion zone: fine | z1 | z5 | z10 | z50 (default: fine)" },
+        circ_point: {
+          type: "array",
+          items: { type: "number" },
+          description: "Midpoint [x,y,z,rx,ry,rz] for movc",
+        },
+        to_point: {
+          type: "array",
+          items: { type: "number" },
+          description: "End point [x,y,z,rx,ry,rz] for movc",
+        },
+        speed: {
+          type: "number",
+          description: "Speed: 1-100 for motion actions; 1-7000 for set_speed (mm/s TCP)",
+        },
+        zone: {
+          type: "string",
+          description: "Motion zone: fine | z1 | z5 | z10 | z50 (default: fine)",
+        },
         // Presets & sequences
         preset: { type: "string", description: "Named preset key" },
         sequence: { type: "string", description: "Named sequence key" },
         // RAPID
         code: { type: "string", description: "RAPID program source code (same as rapid_code)" },
         rapid_code: { type: "string", description: "RAPID program source code" },
-        module_name: { type: "string", description: "RAPID module name (default: OpenClawMotionMod)" },
-        allow_real_execution: { type: "boolean", description: "Permit execution on real (non-virtual) controllers" },
+        module_name: {
+          type: "string",
+          description: "RAPID module name (default: OpenClawMotionMod)",
+        },
+        allow_real_execution: {
+          type: "boolean",
+          description: "Permit execution on real (non-virtual) controllers",
+        },
         // movj_rapid
         task_name: { type: "string", description: "RAPID task name (default: T_ROB1)" },
-        program_timeout_ms: { type: "number", description: "Max wait ms for RAPID completion (default: 60000)" },
+        program_timeout_ms: {
+          type: "number",
+          description: "Max wait ms for RAPID completion (default: 60000)",
+        },
         // Event log
         category_id: { type: "number", description: "Event log category (0=common, default: 0)" },
         limit: { type: "number", description: "Max entries to return (default: 20)" },
         // Backup
         output_dir: { type: "string", description: "Local directory to write backup file" },
         // Dance
-        point_a: { type: "array", items: { type: "number" }, description: "Dance point A joint angles" },
-        point_b: { type: "array", items: { type: "number" }, description: "Dance point B joint angles" },
+        point_a: {
+          type: "array",
+          items: { type: "number" },
+          description: "Dance point A joint angles",
+        },
+        point_b: {
+          type: "array",
+          items: { type: "number" },
+          description: "Dance point B joint angles",
+        },
         repeat: { type: "number", description: "A/B oscillation count (default: 2)" },
-        max_joint_step: { type: "number", description: "Max interpolation step per joint in degrees (default: 6)" },
-        min_samples: { type: "number", description: "Min interpolation samples per segment (default: 2)" },
-        interpolation: { type: "string", description: "Interpolation: linear | smoothstep | cosine" },
-        auto_connect: { type: "boolean", description: "Auto-connect from previous endpoint to point A (default: true)" },
-        return_to_a: { type: "boolean", description: "Return to point A after dance segment (default: false)" },
+        max_joint_step: {
+          type: "number",
+          description: "Max interpolation step per joint in degrees (default: 6)",
+        },
+        min_samples: {
+          type: "number",
+          description: "Min interpolation samples per segment (default: 2)",
+        },
+        interpolation: {
+          type: "string",
+          description: "Interpolation: linear | smoothstep | cosine",
+        },
+        auto_connect: {
+          type: "boolean",
+          description: "Auto-connect from previous endpoint to point A (default: true)",
+        },
+        return_to_a: {
+          type: "boolean",
+          description: "Return to point A after dance segment (default: false)",
+        },
         template: { type: "string", description: "Dance template: wave | bounce | sway | twist" },
-        amplitude: { type: "number", description: "Template amplitude scale 0.1-2.0 (default: 1.0)" },
-        beats: { type: "number", description: "Template beats mapped to repeat count (default: 8)" },
+        amplitude: {
+          type: "number",
+          description: "Template amplitude scale 0.1-2.0 (default: 1.0)",
+        },
+        beats: {
+          type: "number",
+          description: "Template beats mapped to repeat count (default: 8)",
+        },
         // New actions
         var_name: { type: "string", description: "RAPID variable name" },
         value: { type: "string", description: "RAPID variable value (for set_rapid_variable)" },
         name_filter: { type: "string", description: "IO signal name filter substring" },
-        routine_name: { type: "string", description: "PROC name for reset_program_pointer (optional; auto-detected if omitted)" }
+        routine_name: {
+          type: "string",
+          description: "PROC name for reset_program_pointer (optional; auto-detected if omitted)",
+        },
       },
-      required: ["action"]
+      required: ["action"],
     },
     execute: async (_id, params) => {
       const action = String(params["action"] ?? "");
       if (action === "get_version") {
         return {
           content: [{ type: "text", text: `abb_robot plugin v${ABB_PLUGIN_VERSION}` }],
-          details: { plugin: "abb-robot-control", version: ABB_PLUGIN_VERSION }
+          details: { plugin: "abb-robot-control", version: ABB_PLUGIN_VERSION },
         };
       }
       if (action === "scan_controllers") {
@@ -1530,15 +1866,21 @@ function createABBRobotTool(pluginConfig) {
           const result = await tempCtrl.scanControllers();
           if (!result.success) return errorResult(String(result.error ?? "Scan failed"));
           const lines = result.controllers.map(
-            (c) => `  \u2022 ${c.ip} \u2014 ${c.systemName} (${c.isVirtual ? "virtual" : "real"}) id=${c.id}`
+            (c) =>
+              `  \u2022 ${c.ip} \u2014 ${c.systemName} (${c.isVirtual ? "virtual" : "real"}) id=${c.id}`,
           );
           return {
-            content: [{
-              type: "text",
-              text: result.total === 0 ? "No ABB controllers found on the network." : `Found ${result.total} controller(s):
-${lines.join("\n")}`
-            }],
-            details: result
+            content: [
+              {
+                type: "text",
+                text:
+                  result.total === 0
+                    ? "No ABB controllers found on the network."
+                    : `Found ${result.total} controller(s):
+${lines.join("\n")}`,
+              },
+            ],
+            details: result,
           };
         } catch (err) {
           return errorResult(`scan_controllers failed: ${String(err)}`);
@@ -1564,7 +1906,7 @@ ${lines.join("\n")}`
               type: "revolute",
               min: -180,
               max: 180,
-              home: 0
+              home: 0,
             }));
             identifiedRobot = identifyRobot(jointConfigs) || "abb-crb-15000";
           }
@@ -1572,21 +1914,23 @@ ${lines.join("\n")}`
           try {
             motionState.lastTarget = await controller.getJointPositions();
             motionState.history.push({
-              timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+              timestamp: /* @__PURE__ */ new Date().toISOString(),
               joints: [...motionState.lastTarget],
-              source: "connect-sync"
+              source: "connect-sync",
             });
           } catch {
             motionState.lastTarget = null;
           }
           return {
-            content: [{
-              type: "text",
-              text: `\u2713 Connected to ABB controller at ${host}:${port}
+            content: [
+              {
+                type: "text",
+                text: `\u2713 Connected to ABB controller at ${host}:${port}
 System: ${systemName}
-Robot: ${currentConfig.manufacturer} ${currentConfig.model} (${currentConfig.id})`
-            }],
-            details: { connected: true, host, port, systemName, robotId: currentConfig.id }
+Robot: ${currentConfig.manufacturer} ${currentConfig.model} (${currentConfig.id})`,
+              },
+            ],
+            details: { connected: true, host, port, systemName, robotId: currentConfig.id },
           };
         } catch (err) {
           return errorResult(`Connection failed: ${String(err)}`);
@@ -1600,9 +1944,9 @@ Robot: ${currentConfig.manufacturer} ${currentConfig.model} (${currentConfig.id}
         pluginConfig,
         getCfg,
         errorResult,
-        motionState
+        motionState,
       );
-    }
+    },
   };
 }
 
@@ -1610,34 +1954,46 @@ Robot: ${currentConfig.manufacturer} ${currentConfig.model} (${currentConfig.id}
 var plugin = {
   id: "abb-robot-control",
   name: "ABB Robot Control",
-  description: "Control actual ABB robots via PC SDK. Connect to robot controllers, execute RAPID programs, move robots, and manage motion sequences. Supports automatic robot identification and multi-robot configurations.",
+  description:
+    "Control actual ABB robots via PC SDK. Connect to robot controllers, execute RAPID programs, move robots, and manage motion sequences. Supports automatic robot identification and multi-robot configurations.",
   configSchema: {
     type: "object",
     additionalProperties: false,
     properties: {
       controllerHost: {
         type: "string",
-        description: "Default ABB robot controller IP address or hostname"
+        description: "Default ABB robot controller IP address or hostname",
       },
       controllerPort: {
         type: "number",
         description: "Default controller port (default: 7000)",
         minimum: 1,
-        maximum: 65535
+        maximum: 65535,
       },
       defaultRobot: {
         type: "string",
-        description: "Default robot configuration ID (e.g. 'abb-crb-15000')"
+        description: "Default robot configuration ID (e.g. 'abb-crb-15000')",
       },
       autoConnect: {
         type: "boolean",
-        description: "Automatically connect to controller on startup"
+        description: "Automatically connect to controller on startup",
       },
       rapidProgramPath: {
         type: "string",
-        description: "Path on controller to store generated RAPID programs"
-      }
-    }
+        description: "Path on controller to store generated RAPID programs",
+      },
+      defaultMode: {
+        type: "string",
+        description: "Default operation mode: virtual, real, or auto",
+        enum: ["virtual", "real", "auto"],
+      },
+      wsBridgePort: {
+        type: "number",
+        description: "WebSocket bridge port for virtual mode",
+        minimum: 1,
+        maximum: 65535,
+      },
+    },
   },
   register(api, config) {
     config = config || {};
@@ -1646,11 +2002,13 @@ var plugin = {
     if (config.autoConnect && config.controllerHost) {
       setTimeout(async () => {
         try {
+          const mode = config.defaultMode || "real";
           await tool.execute("auto-connect", {
             action: "connect",
+            mode,
             host: config.controllerHost,
-            port: config.controllerPort || 7e3,
-            robot_id: config.defaultRobot
+            port: mode === "virtual" ? config.wsBridgePort || 9877 : config.controllerPort || 7e3,
+            robot_id: config.defaultRobot,
           });
           console.log("[abb-robot-control] Auto-connected to controller");
         } catch (err) {
@@ -1658,9 +2016,7 @@ var plugin = {
         }
       }, 2e3);
     }
-  }
+  },
 };
 var index_default = plugin;
-export {
-  index_default as default
-};
+export { index_default as default };

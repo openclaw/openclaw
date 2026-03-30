@@ -9,7 +9,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROBOTS_DIR = path.resolve(__dirname, "../robots");
+const ROBOTS_DIR_CANDIDATES = [
+  path.resolve(__dirname, "../robots"),
+  path.resolve(__dirname, "./robots"),
+];
+const ROBOTS_DIR =
+  ROBOTS_DIR_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ?? ROBOTS_DIR_CANDIDATES[0];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -64,7 +69,7 @@ export interface RobotConfig {
   gravity?: [number, number, number];
   presets?: Record<string, number[]>;
   sequences?: Record<string, Sequence>;
-  
+
   // ABB-specific fields
   abbModel?: string;
   abbSerialNumber?: string;
@@ -101,7 +106,7 @@ export function loadRobotConfig(robotId: string): RobotConfig {
   if (!fs.existsSync(filePath)) {
     const available = listRobots();
     throw new Error(
-      `Robot config not found: "${robotId}". Available: ${available.join(", ") || "(none)"}`
+      `Robot config not found: "${robotId}". Available: ${available.join(", ") || "(none)"}`,
     );
   }
 
@@ -119,59 +124,60 @@ export function loadRobotConfig(robotId: string): RobotConfig {
  * Identify robot configuration from controller data
  * Matches based on DH parameters and joint limits
  */
-export function identifyRobot(
-  joints: JointConfig[],
-  dhParams?: DHParameter[]
-): string | null {
+export function identifyRobot(joints: JointConfig[], dhParams?: DHParameter[]): string | null {
   const configs = listRobots();
-  
+
   for (const configId of configs) {
     try {
       const config = loadRobotConfig(configId);
-      
+
       // Check DOF match
       if (config.dof !== joints.length) continue;
-      
+
       // Check joint limits match (with tolerance)
       let limitsMatch = true;
       for (let i = 0; i < joints.length; i++) {
         const configJoint = config.joints[i];
         const testJoint = joints[i];
-        
-        if (Math.abs(configJoint.min - testJoint.min) > 1.0 ||
-            Math.abs(configJoint.max - testJoint.max) > 1.0) {
+
+        if (
+          Math.abs(configJoint.min - testJoint.min) > 1.0 ||
+          Math.abs(configJoint.max - testJoint.max) > 1.0
+        ) {
           limitsMatch = false;
           break;
         }
       }
-      
+
       if (!limitsMatch) continue;
-      
+
       // Check DH parameters if provided
       if (dhParams && config.dhParameters) {
         let dhMatch = true;
         for (let i = 0; i < dhParams.length; i++) {
           const configDH = config.dhParameters[i];
           const testDH = dhParams[i];
-          
-          if (Math.abs(configDH.d - testDH.d) > 0.01 ||
-              Math.abs(configDH.a - testDH.a) > 0.01 ||
-              Math.abs(configDH.alpha - testDH.alpha) > 0.01) {
+
+          if (
+            Math.abs(configDH.d - testDH.d) > 0.01 ||
+            Math.abs(configDH.a - testDH.a) > 0.01 ||
+            Math.abs(configDH.alpha - testDH.alpha) > 0.01
+          ) {
             dhMatch = false;
             break;
           }
         }
-        
+
         if (!dhMatch) continue;
       }
-      
+
       // Found a match
       return configId;
     } catch {
       continue;
     }
   }
-  
+
   return null;
 }
 
@@ -187,14 +193,14 @@ export function clampJoint(cfg: JointConfig, value: number): number {
  */
 export function validateJointValues(
   config: RobotConfig,
-  values: number[]
+  values: number[],
 ): { values: number[]; violations: string[] } {
   const violations: string[] = [];
   const sanitised = config.joints.map((joint, i) => {
     const raw = values[i] ?? joint.home;
     if (raw < joint.min || raw > joint.max) {
       violations.push(
-        `${joint.label ?? joint.id}: ${raw.toFixed(2)} out of range [${joint.min}, ${joint.max}]`
+        `${joint.label ?? joint.id}: ${raw.toFixed(2)} out of range [${joint.min}, ${joint.max}]`,
       );
     }
     return clampJoint(joint, raw);
@@ -210,7 +216,7 @@ export function resolvePreset(config: RobotConfig, presetName: string): number[]
   if (!(presetName in presets)) {
     throw new Error(
       `Unknown preset "${presetName}" for robot "${config.id}". ` +
-      `Available: ${Object.keys(presets).join(", ") || "(none)"}`
+        `Available: ${Object.keys(presets).join(", ") || "(none)"}`,
     );
   }
   const { values } = validateJointValues(config, presets[presetName]);
@@ -225,7 +231,7 @@ export function resolveSequence(config: RobotConfig, sequenceName: string): Sequ
   if (!(sequenceName in sequences)) {
     throw new Error(
       `Unknown sequence "${sequenceName}" for robot "${config.id}". ` +
-      `Available: ${Object.keys(sequences).join(", ") || "(none)"}`
+        `Available: ${Object.keys(sequences).join(", ") || "(none)"}`,
     );
   }
   const seq = sequences[sequenceName];
@@ -256,9 +262,7 @@ function validateConfig(raw: unknown, id: string): RobotConfig {
       throw new Error(`Robot config "${id}": joint "${j.id}" missing numeric min/max`);
     }
     if (j.min > j.max) {
-      throw new Error(
-        `Robot config "${id}": joint "${j.id}" min (${j.min}) > max (${j.max})`
-      );
+      throw new Error(`Robot config "${id}": joint "${j.id}" min (${j.min}) > max (${j.max})`);
     }
   }
 

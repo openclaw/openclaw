@@ -1,6 +1,20 @@
 {
   "id": "abb-robot-virtual-control",
+  "name": "ABB Robot Virtual Control",
+  "description": "Virtual ABB control plugin for OpenClaw 3D viewer workflows over ws-bridge.",
+  "version": "1.0.0",
+  "skills": ["./skills"],
   "channels": [],
+  "uiHints": {
+    "wsBridgePort": {
+      "label": "WS Bridge Port",
+      "help": "WebSocket bridge port for virtual viewer control (default: 9877)."
+    },
+    "defaultRobot": {
+      "label": "Default Virtual Robot",
+      "help": "Robot id used when robot_id is omitted."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

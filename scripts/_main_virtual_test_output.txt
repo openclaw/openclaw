@@ -1,0 +1,6 @@
+MAIN_VIRTUAL_CONNECT {"connected":true,"mode":"virtual","host":"127.0.0.1","port":9877,"robotId":"abb-crb-15000","wsConnected":true}
+MAIN_VIRTUAL_BEFORE {"mode":"virtual","joints":[0,0,0,0,0,0],"success":true}
+MAIN_VIRTUAL_MOVJ {"mode":"virtual","success":true,"joints":[8,0,0,0,0,0]}
+MAIN_VIRTUAL_AFTER {"mode":"virtual","joints":[8,0,0,0,0,0],"success":true}
+MAIN_VIRTUAL_OK
+EXIT=0

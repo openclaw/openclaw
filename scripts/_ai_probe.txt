@@ -1,0 +1,324 @@
+{
+  "runId": "d04931aa-4458-4baa-b660-e3aef812669e",
+  "status": "ok",
+  "summary": "completed",
+  "result": {
+    "payloads": [
+      {
+        "text": "OK",
+        "mediaUrl": null
+      }
+    ],
+    "meta": {
+      "durationMs": 1447,
+      "agentMeta": {
+        "sessionId": "4224f0ad-ab2a-46b7-8507-dfd2cdde6297",
+        "provider": "bailian",
+        "model": "qwen3.5-plus",
+        "lastCallUsage": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "aborted": false,
+      "systemPromptReport": {
+        "source": "run",
+        "generatedAt": 1774785396412,
+        "sessionId": "4224f0ad-ab2a-46b7-8507-dfd2cdde6297",
+        "sessionKey": "agent:main:main",
+        "provider": "bailian",
+        "model": "qwen3.5-plus",
+        "workspaceDir": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace",
+        "bootstrapMaxChars": 20000,
+        "bootstrapTotalMaxChars": 150000,
+        "bootstrapTruncation": {
+          "warningMode": "once",
+          "warningShown": false,
+          "truncatedFiles": 0,
+          "nearLimitFiles": 0,
+          "totalNearLimit": false
+        },
+        "sandbox": {
+          "mode": "off",
+          "sandboxed": false
+        },
+        "systemPrompt": {
+          "chars": 30382,
+          "projectContextChars": 13837,
+          "nonProjectContextChars": 16545
+        },
+        "injectedWorkspaceFiles": [
+          {
+            "name": "AGENTS.md",
+            "path": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace\\AGENTS.md",
+            "missing": false,
+            "rawChars": 7809,
+            "injectedChars": 7809,
+            "truncated": false
+          },
+          {
+            "name": "SOUL.md",
+            "path": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace\\SOUL.md",
+            "missing": false,
+            "rawChars": 1664,
+            "injectedChars": 1664,
+            "truncated": false
+          },
+          {
+            "name": "TOOLS.md",
+            "path": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace\\TOOLS.md",
+            "missing": false,
+            "rawChars": 850,
+            "injectedChars": 850,
+            "truncated": false
+          },
+          {
+            "name": "IDENTITY.md",
+            "path": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace\\IDENTITY.md",
+            "missing": false,
+            "rawChars": 633,
+            "injectedChars": 633,
+            "truncated": false
+          },
+          {
+            "name": "USER.md",
+            "path": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace\\USER.md",
+            "missing": false,
+            "rawChars": 474,
+            "injectedChars": 474,
+            "truncated": false
+          },
+          {
+            "name": "HEARTBEAT.md",
+            "path": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace\\HEARTBEAT.md",
+            "missing": false,
+            "rawChars": 192,
+            "injectedChars": 192,
+            "truncated": false
+          },
+          {
+            "name": "BOOTSTRAP.md",
+            "path": "D:\\OpenClaw\\Develop\\openclaw\\.openclaw-dev\\.openclaw\\workspace\\BOOTSTRAP.md",
+            "missing": false,
+            "rawChars": 1450,
+            "injectedChars": 1450,
+            "truncated": false
+          }
+        ],
+        "skills": {
+          "promptChars": 4926,
+          "entries": [
+            {
+              "name": "abb-robot-control",
+              "blockChars": 353
+            },
+            {
+              "name": "abb-robot-real-control",
+              "blockChars": 682
+            },
+            {
+              "name": "abb-robot-virtual-control",
+              "blockChars": 388
+            },
+            {
+              "name": "clawhub",
+              "blockChars": 421
+            },
+            {
+              "name": "healthcheck",
+              "blockChars": 480
+            },
+            {
+              "name": "node-connect",
+              "blockChars": 530
+            },
+            {
+              "name": "robot-kinematic",
+              "blockChars": 526
+            },
+            {
+              "name": "skill-creator",
+              "blockChars": 748
+            },
+            {
+              "name": "weather",
+              "blockChars": 405
+            }
+          ]
+        },
+        "tools": {
+          "listChars": 2884,
+          "schemaChars": 25052,
+          "entries": [
+            {
+              "name": "read",
+              "summaryChars": 298,
+              "schemaChars": 574,
+              "propertiesCount": 6
+            },
+            {
+              "name": "edit",
+              "summaryChars": 129,
+              "schemaChars": 1135,
+              "propertiesCount": 12
+            },
+            {
+              "name": "write",
+              "summaryChars": 127,
+              "schemaChars": 497,
+              "propertiesCount": 5
+            },
+            {
+              "name": "exec",
+              "summaryChars": 181,
+              "schemaChars": 1086,
+              "propertiesCount": 12
+            },
+            {
+              "name": "process",
+              "summaryChars": 85,
+              "schemaChars": 961,
+              "propertiesCount": 12
+            },
+            {
+              "name": "browser",
+              "summaryChars": 1066,
+              "schemaChars": 2799,
+              "propertiesCount": 48
+            },
+            {
+              "name": "canvas",
+              "summaryChars": 106,
+              "schemaChars": 661,
+              "propertiesCount": 18
+            },
+            {
+              "name": "nodes",
+              "summaryChars": 122,
+              "schemaChars": 1800,
+              "propertiesCount": 37
+            },
+            {
+              "name": "cron",
+              "summaryChars": 3420,
+              "schemaChars": 690,
+              "propertiesCount": 13
+            },
+            {
+              "name": "message",
+              "summaryChars": 89,
+              "schemaChars": 5509,
+              "propertiesCount": 104
+            },
+            {
+              "name": "tts",
+              "summaryChars": 152,
+              "schemaChars": 223,
+              "propertiesCount": 2
+            },
+            {
+              "name": "gateway",
+              "summaryChars": 464,
+              "schemaChars": 497,
+              "propertiesCount": 12
+            },
+            {
+              "name": "agents_list",
+              "summaryChars": 118,
+              "schemaChars": 33,
+              "propertiesCount": 0
+            },
+            {
+              "name": "sessions_list",
+              "summaryChars": 54,
+              "schemaChars": 212,
+              "propertiesCount": 4
+            },
+            {
+              "name": "sessions_history",
+              "summaryChars": 36,
+              "schemaChars": 161,
+              "propertiesCount": 3
+            },
+            {
+              "name": "sessions_send",
+              "summaryChars": 84,
+              "schemaChars": 274,
+              "propertiesCount": 5
+            },
+            {
+              "name": "sessions_yield",
+              "summaryChars": 97,
+              "schemaChars": 60,
+              "propertiesCount": 1
+            },
+            {
+              "name": "sessions_spawn",
+              "summaryChars": 198,
+              "schemaChars": 1179,
+              "propertiesCount": 17
+            },
+            {
+              "name": "subagents",
+              "summaryChars": 105,
+              "schemaChars": 191,
+              "propertiesCount": 4
+            },
+            {
+              "name": "session_status",
+              "summaryChars": 207,
+              "schemaChars": 89,
+              "propertiesCount": 2
+            },
+            {
+              "name": "web_search",
+              "summaryChars": 93,
+              "schemaChars": 446,
+              "propertiesCount": 4
+            },
+            {
+              "name": "web_fetch",
+              "summaryChars": 129,
+              "schemaChars": 374,
+              "propertiesCount": 3
+            },
+            {
+              "name": "memory_search",
+              "summaryChars": 334,
+              "schemaChars": 139,
+              "propertiesCount": 3
+            },
+            {
+              "name": "memory_get",
+              "summaryChars": 151,
+              "schemaChars": 128,
+              "propertiesCount": 3
+            },
+            {
+              "name": "abb_robot",
+              "summaryChars": 266,
+              "schemaChars": 4364,
+              "propertiesCount": 42
+            },
+            {
+              "name": "abb_robot_real",
+              "summaryChars": 60,
+              "schemaChars": 670,
+              "propertiesCount": 19
+            },
+            {
+              "name": "abb_robot_virtual",
+              "summaryChars": 50,
+              "schemaChars": 300,
+              "propertiesCount": 7
+            }
+          ]
+        }
+      },
+      "stopReason": "stop"
+    }
+  }
+}

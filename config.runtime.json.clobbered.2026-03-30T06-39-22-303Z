@@ -1,0 +1,286 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.24-beta.1",
+    "lastTouchedAt": "2026-03-30T06:39:07.516Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-03-14T05:57:04.829Z",
+    "lastRunVersion": "2026.3.13",
+    "lastRunCommand": "configure",
+    "lastRunMode": "local"
+  },
+  "auth": {
+    "profiles": {
+      "modelstudio:default": {
+        "provider": "modelstudio",
+        "mode": "api_key"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "bailian": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "apiKey": "sk-0fc4457f1373453d9f907f1c80ba3595",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.5-plus",
+            "name": "qwen3.5-plus",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "compat": {
+              "thinkingFormat": "qwen"
+            }
+          },
+          {
+            "id": "qwen3-max-2026-01-23",
+            "name": "qwen3-max-2026-01-23",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "compat": {
+              "thinkingFormat": "qwen"
+            }
+          },
+          {
+            "id": "qwen3-coder-next",
+            "name": "qwen3-coder-next",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3-coder-plus",
+            "name": "qwen3-coder-plus",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "MiniMax-M2.5",
+            "name": "MiniMax-M2.5",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 196608,
+            "maxTokens": 32768
+          },
+          {
+            "id": "glm-5",
+            "name": "glm-5",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 202752,
+            "maxTokens": 16384,
+            "compat": {
+              "thinkingFormat": "qwen"
+            }
+          },
+          {
+            "id": "glm-4.7",
+            "name": "glm-4.7",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 202752,
+            "maxTokens": 16384,
+            "compat": {
+              "thinkingFormat": "qwen"
+            }
+          },
+          {
+            "id": "kimi-k2.5",
+            "name": "kimi-k2.5",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "compat": {
+              "thinkingFormat": "qwen"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bailian/qwen3.5-plus"
+      },
+      "models": {
+        "bailian/qwen3.5-plus": {},
+        "bailian/qwen3-max-2026-01-23": {},
+        "bailian/qwen3-coder-next": {},
+        "bailian/qwen3-coder-plus": {},
+        "bailian/MiniMax-M2.5": {},
+        "bailian/glm-5": {},
+        "bailian/glm-4.7": {},
+        "bailian/kimi-k2.5": {}
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "model": "bailian/kimi-k2.5"
+      }
+    ]
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "feishu": {
+      "requireMention": false,
+      "chunkMode": "length",
+      "connectionMode": "websocket",
+      "renderMode": "auto",
+      "groupSessionScope": "group",
+      "replyInThread": "enabled",
+      "allowFrom": [
+        "*"
+      ],
+      "groupPolicy": "open",
+      "appSecret": "N7lAcaNgG8Iz8A4594NXug3kmI4AD682",
+      "topicSessionMode": "enabled",
+      "appId": "cli_a93fbda9de38dbc0",
+      "dmPolicy": "open",
+      "enabled": true
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "lan",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ],
+      "dangerouslyDisableDeviceAuth": true
+    },
+    "auth": {
+      "mode": "token",
+      "token": "99554c13655fdf3508dfeccdd1a238225ef65114dc64a5ce"
+    }
+  },
+  "plugins": {
+    "allow": [
+      "abb-robot-control",
+      "abb-robot-real-control",
+      "abb-robot-virtual-control",
+      "feishu",
+      "qwen-portal-auth",
+      "robot-kinematic"
+    ],
+    "load": {
+      "paths": [
+        "D:/OpenClaw/deploy/openclaw-runtime-next/package/extensions/abb-robot-real-control",
+        "D:/OpenClaw/deploy/openclaw-runtime-next/package/extensions/abb-robot-virtual-control"
+      ]
+    },
+    "entries": {
+      "abb-robot-control": {
+        "enabled": true
+      },
+      "abb-robot-virtual-control": {
+        "enabled": true
+      },
+      "abb-robot-real-control": {
+        "enabled": true
+      },
+      "qwen-portal-auth": {
+        "enabled": true
+      },
+      "feishu": {
+        "enabled": true
+      }
+    },
+    "installs": {}
+  }
+}

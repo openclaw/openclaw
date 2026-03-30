@@ -1,6 +1,25 @@
 {
   "id": "abb-robot-real-control",
+  "name": "ABB Robot Real Control",
+  "description": "Direct ABB PC SDK control plugin for physical controllers and RobotStudio virtual controllers.",
+  "version": "1.0.0",
+  "skills": ["./skills"],
   "channels": [],
+  "uiHints": {
+    "controllerHost": {
+      "label": "Controller Host",
+      "help": "ABB controller host for real plugin operations."
+    },
+    "controllerPort": {
+      "label": "Controller Port",
+      "help": "ABB controller port (default: 7000)."
+    },
+    "bridgeDllPath": {
+      "label": "ABBBridge DLL Path",
+      "help": "Optional override path to ABBBridge.dll for Windows runtime environments.",
+      "advanced": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

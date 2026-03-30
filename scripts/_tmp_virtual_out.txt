@@ -1,0 +1,5 @@
+VIRTUAL_MOVJ_CONNECT {"success":true,"connected":true,"mode":"virtual","wsConnected":false}
+VIRTUAL_MOVJ_BEFORE [0,0,0,0,0,0]
+VIRTUAL_MOVJ_RESULT {"success":true,"mode":"virtual","joints":[5,0,0,0,0,0],"speed":20}
+VIRTUAL_MOVJ_AFTER [5,0,0,0,0,0]
+VIRTUAL_MOVJ_OK

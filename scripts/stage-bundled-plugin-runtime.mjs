@@ -35,7 +35,19 @@ function ensureSymlink(targetValue, targetPath, type) {
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  try {
+    ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+    return;
+  } catch (error) {
+    const code = error?.code;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+      // Windows without symlink privilege can still stage runtime safely via plain file copies.
+      removePathIfExists(targetPath);
+      fs.copyFileSync(sourcePath, targetPath);
+      return;
+    }
+    throw error;
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {

@@ -5,7 +5,7 @@ $outFile = 'd:\OpenClaw\Develop\openclaw\scripts\_real_plugin_actions_report.jso
 
 $steps = @(
   @{ action = 'scan_controllers'; params = @{} },
-  @{ action = 'connect'; params = @{ host = '127.0.0.1'; port = 7000 } },
+  @{ action = 'connect'; params = @{ host = '127.0.0.1'; port = 7000; allowVirtualController = $true } },
   @{ action = 'get_status'; params = @{} },
   @{ action = 'get_system_info'; params = @{} },
   @{ action = 'get_service_info'; params = @{} },
@@ -16,7 +16,7 @@ $steps = @(
   @{ action = 'get_event_log'; params = @{ categoryId = 0; limit = 10 } },
   @{ action = 'list_tasks'; params = @{} },
   @{ action = 'analyze_logs'; params = @{ categoryId = 0; limit = 10; error_hint = 'T_ROB1 MainModule 行3 错误' } },
-  @{ action = 'movj'; params = @{ joints = @(1,2); speed = 5 } }
+  @{ action = 'movj'; params = @{ joints = @(1, 2); speed = 5 } }
 )
 
 $report = New-Object System.Collections.Generic.List[object]
@@ -32,14 +32,24 @@ foreach ($s in $steps) {
     $parsed = [pscustomobject]@{ ok = $false; action = $s.action; error = "invalid-json-output"; raw = $raw }
   }
 
+  $stepSuccess = $false
+  if ($parsed.ok -eq $true) {
+    if ($null -ne $parsed.details -and $null -ne $parsed.details.success) {
+      $stepSuccess = [bool]$parsed.details.success
+    }
+    else {
+      $stepSuccess = $true
+    }
+  }
+
   $report.Add([pscustomobject]@{
-      action = $s.action
-      ok = [bool]$parsed.ok
-      text = [string]$parsed.text
-      error = [string]$parsed.error
+      action  = $s.action
+      ok      = $stepSuccess
+      text    = [string]$parsed.text
+      error   = [string]$parsed.error
       details = $parsed.details
-      raw = $raw
-  }) | Out-Null
+      raw     = $raw
+    }) | Out-Null
 
   Remove-Item -Path $paramFile -ErrorAction SilentlyContinue
 }

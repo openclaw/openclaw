@@ -1,0 +1,43 @@
+---- RAPID CODE DUMP ----
+MODULE OpenClawMotionMod
+  LOCAL CONST jointtarget jt := [[0, 0, 0, 0, 0, 0],[9E9,9E9,9E9,9E9,9E9,9E9]];
+  LOCAL CONST speeddata spd := [100,500,5000,1000];
+  PROC AgentMoveProc()
+    ConfJ \Off;
+    ConfL \Off;
+    MoveAbsJ jt, spd, fine, tool0;
+  ENDPROC
+ENDMODULE
+-------------------------
+{
+  "ok": false,
+  "connect": "鉁?Connected to ABB controller at 127.0.0.1:7000\nSystem: 1JiaX_ABB_6_08\nRobot: ABB IRB 120 (abb-irb-120)",
+  "beforeJoints": [
+    0.1328548938035965,
+    -0.08856991678476334,
+    0,
+    0,
+    0,
+    0
+  ],
+  "targetJoints": [
+    1.3328548938035965,
+    -0.8885699167847634,
+    0,
+    0,
+    0,
+    0
+  ],
+  "moveText": "鉂?abb_robot error: movj failed: Error: System.InvalidOperationException: Cannot acquire mastership after 20 attempts (6.0s). If RobotStudio is open, click Request Write Access in the RAPID editor, or close RobotStudio FlexPendant view. Last error: C004841A : Requested resource is held by someone else.\r\nERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdomainhooks\\rdh_controller.cpp[6157]: org_code: -2 new_code: 0xc004841a; \r\nUrl:  Cmd:Set  Prop:RequestMaster2  Args:-Domain RAPID -Uid 79  Elapsed:0  CurrentCmds:0\r\nHistory:\r\n-00:00:00.6162074 [105] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.6162074 [105] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.6162074 [106] SendCommand url: cmd:Set prop:RequestMaster2 arg:-Domain RAPID -Uid 79\r\n-00:00:00.6162074 [106] status:SYS_CTRL_E_RESOURCE_HELD data:ERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdom...\r\n-00:00:00.3115873 [107] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.3115873 [107] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.3115873 [108] SendCommand url: cmd:Get prop:Mode arg:\r\n-00:00:00.3115873 [108] status:SYS_CTRL_S_OK data:AUTO\r\n-00:00:00.3115873 [109] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.3115873 [109] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.3115873 [110] SendCommand url: cmd:Set prop:RequestMaster2 arg:-Domain RAPID -Uid 79\r\n-00:00:00.3115873 [110] status:SYS_CTRL_E_RESOURCE_HELD data:ERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdom...\r\n-00:00:00.0025888 [111] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.0020798 [111] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.0020798 [112] SendCommand url: cmd:Get prop:Mode arg:\r\n-00:00:00.0020798 [112] status:SYS_CTRL_S_OK data:AUTO\r\n-00:00:00.0020798 [113] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.0005124 [113] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.0005124 [114] SendCommand url: cmd:Set prop:RequestMaster2 arg:-Domain RAPID -Uid 79\r\n00:00:00 [114] status:SYS_CTRL_E_RESOURCE_HELD data:ERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdom...\r\n\r\n   鍦?ABBBridge.RequestMastershipWithRetry(IMastershipResource resource, Int32 maxAttempts, Int32 delayMs)\r\n   鍦?ABBBridge.<>c__DisplayClass24_0.<ExecuteRapidProgramWait>b__1()\r\n   鍦?System.Threading.Tasks.Task.Execute()\r\n--- 寮曞彂寮傚父鐨勪笂涓€浣嶇疆涓爢鏍堣窡韪殑鏈熬 ---\r\n   鍦?System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw()\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.GetResult()\r\n   鍦?ABBBridge.<ExecuteRapidProgramWait>d__24.MoveNext()\r\n--- 寮曞彂寮傚父鐨勪笂涓€浣嶇疆涓爢鏍堣窡韪殑鏈熬 ---\r\n   鍦?System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw()\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.GetResult()\r\n   鍦?ABBBridge.<ExecuteRapidProgram>d__26.MoveNext()",
+  "moveEnd": [],
+  "homeText": "鉂?abb_robot error: go_home failed: Error: System.InvalidOperationException: Cannot acquire mastership after 20 attempts (6.0s). If RobotStudio is open, click Request Write Access in the RAPID editor, or close RobotStudio FlexPendant view. Last error: C004841A : Requested resource is held by someone else.\r\nERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdomainhooks\\rdh_controller.cpp[6157]: org_code: -2 new_code: 0xc004841a; \r\nUrl:  Cmd:Set  Prop:RequestMaster2  Args:-Domain RAPID -Uid 79  Elapsed:0  CurrentCmds:0\r\nHistory:\r\n-00:00:00.6407420 [188] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.6407420 [188] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.6407420 [189] SendCommand url: cmd:Set prop:RequestMaster2 arg:-Domain RAPID -Uid 79\r\n-00:00:00.6407420 [189] status:SYS_CTRL_E_RESOURCE_HELD data:ERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdom...\r\n-00:00:00.3264491 [190] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.3244837 [190] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.3244837 [191] SendCommand url: cmd:Get prop:Mode arg:\r\n-00:00:00.3234273 [191] status:SYS_CTRL_S_OK data:AUTO\r\n-00:00:00.3234273 [192] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n-00:00:00.3229097 [192] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n-00:00:00.3229097 [193] SendCommand url: cmd:Set prop:RequestMaster2 arg:-Domain RAPID -Uid 79\r\n-00:00:00.3218161 [193] status:SYS_CTRL_E_RESOURCE_HELD data:ERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdom...\r\n-00:00:00.0189169 [194] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n00:00:00 [194] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n00:00:00 [195] SendCommand url: cmd:Get prop:Mode arg:\r\n00:00:00 [195] status:SYS_CTRL_S_OK data:AUTO\r\n00:00:00 [196] SendCommand url: cmd:Get prop:CurrentMaster2 arg:-Domain RAPID\r\n00:00:00 [196] status:SYS_CTRL_S_OK data:-Status HeldRemote -Uid 75 -app \"PCSDK\" -loc \"DESKTOP-A38HIOI\" -alias \"HB\"\r\n00:00:00 [197] SendCommand url: cmd:Set prop:RequestMaster2 arg:-Domain RAPID -Uid 79\r\n00:00:00 [197] status:SYS_CTRL_E_RESOURCE_HELD data:ERROR: d:\\workspaces\\robotsoftware\\kernel\\6.08.xx\\areas\\robapi\\components\\robdom...\r\n\r\n   鍦?ABBBridge.RequestMastershipWithRetry(IMastershipResource resource, Int32 maxAttempts, Int32 delayMs)\r\n   鍦?ABBBridge.<>c__DisplayClass23_0.<ExecuteAdhocMotion>b__1()\r\n   鍦?System.Threading.Tasks.Task.Execute()\r\n--- 寮曞彂寮傚父鐨勪笂涓€浣嶇疆涓爢鏍堣窡韪殑鏈熬 ---\r\n   鍦?System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw()\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.GetResult()\r\n   鍦?ABBBridge.<ExecuteAdhocMotion>d__23.MoveNext()\r\n--- 寮曞彂寮傚父鐨勪笂涓€浣嶇疆涓爢鏍堣窡韪殑鏈熬 ---\r\n   鍦?System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw()\r\n   鍦?ABBBridge.<ExecuteAdhocMotion>d__23.MoveNext()\r\n--- 寮曞彂寮傚父鐨勪笂涓€浣嶇疆涓爢鏍堣窡韪殑鏈熬 ---\r\n   鍦?System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw()\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)\r\n   鍦?System.Runtime.CompilerServices.TaskAwaiter.GetResult()\r\n   鍦?ABBBridge.<MoveToJoints>d__19.MoveNext()",
+  "nearHome": true,
+  "afterJoints": [
+    0.1328548938035965,
+    -0.08856991678476334,
+    0,
+    0,
+    0,
+    0
+  ]
+}

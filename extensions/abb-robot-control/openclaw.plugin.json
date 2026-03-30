@@ -1,6 +1,36 @@
 {
   "id": "abb-robot-control",
+  "name": "ABB Robot Control",
+  "description": "Unified ABB robot plugin that supports real controllers and virtual viewer workflows.",
+  "version": "1.0.2",
+  "skills": ["./skills"],
   "channels": [],
+  "uiHints": {
+    "controllerHost": {
+      "label": "Controller Host",
+      "help": "ABB controller IP or hostname for real mode."
+    },
+    "controllerPort": {
+      "label": "Controller Port",
+      "help": "ABB controller port for real mode (default: 7000)."
+    },
+    "defaultRobot": {
+      "label": "Default Robot Profile",
+      "help": "Robot profile id used when robot_id is omitted."
+    },
+    "autoConnect": {
+      "label": "Auto Connect",
+      "help": "Automatically connect after plugin registration."
+    },
+    "defaultMode": {
+      "label": "Default Mode",
+      "help": "Preferred mode for unified abb_robot tool: real, virtual, or auto."
+    },
+    "wsBridgePort": {
+      "label": "WS Bridge Port",
+      "help": "WebSocket bridge port used by virtual mode (default: 9877)."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

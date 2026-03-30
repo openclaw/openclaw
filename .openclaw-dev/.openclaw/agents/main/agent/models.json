@@ -1,0 +1,32 @@
+{
+  "providers": {
+    "bailian": {
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "apiKey": "sk-0fc4457f1373453d9f907f1c80ba3595",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "qwen3.5-plus",
+          "name": "qwen3.5-plus",
+          "api": "openai-completions",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 1000000,
+          "maxTokens": 65536,
+          "compat": {
+            "thinkingFormat": "qwen"
+          }
+        }
+      ]
+    }
+  }
+}

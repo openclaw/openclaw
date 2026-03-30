@@ -1,0 +1,76 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.24-beta.1",
+    "lastTouchedAt": "2026-03-29T12:00:00.000Z"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "bailian": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "apiKey": "sk-0fc4457f1373453d9f907f1c80ba3595",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.5-plus",
+            "name": "qwen3.5-plus",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "compat": { "thinkingFormat": "qwen" }
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bailian/qwen3.5-plus"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "450e7d57486eac87d37d71883210929cd300e11db21c60cd"
+    }
+  },
+  "plugins": {
+    "allow": [
+      "abb-robot-control",
+      "abb-robot-real-control",
+      "abb-robot-virtual-control"
+    ],
+    "entries": {
+      "abb-robot-control": {
+        "enabled": true
+      },
+      "abb-robot-real-control": {
+        "enabled": true
+      },
+      "abb-robot-virtual-control": {
+        "enabled": true
+      }
+    }
+  }
+}
