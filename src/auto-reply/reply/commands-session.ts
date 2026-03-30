@@ -769,8 +769,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
     try {
       await writeRestartSentinel(sentinelPayload);
+      return true;
     } catch {
       // best-effort: sentinel delivery is not critical
+      return false;
     }
   }
 
@@ -788,11 +790,14 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   // Write sentinel before triggerOpenClawRestart() because the OS restart
   // command (launchctl kickstart, systemctl restart) may kill this process
   // before an async write after the trigger completes.
-  await writeSentinel();
+  const sentinelWritten = await writeSentinel();
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    // Clean up stale sentinel since restart didn't actually happen
-    await fs.unlink(resolveRestartSentinelPath()).catch(() => {});
+    // Clean up stale sentinel since restart didn't actually happen — but only
+    // if we actually wrote it, to avoid removing a sentinel from another flow.
+    if (sentinelWritten) {
+      await fs.unlink(resolveRestartSentinelPath()).catch(() => {});
+    }
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,

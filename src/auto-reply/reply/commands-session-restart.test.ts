@@ -125,6 +125,23 @@ describe("handleRestartCommand sentinel", () => {
     unlinkSpy.mockRestore();
   });
 
+  it("does not unlink sentinel when write failed and restart also fails", async () => {
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockResolvedValue();
+    writeRestartSentinelMock.mockRejectedValueOnce(new Error("disk full"));
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "launchctl",
+      detail: "not found",
+    });
+
+    const result = await handleRestartCommand(makeParams(), true);
+
+    expect(result?.reply?.text).toMatch(/Restart failed/);
+    // Sentinel write failed, so we must not remove a sentinel from another flow
+    expect(unlinkSpy).not.toHaveBeenCalled();
+    unlinkSpy.mockRestore();
+  });
+
   it("skips sentinel when command is not /restart", async () => {
     const params = makeParams();
     params.command.commandBodyNormalized = "/help";
