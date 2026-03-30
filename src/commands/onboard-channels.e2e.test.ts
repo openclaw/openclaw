@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
-import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -12,6 +10,8 @@ import {
   loadChannelSetupPluginRegistrySnapshotForChannel,
   reloadChannelSetupPluginRegistry,
 } from "./channel-setup/plugin-install.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import { setupChannels } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
@@ -125,7 +125,13 @@ function setMinimalOnboardingRegistryForTests(): void {
             capabilities: { chatTypes: ["direct", "group"] },
           }),
           setup: {
-            applyAccountConfig: ({ cfg, input }: { cfg: OpenClawConfig; input: { token?: string } }) =>
+            applyAccountConfig: ({
+              cfg,
+              input,
+            }: {
+              cfg: OpenClawConfig;
+              input: { token?: string };
+            }) =>
               ({
                 ...cfg,
                 channels: {

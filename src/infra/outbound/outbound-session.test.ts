@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
