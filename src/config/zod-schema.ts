@@ -865,13 +865,6 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        watchdog: z
-          .object({
-            enabled: z.boolean().optional(),
-            timeoutMs: z.number().int().positive().optional(),
-          })
-          .strict()
-          .optional(),
       })
       .strict()
       .superRefine((gateway, ctx) => {
