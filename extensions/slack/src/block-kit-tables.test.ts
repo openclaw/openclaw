@@ -37,7 +37,28 @@ describe("renderSlackTableFallbackText", () => {
     });
 
     const lines = rendered.split("\n");
-    expect(lines).toHaveLength(101);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(rendered.length).toBeLessThanOrEqual(4000);
     expect(lines[0]?.split("|").length ?? 0).toBeLessThanOrEqual(22);
+  });
+
+  it("truncates extremely wide cells to keep fallback rendering bounded", () => {
+    const rendered = renderSlackTableFallbackText({
+      headers: ["A"],
+      rows: [["x".repeat(5000)]],
+    });
+
+    expect(rendered.length).toBeLessThanOrEqual(4000);
+    expect(rendered).toContain("...");
+  });
+
+  it("does not depend on spread Math.max over huge row arrays", () => {
+    const rendered = renderSlackTableFallbackText({
+      headers: ["A"],
+      rows: Array.from({ length: 5000 }, (_, index) => [`row-${index}`]),
+    });
+
+    expect(rendered.length).toBeLessThanOrEqual(4000);
+    expect(rendered).toContain("row-0");
   });
 });
