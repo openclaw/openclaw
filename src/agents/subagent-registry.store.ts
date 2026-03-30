@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -45,8 +46,11 @@ export function resolveSubagentRegistryPath(): string {
   return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
-export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
-  const pathname = resolveSubagentRegistryPath();
+// Per-process mtime cache: avoids re-parsing runs.json on every RPC call when unchanged.
+// Invalidated on write and when the file's mtime changes (detects writes from other processes).
+let _diskCache: { mtimeMs: number; data: Map<string, SubagentRunRecord> } | null = null;
+
+function parseSubagentRegistryFromFile(pathname: string): Map<string, SubagentRunRecord> {
   const raw = loadJsonFile(pathname);
   if (!raw || typeof raw !== "object") {
     return new Map();
@@ -117,6 +121,30 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   return out;
 }
 
+export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
+  const pathname = resolveSubagentRegistryPath();
+  let currentMtime: number;
+  try {
+    currentMtime = fs.statSync(pathname).mtimeMs;
+  } catch {
+    // File doesn't exist; clear any stale cache entry and return empty.
+    _diskCache = null;
+    return new Map();
+  }
+  if (_diskCache && _diskCache.mtimeMs === currentMtime) {
+    return _diskCache.data;
+  }
+  const data = parseSubagentRegistryFromFile(pathname);
+  // Re-stat after parse: migration inside parseSubagentRegistryFromFile may have written the file,
+  // changing the mtime. Use the post-parse mtime so we don't immediately miss on the next read.
+  try {
+    _diskCache = { mtimeMs: fs.statSync(pathname).mtimeMs, data };
+  } catch {
+    _diskCache = null;
+  }
+  return data;
+}
+
 export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
   const pathname = resolveSubagentRegistryPath();
   const serialized: Record<string, PersistedSubagentRunRecord> = {};
@@ -128,4 +156,6 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
     runs: serialized,
   };
   saveJsonFile(pathname, out);
+  // Invalidate the in-process cache so the next read reflects this write.
+  _diskCache = null;
 }
