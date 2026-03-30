@@ -781,16 +781,7 @@ class NodeRuntime(
       }
     operatorStatusText = "Connecting…"
     updateStatus()
-    connectWithAuth(
-      endpoint = endpoint,
-      auth =
-        GatewayConnectAuth(
-          token = prefs.loadGatewayToken(),
-          bootstrapToken = prefs.loadGatewayBootstrapToken(),
-          password = prefs.loadGatewayPassword(),
-        ),
-      reconnect = true,
-    )
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
   }
 
   private fun connectWithAuth(
@@ -856,15 +847,7 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    connectWithAuth(
-      endpoint = endpoint,
-      auth =
-        GatewayConnectAuth(
-          token = prefs.loadGatewayToken(),
-          bootstrapToken = prefs.loadGatewayBootstrapToken(),
-          password = prefs.loadGatewayPassword(),
-        ),
-    )
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth())
   }
 
   fun connect(
@@ -875,7 +858,16 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = auth)
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
+  }
+
+  internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth {
+    return explicitAuth
+      ?: GatewayConnectAuth(
+        token = prefs.loadGatewayToken(),
+        bootstrapToken = prefs.loadGatewayBootstrapToken(),
+        password = prefs.loadGatewayPassword(),
+      )
   }
 
   fun acceptGatewayTrustPrompt() {
