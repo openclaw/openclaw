@@ -124,7 +124,7 @@ Hotspot script behavior:
 adb devices -l
 ```
 
-4) Install + launch debug build:
+1) Install + launch debug build:
 
 ```bash
 pnpm android:install
@@ -172,12 +172,12 @@ This app is native Kotlin + Jetpack Compose.
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-2) In the Android app:
+1) In the Android app:
 
 - Open the **Connect** tab.
 - Use **Setup Code** or **Manual** mode to connect.
 
-3) Approve pairing (on the gateway machine):
+1) Approve pairing (on the gateway machine):
 
 ```bash
 openclaw devices list
