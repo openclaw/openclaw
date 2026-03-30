@@ -5,6 +5,7 @@ import { setTelegramRuntime } from "./src/runtime.js";
 
 export { telegramPlugin } from "./src/channel.js";
 export { setTelegramRuntime } from "./src/runtime.js";
+export { resetTelegramThreadBindingsForTests } from "./src/thread-bindings.js";
 
 export default defineChannelPluginEntry({
   id: "telegram",
