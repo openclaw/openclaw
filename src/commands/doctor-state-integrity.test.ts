@@ -161,6 +161,52 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
   });
 
+  it("does not flag live transcripts as orphaned when ~/.openclaw is a symlink", async () => {
+    const cfg: OpenClawConfig = {};
+    const logicalStateDir = path.join(tempHome, ".openclaw");
+    const realStateDir = path.join(tempHome, "real-state");
+    fs.rmSync(logicalStateDir, { recursive: true, force: true });
+    fs.mkdirSync(realStateDir, { recursive: true });
+    fs.symlinkSync(realStateDir, logicalStateDir, "dir");
+    // Let state-dir resolution go through HOME so the test exercises the logical
+    // ~/.openclaw symlink path instead of pinning everything to a real dir override.
+    delete process.env.OPENCLAW_STATE_DIR;
+
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const logicalTranscript = path.join(sessionsDir, "sess-1.jsonl");
+    fs.writeFileSync(logicalTranscript, '{"type":"session"}\n');
+    const realTranscript = fs.realpathSync(logicalTranscript);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "sess-1",
+            updatedAt: Date.now(),
+            sessionFile: realTranscript,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const confirmSkipInNonInteractive = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+
+    expect(stateIntegrityText()).not.toContain("orphan transcript file");
+    expect(stateIntegrityText()).not.toContain(
+      "These .jsonl files are no longer referenced by sessions.json",
+    );
+    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Archive"),
+      }),
+    );
+  });
+
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};
     writeSessionStore(cfg, {

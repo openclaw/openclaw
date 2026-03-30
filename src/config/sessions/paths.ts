@@ -79,14 +79,15 @@ function resolvePathFromAgentSessionsDir(
   agentSessionsDir: string,
   candidateAbsPath: string,
 ): string | undefined {
-  const agentBase =
-    safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
-  const realCandidate = safeRealpathSync(candidateAbsPath) ?? candidateAbsPath;
+  const resolvedAgentBase = path.resolve(agentSessionsDir);
+  const agentBase = safeRealpathSync(resolvedAgentBase) ?? resolvedAgentBase;
+  const resolvedCandidate = path.resolve(candidateAbsPath);
+  const realCandidate = safeRealpathSync(resolvedCandidate) ?? resolvedCandidate;
   const relative = path.relative(agentBase, realCandidate);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return undefined;
   }
-  return path.resolve(agentBase, relative);
+  return path.resolve(resolvedAgentBase, relative);
 }
 
 function resolveSiblingAgentSessionsDir(
@@ -189,7 +190,7 @@ function resolvePathWithinSessionsDir(
   if (normalized.startsWith("..") && path.isAbsolute(realTrimmed)) {
     const tryAgentFallback = (agentId: string): string | undefined => {
       const normalizedAgentId = normalizeAgentId(agentId);
-      const siblingSessionsDir = resolveSiblingAgentSessionsDir(realBase, normalizedAgentId);
+      const siblingSessionsDir = resolveSiblingAgentSessionsDir(resolvedBase, normalizedAgentId);
       if (siblingSessionsDir) {
         const siblingResolved = resolvePathFromAgentSessionsDir(siblingSessionsDir, realTrimmed);
         if (siblingResolved) {
@@ -229,7 +230,9 @@ function resolvePathWithinSessionsDir(
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
     throw new Error("Session file path must be within sessions directory");
   }
-  return path.resolve(realBase, normalized);
+  // Preserve the caller-visible sessions dir so symlinked ~/.openclaw paths
+  // stay stable in sessions.json and other diagnostics compare the same namespace.
+  return path.resolve(resolvedBase, normalized);
 }
 
 export function resolveSessionTranscriptPathInDir(
