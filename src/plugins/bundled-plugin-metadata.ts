@@ -265,7 +265,7 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
-function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
+export function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
   for (const relativePath of SOURCE_CONFIG_SCHEMA_CANDIDATES) {
     const candidate = path.join(pluginDir, relativePath);
     if (fs.existsSync(candidate)) {
@@ -283,7 +283,9 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
   return undefined;
 }
 
-function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
+export function loadChannelConfigSurfaceModuleSync(
+  modulePath: string,
+): ChannelConfigSurface | null {
   try {
     const imported = getJiti(modulePath)(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);

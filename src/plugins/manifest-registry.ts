@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
+import {
+  resolveChannelConfigSchemaModulePath,
+  loadChannelConfigSurfaceModuleSync,
+} from "./bundled-plugin-metadata.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import {
@@ -207,6 +211,59 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   );
 }
 
+/**
+ * For external (non-bundled) plugins that declare `channels` but no
+ * `channelConfigs` in their manifest, attempt to discover channel config
+ * schemas from well-known source module paths (e.g. `src/config-schema.ts`,
+ * `channel-config-api.ts`).  This mirrors the synthetic schema discovery
+ * that `collectBundledChannelConfigs` performs for bundled plugins, ensuring
+ * the Control UI can render config forms for third-party channel plugins.
+ */
+function discoverChannelConfigsFromSource(params: {
+  pluginDir: string;
+  manifest: PluginManifest;
+  channelConfigs: Record<string, PluginManifestChannelConfig> | undefined;
+}): Record<string, PluginManifestChannelConfig> | undefined {
+  const channelIds = params.manifest.channels ?? [];
+  if (channelIds.length === 0) {
+    return params.channelConfigs;
+  }
+
+  // If every declared channel already has a schema, nothing to discover.
+  const needsDiscovery = channelIds.some((id) => !params.channelConfigs?.[id]?.schema);
+  if (!needsDiscovery) {
+    return params.channelConfigs;
+  }
+
+  const surfaceModulePath = resolveChannelConfigSchemaModulePath(params.pluginDir);
+  if (!surfaceModulePath) {
+    return params.channelConfigs;
+  }
+
+  const surface = loadChannelConfigSurfaceModuleSync(surfaceModulePath);
+  if (!surface?.schema) {
+    return params.channelConfigs;
+  }
+
+  const result: Record<string, PluginManifestChannelConfig> = {
+    ...params.channelConfigs,
+  };
+  for (const channelId of channelIds) {
+    if (result[channelId]?.schema) {
+      continue;
+    }
+    result[channelId] = {
+      ...result[channelId],
+      schema: surface.schema,
+      ...(surface.uiHints && Object.keys(surface.uiHints).length > 0
+        ? { uiHints: surface.uiHints }
+        : {}),
+    };
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -214,9 +271,13 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
 }): PluginManifestRecord {
-  const channelConfigs = mergePackageChannelMetaIntoChannelConfigs({
-    channelConfigs: params.manifest.channelConfigs,
-    packageChannel: params.candidate.packageManifest?.channel,
+  const channelConfigs = discoverChannelConfigsFromSource({
+    pluginDir: params.candidate.rootDir,
+    manifest: params.manifest,
+    channelConfigs: mergePackageChannelMetaIntoChannelConfigs({
+      channelConfigs: params.manifest.channelConfigs,
+      packageChannel: params.candidate.packageManifest?.channel,
+    }),
   });
   return {
     id: params.manifest.id,
