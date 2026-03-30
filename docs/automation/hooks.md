@@ -576,10 +576,12 @@ Compaction lifecycle hooks exposed through the plugin hook runner:
 
 ### Future Events
 
-Planned event types:
+The following event types are planned for the internal hook event stream.
+Note that `session_start` and `session_end` already exist as [Plugin Hook API](/plugins/architecture#provider-runtime-hooks) hooks
+but are not yet available as internal hook event keys in `HOOK.md` metadata:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
+- **`session:start`**: When a new session begins (planned for internal hook stream; available as plugin hook `session_start`)
+- **`session:end`**: When a session ends (planned for internal hook stream; available as plugin hook `session_end`)
 - **`agent:error`**: When an agent encounters an error
 
 ## Creating Custom Hooks
@@ -996,7 +998,7 @@ metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
 The gateway logs hook loading at startup:
 
 ```
-Registered hook: session-memory -> command:new
+Registered hook: session-memory -> command:new, command:reset
 Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup
