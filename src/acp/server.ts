@@ -53,9 +53,10 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): void {
     },
   });
 
-  const input = Writable.toWeb(process.stdout);
-  const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(input, output);
+  const stream = ndJsonStream(
+    Writable.toWeb(process.stdout),
+    Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
+  );
 
   new AgentSideConnection((conn: AgentSideConnection) => {
     agent = new AcpGatewayAgent(conn, gateway, opts);
