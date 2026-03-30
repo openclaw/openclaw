@@ -68,6 +68,7 @@ export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
 export const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+export const resolveOpenClawPackageRootSync = vi.fn().mockReturnValue(null) as unknown as MockFn;
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
@@ -264,6 +265,7 @@ vi.mock("../process/exec.js", () => ({
 
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot,
+  resolveOpenClawPackageRootSync,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({

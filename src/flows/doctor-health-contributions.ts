@@ -17,6 +17,7 @@ import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
 import { noteChromeMcpBrowserReadiness } from "../commands/doctor-browser.js";
 import { doctorShellCompletion } from "../commands/doctor-completion.js";
 import { maybeRepairLegacyCronStore } from "../commands/doctor-cron.js";
+import { resolveGatewayAuthTokenForService } from "../commands/doctor-gateway-auth-token.js";
 import { maybeRepairGatewayDaemon } from "../commands/doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import {
@@ -157,15 +158,23 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     value: ctx.cfg.gateway?.auth?.token,
     defaults: ctx.cfg.secrets?.defaults,
   }).ref;
+  const gatewayTokenResolution = gatewayTokenRef
+    ? await resolveGatewayAuthTokenForService(ctx.cfg, process.env)
+    : {};
   const auth = resolveGatewayAuth({
     authConfig: ctx.cfg.gateway?.auth,
+    authOverride: gatewayTokenResolution.token
+      ? {
+          token: gatewayTokenResolution.token,
+        }
+      : undefined,
     tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
   });
   const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
   if (!needsToken) {
     return;
   }
-  if (gatewayTokenRef) {
+  if (gatewayTokenRef && !gatewayTokenResolution.token) {
     note(
       [
         "Gateway token is managed via SecretRef and is currently unavailable.",
