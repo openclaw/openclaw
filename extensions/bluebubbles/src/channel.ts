@@ -102,6 +102,11 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
+        createManager: ({ cfg, accountId }) =>
+          createBlueBubblesConversationBindingManager({
+            cfg,
+            accountId: accountId ?? undefined,
+          }),
       },
       actions: bluebubblesMessageActions,
       bindings: {

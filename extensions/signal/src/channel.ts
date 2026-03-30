@@ -16,6 +16,7 @@ import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { probeSignal, type SignalProbe } from "./probe.js";
+import { resolveSignalReactionLevel } from "./reaction-level.js";
 import {
   buildBaseChannelStatusSummary,
   chunkText,
@@ -237,6 +238,15 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         resolveDmPolicy: (account) => account.config.dmPolicy,
         resolveGroupPolicy: (account) => account.config.groupPolicy,
       }),
+      agentPrompt: {
+        reactionGuidance: ({ cfg, accountId }) => {
+          const level = resolveSignalReactionLevel({
+            cfg,
+            accountId: accountId ?? undefined,
+          }).agentReactionGuidance;
+          return level ? { level, channelLabel: "Signal" } : undefined;
+        },
+      },
       messaging: {
         normalizeTarget: normalizeSignalMessagingTarget,
         parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),

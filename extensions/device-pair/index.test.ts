@@ -112,8 +112,16 @@ function createChannelRuntime(
 ): OpenClawPluginApi["runtime"] {
   return {
     channel: {
-      [runtimeKey]: {
-        [sendKey]: sendMessage,
+      outbound: {
+        loadAdapter: async (channelId: string) =>
+          channelId === runtimeKey
+            ? ({
+                sendText: async ({ to, text, ...opts }: Record<string, unknown>) =>
+                  await sendMessage(to, text, opts),
+                sendMedia: async ({ to, text, ...opts }: Record<string, unknown>) =>
+                  await sendMessage(to, text, opts),
+              } as const)
+            : undefined,
       },
     },
   } as unknown as OpenClawPluginApi["runtime"];
@@ -210,7 +218,7 @@ describe("device-pair /pair qr", () => {
       expectedTarget: "123",
       expectedOpts: {
         accountId: "default",
-        messageThreadId: 271,
+        threadId: 271,
       },
     },
     {
@@ -240,7 +248,7 @@ describe("device-pair /pair qr", () => {
       expectedTarget: "user:U123",
       expectedOpts: {
         accountId: "default",
-        threadTs: "1234567890.000001",
+        threadId: "1234567890.000001",
       },
     },
     {

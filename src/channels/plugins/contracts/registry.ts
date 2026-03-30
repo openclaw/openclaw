@@ -8,10 +8,8 @@ import {
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import { createBlueBubblesConversationBindingManager } from "../../../plugin-sdk/bluebubbles.js";
 import { createDiscordThreadBindingManager } from "../../../plugin-sdk/discord.js";
 import { createFeishuThreadBindingManager } from "../../../plugin-sdk/feishu.js";
-import { createIMessageConversationBindingManager } from "../../../plugin-sdk/imessage.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
@@ -22,13 +20,13 @@ import {
   resetMatrixThreadBindingsForTests,
   setMatrixRuntime,
 } from "../../../plugin-sdk/matrix.js";
-import { createTelegramThreadBindingManager } from "../../../plugin-sdk/telegram-runtime.js";
 import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
 import {
   listBundledChannelPlugins,
   requireBundledChannelPlugin,
   setBundledChannelRuntime,
 } from "../bundled.js";
+import { createChannelConversationBindingManager } from "../conversation-bindings.js";
 import type { ChannelPlugin } from "../types.js";
 import {
   channelPluginSurfaceKeys,
@@ -655,7 +653,8 @@ const sessionBindingContractEntries: Record<
       placements: ["current"],
     },
     getCapabilities: () => {
-      createBlueBubblesConversationBindingManager({
+      void createChannelConversationBindingManager({
+        channelId: "bluebubbles",
         cfg: baseSessionBindingCfg,
         accountId: "default",
       });
@@ -665,7 +664,8 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
-      createBlueBubblesConversationBindingManager({
+      await createChannelConversationBindingManager({
+        channelId: "bluebubbles",
         cfg: baseSessionBindingCfg,
         accountId: "default",
       });
@@ -694,10 +694,12 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      createBlueBubblesConversationBindingManager({
+      const manager = await createChannelConversationBindingManager({
+        channelId: "bluebubbles",
         cfg: baseSessionBindingCfg,
         accountId: "default",
-      }).stop();
+      });
+      await manager?.stop();
       expectClearedSessionBinding({
         channel: "bluebubbles",
         accountId: "default",
@@ -829,7 +831,8 @@ const sessionBindingContractEntries: Record<
       placements: ["current"],
     },
     getCapabilities: () => {
-      createIMessageConversationBindingManager({
+      void createChannelConversationBindingManager({
+        channelId: "imessage",
         cfg: baseSessionBindingCfg,
         accountId: "default",
       });
@@ -839,7 +842,8 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
-      createIMessageConversationBindingManager({
+      await createChannelConversationBindingManager({
+        channelId: "imessage",
         cfg: baseSessionBindingCfg,
         accountId: "default",
       });
@@ -868,10 +872,12 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      createIMessageConversationBindingManager({
+      const manager = await createChannelConversationBindingManager({
+        channelId: "imessage",
         cfg: baseSessionBindingCfg,
         accountId: "default",
-      }).stop();
+      });
+      await manager?.stop();
       expectClearedSessionBinding({
         channel: "imessage",
         accountId: "default",
@@ -937,10 +943,10 @@ const sessionBindingContractEntries: Record<
       placements: ["current"],
     },
     getCapabilities: () => {
-      createTelegramThreadBindingManager({
+      void createChannelConversationBindingManager({
+        channelId: "telegram",
+        cfg: baseSessionBindingCfg,
         accountId: "default",
-        persist: false,
-        enableSweeper: false,
       });
       return getSessionBindingService().getCapabilities({
         channel: "telegram",
@@ -948,10 +954,10 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
-      createTelegramThreadBindingManager({
+      await createChannelConversationBindingManager({
+        channelId: "telegram",
+        cfg: baseSessionBindingCfg,
         accountId: "default",
-        persist: false,
-        enableSweeper: false,
       });
       const service = getSessionBindingService();
       const binding = await service.bind({
@@ -977,12 +983,12 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      const manager = createTelegramThreadBindingManager({
+      const manager = await createChannelConversationBindingManager({
+        channelId: "telegram",
+        cfg: baseSessionBindingCfg,
         accountId: "default",
-        persist: false,
-        enableSweeper: false,
       });
-      manager.stop();
+      await manager?.stop();
       expectClearedSessionBinding({
         channel: "telegram",
         accountId: "default",

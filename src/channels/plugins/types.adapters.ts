@@ -643,6 +643,33 @@ export type ChannelConfiguredBindingProvider = {
 
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
+  setIdleTimeoutBySessionKey?: (params: {
+    targetSessionKey: string;
+    accountId?: string | null;
+    idleTimeoutMs: number;
+  }) => Array<{
+    boundAt: number;
+    lastActivityAt: number;
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+  }>;
+  setMaxAgeBySessionKey?: (params: {
+    targetSessionKey: string;
+    accountId?: string | null;
+    maxAgeMs: number;
+  }) => Array<{
+    boundAt: number;
+    lastActivityAt: number;
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+  }>;
+  createManager?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
+    | {
+        stop: () => void | Promise<void>;
+      }
+    | Promise<{
+        stop: () => void | Promise<void>;
+      }>;
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {

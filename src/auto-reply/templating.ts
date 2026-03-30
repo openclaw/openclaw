@@ -3,13 +3,24 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { StickerMetadata } from "../plugin-sdk/telegram-runtime.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
+
+export type StickerContextMetadata = {
+  cachedDescription?: string;
+  emoji?: string;
+  setName?: string;
+  description?: string;
+  fileId?: string;
+  fileUniqueId?: string;
+  uniqueFileId?: string;
+  isAnimated?: boolean;
+  isVideo?: boolean;
+} & Record<string, unknown>;
 
 export type MsgContext = {
   Body?: string;
@@ -94,7 +105,7 @@ export type MsgContext = {
   MediaUrls?: string[];
   MediaTypes?: string[];
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
-  Sticker?: StickerMetadata;
+  Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
   StickerMediaIncluded?: boolean;
   OutputDir?: string;

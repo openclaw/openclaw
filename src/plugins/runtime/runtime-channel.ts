@@ -35,6 +35,11 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import {
+  setChannelConversationBindingIdleTimeoutBySessionKey,
+  setChannelConversationBindingMaxAgeBySessionKey,
+} from "../../channels/plugins/conversation-bindings.js";
+import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
   resolveChannelGroupPolicy,
@@ -56,15 +61,17 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import {
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+} from "../../plugin-sdk/discord.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
-import { createRuntimeIMessage } from "./runtime-imessage.js";
 import { createRuntimeLine } from "./runtime-line.js";
 import { createRuntimeMatrix } from "./runtime-matrix.js";
 import { createRuntimeSignal } from "./runtime-signal.js";
 import { createRuntimeSlack } from "./runtime-slack.js";
-import { createRuntimeTelegram } from "./runtime-telegram.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -151,23 +158,74 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       shouldComputeCommandAuthorized,
       shouldHandleTextCommands,
     },
+    outbound: {
+      loadAdapter: loadChannelOutboundAdapter,
+    },
+    threadBindings: {
+      setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) => {
+        switch (channelId) {
+          case "discord":
+            return setThreadBindingIdleTimeoutBySessionKey({
+              targetSessionKey,
+              accountId,
+              idleTimeoutMs,
+            });
+          case "matrix":
+            return setChannelConversationBindingIdleTimeoutBySessionKey({
+              channelId,
+              targetSessionKey,
+              accountId: accountId ?? "",
+              idleTimeoutMs,
+            });
+          case "telegram":
+            return setChannelConversationBindingIdleTimeoutBySessionKey({
+              channelId,
+              targetSessionKey,
+              accountId,
+              idleTimeoutMs,
+            });
+        }
+      },
+      setMaxAgeBySessionKey: ({ channelId, targetSessionKey, accountId, maxAgeMs }) => {
+        switch (channelId) {
+          case "discord":
+            return setThreadBindingMaxAgeBySessionKey({
+              targetSessionKey,
+              accountId,
+              maxAgeMs,
+            });
+          case "matrix":
+            return setChannelConversationBindingMaxAgeBySessionKey({
+              channelId,
+              targetSessionKey,
+              accountId: accountId ?? "",
+              maxAgeMs,
+            });
+          case "telegram":
+            return setChannelConversationBindingMaxAgeBySessionKey({
+              channelId,
+              targetSessionKey,
+              accountId,
+              maxAgeMs,
+            });
+        }
+      },
+    },
   } satisfies Omit<
     PluginRuntime["channel"],
-    "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp" | "line"
+    "discord" | "slack" | "matrix" | "signal" | "whatsapp" | "line"
   > &
     Partial<
       Pick<
         PluginRuntime["channel"],
-        "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp" | "line"
+        "discord" | "slack" | "matrix" | "signal" | "whatsapp" | "line"
       >
     >;
 
   defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
   defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
-  defineCachedValue(channelRuntime, "telegram", createRuntimeTelegram);
   defineCachedValue(channelRuntime, "matrix", createRuntimeMatrix);
   defineCachedValue(channelRuntime, "signal", createRuntimeSignal);
-  defineCachedValue(channelRuntime, "imessage", createRuntimeIMessage);
   defineCachedValue(channelRuntime, "whatsapp", createRuntimeWhatsApp);
   defineCachedValue(channelRuntime, "line", createRuntimeLine);
 
