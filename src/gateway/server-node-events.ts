@@ -365,11 +365,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
-
+      if (!message && normalizedAttachments.length === 0) {
+        return;
+      }
+      if (message.length > 20_000) {
+        return;
+      }
       if (normalizedAttachments.length > 0) {
-      // NodeEventContext does not expose loadGatewayModelCatalog.
-      // Node events are fire-and-forget; default to supportsImages:true so
-      // attachments are handled the same as before this change.
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: 5_000_000,
@@ -384,9 +386,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       if (!message) {
-        return;
-      }
-      if (message.length > 20_000) {
         return;
       }
 
