@@ -2,7 +2,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -72,6 +72,7 @@ function formatResolveResult(result: ResolveResult): string {
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const loadedRaw = loadConfig();
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadedRaw,
@@ -103,7 +104,10 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     : null;
   if (resolvedExplicit?.configChanged) {
     cfg = resolvedExplicit.cfg;
-    await writeConfigFile(cfg);
+    await replaceConfigFile({
+      nextConfig: cfg,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
   }
 
   const selection = explicitChannel
