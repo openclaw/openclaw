@@ -217,7 +217,8 @@ function resolveEnabledChannelIds(): ReadonlySet<string> | undefined {
       return new Set(allow);
     }
   } catch {
-    // Config not available yet (e.g. during early bootstrap); load all channels.
+    // Config load failed for any reason (file missing, parse error, early bootstrap, etc.).
+    // Fall back to loading all channels — this is always safe.
   }
   return undefined;
 }
