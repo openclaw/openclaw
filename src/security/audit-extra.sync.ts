@@ -27,14 +27,9 @@ import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
 import { hasBundledWebSearchCredential } from "../plugins/bundled-web-search-registry.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+import type { SecurityAuditFinding } from "./audit.js";
 
-export type SecurityAuditFinding = {
-  checkId: string;
-  severity: "info" | "warn" | "critical";
-  title: string;
-  detail: string;
-  remediation?: string;
-};
+export type { SecurityAuditFinding };
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
 

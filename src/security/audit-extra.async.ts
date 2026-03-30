@@ -32,18 +32,13 @@ import {
   safeStat,
 } from "./audit-fs.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+import type { SecurityAuditFinding } from "./audit.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { SkillScanFinding } from "./skill-scanner.js";
 import * as skillScanner from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 
-export type SecurityAuditFinding = {
-  checkId: string;
-  severity: "info" | "warn" | "critical";
-  title: string;
-  detail: string;
-  remediation?: string;
-};
+export type { SecurityAuditFinding };
 
 type ExecDockerRawFn = (
   args: string[],

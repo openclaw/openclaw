@@ -94,6 +94,39 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
+  it("error state with errorKind resolves as end_turn", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "error",
+        errorKind: "rate_limit",
+        errorMessage: "too many requests",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
+  it("error state with refusal errorKind resolves as end_turn", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "error",
+        errorKind: "refusal",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
   it("aborted state resolves as cancelled", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
 

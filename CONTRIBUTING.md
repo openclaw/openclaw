@@ -85,6 +85,20 @@ Welcome to the lobster tank! 🦞
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
+## Local Dev Loop
+
+The pre-commit hook runs `pnpm format` and `pnpm check` on every commit, which
+can be slow on large trees. For faster iteration during active development,
+set `FAST_COMMIT=1` to skip the repo-wide format/check inside the hook:
+
+```sh
+FAST_COMMIT=1 git commit -m "your message"
+```
+
+This does **not** lower the bar before landing — run `pnpm check` and
+`pnpm test` manually near your final push point, and `pnpm build` if your
+change can affect build output or published surfaces.
+
 ## Before You PR
 
 - Test locally with your OpenClaw instance

@@ -892,10 +892,15 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     if (state === "error") {
-      // ACP has no explicit "server_error" stop reason.  Use "end_turn" so clients
-      // do not treat transient backend errors (timeouts, rate-limits) as deliberate
-      // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
-      // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
+      // ACP has no explicit "server_error" stop reason, so all gateway errors
+      // resolve as "end_turn" to avoid clients treating transient failures
+      // (timeouts, rate-limits) as deliberate model refusals.
+      // errorKind carries the gateway's classification for logging and UI use.
+      const errorKind = payload.errorKind as string | undefined;
+      const errorMsg = payload.errorMessage as string | undefined;
+      if (errorKind || errorMsg) {
+        this.log(`gateway error: kind=${errorKind ?? "unknown"} message=${errorMsg ?? ""}`);
+      }
       void this.finishPrompt(pending.sessionId, pending, "end_turn");
     }
   }

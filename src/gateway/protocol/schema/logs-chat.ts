@@ -80,6 +80,10 @@ export const ChatEventSchema = Type.Object(
     ]),
     message: Type.Optional(Type.Unknown()),
     errorMessage: Type.Optional(Type.String()),
+    // Present when state is "error". Classifies the failure so clients can
+    // distinguish transient backend errors from deliberate model refusals.
+    // Known values: "refusal" | "timeout" | "rate_limit" | "unknown".
+    errorKind: Type.Optional(Type.String()),
     usage: Type.Optional(Type.Unknown()),
     stopReason: Type.Optional(Type.String()),
   },
