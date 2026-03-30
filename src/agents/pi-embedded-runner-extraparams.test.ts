@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,
@@ -30,6 +31,37 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn(
   },
 );
 
+const XAI_FAST_MODEL_IDS = new Map<string, string>([
+  ["grok-3", "grok-3-fast"],
+  ["grok-3-mini", "grok-3-mini-fast"],
+  ["grok-4", "grok-4-fast"],
+  ["grok-4-0709", "grok-4-fast"],
+]);
+
+function createTestXaiFastModeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  fastMode: boolean,
+): StreamFn {
+  return (model, context, options) => {
+    if (!fastMode || model.api !== "openai-completions" || model.provider !== "xai") {
+      return (
+        baseStreamFn ??
+        (() => {
+          throw new Error("missing stream function");
+        })
+      )(model, context, options);
+    }
+
+    const fastModelId = XAI_FAST_MODEL_IDS.get(String(model.id).trim());
+    return (
+      baseStreamFn ??
+      (() => {
+        throw new Error("missing stream function");
+      })
+    )(fastModelId ? { ...model, id: fastModelId } : model, context, options);
+  };
+}
+
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
@@ -54,6 +86,15 @@ beforeEach(() => {
       };
     },
     wrapProviderStreamFn: (params) => {
+      if (params.provider === "ollama") {
+        return createConfiguredOllamaCompatNumCtxWrapper(params.context);
+      }
+      if (params.provider === "xai") {
+        return createTestXaiFastModeWrapper(
+          params.context.streamFn,
+          params.context.extraParams?.fastMode === true,
+        );
+      }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;
       }
@@ -236,6 +277,39 @@ describe("resolveExtraParams", () => {
 
     expect(result).toEqual({
       parallel_tool_calls: false,
+    });
+  });
+
+  it("canonicalizes text verbosity alias styles with agent override precedence", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  text_verbosity: "high",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              params: {
+                textVerbosity: "low",
+              },
+            },
+          ],
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentId: "main",
+    });
+
+    expect(result).toEqual({
+      text_verbosity: "low",
     });
   });
 
@@ -1839,6 +1913,162 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("priority");
   });
 
+  it("injects configured OpenAI text verbosity into Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  textVerbosity: "low",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload.text).toEqual({ verbosity: "low" });
+  });
+
+  it("injects configured text verbosity into Codex Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  text_verbosity: "high",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+      } as unknown as Model<"openai-codex-responses">,
+      payload: {
+        store: false,
+        text: {
+          verbosity: "medium",
+        },
+      },
+    });
+    expect(payload.text).toEqual({ verbosity: "high" });
+  });
+
+  it("preserves caller-provided payload.text keys when injecting text verbosity", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  text_verbosity: "medium",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        text: {
+          format: { type: "text" },
+        },
+      },
+    });
+    expect(payload.text).toEqual({
+      format: { type: "text" },
+      verbosity: "medium",
+    });
+  });
+
+  it("preserves caller-provided payload.text.verbosity for OpenAI Responses", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  textVerbosity: "low",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        text: {
+          verbosity: "high",
+        },
+      },
+    });
+    expect(payload.text).toEqual({ verbosity: "high" });
+  });
+
+  it("injects configured OpenAI service_tier into Codex Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as unknown as Model<"openai-codex-responses">,
+    });
+    expect(payload.service_tier).toBe("priority");
+  });
+
   it("preserves caller-provided service_tier values", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
@@ -1870,7 +2100,104 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("default");
   });
 
-  it("injects fast-mode payload defaults for direct OpenAI Responses", () => {
+  it("warns and skips invalid OpenAI text verbosity values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "openai",
+        applyModelId: "gpt-5.4",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.4": {
+                  params: {
+                    textVerbosity: "loud",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        } as unknown as Model<"openai-responses">,
+      });
+      expect(payload).not.toHaveProperty("text");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid OpenAI text verbosity param: loud");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("lets null runtime override suppress inherited text verbosity injection", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  textVerbosity: "high",
+                },
+              },
+            },
+          },
+        },
+      },
+      extraParamsOverride: {
+        text_verbosity: null,
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("text");
+  });
+
+  it("ignores OpenAI text verbosity params for non-OpenAI providers without warning", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "anthropic",
+        applyModelId: "claude-sonnet-4-5",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-5": {
+                  params: {
+                    textVerbosity: "high",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-5",
+          baseUrl: "https://api.anthropic.com",
+        } as unknown as Model<"anthropic-messages">,
+        payload: {},
+      });
+      expect(payload).not.toHaveProperty("text");
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("maps fast mode to priority service_tier for direct OpenAI Responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
@@ -1897,8 +2224,8 @@ describe("applyExtraParamsToAgent", () => {
         store: false,
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "low" });
-    expect(payload.text).toEqual({ verbosity: "low" });
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("text");
     expect(payload.service_tier).toBe("priority");
   });
 
@@ -1940,20 +2267,20 @@ describe("applyExtraParamsToAgent", () => {
     expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
-  it("maps MiniMax M2.1 /fast to the matching highspeed model", () => {
+  it("maps MiniMax M2.7 /fast to the matching highspeed model", () => {
     const resolvedModelId = runResolvedModelIdCase({
       applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.1",
+      applyModelId: "MiniMax-M2.7",
       extraParamsOverride: { fastMode: true },
       model: {
         api: "anthropic-messages",
         provider: "minimax",
-        id: "MiniMax-M2.1",
+        id: "MiniMax-M2.7",
         baseUrl: "https://api.minimax.io/anthropic",
       } as Model<"anthropic-messages">,
     });
 
-    expect(resolvedModelId).toBe("MiniMax-M2.1-highspeed");
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
   it("keeps explicit MiniMax highspeed models unchanged when /fast is off", () => {
@@ -2054,7 +2381,180 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
-  it("does not inject Anthropic fast mode service_tier for OAuth auth", () => {
+  it("injects configured Anthropic service_tier into direct Anthropic payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("injects configured Anthropic service_tier into OAuth-authenticated Anthropic payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("does not warn for valid Anthropic serviceTier values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "anthropic",
+        applyModelId: "claude-sonnet-4-5",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-5": {
+                  params: {
+                    serviceTier: "standard_only",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-5",
+          baseUrl: "https://api.anthropic.com",
+        } as unknown as Model<"anthropic-messages">,
+        payload: {},
+      });
+
+      expect(payload.service_tier).toBe("standard_only");
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("accepts snake_case Anthropic service_tier params", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: {
+        service_tier: "standard_only",
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("lets explicit Anthropic service_tier override fast mode defaults", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  fastMode: true,
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("lets explicit Anthropic service_tier override OAuth fast mode defaults", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  fastMode: true,
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("injects Anthropic fast mode service_tier for OAuth auth", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -2070,7 +2570,26 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload.service_tier).toBe("auto");
+  });
+
+  it("injects Anthropic standard_only service_tier for OAuth auth when fastMode is false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
   });
 
   it("does not inject Anthropic fast mode service_tier for proxied base URLs", () => {
@@ -2089,7 +2608,25 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("service_tier");
   });
 
-  it("applies fast-mode defaults for openai-codex responses without service_tier", () => {
+  it("does not inject explicit Anthropic service_tier for proxied base URLs", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: {
+        serviceTier: "standard_only",
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://proxy.example.com/anthropic",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("maps fast mode to priority service_tier for openai-codex responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai-codex",
       applyModelId: "gpt-5.4",
@@ -2104,9 +2641,9 @@ describe("applyExtraParamsToAgent", () => {
         store: false,
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "low" });
-    expect(payload.text).toEqual({ verbosity: "low" });
-    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("text");
+    expect(payload.service_tier).toBe("priority");
   });
 
   it("does not inject service_tier for non-openai providers", () => {
@@ -2218,7 +2755,42 @@ describe("applyExtraParamsToAgent", () => {
       });
 
       expect(payload).not.toHaveProperty("service_tier");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith("ignoring invalid OpenAI service tier param: invalid");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for valid OpenAI serviceTier values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "openai",
+        applyModelId: "gpt-5.4",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.4": {
+                  params: {
+                    serviceTier: "priority",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        } as unknown as Model<"openai-responses">,
+      });
+
+      expect(payload.service_tier).toBe("priority");
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }

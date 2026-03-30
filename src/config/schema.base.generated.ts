@@ -744,6 +744,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 email: {
                   type: "string",
                 },
+                displayName: {
+                  type: "string",
+                },
               },
               required: ["provider", "mode"],
               additionalProperties: false,
@@ -1262,14 +1265,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                           toolSchemaProfile: {
                             type: "string",
-                            const: "xai",
+                          },
+                          unsupportedToolSchemaKeywords: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
                           },
                           nativeWebSearchTool: {
                             type: "boolean",
                           },
                           toolCallArgumentsEncoding: {
                             type: "string",
-                            const: "html-entities",
                           },
                           requiresMistralToolIds: {
                             type: "boolean",
@@ -1879,32 +1887,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     additionalProperties: false,
                   },
                   provider: {
-                    anyOf: [
-                      {
-                        type: "string",
-                        const: "openai",
-                      },
-                      {
-                        type: "string",
-                        const: "local",
-                      },
-                      {
-                        type: "string",
-                        const: "gemini",
-                      },
-                      {
-                        type: "string",
-                        const: "voyage",
-                      },
-                      {
-                        type: "string",
-                        const: "mistral",
-                      },
-                      {
-                        type: "string",
-                        const: "ollama",
-                      },
-                    ],
+                    type: "string",
                   },
                   remote: {
                     type: "object",
@@ -2018,36 +2001,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     additionalProperties: false,
                   },
                   fallback: {
-                    anyOf: [
-                      {
-                        type: "string",
-                        const: "openai",
-                      },
-                      {
-                        type: "string",
-                        const: "gemini",
-                      },
-                      {
-                        type: "string",
-                        const: "local",
-                      },
-                      {
-                        type: "string",
-                        const: "voyage",
-                      },
-                      {
-                        type: "string",
-                        const: "mistral",
-                      },
-                      {
-                        type: "string",
-                        const: "ollama",
-                      },
-                      {
-                        type: "string",
-                        const: "none",
-                      },
-                    ],
+                    type: "string",
                   },
                   model: {
                     type: "string",
@@ -2078,6 +2032,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       path: {
                         type: "string",
+                      },
+                      fts: {
+                        type: "object",
+                        properties: {
+                          tokenizer: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "unicode61",
+                              },
+                              {
+                                type: "string",
+                                const: "trigram",
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
                       },
                       vector: {
                         type: "object",
@@ -2327,6 +2299,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              llm: {
+                type: "object",
+                properties: {
+                  idleTimeoutSeconds: {
+                    description:
+                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
                   },
                 },
                 additionalProperties: false,
@@ -3496,32 +3481,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       additionalProperties: false,
                     },
                     provider: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "openai",
-                        },
-                        {
-                          type: "string",
-                          const: "local",
-                        },
-                        {
-                          type: "string",
-                          const: "gemini",
-                        },
-                        {
-                          type: "string",
-                          const: "voyage",
-                        },
-                        {
-                          type: "string",
-                          const: "mistral",
-                        },
-                        {
-                          type: "string",
-                          const: "ollama",
-                        },
-                      ],
+                      type: "string",
                     },
                     remote: {
                       type: "object",
@@ -3635,36 +3595,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       additionalProperties: false,
                     },
                     fallback: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "openai",
-                        },
-                        {
-                          type: "string",
-                          const: "gemini",
-                        },
-                        {
-                          type: "string",
-                          const: "local",
-                        },
-                        {
-                          type: "string",
-                          const: "voyage",
-                        },
-                        {
-                          type: "string",
-                          const: "mistral",
-                        },
-                        {
-                          type: "string",
-                          const: "ollama",
-                        },
-                        {
-                          type: "string",
-                          const: "none",
-                        },
-                      ],
+                      type: "string",
                     },
                     model: {
                       type: "string",
@@ -3695,6 +3626,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         path: {
                           type: "string",
+                        },
+                        fts: {
+                          type: "object",
+                          properties: {
+                            tokenizer: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "unicode61",
+                                },
+                                {
+                                  type: "string",
+                                  const: "trigram",
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         vector: {
                           type: "object",
@@ -4687,7 +4636,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       properties: {
                         host: {
                           type: "string",
-                          enum: ["sandbox", "gateway", "node"],
+                          enum: ["auto", "sandbox", "gateway", "node"],
                         },
                         security: {
                           type: "string",
@@ -5617,6 +5566,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
+                  maxResponseBytes: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -5727,6 +5681,101 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              x_search: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  apiKey: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        oneOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "env",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "file",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "exec",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  model: {
+                    type: "string",
+                  },
+                  inlineCitations: {
+                    type: "boolean",
+                  },
+                  maxTurns: {
+                    type: "integer",
+                    minimum: -9007199254740991,
+                    maximum: 9007199254740991,
+                  },
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  cacheTtlMinutes: {
+                    type: "number",
+                    minimum: 0,
                   },
                 },
                 additionalProperties: false,
@@ -7169,7 +7218,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               host: {
                 type: "string",
-                enum: ["sandbox", "gateway", "node"],
+                enum: ["auto", "sandbox", "gateway", "node"],
               },
               security: {
                 type: "string",
@@ -8187,292 +8236,109 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 additionalProperties: false,
               },
-              elevenlabs: {
+              providers: {
                 type: "object",
-                properties: {
-                  apiKey: {
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    apiKey: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                  additionalProperties: {
                     anyOf: [
                       {
                         type: "string",
                       },
                       {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
-                      },
-                    ],
-                  },
-                  baseUrl: {
-                    type: "string",
-                  },
-                  voiceId: {
-                    type: "string",
-                  },
-                  modelId: {
-                    type: "string",
-                  },
-                  seed: {
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 4294967295,
-                  },
-                  applyTextNormalization: {
-                    type: "string",
-                    enum: ["auto", "on", "off"],
-                  },
-                  languageCode: {
-                    type: "string",
-                  },
-                  voiceSettings: {
-                    type: "object",
-                    properties: {
-                      stability: {
                         type: "number",
-                        minimum: 0,
-                        maximum: 1,
                       },
-                      similarityBoost: {
-                        type: "number",
-                        minimum: 0,
-                        maximum: 1,
-                      },
-                      style: {
-                        type: "number",
-                        minimum: 0,
-                        maximum: 1,
-                      },
-                      useSpeakerBoost: {
+                      {
                         type: "boolean",
                       },
-                      speed: {
-                        type: "number",
-                        minimum: 0.5,
-                        maximum: 2,
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                },
-                additionalProperties: false,
-              },
-              openai: {
-                type: "object",
-                properties: {
-                  apiKey: {
-                    anyOf: [
                       {
-                        type: "string",
+                        type: "null",
                       },
                       {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
+                        type: "array",
+                        items: {},
+                      },
+                      {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {},
                       },
                     ],
                   },
-                  baseUrl: {
-                    type: "string",
-                  },
-                  model: {
-                    type: "string",
-                  },
-                  voice: {
-                    type: "string",
-                  },
-                  speed: {
-                    type: "number",
-                    minimum: 0.25,
-                    maximum: 4,
-                  },
-                  instructions: {
-                    type: "string",
-                  },
                 },
-                additionalProperties: false,
-              },
-              edge: {
-                type: "object",
-                properties: {
-                  enabled: {
-                    type: "boolean",
-                  },
-                  voice: {
-                    type: "string",
-                  },
-                  lang: {
-                    type: "string",
-                  },
-                  outputFormat: {
-                    type: "string",
-                  },
-                  pitch: {
-                    type: "string",
-                  },
-                  rate: {
-                    type: "string",
-                  },
-                  volume: {
-                    type: "string",
-                  },
-                  saveSubtitles: {
-                    type: "boolean",
-                  },
-                  proxy: {
-                    type: "string",
-                  },
-                  timeoutMs: {
-                    type: "integer",
-                    minimum: 1000,
-                    maximum: 120000,
-                  },
-                },
-                additionalProperties: false,
-              },
-              microsoft: {
-                type: "object",
-                properties: {
-                  enabled: {
-                    type: "boolean",
-                  },
-                  voice: {
-                    type: "string",
-                  },
-                  lang: {
-                    type: "string",
-                  },
-                  outputFormat: {
-                    type: "string",
-                  },
-                  pitch: {
-                    type: "string",
-                  },
-                  rate: {
-                    type: "string",
-                  },
-                  volume: {
-                    type: "string",
-                  },
-                  saveSubtitles: {
-                    type: "boolean",
-                  },
-                  proxy: {
-                    type: "string",
-                  },
-                  timeoutMs: {
-                    type: "integer",
-                    minimum: 1000,
-                    maximum: 120000,
-                  },
-                },
-                additionalProperties: false,
               },
               prefsPath: {
                 type: "string",
@@ -8604,6 +8470,74 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         type: "object",
         properties: {
           exec: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              mode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "session",
+                  },
+                  {
+                    type: "string",
+                    const: "targets",
+                  },
+                  {
+                    type: "string",
+                    const: "both",
+                  },
+                ],
+              },
+              agentFilter: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              sessionFilter: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              targets: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    channel: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    to: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    accountId: {
+                      type: "string",
+                    },
+                    threadId: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  required: ["channel", "to"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+          plugin: {
             type: "object",
             properties: {
               enabled: {
@@ -9431,44 +9365,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "boolean",
                 },
                 channel: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      const: "last",
-                    },
-                    {
-                      type: "string",
-                      const: "whatsapp",
-                    },
-                    {
-                      type: "string",
-                      const: "telegram",
-                    },
-                    {
-                      type: "string",
-                      const: "discord",
-                    },
-                    {
-                      type: "string",
-                      const: "irc",
-                    },
-                    {
-                      type: "string",
-                      const: "slack",
-                    },
-                    {
-                      type: "string",
-                      const: "signal",
-                    },
-                    {
-                      type: "string",
-                      const: "imessage",
-                    },
-                    {
-                      type: "string",
-                      const: "msteams",
-                    },
-                  ],
+                  type: "string",
+                  minLength: 1,
                 },
                 to: {
                   type: "string",
@@ -9829,10 +9727,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         additionalProperties: false,
       },
       channels: {
-        type: "object",
         properties: {},
-        additionalProperties: true,
         required: [],
+        additionalProperties: true,
       },
       discovery: {
         type: "object",
@@ -10990,6 +10887,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 ],
               },
+              searchTool: {
+                type: "string",
+                minLength: 1,
+              },
               includeDefaultMemory: {
                 type: "boolean",
               },
@@ -11222,6 +11123,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 url: {
                   type: "string",
                   format: "uri",
+                },
+                headers: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "boolean",
+                      },
+                    ],
+                  },
                 },
               },
               additionalProperties: {},
@@ -12074,7 +11994,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.list[].runtime.acp.agent": {
       label: "Agent ACP Harness Agent",
-      help: "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+      help: "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
       tags: ["advanced"],
     },
     "agents.list[].runtime.acp.backend": {
@@ -12641,7 +12561,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.exec.applyPatch.enabled": {
       label: "Enable apply_patch",
-      help: "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
+      help: "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
       tags: ["tools"],
     },
     "tools.exec.applyPatch.workspaceOnly": {
@@ -12720,8 +12640,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["tools"],
     },
     "tools.exec.host": {
-      label: "Exec Host",
-      help: "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+      label: "Exec Target",
+      help: 'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
       tags: ["tools"],
     },
     "tools.exec.security": {
@@ -12816,7 +12736,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     approvals: {
       label: "Approvals",
-      help: "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+      help: "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
       tags: ["advanced"],
     },
     "approvals.exec": {
@@ -12867,6 +12787,56 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "approvals.exec.targets[].threadId": {
       label: "Approval Target Thread ID",
       help: "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin": {
+      label: "Plugin Approval Forwarding",
+      help: "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.enabled": {
+      label: "Forward Plugin Approvals",
+      help: "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.mode": {
+      label: "Plugin Approval Forwarding Mode",
+      help: 'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
+      tags: ["advanced"],
+    },
+    "approvals.plugin.agentFilter": {
+      label: "Plugin Approval Agent Filter",
+      help: 'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.',
+      tags: ["advanced"],
+    },
+    "approvals.plugin.sessionFilter": {
+      label: "Plugin Approval Session Filter",
+      help: 'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.',
+      tags: ["storage"],
+    },
+    "approvals.plugin.targets": {
+      label: "Plugin Approval Forwarding Targets",
+      help: "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].channel": {
+      label: "Plugin Approval Target Channel",
+      help: "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].to": {
+      label: "Plugin Approval Target Destination",
+      help: "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].accountId": {
+      label: "Plugin Approval Target Account ID",
+      help: "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].threadId": {
+      label: "Plugin Approval Target Thread ID",
+      help: "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
       tags: ["advanced"],
     },
     "tools.message.allowCrossContextSend": {
@@ -12944,6 +12914,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Hard cap for web_fetch maxChars (applies to config and tool calls).",
       tags: ["performance", "tools"],
     },
+    "tools.web.fetch.maxResponseBytes": {
+      label: "Web Fetch Max Download Size (bytes)",
+      help: "Max download size before truncation.",
+      tags: ["performance", "tools"],
+    },
     "tools.web.fetch.timeoutSeconds": {
       label: "Web Fetch Timeout (sec)",
       help: "Timeout in seconds for web_fetch requests.",
@@ -12983,7 +12958,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.web.fetch.firecrawl.baseUrl": {
       label: "Firecrawl Base URL",
       help: "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
-      tags: ["tools"],
+      tags: ["tools", "url-secret"],
     },
     "tools.web.fetch.firecrawl.onlyMainContent": {
       label: "Firecrawl Main Content Only",
@@ -12999,6 +12974,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Firecrawl Timeout (sec)",
       help: "Timeout in seconds for Firecrawl requests.",
       tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.enabled": {
+      label: "Enable X Search Tool",
+      help: "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.apiKey": {
+      label: "xAI API Key",
+      help: "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.x_search.model": {
+      label: "X Search Model",
+      help: 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.x_search.inlineCitations": {
+      label: "X Search Inline Citations",
+      help: "Keep inline citations from xAI in x_search responses when available (default: false).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.maxTurns": {
+      label: "X Search Max Turns",
+      help: "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.timeoutSeconds": {
+      label: "X Search Timeout (sec)",
+      help: "Timeout in seconds for x_search requests.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.cacheTtlMinutes": {
+      label: "X Search Cache TTL (min)",
+      help: "Cache TTL in minutes for x_search results.",
+      tags: ["performance", "storage", "tools"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
@@ -13052,7 +13063,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Gateway APNs Relay Base URL",
       help: "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
       placeholder: "https://relay.example.com",
-      tags: ["network", "advanced"],
+      tags: ["network", "advanced", "url-secret"],
     },
     "gateway.push.apns.relay.timeoutMs": {
       label: "Gateway APNs Relay Timeout (ms)",
@@ -13392,7 +13403,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.memorySearch.remote.baseUrl": {
       label: "Remote Embedding Base URL",
       help: "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
-      tags: ["advanced"],
+      tags: ["advanced", "url-secret"],
     },
     "agents.defaults.memorySearch.remote.apiKey": {
       label: "Remote Embedding API Key",
@@ -13613,6 +13624,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "memory.qmd.searchMode": {
       label: "QMD Search Mode",
       help: 'Selects the QMD retrieval path: "query" uses standard query flow, "search" uses search-oriented retrieval, and "vsearch" emphasizes vector retrieval. Keep default unless tuning relevance quality.',
+      tags: ["storage"],
+    },
+    "memory.qmd.searchTool": {
+      label: "QMD Search Tool Override",
+      help: "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
       tags: ["storage"],
     },
     "memory.qmd.includeDefaultMemory": {
@@ -13843,7 +13859,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "models.providers.*.baseUrl": {
       label: "Model Provider Base URL",
       help: "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
-      tags: ["models"],
+      tags: ["models", "url-secret"],
     },
     "models.providers.*.apiKey": {
       label: "Model Provider API Key",
@@ -15171,6 +15187,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
       tags: ["media"],
     },
+    "messages.tts.providers": {
+      label: "TTS Provider Settings",
+      help: "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
+      tags: ["media"],
+    },
+    "messages.tts.providers.*": {
+      label: "TTS Provider Config",
+      help: "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
+      tags: ["media"],
+    },
+    "messages.tts.providers.*.apiKey": {
+      label: "TTS Provider API Key",
+      help: "Provider API key used by that speech provider when its plugin requires authenticated TTS access.",
+      tags: ["security", "auth", "media"],
+      sensitive: true,
+    },
     "talk.provider": {
       label: "Talk Active Provider",
       help: 'Active Talk provider id (for example "elevenlabs").',
@@ -15243,673 +15275,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
       tags: ["network", "automation", "channels"],
     },
-    "channels.whatsapp": {
-      label: "WhatsApp",
-      help: "WhatsApp channel provider configuration for access policy and message batching behavior. Use this section to tune responsiveness and direct-message routing safety for WhatsApp chats.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram": {
-      label: "Telegram",
-      help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.customCommands": {
-      label: "Telegram Custom Commands",
-      help: "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord": {
-      label: "Discord",
-      help: "Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed.",
-      tags: ["network", "channels"],
-    },
-    "channels.slack": {
-      label: "Slack",
-      help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
-      tags: ["network", "channels"],
-    },
-    "channels.mattermost": {
-      label: "Mattermost",
-      help: "Mattermost channel provider configuration for bot credentials, base URL, and message trigger modes. Keep mention/trigger rules strict in high-volume team channels.",
-      tags: ["network", "channels"],
-    },
-    "channels.signal": {
-      label: "Signal",
-      help: "Signal channel provider configuration including account identity and DM policy behavior. Keep account mapping explicit so routing remains stable across multi-device setups.",
-      tags: ["network", "channels"],
-    },
-    "channels.imessage": {
-      label: "iMessage",
-      help: "iMessage channel provider configuration for CLI integration and DM access policy handling. Use explicit CLI paths when runtime environments have non-standard binary locations.",
-      tags: ["network", "channels"],
-    },
-    "channels.bluebubbles": {
-      label: "BlueBubbles",
-      help: "BlueBubbles channel provider configuration used for Apple messaging bridge integrations. Keep DM policy aligned with your trusted sender model in shared deployments.",
-      tags: ["network", "channels"],
-    },
-    "channels.msteams": {
-      label: "MS Teams",
-      help: "Microsoft Teams channel provider configuration and provider-specific policy toggles. Use this section to isolate Teams behavior from other enterprise chat providers.",
-      tags: ["network", "channels"],
-    },
     "channels.modelByChannel": {
       label: "Channel Model Overrides",
       help: "Map provider -> channel id -> model override (values are provider/model or aliases).",
       tags: ["network", "channels"],
-    },
-    "channels.irc": {
-      label: "IRC",
-      help: "IRC channel provider configuration and compatibility settings for classic IRC transport workflows. Use this section when bridging legacy chat infrastructure into OpenClaw.",
-      tags: ["network", "channels"],
-    },
-    "channels.irc.dmPolicy": {
-      label: "IRC DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.irc.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.irc.nickserv.enabled": {
-      label: "IRC NickServ Enabled",
-      help: "Enable NickServ identify/register after connect (defaults to enabled when password is configured).",
-      tags: ["network", "channels"],
-    },
-    "channels.irc.nickserv.service": {
-      label: "IRC NickServ Service",
-      help: "NickServ service nick (default: NickServ).",
-      tags: ["network", "channels"],
-    },
-    "channels.irc.nickserv.password": {
-      label: "IRC NickServ Password",
-      help: "NickServ password used for IDENTIFY/REGISTER (sensitive).",
-      tags: ["security", "auth", "network", "channels"],
-      sensitive: true,
-    },
-    "channels.irc.nickserv.passwordFile": {
-      label: "IRC NickServ Password File",
-      help: "Optional file path containing NickServ password.",
-      tags: ["security", "auth", "network", "storage", "channels"],
-    },
-    "channels.irc.nickserv.register": {
-      label: "IRC NickServ Register",
-      help: "If true, send NickServ REGISTER on every connect. Use once for initial registration, then disable.",
-      tags: ["network", "channels"],
-    },
-    "channels.irc.nickserv.registerEmail": {
-      label: "IRC NickServ Register Email",
-      help: "Email used with NickServ REGISTER (required when register=true).",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.botToken": {
-      label: "Telegram Bot Token",
-      help: "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
-      tags: ["security", "auth", "network", "channels"],
-      sensitive: true,
-    },
-    "channels.telegram.dmPolicy": {
-      label: "Telegram DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.telegram.configWrites": {
-      label: "Telegram Config Writes",
-      help: "Allow Telegram to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.commands.native": {
-      label: "Telegram Native Commands",
-      help: 'Override native commands for Telegram (bool or "auto").',
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.commands.nativeSkills": {
-      label: "Telegram Native Skill Commands",
-      help: 'Override native skill commands for Telegram (bool or "auto").',
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.streaming": {
-      label: "Telegram Streaming Mode",
-      help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.retry.attempts": {
-      label: "Telegram Retry Attempts",
-      help: "Max retry attempts for outbound Telegram API calls (default: 3).",
-      tags: ["network", "reliability", "channels"],
-    },
-    "channels.telegram.retry.minDelayMs": {
-      label: "Telegram Retry Min Delay (ms)",
-      help: "Minimum retry delay in ms for Telegram outbound calls.",
-      tags: ["network", "reliability", "channels"],
-    },
-    "channels.telegram.retry.maxDelayMs": {
-      label: "Telegram Retry Max Delay (ms)",
-      help: "Maximum retry delay cap in ms for Telegram outbound calls.",
-      tags: ["network", "reliability", "performance", "channels"],
-    },
-    "channels.telegram.retry.jitter": {
-      label: "Telegram Retry Jitter",
-      help: "Jitter factor (0-1) applied to Telegram retry delays.",
-      tags: ["network", "reliability", "channels"],
-    },
-    "channels.telegram.network.autoSelectFamily": {
-      label: "Telegram autoSelectFamily",
-      help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.timeoutSeconds": {
-      label: "Telegram API Timeout (seconds)",
-      help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.telegram.silentErrorReplies": {
-      label: "Telegram Silent Error Replies",
-      help: "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.apiRoot": {
-      label: "Telegram API Root URL",
-      help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.autoTopicLabel": {
-      label: "Telegram Auto Topic Label",
-      help: "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.autoTopicLabel.enabled": {
-      label: "Telegram Auto Topic Label Enabled",
-      help: "Whether auto topic labeling is enabled. Default: true.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.autoTopicLabel.prompt": {
-      label: "Telegram Auto Topic Label Prompt",
-      help: "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.capabilities.inlineButtons": {
-      label: "Telegram Inline Buttons",
-      help: "Enable Telegram inline button components for supported command and interaction surfaces. Disable if your deployment needs plain-text-only compatibility behavior.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.execApprovals": {
-      label: "Telegram Exec Approvals",
-      help: "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.execApprovals.enabled": {
-      label: "Telegram Exec Approvals Enabled",
-      help: "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.execApprovals.approvers": {
-      label: "Telegram Exec Approval Approvers",
-      help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.execApprovals.agentFilter": {
-      label: "Telegram Exec Approval Agent Filter",
-      help: 'Optional allowlist of agent IDs eligible for Telegram exec approvals, for example `["main", "ops-agent"]`. Use this to keep approval prompts scoped to the agents you actually operate from Telegram.',
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.execApprovals.sessionFilter": {
-      label: "Telegram Exec Approval Session Filter",
-      help: "Optional session-key filters matched as substring or regex-style patterns before Telegram approval routing is used. Use narrow patterns so Telegram approvals only appear for intended sessions.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.telegram.execApprovals.target": {
-      label: "Telegram Exec Approval Target",
-      help: 'Controls where Telegram approval prompts are sent: "dm" sends to approver DMs (default), "channel" sends to the originating Telegram chat/topic, and "both" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted groups/topics.',
-      tags: ["network", "channels"],
-    },
-    "channels.telegram.threadBindings.enabled": {
-      label: "Telegram Thread Binding Enabled",
-      help: "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.telegram.threadBindings.idleHours": {
-      label: "Telegram Thread Binding Idle Timeout (hours)",
-      help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.telegram.threadBindings.maxAgeHours": {
-      label: "Telegram Thread Binding Max Age (hours)",
-      help: "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
-      tags: ["network", "performance", "storage", "channels"],
-    },
-    "channels.telegram.threadBindings.spawnSubagentSessions": {
-      label: "Telegram Thread-Bound Subagent Spawn",
-      help: "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.telegram.threadBindings.spawnAcpSessions": {
-      label: "Telegram Thread-Bound ACP Spawn",
-      help: "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.whatsapp.dmPolicy": {
-      label: "WhatsApp DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.whatsapp.selfChatMode": {
-      label: "WhatsApp Self-Phone Mode",
-      help: "Same-phone setup (bot uses your personal WhatsApp number).",
-      tags: ["network", "channels"],
-    },
-    "channels.whatsapp.debounceMs": {
-      label: "WhatsApp Message Debounce (ms)",
-      help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.whatsapp.configWrites": {
-      label: "WhatsApp Config Writes",
-      help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.signal.dmPolicy": {
-      label: "Signal DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.signal.configWrites": {
-      label: "Signal Config Writes",
-      help: "Allow Signal to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.imessage.dmPolicy": {
-      label: "iMessage DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.imessage.configWrites": {
-      label: "iMessage Config Writes",
-      help: "Allow iMessage to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.bluebubbles.dmPolicy": {
-      label: "BlueBubbles DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.msteams.configWrites": {
-      label: "MS Teams Config Writes",
-      help: "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.irc.configWrites": {
-      label: "IRC Config Writes",
-      help: "Allow IRC to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.dmPolicy": {
-      label: "Discord DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.discord.dm.policy": {
-      label: "Discord DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.discord.configWrites": {
-      label: "Discord Config Writes",
-      help: "Allow Discord to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.proxy": {
-      label: "Discord Proxy URL",
-      help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.commands.native": {
-      label: "Discord Native Commands",
-      help: 'Override native commands for Discord (bool or "auto").',
-      tags: ["network", "channels"],
-    },
-    "channels.discord.commands.nativeSkills": {
-      label: "Discord Native Skill Commands",
-      help: 'Override native skill commands for Discord (bool or "auto").',
-      tags: ["network", "channels"],
-    },
-    "channels.discord.streaming": {
-      label: "Discord Streaming Mode",
-      help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
-      tags: ["network", "channels"],
-    },
-    "channels.discord.streamMode": {
-      label: "Discord Stream Mode (Legacy)",
-      help: "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.draftChunk.minChars": {
-      label: "Discord Draft Chunk Min Chars",
-      help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
-      tags: ["network", "channels"],
-    },
-    "channels.discord.draftChunk.maxChars": {
-      label: "Discord Draft Chunk Max Chars",
-      help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.draftChunk.breakPreference": {
-      label: "Discord Draft Chunk Break Preference",
-      help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.retry.attempts": {
-      label: "Discord Retry Attempts",
-      help: "Max retry attempts for outbound Discord API calls (default: 3).",
-      tags: ["network", "reliability", "channels"],
-    },
-    "channels.discord.retry.minDelayMs": {
-      label: "Discord Retry Min Delay (ms)",
-      help: "Minimum retry delay in ms for Discord outbound calls.",
-      tags: ["network", "reliability", "channels"],
-    },
-    "channels.discord.retry.maxDelayMs": {
-      label: "Discord Retry Max Delay (ms)",
-      help: "Maximum retry delay cap in ms for Discord outbound calls.",
-      tags: ["network", "reliability", "performance", "channels"],
-    },
-    "channels.discord.retry.jitter": {
-      label: "Discord Retry Jitter",
-      help: "Jitter factor (0-1) applied to Discord retry delays.",
-      tags: ["network", "reliability", "channels"],
-    },
-    "channels.discord.maxLinesPerMessage": {
-      label: "Discord Max Lines Per Message",
-      help: "Soft max line count per Discord message (default: 17).",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.inboundWorker.runTimeoutMs": {
-      label: "Discord Inbound Worker Timeout (ms)",
-      help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.eventQueue.listenerTimeout": {
-      label: "Discord EventQueue Listener Timeout (ms)",
-      help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.eventQueue.maxQueueSize": {
-      label: "Discord EventQueue Max Queue Size",
-      help: "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.eventQueue.maxConcurrency": {
-      label: "Discord EventQueue Max Concurrency",
-      help: "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.threadBindings.enabled": {
-      label: "Discord Thread Binding Enabled",
-      help: "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.discord.threadBindings.idleHours": {
-      label: "Discord Thread Binding Idle Timeout (hours)",
-      help: "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.discord.threadBindings.maxAgeHours": {
-      label: "Discord Thread Binding Max Age (hours)",
-      help: "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
-      tags: ["network", "performance", "storage", "channels"],
-    },
-    "channels.discord.threadBindings.spawnSubagentSessions": {
-      label: "Discord Thread-Bound Subagent Spawn",
-      help: "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.discord.threadBindings.spawnAcpSessions": {
-      label: "Discord Thread-Bound ACP Spawn",
-      help: "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
-      tags: ["network", "storage", "channels"],
-    },
-    "channels.discord.ui.components.accentColor": {
-      label: "Discord Component Accent Color",
-      help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.intents.presence": {
-      label: "Discord Presence Intent",
-      help: "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.intents.guildMembers": {
-      label: "Discord Guild Members Intent",
-      help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.voice.enabled": {
-      label: "Discord Voice Enabled",
-      help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.voice.autoJoin": {
-      label: "Discord Voice Auto-Join",
-      help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.voice.daveEncryption": {
-      label: "Discord Voice DAVE Encryption",
-      help: "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.voice.decryptionFailureTolerance": {
-      label: "Discord Voice Decrypt Failure Tolerance",
-      help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.voice.tts": {
-      label: "Discord Voice Text-to-Speech",
-      help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
-      tags: ["network", "media", "channels"],
-    },
-    "channels.discord.pluralkit.enabled": {
-      label: "Discord PluralKit Enabled",
-      help: "Resolve PluralKit proxied messages and treat system members as distinct senders.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.pluralkit.token": {
-      label: "Discord PluralKit Token",
-      help: "Optional PluralKit token for resolving private systems or members.",
-      tags: ["security", "auth", "network", "channels"],
-      sensitive: true,
-    },
-    "channels.discord.activity": {
-      label: "Discord Presence Activity",
-      help: "Discord presence activity text (defaults to custom status).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.status": {
-      label: "Discord Presence Status",
-      help: "Discord presence status (online, dnd, idle, invisible).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.autoPresence.enabled": {
-      label: "Discord Auto Presence Enabled",
-      help: "Enable automatic Discord bot presence updates based on runtime/model availability signals. When enabled: healthy=>online, degraded/unknown=>idle, exhausted/unavailable=>dnd.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.autoPresence.intervalMs": {
-      label: "Discord Auto Presence Check Interval (ms)",
-      help: "How often to evaluate Discord auto-presence state in milliseconds (default: 30000).",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.autoPresence.minUpdateIntervalMs": {
-      label: "Discord Auto Presence Min Update Interval (ms)",
-      help: "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.discord.autoPresence.healthyText": {
-      label: "Discord Auto Presence Healthy Text",
-      help: "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
-      tags: ["network", "reliability", "channels"],
-    },
-    "channels.discord.autoPresence.degradedText": {
-      label: "Discord Auto Presence Degraded Text",
-      help: "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.autoPresence.exhaustedText": {
-      label: "Discord Auto Presence Exhausted Text",
-      help: "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.activityType": {
-      label: "Discord Presence Activity Type",
-      help: "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
-      tags: ["network", "channels"],
-    },
-    "channels.discord.activityUrl": {
-      label: "Discord Presence Activity URL",
-      help: "Discord presence streaming URL (required for activityType=1).",
-      tags: ["network", "channels"],
-    },
-    "channels.slack.dm.policy": {
-      label: "Slack DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.slack.dmPolicy": {
-      label: "Slack DM Policy",
-      help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.slack.configWrites": {
-      label: "Slack Config Writes",
-      help: "Allow Slack to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.slack.commands.native": {
-      label: "Slack Native Commands",
-      help: 'Override native commands for Slack (bool or "auto").',
-      tags: ["network", "channels"],
-    },
-    "channels.slack.commands.nativeSkills": {
-      label: "Slack Native Skill Commands",
-      help: 'Override native skill commands for Slack (bool or "auto").',
-      tags: ["network", "channels"],
-    },
-    "channels.slack.allowBots": {
-      label: "Slack Allow Bot Messages",
-      help: "Allow bot-authored messages to trigger Slack replies (default: false).",
-      tags: ["access", "network", "channels"],
-    },
-    "channels.discord.allowBots": {
-      label: "Discord Allow Bot Messages",
-      help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.matrix.allowBots": {
-      label: "Matrix Allow Bot Messages",
-      help: 'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
-      tags: ["access", "network", "channels"],
-    },
-    "channels.discord.token": {
-      label: "Discord Bot Token",
-      help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
-      tags: ["security", "auth", "network", "channels"],
-      sensitive: true,
-    },
-    "channels.slack.botToken": {
-      label: "Slack Bot Token",
-      help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
-      tags: ["security", "auth", "network", "channels"],
-      sensitive: true,
-    },
-    "channels.slack.appToken": {
-      label: "Slack App Token",
-      help: "Slack app-level token used for Socket Mode connections and event transport when enabled. Use least-privilege app scopes and store this token as a secret.",
-      tags: ["security", "auth", "network", "channels"],
-      sensitive: true,
-    },
-    "channels.slack.userToken": {
-      label: "Slack User Token",
-      help: "Optional Slack user token for workflows requiring user-context API access beyond bot permissions. Use sparingly and audit scopes because this token can carry broader authority.",
-      tags: ["security", "auth", "network", "channels"],
-      sensitive: true,
-    },
-    "channels.slack.userTokenReadOnly": {
-      label: "Slack User Token Read Only",
-      help: "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.slack.capabilities.interactiveReplies": {
-      label: "Slack Interactive Replies",
-      help: "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
-      tags: ["network", "channels"],
-    },
-    "channels.slack.streaming": {
-      label: "Slack Streaming Mode",
-      help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
-      tags: ["network", "channels"],
-    },
-    "channels.slack.nativeStreaming": {
-      label: "Slack Native Streaming",
-      help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.slack.streamMode": {
-      label: "Slack Stream Mode (Legacy)",
-      help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
-      tags: ["network", "channels"],
-    },
-    "channels.slack.thread.historyScope": {
-      label: "Slack Thread History Scope",
-      help: 'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
-      tags: ["network", "channels"],
-    },
-    "channels.slack.thread.inheritParent": {
-      label: "Slack Thread Parent Inheritance",
-      help: "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
-      tags: ["network", "channels"],
-    },
-    "channels.slack.thread.initialHistoryLimit": {
-      label: "Slack Thread Initial History Limit",
-      help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
-      tags: ["network", "performance", "channels"],
-    },
-    "channels.mattermost.botToken": {
-      label: "Mattermost Bot Token",
-      help: "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.mattermost.baseUrl": {
-      label: "Mattermost Base URL",
-      help: "Base URL for your Mattermost server (e.g., https://chat.example.com).",
-      placeholder: "https://chat.example.com",
-      tags: ["network", "channels"],
-    },
-    "channels.mattermost.configWrites": {
-      label: "Mattermost Config Writes",
-      help: "Allow Mattermost to write config in response to channel events/commands (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.mattermost.chatmode": {
-      label: "Mattermost Chat Mode",
-      help: 'Reply to channel messages on mention ("oncall"), on trigger chars (">" or "!") ("onchar"), or on every message ("onmessage").',
-      tags: ["network", "channels"],
-    },
-    "channels.mattermost.oncharPrefixes": {
-      label: "Mattermost Onchar Prefixes",
-      help: 'Trigger prefixes for onchar mode (default: [">", "!"]).',
-      tags: ["network", "channels"],
-    },
-    "channels.mattermost.requireMention": {
-      label: "Mattermost Require Mention",
-      help: "Require @mention in channels before responding (default: true).",
-      tags: ["network", "channels"],
-    },
-    "channels.signal.account": {
-      label: "Signal Account",
-      help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
-      tags: ["network", "channels"],
-    },
-    "channels.imessage.cliPath": {
-      label: "iMessage CLI Path",
-      help: "Filesystem path to the iMessage bridge CLI binary used for send/receive operations. Set explicitly when the binary is not on PATH in service runtime environments.",
-      tags: ["network", "storage", "channels"],
     },
     "agents.list[].skills": {
       label: "Agent Skill Filter",
@@ -16059,7 +15428,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "plugins.installs.*.installPath": {
       label: "Plugin Install Path",
-      help: "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      help: "Resolved install directory for the installed plugin bundle.",
       tags: ["storage"],
     },
     "plugins.installs.*.version": {
@@ -16177,115 +15546,60 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
-    "messages.tts.elevenlabs.apiKey": {
+    "mcp.servers.*.headers.*": {
       sensitive: true,
-      tags: ["security", "auth", "media"],
-    },
-    "messages.tts.openai.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "media"],
-    },
-    "channels.telegram.webhookSecret": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.telegram.accounts.*.botToken": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.telegram.accounts.*.webhookSecret": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.discord.voice.tts.elevenlabs.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "media", "channels"],
-    },
-    "channels.discord.voice.tts.openai.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "media", "channels"],
-    },
-    "channels.discord.accounts.*.token": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.discord.accounts.*.voice.tts.elevenlabs.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "media", "channels"],
-    },
-    "channels.discord.accounts.*.voice.tts.openai.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "media", "channels"],
-    },
-    "channels.discord.accounts.*.pluralkit.token": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.irc.password": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.irc.accounts.*.password": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.irc.accounts.*.nickserv.password": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.googlechat.serviceAccount": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
-    },
-    "channels.googlechat.serviceAccountRef": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
-    },
-    "channels.googlechat.accounts.*.serviceAccount": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
-    },
-    "channels.googlechat.accounts.*.serviceAccountRef": {
-      sensitive: true,
-      tags: ["security", "network", "channels"],
-    },
-    "channels.slack.signingSecret": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.slack.accounts.*.signingSecret": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.slack.accounts.*.botToken": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.slack.accounts.*.appToken": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.slack.accounts.*.userToken": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.bluebubbles.password": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.bluebubbles.accounts.*.password": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
-    },
-    "channels.msteams.appPassword": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "channels"],
+      tags: ["security"],
     },
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
     },
+    "agents.list[].memorySearch.remote.baseUrl": {
+      tags: ["advanced", "url-secret"],
+    },
+    "tools.web.search.brave.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.firecrawl.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.gemini.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.grok.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.kimi.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.perplexity.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.media.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.image.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.image.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.audio.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.audio.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.video.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.video.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "mcp.servers.*.url": {
+      tags: ["advanced", "url-secret"],
+    },
   },
-  version: "2026.3.24",
+  version: "2026.3.30",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

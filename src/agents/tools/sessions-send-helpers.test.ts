@@ -109,4 +109,14 @@ describe("resolveAnnounceTargetFromKey", () => {
       threadId: "om_x100abc123",
     });
   });
+
+  it("preserves decimal thread ids for Slack-style session keys", () => {
+    expect(
+      resolveAnnounceTargetFromKey("agent:main:slack:channel:general:thread:1699999999.0001"),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:general",
+      threadId: "1699999999.0001",
+    });
+  });
 });

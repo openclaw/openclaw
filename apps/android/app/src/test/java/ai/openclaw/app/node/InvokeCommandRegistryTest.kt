@@ -86,6 +86,7 @@ class InvokeCommandRegistryTest {
           locationEnabled = true,
           sendSmsAvailable = true,
           readSmsAvailable = true,
+          smsSearchPossible = true,
           callLogAvailable = true,
           voiceWakeEnabled = true,
           motionActivityAvailable = true,
@@ -113,6 +114,7 @@ class InvokeCommandRegistryTest {
           locationEnabled = true,
           sendSmsAvailable = true,
           readSmsAvailable = true,
+          smsSearchPossible = true,
           callLogAvailable = true,
           motionActivityAvailable = true,
           motionPedometerAvailable = true,
@@ -132,6 +134,7 @@ class InvokeCommandRegistryTest {
           locationEnabled = false,
           sendSmsAvailable = false,
           readSmsAvailable = false,
+          smsSearchPossible = false,
           callLogAvailable = false,
           voiceWakeEnabled = false,
           motionActivityAvailable = true,
@@ -148,17 +151,22 @@ class InvokeCommandRegistryTest {
   fun advertisedCommands_splitsSmsSendAndSearchAvailability() {
     val readOnlyCommands =
       InvokeCommandRegistry.advertisedCommands(
-        defaultFlags(readSmsAvailable = true),
+        defaultFlags(readSmsAvailable = true, smsSearchPossible = true),
       )
     val sendOnlyCommands =
       InvokeCommandRegistry.advertisedCommands(
         defaultFlags(sendSmsAvailable = true),
+      )
+    val requestableSearchCommands =
+      InvokeCommandRegistry.advertisedCommands(
+        defaultFlags(smsSearchPossible = true),
       )
 
     assertTrue(readOnlyCommands.contains(OpenClawSmsCommand.Search.rawValue))
     assertFalse(readOnlyCommands.contains(OpenClawSmsCommand.Send.rawValue))
     assertTrue(sendOnlyCommands.contains(OpenClawSmsCommand.Send.rawValue))
     assertFalse(sendOnlyCommands.contains(OpenClawSmsCommand.Search.rawValue))
+    assertTrue(requestableSearchCommands.contains(OpenClawSmsCommand.Search.rawValue))
   }
 
   @Test
@@ -171,9 +179,14 @@ class InvokeCommandRegistryTest {
       InvokeCommandRegistry.advertisedCapabilities(
         defaultFlags(sendSmsAvailable = true),
       )
+    val requestableSearchCapabilities =
+      InvokeCommandRegistry.advertisedCapabilities(
+        defaultFlags(smsSearchPossible = true),
+      )
 
     assertTrue(readOnlyCapabilities.contains(OpenClawCapability.Sms.rawValue))
     assertTrue(sendOnlyCapabilities.contains(OpenClawCapability.Sms.rawValue))
+    assertFalse(requestableSearchCapabilities.contains(OpenClawCapability.Sms.rawValue))
   }
 
   @Test
@@ -195,6 +208,7 @@ class InvokeCommandRegistryTest {
     locationEnabled: Boolean = false,
     sendSmsAvailable: Boolean = false,
     readSmsAvailable: Boolean = false,
+    smsSearchPossible: Boolean = false,
     callLogAvailable: Boolean = false,
     voiceWakeEnabled: Boolean = false,
     motionActivityAvailable: Boolean = false,
@@ -206,6 +220,7 @@ class InvokeCommandRegistryTest {
       locationEnabled = locationEnabled,
       sendSmsAvailable = sendSmsAvailable,
       readSmsAvailable = readSmsAvailable,
+      smsSearchPossible = smsSearchPossible,
       callLogAvailable = callLogAvailable,
       voiceWakeEnabled = voiceWakeEnabled,
       motionActivityAvailable = motionActivityAvailable,

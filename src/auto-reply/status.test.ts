@@ -132,6 +132,75 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Fast: on");
   });
 
+  it("shows configured text verbosity for the active model", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.4",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  textVerbosity: "low",
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Text: low");
+  });
+
+  it("shows per-agent text verbosity overrides for the active model", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.4",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  textVerbosity: "high",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              params: {
+                text_verbosity: "low",
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      agentId: "main",
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Text: low");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {
@@ -231,7 +300,7 @@ describe("buildStatusMessage", () => {
         models: {
           providers: {
             "minimax-portal": {
-              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
             },
             xiaomi: {
               models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
@@ -248,9 +317,9 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
-        model: "MiniMax-M2.5",
+        model: "MiniMax-M2.7",
         fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
         contextTokens: 1_048_576,
@@ -263,7 +332,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
     expect(normalized).toContain("Context: 49k/200k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
   });
@@ -274,7 +343,7 @@ describe("buildStatusMessage", () => {
         models: {
           providers: {
             "minimax-portal": {
-              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
             },
             xiaomi: {
               models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
@@ -292,9 +361,9 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
-        model: "MiniMax-M2.5",
+        model: "MiniMax-M2.7",
         fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
         contextTokens: 1_048_576,
@@ -307,7 +376,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
     expect(normalized).toContain("Context: 49k/123k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
     expect(normalized).not.toContain("Context: 49k/200k");
@@ -319,7 +388,7 @@ describe("buildStatusMessage", () => {
         models: {
           providers: {
             "minimax-portal": {
-              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
             },
             xiaomi: {
               models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
@@ -336,9 +405,9 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
-        model: "MiniMax-M2.5",
+        model: "MiniMax-M2.7",
         fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
         contextTokens: 123_456,
@@ -351,7 +420,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
     expect(normalized).toContain("Context: 49k/123k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
     expect(normalized).not.toContain("Context: 49k/200k");
@@ -363,7 +432,7 @@ describe("buildStatusMessage", () => {
         models: {
           providers: {
             "minimax-portal": {
-              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
             },
             xiaomi: {
               models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
@@ -382,9 +451,9 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
-        model: "MiniMax-M2.5",
+        model: "MiniMax-M2.7",
         fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
       },
@@ -396,7 +465,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
     expect(normalized).toContain("Context: 49k/120k");
     expect(normalized).not.toContain("Context: 49k/200k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
@@ -408,7 +477,7 @@ describe("buildStatusMessage", () => {
         models: {
           providers: {
             "minimax-portal": {
-              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
             },
             xiaomi: {
               models: [{ id: "mimo-v2-flash", contextWindow: 128_000 }],
@@ -427,9 +496,9 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
-        model: "MiniMax-M2.5",
+        model: "MiniMax-M2.7",
         fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
       },
@@ -441,7 +510,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
     expect(normalized).toContain("Context: 49k/128k");
     expect(normalized).not.toContain("Context: 49k/200k");
   });
@@ -452,7 +521,7 @@ describe("buildStatusMessage", () => {
         models: {
           providers: {
             "minimax-portal": {
-              models: [{ id: "MiniMax-M2.5", contextWindow: 200_000 }],
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
             },
             xiaomi: {
               models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
@@ -471,9 +540,9 @@ describe("buildStatusMessage", () => {
         providerOverride: "xiaomi",
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
-        model: "MiniMax-M2.5",
+        model: "MiniMax-M2.7",
         fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.5",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
       },
@@ -485,7 +554,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.5");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
     expect(normalized).toContain("Context: 49k/200k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
   });
@@ -1200,6 +1269,30 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("prefers provider-qualified context windows for fresh bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "sess-anthropic-qualified-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/1.0m");
+    expect(normalized).not.toContain("Context: 25k/200k");
+  });
+
   it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {
     const text = buildStatusMessage({
       config: {
@@ -1285,7 +1378,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast on|off");
+    expect(buildHelpMessage()).toContain("/fast status|on|off");
   });
 });
 

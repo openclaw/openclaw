@@ -32,7 +32,7 @@ vi.mock("@anthropic-ai/vertex-sdk", () => ({
 import {
   resolveAnthropicVertexRegion,
   resolveAnthropicVertexRegionFromBaseUrl,
-} from "./anthropic-vertex-provider.js";
+} from "../plugin-sdk/anthropic-vertex.js";
 
 let createAnthropicVertexStreamFn: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFnForModel;

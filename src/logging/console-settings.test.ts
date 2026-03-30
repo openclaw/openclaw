@@ -1,8 +1,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureConsoleSnapshot, type ConsoleSnapshot } from "./test-helpers/console-snapshot.js";
 
+const shouldSkipMutatingLoggingConfigReadMock = vi.hoisted(() => vi.fn(() => false));
+
 vi.mock("./config.js", () => ({
   readLoggingConfig: () => undefined,
+  shouldSkipMutatingLoggingConfigRead: () => shouldSkipMutatingLoggingConfigReadMock(),
 }));
 
 vi.mock("./logger.js", () => ({
@@ -30,6 +33,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   loadConfigCalls = 0;
+  shouldSkipMutatingLoggingConfigReadMock.mockReset();
+  shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
   snapshot = captureConsoleSnapshot();
   originalIsTty = process.stdout.isTTY;
   originalOpenClawTestConsole = process.env.OPENCLAW_TEST_CONSOLE;

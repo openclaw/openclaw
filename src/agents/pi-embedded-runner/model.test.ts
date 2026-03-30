@@ -33,7 +33,7 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
-  resetMockDiscoverModels();
+  resetMockDiscoverModels(discoverModels);
   mockGetOpenRouterModelCapabilities.mockReset();
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
@@ -249,7 +249,7 @@ describe("buildInlineProviderModels", () => {
 
 describe("resolveModel", () => {
   it("defaults model input to text when discovery omits input", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "custom",
       modelId: "missing-input",
       templateModel: {
@@ -322,7 +322,7 @@ describe("resolveModel", () => {
   });
 
   it("normalizes configured Google override baseUrls when provider api is omitted", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "google",
       modelId: "gemini-2.5-pro",
       templateModel: {
@@ -349,6 +349,64 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(result.model?.api).toBe("google-generative-ai");
     expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+  });
+
+  it("normalizes custom api.openai.com providers to responses transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-openai": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                provider: "custom-openai",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom-openai", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("normalizes custom api.x.ai providers to responses transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-xai": {
+            baseUrl: "https://api.x.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("grok-4.1-fast"),
+                provider: "custom-xai",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom-xai", "grok-4.1-fast", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-xai",
+      id: "grok-4.1-fast",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+    });
   });
 
   it("includes provider headers in provider fallback model", () => {
@@ -399,7 +457,7 @@ describe("resolveModel", () => {
   });
 
   it("drops marker headers from discovered models.json entries", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "custom",
       modelId: "listed-model",
       templateModel: {
@@ -593,7 +651,7 @@ describe("resolveModel", () => {
   });
 
   it("skips OpenRouter preload for models already present in the registry", async () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openrouter",
       modelId: "openrouter/healer-alpha",
       templateModel: {
@@ -626,7 +684,7 @@ describe("resolveModel", () => {
   });
 
   it("prefers configured provider api metadata over discovered registry model", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "onehub",
       modelId: "glm-5",
       templateModel: {
@@ -678,13 +736,13 @@ describe("resolveModel", () => {
   });
 
   it("prefers exact provider config over normalized alias match when both keys exist", () => {
-    mockDiscoveredModel({
-      provider: "qwen",
-      modelId: "qwen3-coder-plus",
+    mockDiscoveredModel(discoverModels, {
+      provider: "bedrock",
+      modelId: "bedrock-alias-exact-test",
       templateModel: {
-        id: "qwen3-coder-plus",
-        name: "Qwen3 Coder Plus",
-        provider: "qwen",
+        id: "bedrock-alias-exact-test",
+        name: "Bedrock alias test",
+        provider: "bedrock",
         api: "openai-completions",
         baseUrl: "https://default-provider.example.com/v1",
         reasoning: false,
@@ -698,19 +756,19 @@ describe("resolveModel", () => {
     const cfg = {
       models: {
         providers: {
-          "qwen-portal": {
-            baseUrl: "https://canonical-provider.example.com/v1",
+          "amazon-bedrock": {
+            baseUrl: "https://canonical-bedrock.example.com/v1",
             api: "openai-completions",
             headers: { "X-Provider": "canonical" },
-            models: [{ ...makeModel("qwen3-coder-plus"), reasoning: false }],
+            models: [{ ...makeModel("bedrock-alias-exact-test"), reasoning: false }],
           },
-          qwen: {
-            baseUrl: "https://alias-provider.example.com/v1",
+          bedrock: {
+            baseUrl: "https://alias-bedrock.example.com/v1",
             api: "anthropic-messages",
             headers: { "X-Provider": "alias" },
             models: [
               {
-                ...makeModel("qwen3-coder-plus"),
+                ...makeModel("bedrock-alias-exact-test"),
                 api: "anthropic-messages",
                 reasoning: true,
                 contextWindow: 262144,
@@ -722,14 +780,14 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = resolveModelForTest("qwen", "qwen3-coder-plus", "/tmp/agent", cfg);
+    const result = resolveModelForTest("bedrock", "bedrock-alias-exact-test", "/tmp/agent", cfg);
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
-      provider: "qwen",
-      id: "qwen3-coder-plus",
+      provider: "bedrock",
+      id: "bedrock-alias-exact-test",
       api: "anthropic-messages",
-      baseUrl: "https://alias-provider.example.com",
+      baseUrl: "https://alias-bedrock.example.com",
       reasoning: true,
       contextWindow: 262144,
       maxTokens: 32768,
@@ -738,7 +796,7 @@ describe("resolveModel", () => {
   });
 
   it("builds an openai-codex fallback for gpt-5.4", () => {
-    mockOpenAICodexTemplateModel();
+    mockOpenAICodexTemplateModel(discoverModels);
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
 
@@ -747,7 +805,7 @@ describe("resolveModel", () => {
   });
 
   it("builds an openai-codex fallback for gpt-5.4", () => {
-    mockOpenAICodexTemplateModel();
+    mockOpenAICodexTemplateModel(discoverModels);
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
 
@@ -756,7 +814,7 @@ describe("resolveModel", () => {
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
-    mockOpenAICodexTemplateModel();
+    mockOpenAICodexTemplateModel(discoverModels);
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
 
@@ -767,7 +825,7 @@ describe("resolveModel", () => {
   });
 
   it("keeps openai-codex gpt-5.3-codex-spark when discovery provides it", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
       modelId: "gpt-5.3-codex-spark",
       templateModel: {
@@ -789,7 +847,7 @@ describe("resolveModel", () => {
   });
 
   it("rejects stale direct openai gpt-5.3-codex-spark discovery rows", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openai",
       modelId: "gpt-5.3-codex-spark",
       templateModel: buildForwardCompatTemplate({
@@ -810,7 +868,7 @@ describe("resolveModel", () => {
   });
 
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openai",
       modelId: "gpt-5.2",
       templateModel: buildForwardCompatTemplate({
@@ -892,7 +950,7 @@ describe("resolveModel", () => {
   });
 
   it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openai",
       modelId: "gpt-5-mini",
       templateModel: buildForwardCompatTemplate({
@@ -924,7 +982,7 @@ describe("resolveModel", () => {
   });
 
   it("builds an openai fallback for gpt-5.4 nano from the gpt-5-nano template", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openai",
       modelId: "gpt-5-nano",
       templateModel: buildForwardCompatTemplate({
@@ -956,7 +1014,7 @@ describe("resolveModel", () => {
   });
 
   it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openai",
       modelId: "gpt-5.4",
       templateModel: buildForwardCompatTemplate({
@@ -980,7 +1038,7 @@ describe("resolveModel", () => {
   });
 
   it("keeps proxied openai completions transport untouched", () => {
-    mockDiscoveredModel({
+    mockDiscoveredModel(discoverModels, {
       provider: "openai",
       modelId: "gpt-5.4",
       templateModel: buildForwardCompatTemplate({
@@ -1000,6 +1058,75 @@ describe("resolveModel", () => {
       id: "gpt-5.4",
       api: "openai-completions",
       baseUrl: "https://proxy.example.com/v1",
+    });
+  });
+
+  it("normalizes stale native xai completions transport to responses", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "xai",
+      modelId: "grok-4.20-beta-latest-reasoning",
+      templateModel: buildForwardCompatTemplate({
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Grok 4.20 Beta Latest (Reasoning)",
+        provider: "xai",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+      }),
+    });
+
+    const result = resolveModelForTest("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "xai",
+      id: "grok-4.20-beta-latest-reasoning",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+    });
+  });
+
+  it("normalizes stale native xai completions transport after plugin model normalization", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "xai",
+      modelId: "grok-4.20-beta-latest-reasoning",
+      templateModel: buildForwardCompatTemplate({
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Grok 4.20 Beta Latest (Reasoning)",
+        provider: "xai",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+      }),
+    });
+
+    const result = resolveModel("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent", undefined, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        applyProviderResolvedModelCompatWithPlugins: () => undefined,
+        buildProviderUnknownModelHintWithPlugin: () => undefined,
+        prepareProviderDynamicModel: async () => {},
+        runProviderDynamicModel: () => undefined,
+        applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>
+          provider === "xai" &&
+          context.model.api === "openai-completions" &&
+          context.model.baseUrl === "https://api.x.ai/v1"
+            ? {
+                ...context.model,
+                api: "openai-responses",
+              }
+            : undefined,
+        normalizeProviderResolvedModelWithPlugin: ({ provider, context }) =>
+          provider === "xai" ? (context.model as never) : undefined,
+        normalizeProviderTransportWithPlugin: () => undefined,
+      },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "xai",
+      id: "grok-4.20-beta-latest-reasoning",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
     });
   });
 });

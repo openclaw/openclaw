@@ -258,7 +258,7 @@ export async function maybeRepairGatewayServiceConfig(
       note(warning, "Gateway runtime");
     }
     note(
-      "System Node 22 LTS (22.16+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+      "System Node 22 LTS (22.14+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
       "Gateway runtime",
     );
   }
@@ -411,7 +411,7 @@ export async function maybeScanExtraGatewayServices(
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
     const shouldRemove = await prompter.confirmRuntimeRepair({
-      message: "Remove legacy gateway services (clawdbot/moltbot) now?",
+      message: "Remove legacy gateway services now?",
       initialValue: true,
     });
     if (shouldRemove) {

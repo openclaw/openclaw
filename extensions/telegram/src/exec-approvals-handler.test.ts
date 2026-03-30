@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
 
 const baseRequest = {
@@ -78,7 +78,7 @@ describe("TelegramExecApprovalHandler", () => {
             },
             {
               text: "Allow Always",
-              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-always",
+              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 always",
             },
           ],
           [

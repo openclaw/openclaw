@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
 NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
-NODE_MIN_MINOR=16
+NODE_MIN_MINOR=14
 NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
@@ -2074,7 +2074,7 @@ run_bootstrap_onboarding_if_needed() {
     fi
 
     local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
         return
     fi
 
@@ -2492,7 +2492,7 @@ main() {
             ui_info "Skipping onboard (requested); run openclaw onboard later"
         else
             local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
@@ -30,6 +31,14 @@ vi.mock("./runtime.js", () => ({
 
 import { feishuOutbound } from "./outbound.js";
 const sendText = feishuOutbound.sendText!;
+const emptyConfig: ClawdbotConfig = {};
+const cardRenderConfig: ClawdbotConfig = {
+  channels: {
+    feishu: {
+      renderMode: "card",
+    },
+  },
+};
 
 function resetOutboundMocks() {
   vi.clearAllMocks();
@@ -44,6 +53,16 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     resetOutboundMocks();
   });
 
+  it("chunks outbound text without requiring Feishu runtime initialization", () => {
+    const chunker = feishuOutbound.chunker;
+    if (!chunker) {
+      throw new Error("feishuOutbound.chunker missing");
+    }
+
+    expect(() => chunker("hello world", 5)).not.toThrow();
+    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+  });
+
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
     const file = path.join(dir, `sample${ext}`);
@@ -55,7 +74,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     const { dir, file } = await createTmpImage();
     try {
       const result = await sendText({
-        cfg: {} as any,
+        cfg: emptyConfig,
         to: "chat_1",
         text: file,
         accountId: "main",
@@ -81,7 +100,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 
   it("keeps non-path text on the text-send path", async () => {
     await sendText({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "please upload /tmp/example.png",
       accountId: "main",
@@ -102,7 +121,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
     try {
       await sendText({
-        cfg: {} as any,
+        cfg: emptyConfig,
         to: "chat_1",
         text: file,
         accountId: "main",
@@ -123,13 +142,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 
   it("uses markdown cards when renderMode=card", async () => {
     const result = await sendText({
-      cfg: {
-        channels: {
-          feishu: {
-            renderMode: "card",
-          },
-        },
-      } as any,
+      cfg: cardRenderConfig,
       to: "chat_1",
       text: "| a | b |\n| - | - |",
       accountId: "main",
@@ -148,12 +161,12 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 
   it("forwards replyToId as replyToMessageId on sendText", async () => {
     await sendText({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "hello",
       replyToId: "om_reply_1",
       accountId: "main",
-    } as any);
+    });
 
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -167,13 +180,13 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 
   it("falls back to threadId when replyToId is empty on sendText", async () => {
     await sendText({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "hello",
       replyToId: " ",
       threadId: "om_thread_2",
       accountId: "main",
-    } as any);
+    });
 
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -215,7 +228,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
 
   it("forwards replyToId as replyToMessageId to sendMessageFeishu", async () => {
     await sendText({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "hello",
       replyToId: "om_reply_target",
@@ -234,13 +247,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
 
   it("forwards replyToId to sendStructuredCardFeishu when renderMode=card", async () => {
     await sendText({
-      cfg: {
-        channels: {
-          feishu: {
-            renderMode: "card",
-          },
-        },
-      } as any,
+      cfg: cardRenderConfig,
       to: "chat_1",
       text: "```code```",
       replyToId: "om_reply_target",
@@ -256,7 +263,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
 
   it("does not pass replyToMessageId when replyToId is absent", async () => {
     await sendText({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "hello",
       accountId: "main",
@@ -280,7 +287,7 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
 
   it("forwards replyToId to sendMediaFeishu", async () => {
     await feishuOutbound.sendMedia?.({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "",
       mediaUrl: "https://example.com/image.png",
@@ -322,7 +329,7 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
 
   it("forwards replyToId to text caption send", async () => {
     await feishuOutbound.sendMedia?.({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "caption text",
       mediaUrl: "https://example.com/image.png",
@@ -345,13 +352,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
 
   it("uses markdown cards for captions when renderMode=card", async () => {
     const result = await feishuOutbound.sendMedia?.({
-      cfg: {
-        channels: {
-          feishu: {
-            renderMode: "card",
-          },
-        },
-      } as any,
+      cfg: cardRenderConfig,
       to: "chat_1",
       text: "| a | b |\n| - | - |",
       mediaUrl: "https://example.com/image.png",
@@ -378,13 +379,13 @@ describe("feishuOutbound.sendMedia renderMode", () => {
 
   it("uses threadId fallback as replyToMessageId on sendMedia", async () => {
     await feishuOutbound.sendMedia?.({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "chat_1",
       text: "caption",
       mediaUrl: "https://example.com/image.png",
       threadId: "om_thread_1",
       accountId: "main",
-    } as any);
+    });
 
     expect(sendMediaFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
