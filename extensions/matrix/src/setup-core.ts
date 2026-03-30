@@ -19,6 +19,7 @@ export function buildMatrixConfigUpdate(
   input: {
     homeserver?: string;
     allowPrivateNetwork?: boolean;
+    proxy?: string;
     userId?: string;
     accessToken?: string;
     password?: string;
@@ -30,6 +31,7 @@ export function buildMatrixConfigUpdate(
     enabled: true,
     homeserver: input.homeserver,
     allowPrivateNetwork: input.allowPrivateNetwork,
+    proxy: input.proxy,
     userId: input.userId,
     accessToken: input.accessToken,
     password: input.password,
