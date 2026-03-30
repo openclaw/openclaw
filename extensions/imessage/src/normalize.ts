@@ -1,10 +1,31 @@
-import { normalizeE164 } from "../../../plugin-sdk/account-resolution.js";
-import { looksLikeHandleOrPhoneTarget, trimMessagingTarget } from "./shared.js";
+import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 
-// Service prefixes that indicate explicit delivery method; must be preserved during normalization
 const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
   /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i;
+
+function trimMessagingTarget(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
+
+function looksLikeHandleOrPhoneTarget(params: {
+  raw: string;
+  prefixPattern: RegExp;
+  phonePattern?: RegExp;
+}): boolean {
+  const trimmed = params.raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (params.prefixPattern.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.includes("@")) {
+    return true;
+  }
+  return (params.phonePattern ?? /^\+?\d{3,}$/).test(trimmed);
+}
 
 export function normalizeIMessageHandle(raw: string): string {
   const trimmed = raw.trim();
@@ -45,7 +66,6 @@ export function normalizeIMessageMessagingTarget(raw: string): string | undefine
     return undefined;
   }
 
-  // Preserve service prefix if present (e.g., "sms:+1555" → "sms:+15551234567")
   const lower = trimmed.toLowerCase();
   for (const prefix of SERVICE_PREFIXES) {
     if (lower.startsWith(prefix)) {

@@ -16,6 +16,8 @@ Docs: https://docs.openclaw.ai
 - Agents/MCP: materialize bundle MCP tools with provider-safe names (`serverName__toolName`), support optional `streamable-http` transport selection plus per-server connection timeouts, and preserve real tool results from aborted/error turns unless truncation explicitly drops them. (#49505) Thanks @ziomancer.
 - Plugins/hooks: add a `before_install` hook with structured request provenance, built-in scan status, and install-target metadata so external security scanners and policy engines can review and block skill, plugin package, plugin bundle, and single-file plugin installs. (#56050) thanks @odysseus0.
 - ACP/plugins: add an explicit default-off ACPX plugin-tools MCP bridge config, document the trust boundary, and harden the built-in bridge packaging/logging path so global installs and stdio MCP sessions work reliably. (#56867) Thanks @joe2643.
+- Docs/zh-CN: add a Chinese Diffs tool page so Chinese readers can access the full Diffs viewer, file-rendering, security, and troubleshooting docs. (#40773) Thanks @elliotllliu.
+- Docs/zh-CN: align the Chinese Diffs tool page with the current English source and generated translation metadata. Thanks @gumadeiras.
 
 ### Fixes
 
@@ -26,6 +28,9 @@ Docs: https://docs.openclaw.ai
 - ACPX/runtime: derive the bundled ACPX expected version from the extension package metadata instead of hardcoding a separate literal, so plugin-local ACPX installs stop drifting out of health-check parity after version bumps. (#49089) Thanks @jiejiesks and @vincentkoc.
 - Gateway/auth: make local-direct `trusted-proxy` fallback require the configured shared token instead of silently authenticating same-host callers, while keeping same-host reverse proxy identity-header flows on the normal trusted-proxy path. Thanks @zhangning-agent and @vincentkoc.
 - Memory/QMD: send MCP `query` collection filters as the upstream `collections` array instead of the legacy singular `collection` field, so mcporter-backed QMD 1.1+ searches still scope correctly after the unified `query` tool migration. (#54728) Thanks @armanddp and @vincentkoc.
+- Memory/QMD: keep `qmd embed` active in `search` mode too, so BM25-first setups still build a complete index for later vector and hybrid retrieval. (#54509) Thanks @hnshah and @vincentkoc.
+- Memory/QMD: point `QMD_CONFIG_DIR` at the nested `xdg-config/qmd` directory so per-agent collection config resolves correctly. (#39078) Thanks @smart-tinker and @vincentkoc.
+- Memory/QMD: include deduplicated default plus per-agent `memorySearch.extraPaths` when building QMD custom collections, so shared and agent-specific extra roots both get indexed consistently. (#57315) Thanks @Vitalcheffe and @vincentkoc.
 - Agents/sandbox: honor `tools.sandbox.tools.alsoAllow`, let explicit sandbox re-allows remove matching built-in default-deny tools, and keep sandbox explain/error guidance aligned with the effective sandbox tool policy. (#54492) Thanks @ngutman.
 - LINE/ACP: add current-conversation binding and inbound binding-routing parity so `/acp spawn ... --thread here`, configured ACP bindings, and active conversation-bound ACP sessions work on LINE like the other conversation channels.
 - LINE/markdown: preserve underscores inside Latin, Cyrillic, and CJK words when stripping markdown, while still removing standalone `_italic_` markers on the shared text-runtime path used by LINE and TTS. (#47465) Thanks @jackjin1997.
@@ -70,6 +75,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI: add descriptor-backed lazy plugin CLI registration so Matrix can keep its CLI module lazy-loaded without dropping `openclaw matrix ...` from parse-time command registration. (#57165) Thanks @gumadeiras.
 - Plugins/CLI: collect root-help plugin descriptors through a dedicated non-activating CLI metadata path so enabled plugins keep validated config semantics without triggering runtime-only plugin registration work, while preserving runtime CLI command registration for legacy channel plugins that still wire commands from full registration. (#57294) thanks @gumadeiras.
 - Anthropic/OAuth: inject `/fast` `service_tier` hints for direct `sk-ant-oat-*` requests so OAuth-authenticated Anthropic runs stop missing the same overload-routing signal as API-key traffic. Fixes #55758. Thanks @Cypherm and @vincentkoc.
+- Anthropic/service tiers: support explicit `serviceTier` model params for direct Anthropic requests and let them override `/fast` defaults when both are set. (#45453) Thanks @vincentkoc.
 - Docs/anchors: fix broken English docs links and make Mint anchor audits run against the English-source docs tree. (#57039) thanks @velvet-shark.
 - Cron/announce: preserve all deliverable text payloads for announce mode instead of collapsing to the last chunk, so multi-line cron reports deliver in full to Telegram forum topics.
 
