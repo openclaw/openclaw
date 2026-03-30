@@ -328,10 +328,23 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
     : detectLegacyMatrixCrypto({ cfg: params.cfg, env });
   const warnings = [...detection.warnings];
   const changes: string[] = [];
-  let inspectLegacyStore = params.deps?.inspectLegacyStore;
   const writeJsonFileAtomically =
     params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomicallyImpl;
-  if (!inspectLegacyStore && detection.plans.length > 0) {
+  if (detection.plans.length === 0) {
+    if (warnings.length > 0) {
+      params.log?.warn?.(
+        `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      );
+    }
+    return {
+      migrated: false,
+      changes,
+      warnings,
+    };
+  }
+
+  let inspectLegacyStore = params.deps?.inspectLegacyStore;
+  if (!inspectLegacyStore) {
     try {
       inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
         cfg: params.cfg,
@@ -354,6 +367,13 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
       };
     }
   }
+  if (!inspectLegacyStore) {
+    return {
+      migrated: false,
+      changes,
+      warnings,
+    };
+  }
 
   for (const plan of detection.plans) {
     const existingState = loadLegacyCryptoMigrationState(plan.statePath);
@@ -370,8 +390,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
 
     let summary: MatrixLegacyCryptoSummary;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      summary = await inspectLegacyStore!({
+      summary = await inspectLegacyStore({
         cryptoRootDir: plan.legacyCryptoPath,
         userId: plan.userId,
         deviceId: plan.deviceId,
