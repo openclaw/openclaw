@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
 import { buildDmGroupAccountAllowlistAdapter } from "../../plugin-sdk/allowlist-config-edit.js";
+import { resolveApprovalApprovers } from "../../plugin-sdk/approval-approvers.js";
 import { createApproverRestrictedNativeApprovalAdapter } from "../../plugin-sdk/approval-runtime.js";
 import { createScopedChannelConfigAdapter } from "../../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -216,15 +217,36 @@ function resolveTelegramTestAccount(
 }
 
 function normalizeTelegramAllowFromEntries(values: Array<string | number>): string[] {
-  return formatAllowFromLowercase({ allowFrom: values });
+  return formatAllowFromLowercase({ allowFrom: values, stripPrefixRe: /^(telegram|tg):/i });
+}
+
+function stripTelegramInternalPrefixes(value: string): string {
+  let trimmed = value.trim();
+  let strippedTelegramPrefix = false;
+  while (true) {
+    const next = (() => {
+      if (/^(telegram|tg):/i.test(trimmed)) {
+        strippedTelegramPrefix = true;
+        return trimmed.replace(/^(telegram|tg):/i, "").trim();
+      }
+      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
+        return trimmed.replace(/^group:/i, "").trim();
+      }
+      return trimmed;
+    })();
+    if (next === trimmed) {
+      return trimmed;
+    }
+    trimmed = next;
+  }
 }
 
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
-  const normalized = String(value).trim();
+  const normalized = stripTelegramInternalPrefixes(String(value));
   if (!normalized || normalized.startsWith("-")) {
     return undefined;
   }
-  return normalized.replace(/^(?:tg|telegram):/i, "");
+  return normalized;
 }
 
 function getTelegramExecApprovalApprovers(params: {
@@ -232,12 +254,11 @@ function getTelegramExecApprovalApprovers(params: {
   accountId?: string | null;
 }): string[] {
   const account = resolveTelegramTestAccount(params.cfg, params.accountId);
-  const explicit = account.execApprovals?.approvers;
-  const allowFrom = account.allowFrom;
-  const source = Array.isArray(explicit) ? explicit : Array.isArray(allowFrom) ? allowFrom : [];
-  return source
-    .map((entry) => normalizeTelegramDirectApproverId(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  return resolveApprovalApprovers({
+    explicit: account.execApprovals?.approvers,
+    allowFrom: account.allowFrom,
+    normalizeApprover: normalizeTelegramDirectApproverId,
+  });
 }
 
 function isTelegramExecApprovalTargetRecipient(params: {
@@ -272,7 +293,7 @@ function isTelegramExecApprovalAuthorizedSender(params: {
   accountId?: string | null;
   senderId?: string | null;
 }): boolean {
-  const senderId = params.senderId?.trim();
+  const senderId = params.senderId ? normalizeTelegramDirectApproverId(params.senderId) : undefined;
   if (!senderId) {
     return false;
   }
@@ -354,6 +375,35 @@ const telegramCommandTestPlugin: ChannelPlugin = {
     resolveGroupPolicy: (account) => account.groupPolicy,
   }),
 };
+
+describe("telegram command test plugin helpers", () => {
+  it("normalizes telegram allowFrom entries like the production adapter", () => {
+    expect(normalizeTelegramAllowFromEntries([" TG:123 ", "telegram:456", "@Alice"])).toEqual([
+      "123",
+      "456",
+      "@alice",
+    ]);
+  });
+
+  it("falls back to allowFrom when explicit exec approvers are empty", () => {
+    expect(
+      getTelegramExecApprovalApprovers({
+        cfg: {
+          channels: {
+            telegram: {
+              allowFrom: ["tg:123"],
+              execApprovals: { enabled: true, approvers: [] },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toEqual(["123"]);
+  });
+
+  it("rejects prefixed telegram group ids as direct approvers", () => {
+    expect(normalizeTelegramDirectApproverId("tg:-100123456")).toBeUndefined();
+  });
+});
 
 function setMinimalChannelPluginRegistryForTests(): void {
   setActivePluginRegistry(
