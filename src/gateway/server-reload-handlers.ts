@@ -102,6 +102,9 @@ export function createGatewayReloadHandlers(params: {
               ...(nextConfig.gateway?.channelMaxRestartsPerHour != null && {
                 maxRestartsPerHour: nextConfig.gateway.channelMaxRestartsPerHour,
               }),
+              ...(nextConfig.gateway?.channelHealthRestartMode != null && {
+                defaultRestartMode: nextConfig.gateway.channelHealthRestartMode,
+              }),
             });
     }
 

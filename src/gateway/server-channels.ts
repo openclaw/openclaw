@@ -149,6 +149,15 @@ export type ChannelManager = {
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
+  /**
+   * Returns the per-channel `healthMonitor` config for a given channel and
+   * account, or `undefined` if no per-channel override is configured.
+   * Used by the health-monitor to resolve the effective `restartMode`.
+   */
+  getChannelHealthMonitorConfig: (
+    channelId: ChannelId,
+    accountId: string,
+  ) => import("../config/types.channels.js").ChannelHealthMonitorConfig | undefined;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
@@ -221,6 +230,38 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
 
     return true;
+  };
+
+  const getChannelHealthMonitorConfig = (
+    channelId: ChannelId,
+    accountId: string,
+  ): import("../config/types.channels.js").ChannelHealthMonitorConfig | undefined => {
+    const cfg = loadConfig();
+    const channelConfig = cfg.channels?.[channelId] as
+      | import("../config/types.channels.js").ChannelHealthMonitorConfig
+      | undefined;
+
+    // Check account-level override first.
+    if (channelConfig?.accounts) {
+      const direct = resolveAccountEntry(channelConfig.accounts, accountId);
+      if (direct?.healthMonitor != null) {
+        return direct.healthMonitor as import("../config/types.channels.js").ChannelHealthMonitorConfig;
+      }
+      const normalizedAccountId = normalizeOptionalAccountId(accountId);
+      if (normalizedAccountId) {
+        const match = resolveNormalizedAccountEntry(
+          channelConfig.accounts,
+          normalizedAccountId,
+          normalizeAccountId,
+        );
+        if (match?.healthMonitor != null) {
+          return match.healthMonitor as import("../config/types.channels.js").ChannelHealthMonitorConfig;
+        }
+      }
+    }
+
+    // Fall back to channel-level healthMonitor config.
+    return channelConfig?.healthMonitor;
   };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
@@ -607,5 +648,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     isManuallyStopped: isManuallyStopped_,
     resetRestartAttempts: resetRestartAttempts_,
     isHealthMonitorEnabled,
+    getChannelHealthMonitorConfig,
   };
 }

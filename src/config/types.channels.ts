@@ -9,12 +9,33 @@ export type ChannelHeartbeatVisibilityConfig = {
   useIndicator?: boolean;
 };
 
+/**
+ * Controls how the channel health-monitor reacts to a stale-socket condition.
+ *
+ * - `"stop-start"` (default): stops the channel then starts it again. Reliable
+ *   but invalidates any in-memory state held by the provider client, including
+ *   Anthropic's prompt-cache warm-up context.
+ * - `"reconnect"`: performs a lightweight re-connect by stopping and immediately
+ *   starting the channel without resetting the restart-attempt counter or
+ *   emitting a full channel teardown. Preserves in-memory provider state where
+ *   the underlying SDK supports session resumption (e.g. Discord gateway
+ *   RESUME). Falls back to `"stop-start"` if the reconnect fails.
+ */
+export type ChannelHealthRestartMode = "stop-start" | "reconnect";
+
 export type ChannelHealthMonitorConfig = {
   /**
    * Enable channel-health-monitor restarts for this channel or account.
    * Inherits the global gateway setting when omitted.
    */
   enabled?: boolean;
+  /**
+   * How to restart a stale channel. `"reconnect"` attempts a lightweight
+   * re-connect that may preserve SDK-level session state (e.g. Discord
+   * RESUME), which avoids invalidating Anthropic prompt-cache context.
+   * Defaults to `"stop-start"` for backwards-compatibility.
+   */
+  restartMode?: ChannelHealthRestartMode;
 };
 
 export type ChannelDefaultsConfig = {
