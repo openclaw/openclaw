@@ -379,6 +379,10 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           });
           message = parsed.message.trim();
           images = parsed.images;
+          if (message.length > 20_000) {
+            ctx.logGateway.warn(`agent.request message exceeds limit after attachment parsing (length=${message.length})`);
+            return;
+          }
         } catch (err) {
           ctx.logGateway.warn(`agent.request attachment parse failed: ${err instanceof Error ? err.message : String(err)}`);
           return;
