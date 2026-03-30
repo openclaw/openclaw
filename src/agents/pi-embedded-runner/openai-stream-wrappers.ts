@@ -8,7 +8,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type OpenAITextVerbosity = "low" | "medium" | "high";
 
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
+const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
@@ -358,7 +358,9 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
-      (model.api !== "openai-responses" && model.api !== "openai-codex-responses") ||
+      (model.api !== "openai-responses" &&
+        model.api !== "openai-codex-responses" &&
+        model.api !== "azure-openai-responses") ||
       (model.provider !== "openai" && model.provider !== "openai-codex")
     ) {
       return underlying(model, context, options);
