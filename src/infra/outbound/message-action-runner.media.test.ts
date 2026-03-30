@@ -602,4 +602,70 @@ describe("runMessageAction media behavior", () => {
       }
     });
   });
+
+  describe("send action with buffer", () => {
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "slack",
+            source: "test",
+            plugin: slackPlugin,
+          },
+        ]),
+      );
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+    });
+
+    it("accepts send with buffer and message through the full runner path", async () => {
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          buffer: "aGVsbG8=",
+          contentType: "text/plain",
+          message: "Here is a file",
+        },
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+    });
+
+    it("accepts send with data-URI buffer through the runner without error", async () => {
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          buffer: "data:image/png;base64,iVBOR",
+          message: "screenshot",
+        },
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+    });
+
+    it("rejects send with buffer but no message and no media", async () => {
+      await expect(
+        runMessageAction({
+          cfg: slackConfig,
+          action: "send",
+          params: {
+            channel: "slack",
+            target: "#C12345678",
+            buffer: "aGVsbG8=",
+          },
+          dryRun: true,
+        }),
+      ).rejects.toThrow(/message required/i);
+    });
+  });
 });
