@@ -719,6 +719,35 @@ describe("parseSlackDirectives", () => {
     ]);
   });
 
+  it("parses optional Slack button styles without truncating callback values", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_buttons: Approve:pluginbind:approval-123:o:primary, Reject:deny:danger, Skip:skip:secondary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            value: "pluginbind:approval-123:o",
+            style: "primary",
+          },
+          {
+            label: "Reject",
+            value: "deny",
+            style: "danger",
+          },
+          {
+            label: "Skip",
+            value: "skip",
+            style: "secondary",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps existing interactive blocks when compiling additional Slack directives", () => {
     const result = parseSlackDirectives({
       text: "Choose [[slack_buttons: Retry:retry]]",

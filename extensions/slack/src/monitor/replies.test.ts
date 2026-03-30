@@ -100,6 +100,46 @@ describe("deliverReplies identity passthrough", () => {
       }),
     );
   });
+
+  it("renders interactive replies into Slack blocks during delivery", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "Choose",
+            interactive: {
+              blocks: [
+                { type: "text", text: "Choose" },
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Approve", value: "approve", style: "primary" }],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      blocks: [
+        expect.objectContaining({ type: "section" }),
+        expect.objectContaining({
+          type: "actions",
+          elements: [
+            expect.objectContaining({
+              action_id: "openclaw:reply_button:1:1",
+              style: "primary",
+              value: "approve",
+            }),
+          ],
+        }),
+      ],
+    });
+  });
 });
 
 describe("deliverSlackSlashReplies chunking", () => {

@@ -10,6 +10,7 @@ const SLACK_SIMPLE_OPTION_RE = /^[a-z0-9][a-z0-9 _+/-]{0,31}$/i;
 type SlackChoice = {
   label: string;
   value: string;
+  style?: "primary" | "secondary" | "success" | "danger";
 };
 
 function parseChoice(raw: string): SlackChoice | null {
@@ -25,11 +26,28 @@ function parseChoice(raw: string): SlackChoice | null {
     };
   }
   const label = trimmed.slice(0, delimiter).trim();
-  const value = trimmed.slice(delimiter + 1).trim();
+  let value = trimmed.slice(delimiter + 1).trim();
   if (!label || !value) {
     return null;
   }
-  return { label, value };
+  let style: SlackChoice["style"];
+  const styleDelimiter = value.lastIndexOf(":");
+  if (styleDelimiter !== -1) {
+    const maybeStyle = value.slice(styleDelimiter + 1).trim().toLowerCase();
+    if (
+      maybeStyle === "primary" ||
+      maybeStyle === "secondary" ||
+      maybeStyle === "success" ||
+      maybeStyle === "danger"
+    ) {
+      const unstyledValue = value.slice(0, styleDelimiter).trim();
+      if (unstyledValue) {
+        value = unstyledValue;
+        style = maybeStyle;
+      }
+    }
+  }
+  return style ? { label, value, style } : { label, value };
 }
 
 function parseChoices(raw: string, maxItems: number): SlackChoice[] {
@@ -62,6 +80,7 @@ function buildButtonsBlock(
     buttons: choices.map((choice) => ({
       label: choice.label,
       value: choice.value,
+      style: choice.style,
     })),
   };
 }
