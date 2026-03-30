@@ -1380,6 +1380,7 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
       expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.Body).toContain("exec finished: backup completed");
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {
