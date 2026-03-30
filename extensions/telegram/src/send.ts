@@ -1029,7 +1029,7 @@ export async function sendMessageTelegram(
 }
 
 // Max retry attempts for sendChatAction to prevent infinite loops (issue #56096)
-const MAX_SEND_CHAT_ACTION_RETRIES = 5;
+const MAX_SEND_CHAT_ACTION_ATTEMPTS = 5;
 
 /**
  * Check if an error is recoverable for sendChatAction with stricter rules.
@@ -1061,7 +1061,7 @@ export async function sendTypingTelegram(
   // Use limited retries with exponential backoff for sendChatAction
   // This prevents infinite retry loops (issue #56096)
   const typingRetryConfig: RetryConfig = {
-    attempts: MAX_SEND_CHAT_ACTION_RETRIES,
+    attempts: MAX_SEND_CHAT_ACTION_ATTEMPTS,
     minDelayMs: 1000, // Start with 1s backoff
     maxDelayMs: 30_000, // Cap at 30s
     jitter: 0.2,
@@ -1073,6 +1073,7 @@ export async function sendTypingTelegram(
     retry: typingRetryConfig,
     verbose: opts.verbose,
     shouldRetry: shouldRetrySendChatAction,
+    strictShouldRetry: true,
   });
   const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
 
@@ -1089,11 +1090,9 @@ export async function sendTypingTelegram(
   } catch (err) {
     // Log but don't fail - typing indicator is non-critical
     // This ensures the main message flow continues even if typing fails
-    if (opts.verbose) {
-      sendLogger.warn(
-        `sendTypingTelegram failed after ${MAX_SEND_CHAT_ACTION_RETRIES} retries, continuing: ${formatErrorMessage(err)}`,
-      );
-    }
+    sendLogger.warn(
+      `sendTypingTelegram failed after ${MAX_SEND_CHAT_ACTION_ATTEMPTS} attempts, continuing: ${formatErrorMessage(err)}`,
+    );
     // Return success anyway - typing indicator is best-effort
   }
 
