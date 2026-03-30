@@ -1309,7 +1309,7 @@ public struct SessionsRecallParams: Codable, Sendable {
     public let query: String
     public let maxtokens: Int?
     public let limit: Int?
-    public let scope: AnyCodable?
+    public let scope: String?
     public let requestersessionkey: String?
     public let sandboxed: Bool?
 
@@ -1317,7 +1317,7 @@ public struct SessionsRecallParams: Codable, Sendable {
         query: String,
         maxtokens: Int?,
         limit: Int?,
-        scope: AnyCodable?,
+        scope: String?,
         requestersessionkey: String?,
         sandboxed: Bool?)
     {

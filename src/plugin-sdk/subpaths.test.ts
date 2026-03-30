@@ -320,6 +320,14 @@ describe("plugin-sdk subpath exports", () => {
       "memory-core-host-runtime-files",
       'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
     );
+    expectSourceContains(
+      "memory-core-host-session-fts",
+      'from "../../extensions/memory-core/src/memory/hybrid.js"',
+    );
+    expectSourceContains(
+      "memory-core-host-session-fts",
+      'from "../../extensions/memory-core/src/memory/manager-search.js"',
+    );
   });
 
   it("exports channel runtime helpers from the dedicated subpath", () => {
