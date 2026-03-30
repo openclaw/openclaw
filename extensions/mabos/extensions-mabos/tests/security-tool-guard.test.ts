@@ -30,11 +30,15 @@ describe("ToolGuard", () => {
   });
 
   it("redacts sensitive args", () => {
-    const result = guard.checkApproval("send_email", {
-      to: "user@example.com",
-      apiKey: "sk-secret-123",
-      body: "hello",
-    }, "agent");
+    const result = guard.checkApproval(
+      "send_email",
+      {
+        to: "user@example.com",
+        apiKey: "sk-secret-123",
+        body: "hello",
+      },
+      "agent",
+    );
     assert.ok(result !== null);
     assert.equal(result!.redactedArgs.apiKey, "[REDACTED]");
     assert.equal(result!.redactedArgs.to, "user@example.com");

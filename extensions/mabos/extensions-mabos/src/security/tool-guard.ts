@@ -15,8 +15,15 @@ interface ToolGuardConfig {
 }
 
 const SENSITIVE_KEYS = new Set([
-  "apikey", "api_key", "token", "secret", "password", "credential",
-  "authorization", "key", "private_key",
+  "apikey",
+  "api_key",
+  "token",
+  "secret",
+  "password",
+  "credential",
+  "authorization",
+  "key",
+  "private_key",
 ]);
 
 export class ToolGuard {
@@ -24,7 +31,7 @@ export class ToolGuard {
   private autoApproveRoles: Set<string>;
 
   constructor(config: ToolGuardConfig) {
-    this.dangerousPatterns = (config.dangerousTools ?? []).map(pattern => {
+    this.dangerousPatterns = (config.dangerousTools ?? []).map((pattern) => {
       if (pattern.includes("*")) {
         const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         return new RegExp(`^${escaped.split("\\*").join(".*")}$`, "i");
