@@ -64,6 +64,33 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     expect(retried.history.map((entry) => entry.body)).toEqual(["msg1"]);
     expect(retried.snapshotIdx).toBe(first.snapshotIdx);
   });
+
+  it("refreshes watermark recency before capped-map eviction", () => {
+    const tracker = createRoomHistoryTracker(200, 10, 2);
+    const room1 = "!room1:test";
+    const room2 = "!room2:test";
+    const room3 = "!room3:test";
+
+    tracker.recordPending(room1, entry("old msg in room1"));
+    const snap1 = tracker.recordTrigger(room1, entry("trigger in room1"));
+    tracker.consumeHistory(AGENT, room1, snap1);
+
+    tracker.recordPending(room2, entry("old msg in room2"));
+    const snap2 = tracker.recordTrigger(room2, entry("trigger in room2"));
+    tracker.consumeHistory(AGENT, room2, snap2);
+
+    // Refresh room1 so room2 becomes the stalest watermark entry.
+    tracker.consumeHistory(AGENT, room1, snap1);
+
+    tracker.recordPending(room3, entry("old msg in room3"));
+    const snap3 = tracker.recordTrigger(room3, entry("trigger in room3"));
+    tracker.consumeHistory(AGENT, room3, snap3);
+
+    tracker.recordPending(room1, entry("new msg in room1"));
+    const room1History = tracker.getPendingHistory(AGENT, room1, 100);
+    expect(room1History).toHaveLength(1);
+    expect(room1History[0]?.body).toBe("new msg in room1");
+  });
 });
 
 describe("createRoomHistoryTracker — roomQueues eviction", () => {

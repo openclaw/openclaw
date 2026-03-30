@@ -85,6 +85,7 @@ type RoomQueue = {
 export function createRoomHistoryTracker(
   maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
   maxRoomQueues = DEFAULT_MAX_ROOM_QUEUES,
+  maxWatermarkEntries = MAX_WATERMARK_ENTRIES,
 ): RoomHistoryTracker {
   const roomQueues = new Map<string, RoomQueue>();
   /** Maps `${agentId}:${roomId}` → absolute consumed-up-to index */
@@ -135,6 +136,21 @@ export function createRoomHistoryTracker(
       return null;
     }
     return `${agentId}:${messageId.trim()}`;
+  }
+
+  function rememberWatermark(key: string, snapshotIdx: number): void {
+    const nextSnapshotIdx = Math.max(agentWatermarks.get(key) ?? 0, snapshotIdx);
+    if (agentWatermarks.has(key)) {
+      // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
+      agentWatermarks.delete(key);
+    }
+    agentWatermarks.set(key, nextSnapshotIdx);
+    if (agentWatermarks.size > maxWatermarkEntries) {
+      const oldest = agentWatermarks.keys().next().value;
+      if (oldest !== undefined) {
+        agentWatermarks.delete(oldest);
+      }
+    }
   }
 
   function computePendingHistory(
@@ -208,17 +224,10 @@ export function createRoomHistoryTracker(
       // Monotone write: never regress an already-advanced watermark.
       // Guards against out-of-order completion when two triggers for the same
       // (agentId, roomId) are in-flight concurrently.
-      agentWatermarks.set(key, Math.max(agentWatermarks.get(key) ?? 0, snapshotIdx));
+      rememberWatermark(key, snapshotIdx);
       const retryKey = preparedTriggerKey(agentId, messageId);
       if (queue && retryKey) {
         queue.preparedTriggers.delete(retryKey);
-      }
-      // LRU-style eviction to prevent unbounded growth
-      if (agentWatermarks.size > MAX_WATERMARK_ENTRIES) {
-        const oldest = agentWatermarks.keys().next().value;
-        if (oldest !== undefined) {
-          agentWatermarks.delete(oldest);
-        }
       }
     },
   };
