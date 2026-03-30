@@ -143,6 +143,22 @@ describe("resolveMemoryBackendConfig", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.qmd?.searchMode).toBe("vsearch");
   });
+
+  it("resolves qmd mcporter search tool override", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+          searchTool: " hybrid_search ",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.qmd?.searchMode).toBe("query");
+    expect(resolved.qmd?.searchTool).toBe("hybrid_search");
+  });
 });
 
 describe("memorySearch.extraPaths integration", () => {
