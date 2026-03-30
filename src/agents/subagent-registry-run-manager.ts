@@ -1,7 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createTaskRecord } from "../tasks/task-registry.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
@@ -320,7 +320,7 @@ export function createSubagentRunManager(params: {
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     try {
-      createTaskRecord({
+      createRunningTaskRun({
         runtime: "subagent",
         sourceId: registerParams.runId,
         requesterSessionKey: registerParams.requesterSessionKey,
@@ -329,7 +329,6 @@ export function createSubagentRunManager(params: {
         runId: registerParams.runId,
         label: registerParams.label,
         task: registerParams.task,
-        status: "running",
         deliveryStatus:
           registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
         startedAt: now,
