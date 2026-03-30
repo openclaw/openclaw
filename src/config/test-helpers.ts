@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { OpenClawConfig } from "./config.js";
+import { resetConfigRuntimeState, type OpenClawConfig } from "./config.js";
 
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-config-" });
+  resetConfigRuntimeState();
+  try {
+    return await withTempHomeBase(fn, { prefix: "openclaw-config-" });
+  } finally {
+    resetConfigRuntimeState();
+  }
 }
 
 export async function writeOpenClawConfig(home: string, config: unknown): Promise<string> {
@@ -12,6 +17,23 @@ export async function writeOpenClawConfig(home: string, config: unknown): Promis
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   return configPath;
+}
+
+export async function writeStateDirDotEnv(
+  content: string,
+  params?: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+  },
+): Promise<{ dotEnvPath: string; stateDir: string }> {
+  const stateDir = params?.stateDir ?? params?.env?.OPENCLAW_STATE_DIR?.trim();
+  if (!stateDir) {
+    throw new Error("Expected OPENCLAW_STATE_DIR or explicit stateDir for .env test setup");
+  }
+  const dotEnvPath = path.join(stateDir, ".env");
+  await fs.mkdir(path.dirname(dotEnvPath), { recursive: true });
+  await fs.writeFile(dotEnvPath, content, "utf-8");
+  return { dotEnvPath, stateDir };
 }
 
 export async function withTempHomeConfig<T>(

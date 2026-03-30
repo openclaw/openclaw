@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 32_000;
@@ -29,7 +30,7 @@ export function resolveContextWindowInfo(params: {
     const providers = params.cfg?.models?.providers as
       | Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>
       | undefined;
-    const providerEntry = providers?.[params.provider];
+    const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
     const match = models.find((m) => m?.id === params.modelId);
     return normalizePositiveInt(match?.contextWindow);

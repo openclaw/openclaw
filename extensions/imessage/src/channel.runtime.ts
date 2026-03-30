@@ -1,14 +1,12 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "../runtime-api.js";
 import type { ResolvedIMessageAccount } from "./accounts.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { probeIMessage } from "./probe.js";
-import { getIMessageRuntime } from "./runtime.js";
+import { sendMessageIMessage } from "./send.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 
-type IMessageSendFn = ReturnType<
-  typeof getIMessageRuntime
->["channel"]["imessage"]["sendMessageIMessage"];
+type IMessageSendFn = typeof sendMessageIMessage;
 
 export async function sendIMessageOutbound(params: {
   cfg: Parameters<typeof import("./accounts.js").resolveIMessageAccount>[0]["cfg"];
@@ -21,8 +19,7 @@ export async function sendIMessageOutbound(params: {
   replyToId?: string;
 }) {
   const send =
-    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage") ??
-    getIMessageRuntime().channel.imessage.sendMessageIMessage;
+    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage") ?? sendMessageIMessage;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -41,7 +38,7 @@ export async function sendIMessageOutbound(params: {
 }
 
 export async function notifyIMessageApproval(id: string): Promise<void> {
-  await getIMessageRuntime().channel.imessage.sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
+  await sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
 }
 
 export async function probeIMessageAccount(timeoutMs?: number) {

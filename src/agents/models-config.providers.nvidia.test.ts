@@ -3,10 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { buildNvidiaProvider } from "./models-config.providers.js";
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", async () => {
@@ -94,9 +94,6 @@ describe("MiniMax implicit provider (#15275)", () => {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.["minimax-portal"]).toBeDefined();
       expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
-      expect(providers?.["minimax-portal"]?.models?.some((m) => m.id === "MiniMax-VL-01")).toBe(
-        true,
-      );
     });
   });
 });

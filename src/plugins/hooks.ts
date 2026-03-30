@@ -14,6 +14,9 @@ import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -53,6 +56,9 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeInstallContext,
+  PluginHookBeforeInstallEvent,
+  PluginHookBeforeInstallResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -60,6 +66,9 @@ export type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -100,6 +109,9 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookBeforeInstallContext,
+  PluginHookBeforeInstallEvent,
+  PluginHookBeforeInstallResult,
 };
 
 export type HookRunnerLogger = {
@@ -112,6 +124,17 @@ export type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
+};
+
+type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
+  mergeResults?: (
+    accumulated: TResult | undefined,
+    next: TResult,
+    registration: PluginHookRegistration<K>,
+  ) => TResult;
+  shouldStop?: (result: TResult) => boolean;
+  terminalLabel?: string;
+  onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
 };
 
 export type PluginTargetedInboundClaimOutcome =
@@ -160,20 +183,25 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
 
+  const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;
+  const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
+  const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
+    prev === true || next === true ? true : undefined;
+
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
     next: PluginHookBeforeModelResolveResult,
   ): PluginHookBeforeModelResolveResult => ({
     // Keep the first defined override so higher-priority hooks win.
-    modelOverride: acc?.modelOverride ?? next.modelOverride,
-    providerOverride: acc?.providerOverride ?? next.providerOverride,
+    modelOverride: firstDefined(acc?.modelOverride, next.modelOverride),
+    providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
   });
 
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
-    systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+    systemPrompt: lastDefined(acc?.systemPrompt, next.systemPrompt),
     prependContext: concatOptionalTextSegments({
       left: acc?.prependContext,
       right: next.prependContext,
@@ -270,7 +298,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
-    mergeResults?: (accumulated: TResult | undefined, next: TResult) => TResult,
+    policy: ModifyingHookPolicy<K, TResult> = {},
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
@@ -288,10 +316,19 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         )(event, ctx);
 
         if (handlerResult !== undefined && handlerResult !== null) {
-          if (mergeResults && result !== undefined) {
-            result = mergeResults(result, handlerResult);
+          if (policy.mergeResults) {
+            result = policy.mergeResults(result, handlerResult, hook);
           } else {
             result = handlerResult;
+          }
+          if (result && policy.shouldStop?.(result)) {
+            const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
+            const priority = hook.priority ?? 0;
+            logger?.debug?.(
+              `[hooks] ${hookName}${terminalLabel} decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+            );
+            policy.onTerminal?.({ hookName, pluginId: hook.pluginId, result });
+            break;
           }
         }
       } catch (err) {
@@ -434,7 +471,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_model_resolve",
       event,
       ctx,
-      mergeBeforeModelResolve,
+      { mergeResults: mergeBeforeModelResolve },
     );
   }
 
@@ -450,7 +487,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_prompt_build",
       event,
       ctx,
-      mergeBeforePromptBuild,
+      { mergeResults: mergeBeforePromptBuild },
     );
   }
 
@@ -466,10 +503,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_agent_start",
       event,
       ctx,
-      (acc, next) => ({
-        ...mergeBeforePromptBuild(acc, next),
-        ...mergeBeforeModelResolve(acc, next),
-      }),
+      {
+        mergeResults: (acc, next) => ({
+          ...mergeBeforePromptBuild(acc, next),
+          ...mergeBeforeModelResolve(acc, next),
+        }),
+      },
     );
   }
 
@@ -592,6 +631,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_dispatch hook.
+   * Allows plugins to inspect or handle a message before model dispatch.
+   * First handler returning { handled: true } wins.
+   */
+  async function runBeforeDispatch(
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookBeforeDispatchContext,
+  ): Promise<PluginHookBeforeDispatchResult | undefined> {
+    return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
+      "before_dispatch",
+      event,
+      ctx,
+    );
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -604,10 +659,19 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "message_sending",
       event,
       ctx,
-      (acc, next) => ({
-        content: next.content ?? acc?.content,
-        cancel: next.cancel ?? acc?.cancel,
-      }),
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.cancel === true) {
+            return acc;
+          }
+          return {
+            content: lastDefined(acc?.content, next.content),
+            cancel: stickyTrue(acc?.cancel, next.cancel),
+          };
+        },
+        shouldStop: (result) => result.cancel === true,
+        terminalLabel: "cancel=true",
+      },
     );
   }
 
@@ -639,11 +703,30 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_tool_call",
       event,
       ctx,
-      (acc, next) => ({
-        params: next.params ?? acc?.params,
-        block: next.block ?? acc?.block,
-        blockReason: next.blockReason ?? acc?.blockReason,
-      }),
+      {
+        mergeResults: (acc, next, reg) => {
+          if (acc?.block === true) {
+            return acc;
+          }
+          const approvalPluginId = acc?.requireApproval?.pluginId;
+          const freezeParamsForDifferentPlugin =
+            Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
+          return {
+            params: freezeParamsForDifferentPlugin
+              ? acc?.params
+              : lastDefined(acc?.params, next.params),
+            block: stickyTrue(acc?.block, next.block),
+            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+            requireApproval:
+              acc?.requireApproval ??
+              (next.requireApproval
+                ? { ...next.requireApproval, pluginId: reg.pluginId }
+                : undefined),
+          };
+        },
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+      },
     );
   }
 
@@ -832,7 +915,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "subagent_spawning",
       event,
       ctx,
-      mergeSubagentSpawningResult,
+      { mergeResults: mergeSubagentSpawningResult },
     );
   }
 
@@ -848,7 +931,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "subagent_delivery_target",
       event,
       ctx,
-      mergeSubagentDeliveryTargetResult,
+      { mergeResults: mergeSubagentDeliveryTargetResult },
     );
   }
 
@@ -901,6 +984,41 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Skill Install Hooks
+  // =========================================================================
+
+  /**
+   * Run before_install hook.
+   * Allows plugins to augment scan findings or block installs.
+   * Runs sequentially so higher-priority hooks can block before lower ones run.
+   */
+  async function runBeforeInstall(
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ): Promise<PluginHookBeforeInstallResult | undefined> {
+    return runModifyingHook<"before_install", PluginHookBeforeInstallResult>(
+      "before_install",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.block === true) {
+            return acc;
+          }
+          const mergedFindings = [...(acc?.findings ?? []), ...(next.findings ?? [])];
+          return {
+            findings: mergedFindings.length > 0 ? mergedFindings : undefined,
+            block: stickyTrue(acc?.block, next.block),
+            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+          };
+        },
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+      },
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -934,6 +1052,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runMessageReceived,
+    runBeforeDispatch,
     runMessageSending,
     runMessageSent,
     // Tool hooks
@@ -952,6 +1071,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Install hooks
+    runBeforeInstall,
     // Utility
     hasHooks,
     getHookCount,
@@ -959,3 +1080,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 }
 
 export type HookRunner = ReturnType<typeof createHookRunner>;
+
+export type SubagentLifecycleHookRunner = Pick<
+  HookRunner,
+  "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+>;

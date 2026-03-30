@@ -8,13 +8,13 @@ import {
   resolveThreadBindingEffectiveExpiresAt,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
+  type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -76,18 +76,20 @@ type TelegramThreadBindingsState = {
  * binding lookups, and binding mutations all observe the same live registry.
  */
 const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.telegramThreadBindingsState");
-
 let threadBindingsState: TelegramThreadBindingsState | undefined;
 
 function getThreadBindingsState(): TelegramThreadBindingsState {
-  threadBindingsState ??= resolveGlobalSingleton<TelegramThreadBindingsState>(
-    TELEGRAM_THREAD_BINDINGS_STATE_KEY,
-    () => ({
+  if (!threadBindingsState) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    threadBindingsState = (globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] as
+      | TelegramThreadBindingsState
+      | undefined) ?? {
       managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
       bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
       persistQueueByAccountId: new Map<string, Promise<void>>(),
-    }),
-  );
+    };
+    globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
+  }
   return threadBindingsState;
 }
 
@@ -316,11 +318,7 @@ async function persistBindingsToDisk(params: {
         (entry) => entry.accountId === params.accountId,
       ),
   };
-  await writeJsonAtomic(resolveBindingsPath(params.accountId), payload, {
-    mode: 0o600,
-    trailingNewline: true,
-    ensureDirMode: 0o700,
-  });
+  await writeJsonFileAtomically(resolveBindingsPath(params.accountId), payload);
 }
 
 function listBindingsForAccount(accountId: string): TelegramThreadBindingRecord[] {
@@ -542,7 +540,11 @@ export function createTelegramThreadBindingManager(
         clearInterval(sweepTimer);
         sweepTimer = null;
       }
-      unregisterSessionBindingAdapter({ channel: "telegram", accountId });
+      unregisterSessionBindingAdapter({
+        channel: "telegram",
+        accountId,
+        adapter: sessionBindingAdapter,
+      });
       const existingManager = getThreadBindingsState().managersByAccountId.get(accountId);
       if (existingManager === manager) {
         getThreadBindingsState().managersByAccountId.delete(accountId);
@@ -550,7 +552,7 @@ export function createTelegramThreadBindingManager(
     },
   };
 
-  registerSessionBindingAdapter({
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "telegram",
     accountId,
     capabilities: {
@@ -687,7 +689,9 @@ export function createTelegramThreadBindingManager(
           ]
         : [];
     },
-  });
+  };
+
+  registerSessionBindingAdapter(sessionBindingAdapter);
 
   const sweeperEnabled = params.enableSweeper !== false;
   if (sweeperEnabled) {
@@ -800,14 +804,16 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   });
 }
 
+export async function resetTelegramThreadBindingsForTests() {
+  for (const manager of getThreadBindingsState().managersByAccountId.values()) {
+    manager.stop();
+  }
+  await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
+  getThreadBindingsState().persistQueueByAccountId.clear();
+  getThreadBindingsState().managersByAccountId.clear();
+  getThreadBindingsState().bindingsByAccountConversation.clear();
+}
+
 export const __testing = {
-  async resetTelegramThreadBindingsForTests() {
-    for (const manager of getThreadBindingsState().managersByAccountId.values()) {
-      manager.stop();
-    }
-    await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
-    getThreadBindingsState().persistQueueByAccountId.clear();
-    getThreadBindingsState().managersByAccountId.clear();
-    getThreadBindingsState().bindingsByAccountConversation.clear();
-  },
+  resetTelegramThreadBindingsForTests,
 };

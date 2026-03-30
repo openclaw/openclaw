@@ -1,6 +1,13 @@
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
+
+const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const DEFAULT_LIVE_MODEL_IDS = ["gpt-5.4-mini", "gpt-5.4-nano"] as const;
@@ -172,6 +179,73 @@ describe("buildOpenAIProvider", () => {
       name: "gpt-5.4-nano",
     });
   });
+
+  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.0",
+      } as never),
+    ).toBe(false);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.2",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.1-codex",
+      } as never),
+    ).toBe(false);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.1-codex-max",
+      } as never),
+    ).toBe(false);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.2-codex",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+  });
+
+  it("falls back to cached codex oauth credentials on accountId extraction failures", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai-codex",
+      access: "cached-access-token",
+      refresh: "refresh-token",
+      expires: Date.now() - 60_000,
+    };
+
+    refreshOpenAICodexTokenMock.mockReset();
+    refreshOpenAICodexTokenMock.mockRejectedValueOnce(
+      new Error("Failed to extract accountId from token"),
+    );
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+  });
 });
 
 describeLive("buildOpenAIProvider live", () => {
@@ -207,13 +281,14 @@ describeLive("buildOpenAIProvider live", () => {
         modelId: liveCase.modelId,
         modelRegistry: registry as never,
       });
-
-      expect(resolved).toBeDefined();
+      if (!resolved) {
+        throw new Error(`openai provider did not resolve ${liveCase.modelId}`);
+      }
 
       const normalized = provider.normalizeResolvedModel?.({
         provider: "openai",
-        modelId: resolved!.id,
-        model: resolved!,
+        modelId: resolved.id,
+        model: resolved,
       });
 
       expect(normalized).toMatchObject({

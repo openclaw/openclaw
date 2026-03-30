@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { withStateDirEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveTelegramToken } from "./token.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
@@ -21,6 +21,25 @@ describe("resolveTelegramToken", () => {
     const tokenFile = path.join(dir, fileName);
     fs.writeFileSync(tokenFile, contents, "utf-8");
     return tokenFile;
+  }
+
+  function createUnknownAccountConfig(): OpenClawConfig {
+    return {
+      channels: {
+        telegram: {
+          botToken: "wrong-bot-token",
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  function expectNoTokenForUnknownAccount(cfg: OpenClawConfig) {
+    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
   }
 
   afterEach(() => {
@@ -117,6 +136,23 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("config");
   });
 
+  it("resolves per-account tokens when config keys normalize spaces to dashes", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            "Carey Notifications": { botToken: "acct-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "carey-notifications" });
+    expect(res.token).toBe("acct-token");
+    expect(res.source).toBe("config");
+  });
+
   it("falls back to top-level token for non-default accounts without account token", () => {
     const cfg = {
       channels: {
@@ -190,20 +226,7 @@ describe("resolveTelegramToken", () => {
 
   it("does not fall through to channel-level token when non-default accountId is not in config", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "wrong-bot-token",
-          accounts: {
-            knownBot: { botToken: "known-bot-token" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
   });
 
   it("throws when botToken is an unresolved SecretRef object", () => {
@@ -218,6 +241,29 @@ describe("resolveTelegramToken", () => {
     expect(() => resolveTelegramToken(cfg)).toThrow(
       /channels\.telegram\.botToken: unresolved SecretRef/i,
     );
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Binding-created accountIds should inherit the channel-level token in
+  // single-bot setups (no accounts section).
+  it("falls through to channel-level token for binding-created accountId without accounts section", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "bot-main" });
+    expect(res.token).toBe("channel-level-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
   });
 });
 

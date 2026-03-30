@@ -49,7 +49,7 @@ Fix in the plugin package:
 
 1. Add `openclaw.extensions` to `package.json`.
 2. Point entries at built runtime files (usually `./dist/index.js`).
-3. Republish the plugin and run `openclaw plugins install <npm-spec>` again.
+3. Republish the plugin and run `openclaw plugins install <package>` again.
 
 Example:
 
@@ -266,6 +266,51 @@ flowchart TD
 
   </Accordion>
 
+  <Accordion title="Exec suddenly asks for approval">
+    ```bash
+    openclaw config get tools.exec.host
+    openclaw config get tools.exec.security
+    openclaw config get tools.exec.ask
+    openclaw gateway restart
+    ```
+
+    What changed:
+
+    - If `tools.exec.host` is unset, the default is `auto`.
+    - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
+    - On `gateway` and `node`, unset `tools.exec.security` defaults to `allowlist`.
+    - Unset `tools.exec.ask` defaults to `on-miss`.
+    - Result: ordinary host commands can now pause with `Approval required` instead of running immediately.
+
+    Restore the old gateway no-approval behavior:
+
+    ```bash
+    openclaw config set tools.exec.host gateway
+    openclaw config set tools.exec.security full
+    openclaw config set tools.exec.ask off
+    openclaw gateway restart
+    ```
+
+    Safer alternatives:
+
+    - Set only `tools.exec.host=gateway` if you just want stable host routing and still want approvals.
+    - Keep `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
+    - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
+
+    Common log signatures:
+
+    - `Approval required.` → command is waiting on `/approve ...`.
+    - `SYSTEM_RUN_DENIED: approval required` → node-host exec approval is pending.
+    - `exec host=sandbox requires a sandbox runtime for this session` → implicit/explicit sandbox selection but sandbox mode is off.
+
+    Deep pages:
+
+    - [/tools/exec](/tools/exec)
+    - [/tools/exec-approvals](/tools/exec-approvals)
+    - [/gateway/security#runtime-expectation-drift](/gateway/security#runtime-expectation-drift)
+
+  </Accordion>
+
   <Accordion title="Browser tool fails">
     ```bash
     openclaw status
@@ -282,6 +327,7 @@ flowchart TD
 
     Common log signatures:
 
+    - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
     - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
@@ -290,6 +336,7 @@ flowchart TD
     Deep pages:
 
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
+    - [/tools/browser#missing-browser-command-or-tool](/tools/browser#missing-browser-command-or-tool)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
     - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 

@@ -58,6 +58,8 @@ If install succeeds but `openclaw` is not found in a new terminal, see [Node.js 
 
 ---
 
+<a id="installsh"></a>
+
 ## install.sh
 
 <Tip>
@@ -71,7 +73,7 @@ Recommended for most interactive installs on macOS/Linux/WSL.
     Supports macOS and Linux (including WSL). If macOS is detected, installs Homebrew if missing.
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). OpenClaw still supports Node 22 LTS, currently `22.16+`, for compatibility.
+    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). OpenClaw still supports Node 22 LTS, currently `22.14+`, for compatibility.
   </Step>
   <Step title="Ensure Git">
     Installs Git if missing.
@@ -170,6 +172,8 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 
 ---
 
+<a id="install-clish"></a>
+
 ## install-cli.sh
 
 <Info>
@@ -248,6 +252,8 @@ Designed for environments where you want everything under a local prefix (defaul
 
 ---
 
+<a id="installps1"></a>
+
 ## install.ps1
 
 ### Flow (install.ps1)
@@ -257,7 +263,7 @@ Designed for environments where you want everything under a local prefix (defaul
     Requires PowerShell 5+.
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. Node 22 LTS, currently `22.16+`, remains supported for compatibility.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. Node 22 LTS, currently `22.14+`, remains supported for compatibility.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using selected `-Tag`

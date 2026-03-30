@@ -1,26 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import type { RuntimeEnv } from "../runtime-api.js";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
-import { setMatrixRuntime } from "./runtime.js";
+import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 describe("matrix directory", () => {
-  const runtimeEnv: RuntimeEnv = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
+  const runtimeEnv: RuntimeEnv = createRuntimeEnv();
 
   beforeEach(() => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
-      },
-    } as PluginRuntime);
+    installMatrixTestRuntime();
   });
 
   it("lists peers and groups from config", async () => {

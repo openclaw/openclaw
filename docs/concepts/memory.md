@@ -1,108 +1,102 @@
 ---
-title: "Memory"
-summary: "How OpenClaw memory works (workspace files + automatic memory flush)"
+title: "Memory Overview"
+summary: "How OpenClaw remembers things across sessions"
 read_when:
-  - You want the memory file layout and workflow
-  - You want to tune the automatic pre-compaction memory flush
+  - You want to understand how memory works
+  - You want to know what memory files to write
 ---
 
-# Memory
+# Memory Overview
 
-OpenClaw memory is **plain Markdown in the agent workspace**. The files are the
-source of truth; the model only "remembers" what gets written to disk.
+OpenClaw remembers things by writing **plain Markdown files** in your agent's
+workspace. The model only "remembers" what gets saved to disk -- there is no
+hidden state.
 
-Memory search tools are provided by the active memory plugin (default:
-`memory-core`). Disable memory plugins with `plugins.slots.memory = "none"`.
+## How it works
 
-## Memory files (Markdown)
+Your agent has two places to store memories:
 
-The default workspace layout uses two memory layers:
+- **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
+  decisions. Loaded at the start of every DM session.
+- **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
+  Today and yesterday's notes are loaded automatically.
 
-- `memory/YYYY-MM-DD.md`
-  - Daily log (append-only).
-  - Read today + yesterday at session start.
-- `MEMORY.md` (optional)
-  - Curated long-term memory.
-  - If both `MEMORY.md` and `memory.md` exist at the workspace root, OpenClaw only loads `MEMORY.md`.
-  - Lowercase `memory.md` is only used as a fallback when `MEMORY.md` is absent.
-  - **Only load in the main, private session** (never in group contexts).
+These files live in the agent workspace (default `~/.openclaw/workspace`).
 
-These files live under the workspace (`agents.defaults.workspace`, default
-`~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
+<Tip>
+If you want your agent to remember something, just ask it: "Remember that I
+prefer TypeScript." It will write it to the appropriate file.
+</Tip>
 
 ## Memory tools
 
-OpenClaw exposes two agent-facing tools for these Markdown files:
+The agent has two tools for working with memory:
 
-- `memory_search` -- semantic recall over indexed snippets.
-- `memory_get` -- targeted read of a specific Markdown file/line range.
+- **`memory_search`** -- finds relevant notes using semantic search, even when
+  the wording differs from the original.
+- **`memory_get`** -- reads a specific memory file or line range.
 
-`memory_get` now **degrades gracefully when a file doesn't exist** (for example,
-today's daily log before the first write). Both the builtin manager and the QMD
-backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
-handle "nothing recorded yet" and continue their workflow without wrapping the
-tool call in try/catch logic.
+Both tools are provided by the active memory plugin (default: `memory-core`).
 
-## When to write memory
+## Memory search
 
-- Decisions, preferences, and durable facts go to `MEMORY.md`.
-- Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
-- If someone says "remember this," write it down (do not keep it in RAM).
-- This area is still evolving. It helps to remind the model to store memories; it will know what to do.
-- If you want something to stick, **ask the bot to write it** into memory.
+When an embedding provider is configured, `memory_search` uses **hybrid
+search** -- combining vector similarity (semantic meaning) with keyword matching
+(exact terms like IDs and code symbols). This works out of the box once you have
+an API key for any supported provider.
 
-## Automatic memory flush (pre-compaction ping)
+<Info>
+OpenClaw auto-detects your embedding provider from available API keys. If you
+have an OpenAI, Gemini, Voyage, or Mistral key configured, memory search is
+enabled automatically.
+</Info>
 
-When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
-agentic turn** that reminds the model to write durable memory **before** the
-context is compacted. The default prompts explicitly say the model _may reply_,
-but usually `NO_REPLY` is the correct response so the user never sees this turn.
+For details on how search works, tuning options, and provider setup, see
+[Memory Search](/concepts/memory-search).
 
-This is controlled by `agents.defaults.compaction.memoryFlush`:
+## Memory backends
 
-```json5
-{
-  agents: {
-    defaults: {
-      compaction: {
-        reserveTokensFloor: 20000,
-        memoryFlush: {
-          enabled: true,
-          softThresholdTokens: 4000,
-          systemPrompt: "Session nearing compaction. Store durable memories now.",
-          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
-        },
-      },
-    },
-  },
-}
+<CardGroup cols={3}>
+<Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
+SQLite-based. Works out of the box with keyword search, vector similarity, and
+hybrid search. No extra dependencies.
+</Card>
+<Card title="QMD" icon="search" href="/concepts/memory-qmd">
+Local-first sidecar with reranking, query expansion, and the ability to index
+directories outside the workspace.
+</Card>
+<Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
+AI-native cross-session memory with user modeling, semantic search, and
+multi-agent awareness. Plugin install.
+</Card>
+</CardGroup>
+
+## Automatic memory flush
+
+Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
+runs a silent turn that reminds the agent to save important context to memory
+files. This is on by default -- you do not need to configure anything.
+
+<Tip>
+The memory flush prevents context loss during compaction. If your agent has
+important facts in the conversation that are not yet written to a file, they
+will be saved automatically before the summary happens.
+</Tip>
+
+## CLI
+
+```bash
+openclaw memory status          # Check index status and provider
+openclaw memory search "query"  # Search from the command line
+openclaw memory index --force   # Rebuild the index
 ```
 
-Details:
+## Further reading
 
-- **Soft threshold**: flush triggers when the session token estimate crosses
-  `contextWindow - reserveTokensFloor - softThresholdTokens`.
-- **Silent** by default: prompts include `NO_REPLY` so nothing is delivered.
-- **Two prompts**: a user prompt plus a system prompt append the reminder.
-- **One flush per compaction cycle** (tracked in `sessions.json`).
-- **Workspace must be writable**: if the session runs sandboxed with
-  `workspaceAccess: "ro"` or `"none"`, the flush is skipped.
-
-For the full compaction lifecycle, see
-[Session management + compaction](/reference/session-management-compaction).
-
-## Vector memory search
-
-OpenClaw can build a small vector index over `MEMORY.md` and `memory/*.md` so
-semantic queries can find related notes even when wording differs. Hybrid search
-(BM25 + vector) is available for combining semantic matching with exact keyword
-lookups.
-
-Memory search supports multiple embedding providers (OpenAI, Gemini, Voyage,
-Mistral, Ollama, and local GGUF models), an optional QMD sidecar backend for
-advanced retrieval, and post-processing features like MMR diversity re-ranking
-and temporal decay.
-
-For the full configuration reference -- including embedding provider setup, QMD
-backend, hybrid search tuning, multimodal memory, and all config knobs -- see
-[Memory configuration reference](/reference/memory-config).
+- [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
+- [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
+- [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
+- [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
+  tuning
+- [Memory configuration reference](/reference/memory-config) -- all config knobs
+- [Compaction](/concepts/compaction) -- how compaction interacts with memory

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -60,8 +60,11 @@ jobs:
           ACTIONLINT_VERSION="1.7.11"
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
-          curl -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          # GitHub release downloads occasionally return transient 5xx responses.
+          # Retry all curl errors here so workflow-sanity does not fail closed on
+          # a one-off release edge outage.
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep " ${archive}\$" checksums.txt | sha256sum -c -
           tar -xzf "${archive}" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
@@ -72,7 +75,10 @@ jobs:
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py
 
-  config-docs-drift:
+      - name: Disallow tracked merge conflict markers
+        run: node scripts/check-no-conflict-markers.mjs
+
+  generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
@@ -87,3 +93,6 @@ jobs:
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check
+
+      - name: Check plugin SDK API baseline drift
+        run: pnpm plugin-sdk:api:check

@@ -16,8 +16,11 @@ export type TelegramMediaRef = {
 };
 
 export type TelegramMessageContextOptions = {
+  commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  receivedAtMs?: number;
+  ingressBuffer?: "inbound-debounce" | "text-fragment";
 };
 
 export type TelegramLogger = {

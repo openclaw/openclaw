@@ -1,75 +1,146 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveMatrixAccountStorageRoot } from "./matrix-config-helpers.js";
 import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./matrix-legacy-crypto.js";
 import { MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE } from "./matrix-plugin-helper.js";
+import {
+  MATRIX_DEFAULT_ACCESS_TOKEN,
+  MATRIX_DEFAULT_DEVICE_ID,
+  MATRIX_DEFAULT_USER_ID,
+  MATRIX_OPS_ACCESS_TOKEN,
+  MATRIX_OPS_ACCOUNT_ID,
+  MATRIX_OPS_DEVICE_ID,
+  MATRIX_OPS_USER_ID,
+  MATRIX_TEST_HOMESERVER,
+  matrixHelperEnv,
+  writeFile,
+  writeMatrixCredentials,
+  writeMatrixPluginFixture,
+} from "./matrix.test-helpers.js";
 
-function writeFile(filePath: string, value: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, value, "utf8");
-}
+vi.unmock("../version.js");
 
-function writeMatrixPluginFixture(rootDir: string): void {
-  fs.mkdirSync(rootDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "matrix",
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
+function createDefaultMatrixConfig(): OpenClawConfig {
+  return {
+    channels: {
+      matrix: {
+        homeserver: MATRIX_TEST_HOMESERVER,
+        userId: MATRIX_DEFAULT_USER_ID,
+        accessToken: MATRIX_DEFAULT_ACCESS_TOKEN,
       },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(rootDir, "index.js"), "export default {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(rootDir, "legacy-crypto-inspector.js"),
-    [
-      "export async function inspectLegacyMatrixCryptoStore() {",
-      '  return { deviceId: "FIXTURE", roomKeyCounts: { total: 1, backedUp: 1 }, backupVersion: "1", decryptionKeyBase64: null };',
-      "}",
-    ].join("\n"),
-    "utf8",
-  );
+    },
+  };
 }
 
-const matrixHelperEnv = {
-  OPENCLAW_BUNDLED_PLUGINS_DIR: (home: string) => path.join(home, "bundled"),
-};
+function writeDefaultLegacyCryptoFixture(home: string) {
+  const stateDir = path.join(home, ".openclaw");
+  const cfg = createDefaultMatrixConfig();
+  const { rootDir } = resolveMatrixAccountStorageRoot({
+    stateDir,
+    homeserver: MATRIX_TEST_HOMESERVER,
+    userId: MATRIX_DEFAULT_USER_ID,
+    accessToken: MATRIX_DEFAULT_ACCESS_TOKEN,
+  });
+  writeFile(
+    path.join(rootDir, "crypto", "bot-sdk.json"),
+    JSON.stringify({ deviceId: MATRIX_DEFAULT_DEVICE_ID }),
+  );
+  return { cfg, rootDir, stateDir };
+}
+
+function createOpsLegacyCryptoFixture(params: {
+  home: string;
+  cfg: OpenClawConfig;
+  accessToken?: string;
+  includeStoredCredentials?: boolean;
+}) {
+  const stateDir = path.join(params.home, ".openclaw");
+  writeMatrixPluginFixture(path.join(params.home, "bundled", "matrix"));
+  writeFile(
+    path.join(stateDir, "matrix", "crypto", "bot-sdk.json"),
+    JSON.stringify({ deviceId: MATRIX_OPS_DEVICE_ID }),
+  );
+  if (params.includeStoredCredentials) {
+    writeMatrixCredentials(stateDir, {
+      accountId: MATRIX_OPS_ACCOUNT_ID,
+      accessToken: params.accessToken ?? MATRIX_OPS_ACCESS_TOKEN,
+      deviceId: MATRIX_OPS_DEVICE_ID,
+    });
+  }
+  const { rootDir } = resolveMatrixAccountStorageRoot({
+    stateDir,
+    homeserver: MATRIX_TEST_HOMESERVER,
+    userId: MATRIX_OPS_USER_ID,
+    accessToken: params.accessToken ?? MATRIX_OPS_ACCESS_TOKEN,
+    accountId: MATRIX_OPS_ACCOUNT_ID,
+  });
+  return { rootDir, stateDir };
+}
+
+async function expectPreparedOpsLegacyMigration(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  rootDir: string;
+  inspectLegacyStore: {
+    deviceId: string;
+    roomKeyCounts: { total: number; backedUp: number };
+    backupVersion: string;
+    decryptionKeyBase64: string;
+  };
+  expectAccountId?: boolean;
+}) {
+  const detection = detectLegacyMatrixCrypto({ cfg: params.cfg, env: params.env });
+  expect(detection.warnings).toEqual([]);
+  expect(detection.plans).toHaveLength(1);
+  expect(detection.plans[0]?.accountId).toBe("ops");
+
+  const result = await autoPrepareLegacyMatrixCrypto({
+    cfg: params.cfg,
+    env: params.env,
+    deps: {
+      inspectLegacyStore: async () => params.inspectLegacyStore,
+    },
+  });
+
+  expect(result.migrated).toBe(true);
+  expect(result.warnings).toEqual([]);
+  const recovery = JSON.parse(
+    fs.readFileSync(path.join(params.rootDir, "recovery-key.json"), "utf8"),
+  ) as {
+    privateKeyBase64: string;
+  };
+  expect(recovery.privateKeyBase64).toBe(params.inspectLegacyStore.decryptionKeyBase64);
+  if (!params.expectAccountId) {
+    return;
+  }
+  const state = JSON.parse(
+    fs.readFileSync(path.join(params.rootDir, "legacy-crypto-migration.json"), "utf8"),
+  ) as {
+    accountId: string;
+  };
+  expect(state.accountId).toBe("ops");
+}
 
 describe("matrix legacy encrypted-state migration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("extracts a saved backup key into the new recovery-key path", async () => {
     await withTempHome(
       async (home) => {
         writeMatrixPluginFixture(path.join(home, "bundled", "matrix"));
-        const stateDir = path.join(home, ".openclaw");
-        const cfg: OpenClawConfig = {
-          channels: {
-            matrix: {
-              homeserver: "https://matrix.example.org",
-              userId: "@bot:example.org",
-              accessToken: "tok-123",
-            },
-          },
-        };
-        const { rootDir } = resolveMatrixAccountStorageRoot({
-          stateDir,
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-123",
-        });
-        writeFile(path.join(rootDir, "crypto", "bot-sdk.json"), '{"deviceId":"DEVICE123"}');
+        const { cfg, rootDir } = writeDefaultLegacyCryptoFixture(home);
 
         const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
         expect(detection.warnings).toEqual([]);
         expect(detection.plans).toHaveLength(1);
 
         const inspectLegacyStore = vi.fn(async () => ({
-          deviceId: "DEVICE123",
+          deviceId: MATRIX_DEFAULT_DEVICE_ID,
           roomKeyCounts: { total: 12, backedUp: 12 },
           backupVersion: "1",
           decryptionKeyBase64: "YWJjZA==",
@@ -107,30 +178,14 @@ describe("matrix legacy encrypted-state migration", () => {
 
   it("warns when legacy local-only room keys cannot be recovered automatically", async () => {
     await withTempHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const cfg: OpenClawConfig = {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@bot:example.org",
-            accessToken: "tok-123",
-          },
-        },
-      };
-      const { rootDir } = resolveMatrixAccountStorageRoot({
-        stateDir,
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "tok-123",
-      });
-      writeFile(path.join(rootDir, "crypto", "bot-sdk.json"), '{"deviceId":"DEVICE123"}');
+      const { cfg, rootDir } = writeDefaultLegacyCryptoFixture(home);
 
       const result = await autoPrepareLegacyMatrixCrypto({
         cfg,
         env: process.env,
         deps: {
           inspectLegacyStore: async () => ({
-            deviceId: "DEVICE123",
+            deviceId: MATRIX_DEFAULT_DEVICE_ID,
             roomKeyCounts: { total: 15, backedUp: 10 },
             backupVersion: null,
             decryptionKeyBase64: null,
@@ -156,30 +211,14 @@ describe("matrix legacy encrypted-state migration", () => {
 
   it("warns instead of throwing when recovery-key persistence fails", async () => {
     await withTempHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const cfg: OpenClawConfig = {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@bot:example.org",
-            accessToken: "tok-123",
-          },
-        },
-      };
-      const { rootDir } = resolveMatrixAccountStorageRoot({
-        stateDir,
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "tok-123",
-      });
-      writeFile(path.join(rootDir, "crypto", "bot-sdk.json"), '{"deviceId":"DEVICE123"}');
+      const { cfg, rootDir } = writeDefaultLegacyCryptoFixture(home);
 
       const result = await autoPrepareLegacyMatrixCrypto({
         cfg,
         env: process.env,
         deps: {
           inspectLegacyStore: async () => ({
-            deviceId: "DEVICE123",
+            deviceId: MATRIX_DEFAULT_DEVICE_ID,
             roomKeyCounts: { total: 12, backedUp: 12 },
             backupVersion: "1",
             decryptionKeyBase64: "YWJjZA==",
@@ -205,78 +244,36 @@ describe("matrix legacy encrypted-state migration", () => {
   it("prepares flat legacy crypto for the only configured non-default Matrix account", async () => {
     await withTempHome(
       async (home) => {
-        writeMatrixPluginFixture(path.join(home, "bundled", "matrix"));
-        const stateDir = path.join(home, ".openclaw");
-        writeFile(
-          path.join(stateDir, "matrix", "crypto", "bot-sdk.json"),
-          JSON.stringify({ deviceId: "DEVICEOPS" }),
-        );
-        writeFile(
-          path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
-          JSON.stringify(
-            {
-              homeserver: "https://matrix.example.org",
-              userId: "@ops-bot:example.org",
-              accessToken: "tok-ops",
-              deviceId: "DEVICEOPS",
-            },
-            null,
-            2,
-          ),
-        );
-
         const cfg: OpenClawConfig = {
           channels: {
             matrix: {
               accounts: {
                 ops: {
-                  homeserver: "https://matrix.example.org",
-                  userId: "@ops-bot:example.org",
+                  homeserver: MATRIX_TEST_HOMESERVER,
+                  userId: MATRIX_OPS_USER_ID,
                 },
               },
             },
           },
         };
-        const { rootDir } = resolveMatrixAccountStorageRoot({
-          stateDir,
-          homeserver: "https://matrix.example.org",
-          userId: "@ops-bot:example.org",
-          accessToken: "tok-ops",
-          accountId: "ops",
+        const { rootDir } = createOpsLegacyCryptoFixture({
+          home,
+          cfg,
+          includeStoredCredentials: true,
         });
 
-        const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
-        expect(detection.warnings).toEqual([]);
-        expect(detection.plans).toHaveLength(1);
-        expect(detection.plans[0]?.accountId).toBe("ops");
-
-        const result = await autoPrepareLegacyMatrixCrypto({
+        await expectPreparedOpsLegacyMigration({
           cfg,
           env: process.env,
-          deps: {
-            inspectLegacyStore: async () => ({
-              deviceId: "DEVICEOPS",
-              roomKeyCounts: { total: 6, backedUp: 6 },
-              backupVersion: "21868",
-              decryptionKeyBase64: "YWJjZA==",
-            }),
+          rootDir,
+          inspectLegacyStore: {
+            deviceId: MATRIX_OPS_DEVICE_ID,
+            roomKeyCounts: { total: 6, backedUp: 6 },
+            backupVersion: "21868",
+            decryptionKeyBase64: "YWJjZA==",
           },
+          expectAccountId: true,
         });
-
-        expect(result.migrated).toBe(true);
-        expect(result.warnings).toEqual([]);
-        const recovery = JSON.parse(
-          fs.readFileSync(path.join(rootDir, "recovery-key.json"), "utf8"),
-        ) as {
-          privateKeyBase64: string;
-        };
-        expect(recovery.privateKeyBase64).toBe("YWJjZA==");
-        const state = JSON.parse(
-          fs.readFileSync(path.join(rootDir, "legacy-crypto-migration.json"), "utf8"),
-        ) as {
-          accountId: string;
-        };
-        expect(state.accountId).toBe("ops");
       },
       { env: matrixHelperEnv },
     );
@@ -285,13 +282,6 @@ describe("matrix legacy encrypted-state migration", () => {
   it("uses scoped Matrix env vars when resolving flat legacy crypto migration", async () => {
     await withTempHome(
       async (home) => {
-        writeMatrixPluginFixture(path.join(home, "bundled", "matrix"));
-        const stateDir = path.join(home, ".openclaw");
-        writeFile(
-          path.join(stateDir, "matrix", "crypto", "bot-sdk.json"),
-          JSON.stringify({ deviceId: "DEVICEOPS" }),
-        );
-
         const cfg: OpenClawConfig = {
           channels: {
             matrix: {
@@ -301,46 +291,29 @@ describe("matrix legacy encrypted-state migration", () => {
             },
           },
         };
-        const { rootDir } = resolveMatrixAccountStorageRoot({
-          stateDir,
-          homeserver: "https://matrix.example.org",
-          userId: "@ops-bot:example.org",
+        const { rootDir } = createOpsLegacyCryptoFixture({
+          home,
+          cfg,
           accessToken: "tok-ops-env",
-          accountId: "ops",
         });
 
-        const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
-        expect(detection.warnings).toEqual([]);
-        expect(detection.plans).toHaveLength(1);
-        expect(detection.plans[0]?.accountId).toBe("ops");
-
-        const result = await autoPrepareLegacyMatrixCrypto({
+        await expectPreparedOpsLegacyMigration({
           cfg,
           env: process.env,
-          deps: {
-            inspectLegacyStore: async () => ({
-              deviceId: "DEVICEOPS",
-              roomKeyCounts: { total: 4, backedUp: 4 },
-              backupVersion: "9001",
-              decryptionKeyBase64: "YWJjZA==",
-            }),
+          rootDir,
+          inspectLegacyStore: {
+            deviceId: MATRIX_OPS_DEVICE_ID,
+            roomKeyCounts: { total: 4, backedUp: 4 },
+            backupVersion: "9001",
+            decryptionKeyBase64: "YWJjZA==",
           },
         });
-
-        expect(result.migrated).toBe(true);
-        expect(result.warnings).toEqual([]);
-        const recovery = JSON.parse(
-          fs.readFileSync(path.join(rootDir, "recovery-key.json"), "utf8"),
-        ) as {
-          privateKeyBase64: string;
-        };
-        expect(recovery.privateKeyBase64).toBe("YWJjZA==");
       },
       {
         env: {
           ...matrixHelperEnv,
-          MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
-          MATRIX_OPS_USER_ID: "@ops-bot:example.org",
+          MATRIX_OPS_HOMESERVER: MATRIX_TEST_HOMESERVER,
+          MATRIX_OPS_USER_ID,
           MATRIX_OPS_ACCESS_TOKEN: "tok-ops-env",
         },
       },
@@ -352,7 +325,7 @@ describe("matrix legacy encrypted-state migration", () => {
       const stateDir = path.join(home, ".openclaw");
       writeFile(
         path.join(stateDir, "matrix", "crypto", "bot-sdk.json"),
-        JSON.stringify({ deviceId: "DEVICEOPS" }),
+        JSON.stringify({ deviceId: MATRIX_OPS_DEVICE_ID }),
       );
 
       const cfg: OpenClawConfig = {
@@ -360,12 +333,12 @@ describe("matrix legacy encrypted-state migration", () => {
           matrix: {
             accounts: {
               ops: {
-                homeserver: "https://matrix.example.org",
-                userId: "@ops-bot:example.org",
-                accessToken: "tok-ops",
+                homeserver: MATRIX_TEST_HOMESERVER,
+                userId: MATRIX_OPS_USER_ID,
+                accessToken: MATRIX_OPS_ACCESS_TOKEN,
               },
               alerts: {
-                homeserver: "https://matrix.example.org",
+                homeserver: MATRIX_TEST_HOMESERVER,
                 userId: "@alerts-bot:example.org",
                 accessToken: "tok-alerts",
               },
@@ -413,18 +386,10 @@ describe("matrix legacy encrypted-state migration", () => {
         const stateDir = path.join(home, ".openclaw");
         writeFile(
           path.join(stateDir, "matrix", "crypto", "bot-sdk.json"),
-          '{"deviceId":"DEVICE123"}',
+          JSON.stringify({ deviceId: MATRIX_DEFAULT_DEVICE_ID }),
         );
 
-        const cfg: OpenClawConfig = {
-          channels: {
-            matrix: {
-              homeserver: "https://matrix.example.org",
-              userId: "@bot:example.org",
-              accessToken: "tok-123",
-            },
-          },
-        };
+        const cfg = createDefaultMatrixConfig();
 
         const result = await autoPrepareLegacyMatrixCrypto({
           cfg,

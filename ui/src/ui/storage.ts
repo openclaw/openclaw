@@ -21,9 +21,25 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 };
 
 import { isSupportedLocale } from "../i18n/index.ts";
-import { getSafeLocalStorage } from "../local-storage.ts";
+import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
+
+export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
+export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
+
+function snapBorderRadius(value: number): BorderRadiusStop {
+  let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
+  let bestDist = Math.abs(value - best);
+  for (const stop of BORDER_RADIUS_STOPS) {
+    const dist = Math.abs(value - stop);
+    if (dist < bestDist) {
+      best = stop;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
 
 export type UiSettings = {
   gatewayUrl: string;
@@ -73,13 +89,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
 }
 
 function getSessionStorage(): Storage | null {
-  if (typeof window !== "undefined" && window.sessionStorage) {
-    return window.sessionStorage;
-  }
-  if (typeof sessionStorage !== "undefined") {
-    return sessionStorage;
-  }
-  return null;
+  return getSafeSessionStorage();
 }
 
 function normalizeGatewayTokenScope(gatewayUrl: string): string {
@@ -253,7 +263,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
         parsed.borderRadius <= 100
-          ? parsed.borderRadius
+          ? snapBorderRadius(parsed.borderRadius)
           : defaults.borderRadius,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };

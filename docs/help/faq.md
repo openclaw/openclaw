@@ -266,8 +266,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   <Accordion title="Cannot access docs.openclaw.ai (SSL error)">
     Some Comcast/Xfinity connections incorrectly block `docs.openclaw.ai` via Xfinity
-    Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry. More
-    detail: [Troubleshooting](/help/faq#docsopenclawai-shows-an-ssl-error-comcast-xfinity).
+    Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry.
     Please help us unblock it by reporting here: [https://spa.xfinity.com/check_url_status](https://spa.xfinity.com/check_url_status).
 
     If you still can't reach the site, the docs are mirrored on GitHub:
@@ -287,6 +286,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     See what changed:
     [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
+
+    For install one-liners and the difference between beta and dev, see the accordion below.
 
   </Accordion>
 
@@ -546,8 +547,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes. You can authenticate with a **setup-token**
-    instead of an API key. This is the subscription path.
+    Yes. You can either use a **setup-token** or reuse a local **Claude CLI**
+    login on the gateway host.
 
     Claude Pro/Max subscriptions **do not include an API key**, so this is the
     technical path for subscription accounts. But this is your decision: Anthropic
@@ -572,7 +573,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Yes. You can either:
+
+    - use a **setup-token**
+    - reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`
+
+    Setup-token is still supported. Claude CLI migration is simpler when the gateway host already runs Claude Code. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
     Important: this is technical compatibility, not a policy guarantee. Anthropic
     has blocked some subscription usage outside Claude Code in the past.
@@ -581,11 +587,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
-    That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-    use a **Claude subscription** (setup-token), wait for the window to
-    reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
-    for usage/billing and raise limits as needed.
+<a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
+<Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
+That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
+use a **Claude subscription** (setup-token), wait for the window to
+reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
+for usage/billing and raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
@@ -629,7 +636,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Is a local model OK for casual chats?">
-    Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.5 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
+    Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** model build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
   </Accordion>
 
   <Accordion title="How do I keep hosted model traffic in a specific region?">
@@ -945,7 +952,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     Token tip: long tasks and sub-agents both consume tokens. If cost is a concern, set a
     cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
-    Docs: [Sub-agents](/tools/subagents).
+    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks).
 
   </Accordion>
 
@@ -992,18 +999,16 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="How do I install skills on Linux?">
-    Use **ClawHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
+    Use native `openclaw skills` commands or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
     Browse skills at [https://clawhub.com](https://clawhub.com).
 
-    Install the ClawHub CLI (pick one package manager):
-
     ```bash
-    npm i -g clawhub
+    openclaw skills search "calendar"
+    openclaw skills install <skill-slug>
+    openclaw skills update --all
     ```
 
-    ```bash
-    pnpm add -g clawhub
-    ```
+    Install the separate `clawhub` CLI only if you want to publish or sync your own skills.
 
   </Accordion>
 
@@ -1075,11 +1080,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     Install skills:
 
     ```bash
-    clawhub install <skill-slug>
-    clawhub update --all
+    openclaw skills install <skill-slug>
+    openclaw skills update --all
     ```
 
-    ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
+    Native installs land in the active workspace `skills/` directory. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
 
   </Accordion>
 
@@ -1131,7 +1136,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 
-    Key config reference: [Gateway configuration](/gateway/configuration-reference#agents-defaults-sandbox)
+    Key config reference: [Gateway configuration](/gateway/configuration-reference#agentsdefaultssandbox)
 
   </Accordion>
 
@@ -1304,7 +1309,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title="I'm in remote mode - where is the session store?">
+  <Accordion title="Remote mode: where is the session store?">
     Session state is owned by the **gateway host**. If you're in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
   </Accordion>
 </AccordionGroup>
@@ -1778,9 +1783,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Yes. Sessions expire after `session.idleMinutes` (default **60**). The **next**
-    message starts a fresh session id for that chat key. This does not delete
-    transcripts - it just starts a new session.
+    Sessions can expire after `session.idleMinutes`, but this is **disabled by default** (default **0**).
+    Set it to a positive value to enable idle expiry. When enabled, the **next**
+    message after the idle period starts a fresh session id for that chat key.
+    This does not delete transcripts - it just starts a new session.
 
     ```json5
     {
@@ -1883,7 +1889,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Why am I getting heartbeat messages every 30 minutes?">
-    Heartbeats run every **30m** by default. Tune or disable them:
+    Heartbeats run every **30m** by default (**1h** when using OAuth auth). Tune or disable them:
 
     ```json5
     {
@@ -2083,13 +2089,15 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     ```
     /model sonnet
-    /model haiku
     /model opus
     /model gpt
     /model gpt-mini
     /model gemini
     /model gemini-flash
+    /model gemini-flash-lite
     ```
+
+    These are the built-in aliases. Custom aliases can be added via `agents.defaults.models`.
 
     You can list available models with `/model`, `/model list`, or `/model status`.
 
@@ -2125,8 +2133,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding?">
     Yes. Set one as default and switch as needed:
 
-    - **Quick switch (per session):** `/model gpt-5.2` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
-    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.2`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
+    - **Quick switch (per session):** `/model gpt-5.4` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
+    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.4`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
@@ -2148,17 +2156,15 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
     This means the **provider isn't configured** (no MiniMax provider config or auth
-    profile was found), so the model can't be resolved. A fix for this detection is
-    in **2026.1.12** (unreleased at the time of writing).
+    profile was found), so the model can't be resolved.
 
     Fix checklist:
 
-    1. Upgrade to **2026.1.12** (or run from source `main`), then restart the gateway.
+    1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
     2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
        exists in env/auth profiles so the provider can be injected.
-    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7`,
-       `minimax/MiniMax-M2.7-highspeed`, `minimax/MiniMax-M2.5`, or
-       `minimax/MiniMax-M2.5-highspeed`.
+    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7` or
+       `minimax/MiniMax-M2.7-highspeed`.
     4. Run:
 
        ```bash
@@ -2185,7 +2191,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
           model: { primary: "minimax/MiniMax-M2.7" },
           models: {
             "minimax/MiniMax-M2.7": { alias: "minimax" },
-            "openai/gpt-5.2": { alias: "gpt" },
+            "openai/gpt-5.4": { alias: "gpt" },
           },
         },
       },
@@ -2952,23 +2958,18 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     ```json5
     {
-      agents: {
-        defaults: {
-          tools: {
-            message: {
-              crossContext: {
-                allowAcrossProviders: true,
-                marker: { enabled: true, prefix: "[from {channel}] " },
-              },
-            },
+      tools: {
+        message: {
+          crossContext: {
+            allowAcrossProviders: true,
+            marker: { enabled: true, prefix: "[from {channel}] " },
           },
         },
       },
     }
     ```
 
-    Restart the gateway after editing config. If you only want this for a single
-    agent, set it under `agents.list[].tools.message` instead.
+    Restart the gateway after editing config.
 
   </Accordion>
 

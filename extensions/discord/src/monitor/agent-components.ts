@@ -24,9 +24,11 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -35,7 +37,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   dispatchPluginInteractiveHandler,
@@ -59,6 +60,7 @@ import {
   type DiscordComponentEntry,
   type DiscordModalEntry,
 } from "../components.js";
+import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
@@ -103,6 +105,16 @@ import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { sendTyping } from "./typing.js";
 
+function resolveComponentGroupPolicy(
+  ctx: AgentComponentContext,
+): "open" | "disabled" | "allowlist" {
+  return resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: ctx.cfg.channels?.discord !== undefined,
+    groupPolicy: ctx.discordConfig?.groupPolicy,
+    defaultGroupPolicy: ctx.cfg.channels?.defaults?.groupPolicy,
+  }).groupPolicy;
+}
+
 async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -120,10 +132,34 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       ? `channel:${params.interactionCtx.channelId}`
       : `user:${params.interactionCtx.userId}`;
   let responded = false;
+  let acknowledged = false;
+  const updateOriginalMessage = async (input: {
+    text?: string;
+    components?: TopLevelComponents[];
+  }) => {
+    const payload = {
+      ...(input.text !== undefined ? { content: input.text } : {}),
+      ...(input.components !== undefined ? { components: input.components } : {}),
+    };
+    if (acknowledged) {
+      // Carbon edits @original on reply() after acknowledge(), which preserves
+      // plugin edit/clear flows without consuming a second interaction callback.
+      await params.interaction.reply(payload);
+      return;
+    }
+    if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
+      throw new Error("Discord interaction cannot update the source message");
+    }
+    await params.interaction.update(payload);
+  };
   const respond: PluginInteractiveDiscordHandlerContext["respond"] = {
     acknowledge: async () => {
-      responded = true;
+      if (responded) {
+        return;
+      }
       await params.interaction.acknowledge();
+      acknowledged = true;
+      responded = true;
     },
     reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;
@@ -140,61 +176,58 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       });
     },
     editMessage: async (input) => {
-      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
-        throw new Error("Discord interaction cannot update the source message");
-      }
       const { text, components } = input;
       responded = true;
-      await params.interaction.update({
-        ...(text !== undefined ? { content: text } : {}),
-        ...(components !== undefined ? { components: components as TopLevelComponents[] } : {}),
+      await updateOriginalMessage({
+        text,
+        components: components as TopLevelComponents[] | undefined,
       });
     },
     clearComponents: async (input?: { text?: string }) => {
-      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
-        throw new Error("Discord interaction cannot clear components on the source message");
-      }
       responded = true;
-      await params.interaction.update({
-        ...(input?.text !== undefined ? { content: input.text } : {}),
+      await updateOriginalMessage({
+        text: input?.text,
         components: [],
       });
     },
   };
   const pluginBindingApproval = parsePluginBindingApprovalCustomId(params.data);
   if (pluginBindingApproval) {
+    try {
+      await respond.acknowledge();
+    } catch {
+      // Interaction may have expired; try to continue anyway.
+    }
     const resolved = await resolvePluginConversationBindingApproval({
       approvalId: pluginBindingApproval.approvalId,
       decision: pluginBindingApproval.decision,
       senderId: params.interactionCtx.userId,
     });
-    let cleared = false;
-    try {
-      await respond.clearComponents();
-      cleared = true;
-    } catch {
+    const approvalMessageId = params.messageId?.trim() || params.interaction.message?.id?.trim();
+    if (approvalMessageId) {
       try {
-        await respond.acknowledge();
-      } catch {
-        // Interaction may already be acknowledged; continue with best-effort follow-up.
+        await editDiscordComponentMessage(
+          normalizedConversationId,
+          approvalMessageId,
+          {
+            text: buildPluginBindingResolvedText(resolved),
+          },
+          {
+            accountId: params.ctx.accountId,
+          },
+        );
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to clear prompt: ${String(err)}`);
       }
     }
-    try {
-      await respond.followUp({
-        text: buildPluginBindingResolvedText(resolved),
-        ephemeral: true,
-      });
-    } catch (err) {
-      logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
-      if (!cleared) {
-        try {
-          await respond.reply({
-            text: buildPluginBindingResolvedText(resolved),
-            ephemeral: true,
-          });
-        } catch {
-          // Interaction may no longer accept a direct reply.
-        }
+    if (resolved.status !== "approved") {
+      try {
+        await respond.followUp({
+          text: buildPluginBindingResolvedText(resolved),
+          ephemeral: true,
+        });
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
       }
     }
     return "handled";
@@ -220,6 +253,13 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       },
     },
     respond,
+    onMatched: async () => {
+      try {
+        await respond.acknowledge();
+      } catch {
+        // Interaction may have expired before the plugin handler ran.
+      }
+    },
   });
   if (!dispatched.matched) {
     return "unmatched";
@@ -509,6 +549,7 @@ async function handleDiscordComponentEvent(params: {
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.componentLabel,
+    defer: false,
   });
   if (!interactionCtx) {
     return;
@@ -544,6 +585,7 @@ async function handleDiscordComponentEvent(params: {
     componentLabel: params.componentLabel,
     unauthorizedReply,
     allowNameMatching,
+    groupPolicy: resolveComponentGroupPolicy(params.ctx),
   });
   if (!memberAllowed) {
     return;
@@ -614,11 +656,16 @@ async function handleDiscordComponentEvent(params: {
       return;
     }
   }
-  const eventText = formatDiscordComponentEventText({
-    kind: consumed.kind === "select" ? "select" : "button",
-    label: consumed.label,
-    values,
-  });
+  // Preserve explicit callback payloads for button fallbacks so Discord
+  // behaves like Telegram when buttons carry synthetic command text. Select
+  // fallbacks still need their chosen values in the synthesized event text.
+  const eventText =
+    (consumed.kind === "button" ? consumed.callbackData?.trim() : undefined) ||
+    formatDiscordComponentEventText({
+      kind: consumed.kind === "select" ? "select" : "button",
+      label: consumed.label,
+      values,
+    });
 
   try {
     await params.interaction.reply({ content: "✓", ...replyOpts });
@@ -720,6 +767,7 @@ async function handleDiscordModalTrigger(params: {
     componentLabel: "form",
     unauthorizedReply,
     allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
+    groupPolicy: resolveComponentGroupPolicy(params.ctx),
   });
   if (!memberAllowed) {
     return;
@@ -809,6 +857,7 @@ export class AgentComponentButton extends Button {
       interaction,
       label: "agent button",
       componentLabel: "button",
+      defer: false,
     });
     if (!interactionCtx) {
       return;
@@ -898,6 +947,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       interaction,
       label: "agent select",
       componentLabel: "select menu",
+      defer: false,
     });
     if (!interactionCtx) {
       return;
@@ -1181,6 +1231,7 @@ class DiscordComponentModal extends Modal {
       componentLabel: "form",
       unauthorizedReply: "You are not authorized to use this form.",
       allowNameMatching,
+      groupPolicy: resolveComponentGroupPolicy(this.ctx),
     });
     if (!memberAllowed) {
       return;

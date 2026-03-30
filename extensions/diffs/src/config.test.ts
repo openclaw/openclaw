@@ -1,4 +1,10 @@
 import fs from "node:fs";
+import {
+  disposeHighlighter,
+  RegisteredCustomThemes,
+  ResolvedThemes,
+  ResolvingThemes,
+} from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
@@ -8,6 +14,10 @@ import {
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
 } from "./config.js";
+import { renderDiffDocument } from "./render.js";
+import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
+import { getServedViewerAsset, VIEWER_LOADER_PATH, VIEWER_RUNTIME_PATH } from "./viewer-assets.js";
+import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const FULL_DEFAULTS = {
   fontFamily: "JetBrains Mono",
@@ -175,5 +185,284 @@ describe("diffs plugin schema surfaces", () => {
     ) as { configSchema?: unknown };
 
     expect(diffsPluginConfigSchema.jsonSchema).toEqual(manifest.configSchema);
+  });
+});
+
+describe("diffs viewer URL helpers", () => {
+  it("defaults to loopback for lan/tailnet bind modes", () => {
+    expect(
+      buildViewerUrl({
+        config: { gateway: { bind: "lan", port: 18789 } },
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("http://127.0.0.1:18789/plugins/diffs/view/id/token");
+
+    expect(
+      buildViewerUrl({
+        config: { gateway: { bind: "tailnet", port: 24444 } },
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("http://127.0.0.1:24444/plugins/diffs/view/id/token");
+  });
+
+  it("uses custom bind host when provided", () => {
+    expect(
+      buildViewerUrl({
+        config: {
+          gateway: {
+            bind: "custom",
+            customBindHost: "gateway.example.com",
+            port: 443,
+            tls: { enabled: true },
+          },
+        },
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://gateway.example.com/plugins/diffs/view/id/token");
+  });
+
+  it("joins viewer path under baseUrl pathname", () => {
+    expect(
+      buildViewerUrl({
+        config: {},
+        baseUrl: "https://example.com/openclaw",
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://example.com/openclaw/plugins/diffs/view/id/token");
+  });
+
+  it("rejects base URLs with query/hash", () => {
+    expect(() => normalizeViewerBaseUrl("https://example.com?a=1")).toThrow(
+      "baseUrl must not include query/hash",
+    );
+    expect(() => normalizeViewerBaseUrl("https://example.com#frag")).toThrow(
+      "baseUrl must not include query/hash",
+    );
+  });
+});
+
+describe("renderDiffDocument", () => {
+  it("renders before/after input into a complete viewer document", async () => {
+    const rendered = await renderDiffDocument(
+      {
+        kind: "before_after",
+        before: "const value = 1;\n",
+        after: "const value = 2;\n",
+        path: "src/example.ts",
+      },
+      {
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+    );
+
+    expect(rendered.title).toBe("src/example.ts");
+    expect(rendered.fileCount).toBe(1);
+    expect(rendered.html).toContain("data-openclaw-diff-root");
+    expect(rendered.html).toContain("src/example.ts");
+    expect(rendered.html).toContain("/plugins/diffs/assets/viewer.js");
+    expect(rendered.imageHtml).toContain("/plugins/diffs/assets/viewer.js");
+    expect(rendered.imageHtml).toContain("max-width: 960px;");
+    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
+    expect(rendered.html).toContain("min-height: 100vh;");
+    expect(rendered.html).toContain('"diffIndicators":"bars"');
+    expect(rendered.html).toContain('"disableLineNumbers":false');
+    expect(rendered.html).toContain("--diffs-line-height: 24px;");
+    expect(rendered.html).toContain("--diffs-font-size: 15px;");
+    expect(rendered.html).not.toContain("fonts.googleapis.com");
+  });
+
+  it("renders multi-file patch input", async () => {
+    const patch = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1 +1 @@",
+      "-const a = 1;",
+      "+const a = 2;",
+      "diff --git a/b.ts b/b.ts",
+      "--- a/b.ts",
+      "+++ b/b.ts",
+      "@@ -1 +1 @@",
+      "-const b = 1;",
+      "+const b = 2;",
+    ].join("\n");
+
+    const rendered = await renderDiffDocument(
+      {
+        kind: "patch",
+        patch,
+        title: "Workspace patch",
+      },
+      {
+        presentation: {
+          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+          layout: "split",
+          theme: "dark",
+        },
+        image: resolveDiffImageRenderOptions({
+          defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          fileQuality: "hq",
+          fileMaxWidth: 1180,
+        }),
+        expandUnchanged: true,
+      },
+    );
+
+    expect(rendered.title).toBe("Workspace patch");
+    expect(rendered.fileCount).toBe(2);
+    expect(rendered.html).toContain("Workspace patch");
+    expect(rendered.imageHtml).toContain("max-width: 1180px;");
+  });
+
+  it("re-registers pierre theme loaders before rendering", async () => {
+    await disposeHighlighter();
+
+    const originalLightLoader = RegisteredCustomThemes.get("pierre-light");
+    const originalDarkLoader = RegisteredCustomThemes.get("pierre-dark");
+    const brokenLoader = async () => {
+      throw new Error("broken pierre theme loader");
+    };
+
+    RegisteredCustomThemes.set("pierre-light", brokenLoader);
+    RegisteredCustomThemes.set("pierre-dark", brokenLoader);
+    ResolvedThemes.delete("pierre-light");
+    ResolvedThemes.delete("pierre-dark");
+    ResolvingThemes.delete("pierre-light");
+    ResolvingThemes.delete("pierre-dark");
+
+    try {
+      const rendered = await renderDiffDocument(
+        {
+          kind: "before_after",
+          before: "const value = 1;\n",
+          after: "const value = 2;\n",
+          path: "src/example.ts",
+        },
+        {
+          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+          expandUnchanged: false,
+        },
+      );
+
+      expect(rendered.fileCount).toBe(1);
+      expect(rendered.html).toContain("src/example.ts");
+      expect(RegisteredCustomThemes.get("pierre-light")).not.toBe(brokenLoader);
+      expect(RegisteredCustomThemes.get("pierre-dark")).not.toBe(brokenLoader);
+    } finally {
+      if (originalLightLoader) {
+        RegisteredCustomThemes.set("pierre-light", originalLightLoader);
+      } else {
+        RegisteredCustomThemes.delete("pierre-light");
+      }
+      if (originalDarkLoader) {
+        RegisteredCustomThemes.set("pierre-dark", originalDarkLoader);
+      } else {
+        RegisteredCustomThemes.delete("pierre-dark");
+      }
+      await disposeHighlighter();
+    }
+  });
+
+  it("rejects patches that exceed file-count limits", async () => {
+    const patch = Array.from({ length: 129 }, (_, i) => {
+      return [
+        `diff --git a/f${i}.ts b/f${i}.ts`,
+        `--- a/f${i}.ts`,
+        `+++ b/f${i}.ts`,
+        "@@ -1 +1 @@",
+        "-const x = 1;",
+        "+const x = 2;",
+      ].join("\n");
+    }).join("\n");
+
+    await expect(
+      renderDiffDocument(
+        {
+          kind: "patch",
+          patch,
+        },
+        {
+          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+          expandUnchanged: false,
+        },
+      ),
+    ).rejects.toThrow("too many files");
+  });
+});
+
+describe("viewer assets", () => {
+  it("serves a stable loader that points at the current runtime bundle", async () => {
+    const loader = await getServedViewerAsset(VIEWER_LOADER_PATH);
+
+    expect(loader?.contentType).toBe("text/javascript; charset=utf-8");
+    expect(String(loader?.body)).toContain(`${VIEWER_RUNTIME_PATH}?v=`);
+  });
+
+  it("serves the runtime bundle body", async () => {
+    const runtime = await getServedViewerAsset(VIEWER_RUNTIME_PATH);
+
+    expect(runtime?.contentType).toBe("text/javascript; charset=utf-8");
+    expect(String(runtime?.body)).toContain("openclawDiffsReady");
+  });
+
+  it("returns null for unknown asset paths", async () => {
+    await expect(getServedViewerAsset("/plugins/diffs/assets/not-real.js")).resolves.toBeNull();
+  });
+});
+
+describe("parseViewerPayloadJson", () => {
+  function buildValidPayload(): Record<string, unknown> {
+    return {
+      prerenderedHTML: "<div>ok</div>",
+      langs: ["text"],
+      oldFile: {
+        name: "README.md",
+        contents: "before",
+      },
+      newFile: {
+        name: "README.md",
+        contents: "after",
+      },
+      options: {
+        theme: {
+          light: "pierre-light",
+          dark: "pierre-dark",
+        },
+        diffStyle: "unified",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "dark",
+        backgroundEnabled: true,
+        overflow: "wrap",
+        unsafeCSS: ":host{}",
+      },
+    };
+  }
+
+  it("accepts valid payload JSON", () => {
+    const parsed = parseViewerPayloadJson(JSON.stringify(buildValidPayload()));
+    expect(parsed.options.diffStyle).toBe("unified");
+    expect(parsed.options.diffIndicators).toBe("bars");
+  });
+
+  it("rejects payloads with invalid shape", () => {
+    const broken = buildValidPayload();
+    broken.options = {
+      ...(broken.options as Record<string, unknown>),
+      diffIndicators: "invalid",
+    };
+
+    expect(() => parseViewerPayloadJson(JSON.stringify(broken))).toThrow(
+      "Diff payload has invalid shape.",
+    );
+  });
+
+  it("rejects invalid JSON", () => {
+    expect(() => parseViewerPayloadJson("{not-json")).toThrow("Diff payload is not valid JSON.");
   });
 });

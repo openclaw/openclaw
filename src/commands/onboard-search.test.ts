@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -11,6 +11,22 @@ const runtime: RuntimeEnv = {
     throw new Error(`unexpected exit ${code}`);
   }) as RuntimeEnv["exit"],
 };
+
+const SEARCH_PROVIDER_ENV_VARS = [
+  "BRAVE_API_KEY",
+  "FIRECRAWL_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "KIMI_API_KEY",
+  "MOONSHOT_API_KEY",
+  "OPENROUTER_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "TAVILY_API_KEY",
+  "XAI_API_KEY",
+] as const;
+
+let originalSearchProviderEnv: Partial<Record<(typeof SEARCH_PROVIDER_ENV_VARS)[number], string>> =
+  {};
 
 function createPrompter(params: { selectValue?: string; textValue?: string }): {
   prompter: WizardPrompter;
@@ -121,6 +137,26 @@ async function runQuickstartPerplexitySetup(
 }
 
 describe("setupSearch", () => {
+  beforeEach(() => {
+    originalSearchProviderEnv = Object.fromEntries(
+      SEARCH_PROVIDER_ENV_VARS.map((key) => [key, process.env[key]]),
+    );
+    for (const key of SEARCH_PROVIDER_ENV_VARS) {
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of SEARCH_PROVIDER_ENV_VARS) {
+      const value = originalSearchProviderEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
   it("returns config unchanged when user skips", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "__skip__" });
@@ -165,6 +201,11 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "google")).toBe("AIza-test");
     expect(result.plugins?.entries?.google?.enabled).toBe(true);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Gemini API key",
+      }),
+    );
   });
 
   it("sets provider and key for firecrawl and enables the plugin", async () => {
@@ -244,7 +285,7 @@ describe("setupSearch", () => {
       const result = await setupSearch(cfg, runtime, prompter);
       expect(result.tools?.web?.search?.provider).toBe("brave");
       expect(result.tools?.web?.search?.enabled).toBeUndefined();
-      const missingNote = notes.find((n) => n.message.includes("No API key stored"));
+      const missingNote = notes.find((n) => n.message.includes("No Brave Search API key stored"));
       expect(missingNote).toBeDefined();
     } finally {
       if (original === undefined) {
@@ -344,6 +385,20 @@ describe("setupSearch", () => {
         process.env.XAI_API_KEY = original;
       }
     }
+  });
+
+  it("uses provider-specific credential copy for kimi in onboarding", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "kimi",
+      textValue: "",
+    });
+    await setupSearch(cfg, runtime, prompter);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Moonshot / Kimi API key",
+      }),
+    );
   });
 
   it("quickstart skips key prompt when env var is available", async () => {
@@ -536,16 +591,16 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in SEARCH_PROVIDER_OPTIONS", () => {
+  it("exports all 7 providers in alphabetical order", () => {
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
     expect(values).toEqual([
       "brave",
+      "firecrawl",
       "gemini",
       "grok",
       "kimi",
       "perplexity",
-      "firecrawl",
       "tavily",
     ]);
   });

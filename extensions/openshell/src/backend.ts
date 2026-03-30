@@ -27,7 +27,11 @@ import {
 } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
-import { replaceDirectoryContents } from "./mirror.js";
+import {
+  DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+  replaceDirectoryContents,
+  stageDirectoryContents,
+} from "./mirror.js";
 
 type CreateOpenShellSandboxBackendFactoryParams = {
   pluginConfig: ResolvedOpenShellPluginConfig;
@@ -293,6 +297,14 @@ class OpenShellSandboxBackendImpl {
       });
       return;
     }
+    if (stats.isSymbolicLink()) {
+      await this.runRemoteShellScript({
+        script: 'rm -rf -- "$1"',
+        args: [remotePath],
+        allowFailure: true,
+      });
+      return;
+    }
     if (stats.isDirectory()) {
       await this.runRemoteShellScript({
         script: 'mkdir -p -- "$1"',
@@ -421,6 +433,9 @@ class OpenShellSandboxBackendImpl {
       await replaceDirectoryContents({
         sourceDir: tmpDir,
         targetDir: this.params.createParams.workspaceDir,
+        // Never sync trusted host hook directories or repository metadata from
+        // the remote sandbox.
+        excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
       });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -428,20 +443,33 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async uploadPathToRemote(localPath: string, remotePath: string): Promise<void> {
-    const result = await runOpenShellCli({
-      context: this.params.execContext,
-      args: [
-        "sandbox",
-        "upload",
-        "--no-git-ignore",
-        this.params.execContext.sandboxName,
-        localPath,
-        remotePath,
-      ],
-      cwd: this.params.createParams.workspaceDir,
-    });
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+    const tmpDir = await fs.mkdtemp(
+      path.join(resolveOpenShellTmpRoot(), "openclaw-openshell-upload-"),
+    );
+    try {
+      // Stage a symlink-free snapshot so upload never dereferences host paths
+      // outside the mirrored workspace tree.
+      await stageDirectoryContents({
+        sourceDir: localPath,
+        targetDir: tmpDir,
+      });
+      const result = await runOpenShellCli({
+        context: this.params.execContext,
+        args: [
+          "sandbox",
+          "upload",
+          "--no-git-ignore",
+          this.params.execContext.sandboxName,
+          tmpDir,
+          remotePath,
+        ],
+        cwd: this.params.createParams.workspaceDir,
+      });
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+      }
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   }
 

@@ -8,6 +8,7 @@ export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
+export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
@@ -17,6 +18,14 @@ export function normalizeExecHost(value?: string | null): ExecHost | null {
     return normalized;
   }
   return null;
+}
+
+export function normalizeExecTarget(value?: string | null): ExecTarget | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "auto") {
+    return normalized;
+  }
+  return normalizeExecHost(normalized);
 }
 
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
@@ -144,7 +153,7 @@ export type ExecApprovalsResolved = {
 };
 
 // Keep CLI + gateway defaults in sync.
-export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
+export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
 const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";

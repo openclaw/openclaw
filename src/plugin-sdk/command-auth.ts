@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+export {
+  createPreCryptoDirectDmAuthorizer,
+  resolveInboundDirectDmAccessWithRuntime,
+  type DirectDmCommandAuthorizationRuntime,
+  type ResolvedInboundDirectDmAccess,
+} from "./direct-dm.js";
 
 export {
   hasControlCommand,
@@ -42,6 +48,7 @@ export type {
   ResolvedCommandArgChoice,
   ShouldHandleTextCommandsParams,
 } from "../auto-reply/commands-registry.js";
+export type { CommandArgsParsing } from "../auto-reply/commands-registry.types.js";
 export {
   resolveCommandAuthorizedFromAuthorizers,
   resolveControlCommandGate,
@@ -63,6 +70,7 @@ export {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
+export type { SkillCommandSpec } from "../agents/skills.js";
 export { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
 export {
   buildModelsProviderData,

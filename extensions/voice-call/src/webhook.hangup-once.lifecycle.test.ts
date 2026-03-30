@@ -29,14 +29,59 @@ async function postWebhookForm(server: VoiceCallWebhookServer, baseUrl: string, 
     server as unknown as { server?: { address?: () => unknown } }
   ).server?.address?.();
   const requestUrl = new URL(baseUrl);
-  if (address && typeof address === "object" && "port" in address && address.port) {
-    requestUrl.port = String(address.port);
+  if (
+    !address ||
+    typeof address !== "object" ||
+    !("port" in address) ||
+    (typeof address.port !== "number" && typeof address.port !== "string") ||
+    !address.port
+  ) {
+    throw new Error("voice webhook server did not expose a bound port");
   }
+  requestUrl.port = String(address.port);
   return await fetch(requestUrl.toString(), {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-plivo-signature-v2": "sig",
+      "x-plivo-signature-v2-nonce": "nonce",
+    },
     body,
   });
+}
+
+async function runDuplicateInboundReplayLifecycleTest(provider: FakeProvider) {
+  const config = createConfig();
+  const manager = new CallManager(config, createTestStorePath());
+  await manager.initialize(provider, "https://example.com/voice/webhook");
+  const server = new VoiceCallWebhookServer(config, manager, provider);
+
+  try {
+    const baseUrl = await server.start();
+    const first = await postWebhookForm(server, baseUrl, "CallSid=CA123&From=%2B15552222222");
+    const second = await postWebhookForm(server, baseUrl, "CallSid=CA123&From=%2B15552222222");
+    return { first, second, manager };
+  } finally {
+    await server.stop();
+  }
+}
+
+function expectSingleRejectedReplayHangup(params: {
+  first: Response;
+  second: Response;
+  provider: FakeProvider;
+  manager: CallManager;
+}) {
+  expect(params.first.status).toBe(200);
+  expect(params.second.status).toBe(200);
+  expect(params.provider.hangupCalls).toHaveLength(1);
+  expect(params.provider.hangupCalls[0]).toEqual(
+    expect.objectContaining({
+      providerCallId: "provider-inbound-1",
+      reason: "hangup-bot",
+    }),
+  );
+  expect(params.manager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
 }
 
 class RejectInboundReplayProvider extends FakeProvider {
@@ -78,50 +123,13 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
 
   it("hangs up a rejected inbound replay only once across duplicate webhook delivery", async () => {
     const provider = new RejectInboundReplayProvider("plivo");
-    const config = createConfig();
-    const manager = new CallManager(config, createTestStorePath());
-    await manager.initialize(provider, "https://example.com/voice/webhook");
-    const server = new VoiceCallWebhookServer(config, manager, provider);
-
-    try {
-      const baseUrl = await server.start();
-      const first = await postWebhookForm(server, baseUrl, "CallSid=CA123&From=%2B15552222222");
-      const second = await postWebhookForm(server, baseUrl, "CallSid=CA123&From=%2B15552222222");
-
-      expect(first.status).toBe(200);
-      expect(second.status).toBe(200);
-      expect(provider.hangupCalls).toHaveLength(1);
-      expect(provider.hangupCalls[0]).toEqual(
-        expect.objectContaining({
-          providerCallId: "provider-inbound-1",
-          reason: "hangup-bot",
-        }),
-      );
-      expect(manager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
-    } finally {
-      await server.stop();
-    }
+    const { first, second, manager } = await runDuplicateInboundReplayLifecycleTest(provider);
+    expectSingleRejectedReplayHangup({ first, second, provider, manager });
   });
 
   it("does not attempt a second hangup when replay arrives after the first hangup fails", async () => {
     const provider = new RejectInboundReplayWithHangupFailureProvider("plivo");
-    const config = createConfig();
-    const manager = new CallManager(config, createTestStorePath());
-    await manager.initialize(provider, "https://example.com/voice/webhook");
-    const server = new VoiceCallWebhookServer(config, manager, provider);
-
-    try {
-      const baseUrl = await server.start();
-      const first = await postWebhookForm(server, baseUrl, "CallSid=CA123&From=%2B15552222222");
-      const second = await postWebhookForm(server, baseUrl, "CallSid=CA123&From=%2B15552222222");
-
-      expect(first.status).toBe(200);
-      expect(second.status).toBe(200);
-      expect(provider.hangupCalls).toHaveLength(1);
-      expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-inbound-1");
-      expect(manager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
-    } finally {
-      await server.stop();
-    }
+    const { first, second, manager } = await runDuplicateInboundReplayLifecycleTest(provider);
+    expectSingleRejectedReplayHangup({ first, second, provider, manager });
   });
 });

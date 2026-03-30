@@ -11,7 +11,6 @@ import { registerFeishuWikiTools } from "./src/wiki.js";
 
 export { feishuPlugin } from "./src/channel.js";
 export { setFeishuRuntime } from "./src/runtime.js";
-export { monitorFeishuProvider } from "./src/monitor.js";
 export {
   sendMessageFeishu,
   sendCardFeishu,
@@ -46,7 +45,21 @@ export {
   type MentionTarget,
 } from "./src/mention.js";
 
-let feishuToolsRegistered = false;
+type MonitorFeishuProvider = typeof import("./src/monitor.js").monitorFeishuProvider;
+
+let feishuMonitorPromise: Promise<typeof import("./src/monitor.js")> | null = null;
+
+function loadFeishuMonitorModule() {
+  feishuMonitorPromise ??= import("./src/monitor.js");
+  return feishuMonitorPromise;
+}
+
+export async function monitorFeishuProvider(
+  ...args: Parameters<MonitorFeishuProvider>
+): ReturnType<MonitorFeishuProvider> {
+  const { monitorFeishuProvider } = await loadFeishuMonitorModule();
+  return await monitorFeishuProvider(...args);
+}
 
 export default defineChannelPluginEntry({
   id: "feishu",
@@ -55,10 +68,6 @@ export default defineChannelPluginEntry({
   plugin: feishuPlugin,
   setRuntime: setFeishuRuntime,
   registerFull(api) {
-    if (feishuToolsRegistered) {
-      return;
-    }
-    feishuToolsRegistered = true;
     registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);

@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import {
+  resolveTelegramGroupRequireMention,
+  resolveTelegramGroupToolPolicy,
+} from "./group-policy.js";
+import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
+import { installMaybePersistResolvedTelegramTargetTests } from "./target-writeback.test-shared.js";
 import {
   isNumericTelegramChatId,
   normalizeTelegramChatId,
@@ -129,3 +136,85 @@ describe("isNumericTelegramChatId", () => {
     expect(isNumericTelegramChatId("t.me/mychannel")).toBe(false);
   });
 });
+
+describe("telegram group policy", () => {
+  it("resolves topic-level requireMention and chat-level tools for topic ids", () => {
+    const telegramCfg = {
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+          groups: {
+            "-1001": {
+              requireMention: true,
+              tools: { allow: ["message.send"] },
+              topics: {
+                "77": {
+                  requireMention: false,
+                },
+              },
+            },
+            "*": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    expect(
+      resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
+    ).toBe(false);
+    expect(resolveTelegramGroupToolPolicy({ cfg: telegramCfg, groupId: "-1001:topic:77" })).toEqual(
+      {
+        allow: ["message.send"],
+      },
+    );
+  });
+});
+
+describe("telegram allow-from helpers", () => {
+  it("normalizes tg/telegram prefixes", () => {
+    const cases = [
+      { value: " TG:123 ", expected: "123" },
+      { value: "telegram:@someone", expected: "@someone" },
+    ] as const;
+    for (const testCase of cases) {
+      expect(normalizeTelegramAllowFromEntry(testCase.value)).toBe(testCase.expected);
+    }
+  });
+
+  it("accepts signed numeric IDs", () => {
+    const cases = [
+      { value: "123456789", expected: true },
+      { value: "-1001234567890", expected: true },
+      { value: "@someone", expected: false },
+      { value: "12 34", expected: false },
+    ] as const;
+    for (const testCase of cases) {
+      expect(isNumericTelegramUserId(testCase.value)).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("telegram target normalization", () => {
+  it("normalizes telegram prefixes, group targets, and topic suffixes", () => {
+    expect(normalizeTelegramMessagingTarget("telegram:123456")).toBe("telegram:123456");
+    expect(normalizeTelegramMessagingTarget("tg:group:-100123")).toBe("telegram:group:-100123");
+    expect(normalizeTelegramMessagingTarget("telegram:-100123:topic:99")).toBe(
+      "telegram:-100123:topic:99",
+    );
+  });
+
+  it("returns undefined for invalid telegram recipients", () => {
+    expect(normalizeTelegramMessagingTarget("telegram:")).toBeUndefined();
+    expect(normalizeTelegramMessagingTarget("   ")).toBeUndefined();
+  });
+
+  it("detects valid telegram target identifiers", () => {
+    expect(looksLikeTelegramTargetId("telegram:123456")).toBe(true);
+    expect(looksLikeTelegramTargetId("tg:group:-100123")).toBe(true);
+    expect(looksLikeTelegramTargetId("hello world")).toBe(false);
+  });
+});
+
+installMaybePersistResolvedTelegramTargetTests();

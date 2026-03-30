@@ -6,10 +6,10 @@ import {
   resolveThreadBindingConversationIdFromBindingId,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
+  type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";
 
@@ -54,13 +54,16 @@ const FEISHU_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.feishuThreadBindin
 let state: FeishuThreadBindingsState | undefined;
 
 function getState(): FeishuThreadBindingsState {
-  state ??= resolveGlobalSingleton<FeishuThreadBindingsState>(
-    FEISHU_THREAD_BINDINGS_STATE_KEY,
-    () => ({
+  if (!state) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    state = (globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] as
+      | FeishuThreadBindingsState
+      | undefined) ?? {
       managersByAccountId: new Map(),
       bindingsByAccountConversation: new Map(),
-    }),
-  );
+    };
+    globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] = state;
+  }
   return state;
 }
 
@@ -233,11 +236,15 @@ export function createFeishuThreadBindingManager(params: {
         }
       }
       getState().managersByAccountId.delete(accountId);
-      unregisterSessionBindingAdapter({ channel: "feishu", accountId });
+      unregisterSessionBindingAdapter({
+        channel: "feishu",
+        accountId,
+        adapter: sessionBindingAdapter,
+      });
     },
   };
 
-  registerSessionBindingAdapter({
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "feishu",
     accountId,
     capabilities: {
@@ -292,7 +299,9 @@ export function createFeishuThreadBindingManager(params: {
       const removed = manager.unbindConversation(conversationId);
       return removed ? [toSessionBindingRecord(removed, { idleTimeoutMs, maxAgeMs })] : [];
     },
-  });
+  };
+
+  registerSessionBindingAdapter(sessionBindingAdapter);
 
   getState().managersByAccountId.set(accountId, manager);
   return manager;

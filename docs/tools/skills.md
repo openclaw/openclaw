@@ -12,37 +12,44 @@ OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders
 
 ## Locations and precedence
 
-Skills are loaded from **three** places:
+OpenClaw loads skills from these sources:
 
-1. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
-2. **Managed/local skills**: `~/.openclaw/skills`
-3. **Workspace skills**: `<workspace>/skills`
+1. **Extra skill folders**: configured with `skills.load.extraDirs`
+2. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
+3. **Managed/local skills**: `~/.openclaw/skills`
+4. **Personal agent skills**: `~/.agents/skills`
+5. **Project agent skills**: `<workspace>/.agents/skills`
+6. **Workspace skills**: `<workspace>/skills`
 
 If a skill name conflicts, precedence is:
 
-`<workspace>/skills` (highest) → `~/.openclaw/skills` → bundled skills (lowest)
-
-Additionally, you can configure extra skill folders (lowest precedence) via
-`skills.load.extraDirs` in `~/.openclaw/openclaw.json`.
+`<workspace>/skills` (highest) → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled skills → `skills.load.extraDirs` (lowest)
 
 ## Per-agent vs shared skills
 
 In **multi-agent** setups, each agent has its own workspace. That means:
 
 - **Per-agent skills** live in `<workspace>/skills` for that agent only.
+- **Project agent skills** live in `<workspace>/.agents/skills` and apply to
+  that workspace before the normal workspace `skills/` folder.
+- **Personal agent skills** live in `~/.agents/skills` and apply across
+  workspaces on that machine.
 - **Shared skills** live in `~/.openclaw/skills` (managed/local) and are visible
   to **all agents** on the same machine.
 - **Shared folders** can also be added via `skills.load.extraDirs` (lowest
   precedence) if you want a common skills pack used by multiple agents.
 
 If the same skill name exists in more than one place, the usual precedence
-applies: workspace wins, then managed/local, then bundled.
+applies: workspace wins, then project agent skills, then personal agent skills,
+then managed/local, then bundled, then extra dirs.
 
 ## Plugins + skills
 
 Plugins can ship their own skills by listing `skills` directories in
 `openclaw.plugin.json` (paths relative to the plugin root). Plugin skills load
-when the plugin is enabled and participate in the normal skill precedence rules.
+when the plugin is enabled. Today those directories are merged into the same
+low-precedence path as `skills.load.extraDirs`, so a same-named bundled,
+managed, agent, or workspace skill overrides them.
 You can gate them via `metadata.openclaw.requires.config` on the plugin’s config
 entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
@@ -50,21 +57,24 @@ tool surface those skills teach.
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-[https://clawhub.com](https://clawhub.com). Use it to discover, install, update, and back up skills.
+[https://clawhub.com](https://clawhub.com). Use native `openclaw skills`
+commands to discover/install/update skills, or the separate `clawhub` CLI when
+you need publish/sync workflows.
 Full guide: [ClawHub](/tools/clawhub).
 
 Common flows:
 
 - Install a skill into your workspace:
-  - `clawhub install <skill-slug>`
+  - `openclaw skills install <skill-slug>`
 - Update all installed skills:
-  - `clawhub update --all`
+  - `openclaw skills update --all`
 - Sync (scan + publish updates):
   - `clawhub sync --all`
 
-By default, `clawhub` installs into `./skills` under your current working
-directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
-that up as `<workspace>/skills` on the next session.
+Native `openclaw skills install` installs into the active workspace `skills/`
+directory. The separate `clawhub` CLI also installs into `./skills` under your
+current working directory (or falls back to the configured OpenClaw workspace).
+OpenClaw picks that up as `<workspace>/skills` on the next session.
 
 ## Security notes
 
@@ -218,6 +228,12 @@ If you want stock image generation/editing inside OpenClaw itself, use the core
 `image_generate` tool with `agents.defaults.imageGenerationModel` instead of a
 bundled skill. Skill examples here are for custom or third-party workflows.
 
+For native image analysis, use the `image` tool with `agents.defaults.imageModel`.
+For native image generation/editing, use `image_generate` with
+`agents.defaults.imageGenerationModel`. If you pick `openai/*`, `google/*`,
+`fal/*`, or another provider-specific image model, add that provider's auth/API
+key too.
+
 Config keys match the **skill name** by default. If a skill defines
 `metadata.openclaw.skillKey`, use that key under `skills.entries`.
 
@@ -251,7 +267,7 @@ Skills can also refresh mid-session when the skills watcher is enabled or when a
 
 ## Remote macOS nodes (Linux gateway)
 
-If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `nodes` tool (typically `nodes.run`).
+If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `exec` tool with `host=node`.
 
 This relies on the node reporting its command support and on a bin probe via `system.run`. If the macOS node goes offline later, the skills remain visible; invocations may fail until the node reconnects.
 

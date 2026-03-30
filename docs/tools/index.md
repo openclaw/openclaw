@@ -52,19 +52,22 @@ OpenClaw has three layers that work together:
 
 These tools ship with OpenClaw and are available without installing any plugins:
 
-| Tool                         | What it does                                             | Page                              |
-| ---------------------------- | -------------------------------------------------------- | --------------------------------- |
-| `exec` / `process`           | Run shell commands, manage background processes          | [Exec](/tools/exec)               |
-| `browser`                    | Control a Chromium browser (navigate, click, screenshot) | [Browser](/tools/browser)         |
-| `web_search` / `web_fetch`   | Search the web, fetch page content                       | [Web](/tools/web)                 |
-| `read` / `write` / `edit`    | File I/O in the workspace                                |                                   |
-| `apply_patch`                | Multi-hunk file patches                                  | [Apply Patch](/tools/apply-patch) |
-| `message`                    | Send messages across all channels                        | [Agent Send](/tools/agent-send)   |
-| `canvas`                     | Drive node Canvas (present, eval, snapshot)              |                                   |
-| `nodes`                      | Discover and target paired devices                       |                                   |
-| `cron` / `gateway`           | Manage scheduled jobs, restart gateway                   |                                   |
-| `image` / `image_generate`   | Analyze or generate images                               |                                   |
-| `sessions_*` / `agents_list` | Session management, sub-agents                           | [Sub-agents](/tools/subagents)    |
+| Tool                                    | What it does                                             | Page                                    |
+| --------------------------------------- | -------------------------------------------------------- | --------------------------------------- |
+| `exec` / `process`                      | Run shell commands, manage background processes          | [Exec](/tools/exec)                     |
+| `code_execution`                        | Run sandboxed remote Python analysis                     | [Code Execution](/tools/code-execution) |
+| `browser`                               | Control a Chromium browser (navigate, click, screenshot) | [Browser](/tools/browser)               |
+| `web_search` / `x_search` / `web_fetch` | Search the web, search X posts, fetch page content       | [Web](/tools/web)                       |
+| `read` / `write` / `edit`               | File I/O in the workspace                                |                                         |
+| `apply_patch`                           | Multi-hunk file patches                                  | [Apply Patch](/tools/apply-patch)       |
+| `message`                               | Send messages across all channels                        | [Agent Send](/tools/agent-send)         |
+| `canvas`                                | Drive node Canvas (present, eval, snapshot)              |                                         |
+| `nodes`                                 | Discover and target paired devices                       |                                         |
+| `cron` / `gateway`                      | Manage scheduled jobs, restart gateway                   |                                         |
+| `image` / `image_generate`              | Analyze or generate images                               |                                         |
+| `sessions_*` / `agents_list`            | Session management, sub-agents                           | [Sub-agents](/tools/subagents)          |
+
+For image work, use `image` for analysis and `image_generate` for generation or editing. If you target `openai/*`, `google/*`, `fal/*`, or another non-default image provider, configure that provider's auth/API key first.
 
 ### Plugin-provided tools
 
@@ -107,18 +110,18 @@ Per-agent override: `agents.list[].tools.profile`.
 
 Use `group:*` shorthands in allow/deny lists:
 
-| Group              | Tools                                                                          |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `group:runtime`    | exec, bash, process                                                            |
-| `group:fs`         | read, write, edit, apply_patch                                                 |
-| `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, session_status |
-| `group:memory`     | memory_search, memory_get                                                      |
-| `group:web`        | web_search, web_fetch                                                          |
-| `group:ui`         | browser, canvas                                                                |
-| `group:automation` | cron, gateway                                                                  |
-| `group:messaging`  | message                                                                        |
-| `group:nodes`      | nodes                                                                          |
-| `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                            |
+| Group              | Tools                                                                                                     |
+| ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | exec, bash, process, code_execution                                                                       |
+| `group:fs`         | read, write, edit, apply_patch                                                                            |
+| `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
+| `group:memory`     | memory_search, memory_get                                                                                 |
+| `group:web`        | web_search, x_search, web_fetch                                                                           |
+| `group:ui`         | browser, canvas                                                                                           |
+| `group:automation` | cron, gateway                                                                                             |
+| `group:messaging`  | message                                                                                                   |
+| `group:nodes`      | nodes                                                                                                     |
+| `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 
 ### Provider-specific restrictions
 

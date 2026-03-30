@@ -8,7 +8,7 @@ echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running plugins Docker E2E..."
-docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -i "$IMAGE_NAME" bash -s <<'EOF'
+docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -e OPENAI_API_KEY -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
 if [ -f dist/index.mjs ]; then
@@ -24,6 +24,192 @@ export OPENCLAW_ENTRY
 
 home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
 export HOME="$home_dir"
+BUNDLED_PLUGIN_ROOT_DIR="extensions"
+OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
+
+gateway_pid=""
+
+stop_gateway() {
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    kill "$gateway_pid" 2>/dev/null || true
+    wait "$gateway_pid" 2>/dev/null || true
+  fi
+  gateway_pid=""
+}
+
+start_gateway() {
+  local log_file="$1"
+  : > "$log_file"
+  node "$OPENCLAW_ENTRY" gateway --port 18789 --bind loopback --allow-unconfigured \
+    >"$log_file" 2>&1 &
+  gateway_pid=$!
+
+  for _ in $(seq 1 120); do
+    if grep -q "listening on ws://" "$log_file"; then
+      return 0
+    fi
+    if ! kill -0 "$gateway_pid" 2>/dev/null; then
+      echo "Gateway exited unexpectedly"
+      cat "$log_file"
+      exit 1
+    fi
+    sleep 0.25
+  done
+
+  echo "Timed out waiting for gateway to start"
+  cat "$log_file"
+  exit 1
+}
+
+wait_for_gateway_health() {
+  for _ in $(seq 1 120); do
+    if node "$OPENCLAW_ENTRY" gateway health \
+      --url ws://127.0.0.1:18789 \
+      --token plugin-e2e-token \
+      --json >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  echo "Timed out waiting for gateway health"
+  return 1
+}
+
+run_gateway_chat_json() {
+  local session_key="$1"
+  local message="$2"
+  local output_file="$3"
+  local timeout_ms="${4:-15000}"
+  node - <<'NODE' "$OPENCLAW_ENTRY" "$session_key" "$message" "$output_file" "$timeout_ms"
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const { randomUUID } = require("node:crypto");
+
+const [, , entry, sessionKey, message, outputFile, timeoutRaw] = process.argv;
+const timeoutMs = Number(timeoutRaw) > 0 ? Number(timeoutRaw) : 15000;
+const gatewayArgs = [
+  entry,
+  "gateway",
+  "call",
+  "--url",
+  "ws://127.0.0.1:18789",
+  "--token",
+  "plugin-e2e-token",
+  "--timeout",
+  "10000",
+  "--json",
+];
+
+const callGateway = (method, params) => {
+  try {
+    return {
+      ok: true,
+      value: JSON.parse(
+        execFileSync("node", [...gatewayArgs, method, "--params", JSON.stringify(params)], {
+          encoding: "utf8",
+        }),
+      ),
+    };
+  } catch (error) {
+    const stderr = typeof error?.stderr === "string" ? error.stderr : "";
+    const stdout = typeof error?.stdout === "string" ? error.stdout : "";
+    const message = [String(error), stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+    return { ok: false, error: new Error(message) };
+  }
+};
+
+const extractText = (messageLike) => {
+  if (!messageLike || typeof messageLike !== "object") {
+    return "";
+  }
+  if (typeof messageLike.text === "string" && messageLike.text.trim()) {
+    return messageLike.text.trim();
+  }
+  const content = Array.isArray(messageLike.content) ? messageLike.content : [];
+  return content
+    .map((part) =>
+      part &&
+      typeof part === "object" &&
+      part.type === "text" &&
+      typeof part.text === "string"
+        ? part.text.trim()
+        : "",
+    )
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+};
+
+const findLatestAssistantText = (history) => {
+  const messages = Array.isArray(history?.messages) ? history.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (!candidate || typeof candidate !== "object" || candidate.role !== "assistant") {
+      continue;
+    }
+    const text = extractText(candidate);
+    if (text) {
+      return { text, message: candidate };
+    }
+  }
+  return null;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function main() {
+  const runId = `plugin-e2e-${randomUUID()}`;
+  const sendResult = callGateway("chat.send", {
+    sessionKey,
+    message,
+    idempotencyKey: runId,
+  });
+  if (!sendResult.ok) {
+    throw sendResult.error;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const historyResult = callGateway("chat.history", { sessionKey });
+    if (!historyResult.ok) {
+      await sleep(150);
+      continue;
+    }
+    const history = historyResult.value;
+    const latestAssistant = findLatestAssistantText(history);
+    if (latestAssistant) {
+      fs.writeFileSync(
+        outputFile,
+        `${JSON.stringify(
+          {
+            sessionKey,
+            runId,
+            text: latestAssistant.text,
+            message: latestAssistant.message,
+            history,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      return;
+    }
+    await sleep(100);
+  }
+
+  throw new Error(`timed out waiting for assistant reply for ${sessionKey}`);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
+NODE
+}
+
+trap 'stop_gateway' EXIT
 
 write_fixture_plugin() {
   local dir="$1"
@@ -68,9 +254,11 @@ fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
 NODE
 }
 
-mkdir -p "$HOME/.openclaw/extensions/demo-plugin"
+demo_plugin_id="demo-plugin"
+demo_plugin_root="$OPENCLAW_PLUGIN_HOME/$demo_plugin_id"
+mkdir -p "$demo_plugin_root"
 
-cat > "$HOME/.openclaw/extensions/demo-plugin/index.js" <<'JS'
+cat > "$demo_plugin_root/index.js" <<'JS'
 module.exports = {
   id: "demo-plugin",
   name: "Demo Plugin",
@@ -83,7 +271,7 @@ module.exports = {
   },
 };
 JS
-cat > "$HOME/.openclaw/extensions/demo-plugin/openclaw.plugin.json" <<'JSON'
+cat > "$demo_plugin_root/openclaw.plugin.json" <<'JSON'
 {
   "id": "demo-plugin",
   "configSchema": {
@@ -264,6 +452,188 @@ if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("de
 }
 console.log("ok");
 NODE
+
+echo "Testing /plugin alias with Claude bundle restart semantics..."
+bundle_plugin_id="claude-bundle-e2e"
+bundle_root="$OPENCLAW_PLUGIN_HOME/$bundle_plugin_id"
+mkdir -p "$bundle_root/.claude-plugin" "$bundle_root/commands"
+cat > "$bundle_root/.claude-plugin/plugin.json" <<'JSON'
+{
+  "name": "claude-bundle-e2e"
+}
+JSON
+cat > "$bundle_root/commands/office-hours.md" <<'MD'
+---
+description: Help with architecture and rollout planning
+---
+Act as an engineering advisor.
+
+Focus on:
+$ARGUMENTS
+MD
+
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = fs.existsSync(configPath)
+  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
+  : {};
+config.gateway = {
+  ...(config.gateway || {}),
+  port: 18789,
+  auth: { mode: "token", token: "plugin-e2e-token" },
+  controlUi: { enabled: false },
+};
+if (process.env.OPENAI_API_KEY) {
+  config.agents = {
+    ...(config.agents || {}),
+    defaults: {
+      ...(config.agents?.defaults || {}),
+      model: { primary: "openai/gpt-5.4" },
+    },
+  };
+}
+config.commands = {
+  ...(config.commands || {}),
+  text: true,
+  plugins: true,
+};
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+
+gateway_log="/tmp/openclaw-plugin-command-e2e.log"
+start_gateway "$gateway_log"
+wait_for_gateway_health
+
+echo "Testing /plugin install with auto-restart..."
+slash_install_dir="$(mktemp -d "/tmp/openclaw-plugin-slash-install.XXXXXX")"
+cat > "$slash_install_dir/package.json" <<'JSON'
+{
+  "name": "@openclaw/slash-install-plugin",
+  "version": "0.0.1",
+  "openclaw": { "extensions": ["./index.js"] }
+}
+JSON
+cat > "$slash_install_dir/index.js" <<'JS'
+module.exports = {
+  id: "slash-install-plugin",
+  name: "Slash Install Plugin",
+  register(api) {
+    api.registerGatewayMethod("demo.slash.install", async () => ({ ok: true }));
+  },
+};
+JS
+cat > "$slash_install_dir/openclaw.plugin.json" <<'JSON'
+{
+  "id": "slash-install-plugin",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+JSON
+
+run_gateway_chat_json \
+  "plugin-e2e-install" \
+  "/plugin install $slash_install_dir" \
+  /tmp/plugin-command-install.json \
+  30000
+node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-install.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes('Installed plugin "slash-install-plugin"')) {
+  throw new Error(`expected install confirmation, got:\n${text}`);
+}
+if (!text.includes("Restart the gateway to load plugins.")) {
+  throw new Error(`expected restart hint, got:\n${text}`);
+}
+console.log("ok");
+NODE
+
+wait_for_gateway_health
+run_gateway_chat_json "plugin-e2e-install-show" "/plugin show slash-install-plugin" /tmp/plugin-command-install-show.json
+node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-install-show.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes('"status": "loaded"')) {
+  throw new Error(`expected loaded status after slash install, got:\n${text}`);
+}
+if (!text.includes('"enabled": true')) {
+  throw new Error(`expected enabled status after slash install, got:\n${text}`);
+}
+if (!text.includes('"demo.slash.install"')) {
+  throw new Error(`expected installed gateway method, got:\n${text}`);
+}
+console.log("ok");
+NODE
+
+run_gateway_chat_json "plugin-e2e-list" "/plugin list" /tmp/plugin-command-list.json
+node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-list.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes("claude-bundle-e2e")) {
+  throw new Error(`expected plugin in /plugin list output, got:\n${text}`);
+}
+if (!text.includes("[disabled]")) {
+  throw new Error(`expected disabled status before enable, got:\n${text}`);
+}
+console.log("ok");
+NODE
+
+run_gateway_chat_json "plugin-e2e-enable" "/plugin enable claude-bundle-e2e" /tmp/plugin-command-enable.json
+node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-enable.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes('Plugin "claude-bundle-e2e" enabled')) {
+  throw new Error(`expected enable confirmation, got:\n${text}`);
+}
+if (!text.includes("Restart the gateway to apply.")) {
+  throw new Error(`expected restart hint, got:\n${text}`);
+}
+console.log("ok");
+NODE
+
+wait_for_gateway_health
+run_gateway_chat_json "plugin-e2e-show" "/plugin show claude-bundle-e2e" /tmp/plugin-command-show.json
+node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-show.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes('"bundleFormat": "claude"')) {
+  throw new Error(`expected Claude bundle inspect payload, got:\n${text}`);
+}
+if (!text.includes('"enabled": true')) {
+  throw new Error(`expected enabled inspect payload, got:\n${text}`);
+}
+console.log("ok");
+NODE
+
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  echo "Testing Claude bundle command invocation..."
+  run_gateway_chat_json \
+    "plugin-e2e-live" \
+    "/office_hours Reply with exactly BUNDLE_OK and nothing else." \
+    /tmp/plugin-command-live.json \
+    60000
+  node - <<'NODE'
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-live.json", "utf8"));
+const text = payload.text || "";
+if (!text.includes("BUNDLE_OK")) {
+  throw new Error(`expected Claude bundle command reply, got:\n${text}`);
+}
+console.log("ok");
+NODE
+else
+  echo "Skipping live Claude bundle command invocation (OPENAI_API_KEY not set)."
+fi
 
 echo "Testing marketplace install and update flows..."
 marketplace_root="$HOME/.claude/plugins/marketplaces/fixture-marketplace"

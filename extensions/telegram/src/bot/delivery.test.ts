@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
@@ -50,6 +50,10 @@ vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   InputFile: class {
     constructor(
       public buffer: Buffer,
@@ -166,7 +170,7 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
     );
-    messageHookRunner.runMessageSending.mockResolvedValue({ content: "" });
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "   " });
 
     const runtime = createRuntime(false);
     const sendMessage = vi.fn();
@@ -180,7 +184,7 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).not.toHaveBeenCalled();
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, content: "" }),
+      expect.objectContaining({ success: false, content: "   " }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
     );
   });
@@ -596,7 +600,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("skips whitespace-only text replies without calling Telegram", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
@@ -611,7 +615,7 @@ describe("deliverReplies", () => {
         replyToMode: "off",
         textLimit: 4000,
       }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    ).resolves.toEqual({ delivered: false });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -636,6 +640,7 @@ describe("deliverReplies", () => {
       expect.any(String),
       expect.objectContaining({
         reply_to_message_id: 500,
+        allow_sending_without_reply: true,
       }),
     );
     expect(sendMessage).toHaveBeenCalledWith(
@@ -744,6 +749,7 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[0][2]).toEqual(
       expect.objectContaining({
         reply_to_message_id: 77,
+        allow_sending_without_reply: true,
         reply_markup: {
           inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
         },
@@ -799,7 +805,10 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // First chunk should have reply_to_message_id
     expect(sendMessage.mock.calls[0][2]).toEqual(
-      expect.objectContaining({ reply_to_message_id: 700 }),
+      expect.objectContaining({
+        reply_to_message_id: 700,
+        allow_sending_without_reply: true,
+      }),
     );
     // Second chunk should NOT have reply_to_message_id
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
@@ -826,7 +835,12 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // Both chunks should have reply_to_message_id
     for (const call of sendMessage.mock.calls) {
-      expect(call[2]).toEqual(expect.objectContaining({ reply_to_message_id: 800 }));
+      expect(call[2]).toEqual(
+        expect.objectContaining({
+          reply_to_message_id: 800,
+          allow_sending_without_reply: true,
+        }),
+      );
     }
   });
 
@@ -854,7 +868,10 @@ describe("deliverReplies", () => {
     expect(sendPhoto).toHaveBeenCalledTimes(2);
     // First media should have reply_to_message_id
     expect(sendPhoto.mock.calls[0][2]).toEqual(
-      expect.objectContaining({ reply_to_message_id: 900 }),
+      expect.objectContaining({
+        reply_to_message_id: 900,
+        allow_sending_without_reply: true,
+      }),
     );
     // Second media should NOT have reply_to_message_id
     expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
