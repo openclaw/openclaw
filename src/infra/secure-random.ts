@@ -12,6 +12,7 @@ export function generateSecureHex(bytes = 16): string {
   return randomBytes(bytes).toString("hex");
 }
 
+/** Returns a cryptographically secure fraction in the range [0, 1). */
 export function generateSecureFraction(): number {
   return randomBytes(4).readUInt32BE(0) / 0x1_0000_0000;
 }

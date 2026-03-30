@@ -5,6 +5,7 @@
  * a notification and can approve or deny the request.
  */
 
+// Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
 import type { PendingApproval } from "../settings.js";
 

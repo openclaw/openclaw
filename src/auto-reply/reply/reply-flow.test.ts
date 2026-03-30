@@ -1930,7 +1930,7 @@ describe("createReplyDispatcher", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(799);
+    await vi.advanceTimersByTimeAsync(2499);
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
