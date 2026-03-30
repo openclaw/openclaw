@@ -119,7 +119,7 @@ describe("slackPlugin actions", () => {
   });
 
   it("treats interactive reply payloads as structured Slack payloads", () => {
-    const hasStructuredReplyPayload = slackPlugin.messaging.hasStructuredReplyPayload;
+    const hasStructuredReplyPayload = slackPlugin.messaging?.hasStructuredReplyPayload;
     if (!hasStructuredReplyPayload) {
       throw new Error("slack messaging.hasStructuredReplyPayload unavailable");
     }
