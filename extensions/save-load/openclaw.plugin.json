@@ -1,0 +1,9 @@
+{
+  "id": "save-load",
+  "name": "Save/Load Context",
+  "description": "Save and load conversation context to file",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
