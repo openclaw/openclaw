@@ -454,6 +454,57 @@ describe("gateway node command allowlist", () => {
     }
   });
 
+  test("records only allowlisted commands in pending node pairing requests", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const deviceIdentityPath = path.join(
+      os.tmpdir(),
+      `openclaw-allowlisted-pending-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
+    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const displayName = "node-pending-allowlisted-only";
+    let nodeClient: GatewayClient | undefined;
+
+    try {
+      nodeClient = await connectNodeClientWithPairing({
+        port,
+        commands: ["system.run", "canvas.snapshot"],
+        platform: "İOS",
+        deviceFamily: "iPhone",
+        instanceId: displayName,
+        displayName,
+        deviceIdentity,
+      });
+
+      const listRes = await rpcReq<{
+        nodes?: Array<{
+          nodeId: string;
+          displayName?: string;
+          connected?: boolean;
+        }>;
+      }>(ws, "node.list", {});
+      const nodeId =
+        (listRes.payload?.nodes ?? []).find(
+          (node) => node.connected && node.displayName === displayName,
+        )?.nodeId ?? "";
+      expect(nodeId).toBeTruthy();
+
+      const pairingList = await rpcReq<{
+        pending?: Array<{ nodeId?: string; commands?: string[] }>;
+      }>(ws, "node.pair.list", {});
+      expect(pairingList.ok).toBe(true);
+      expect(pairingList.payload?.pending ?? []).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            nodeId,
+            commands: ["canvas.snapshot"],
+          }),
+        ]),
+      );
+    } finally {
+      await nodeClient?.stopAndWait();
+    }
+  });
+
   test("rejects reconnect metadata spoof for paired node devices", async () => {
     const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const deviceIdentityPath = path.join(
@@ -497,7 +548,7 @@ describe("gateway node command allowlist", () => {
         }),
       ).rejects.toThrow(/pairing required/i);
     } finally {
-      iosClient?.stop();
+      await iosClient?.stopAndWait();
     }
   });
 
@@ -573,7 +624,7 @@ describe("gateway node command allowlist", () => {
         expect(systemRunRes.ok).toBe(false);
         expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
       } finally {
-        client?.stop();
+        await client?.stopAndWait();
       }
     }
   });

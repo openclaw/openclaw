@@ -965,6 +965,13 @@ export function attachGatewayWsMessageHandler(params: {
           const cfg = loadConfig();
           const nodeId = connectParams.device?.id ?? connectParams.client.id;
           const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
+          const allowlist = resolveNodeCommandAllowlist(cfg, {
+            platform: connectParams.client.platform,
+            deviceFamily: connectParams.client.deviceFamily,
+          });
+          const allowlistedDeclared = declared
+            .map((cmd) => cmd.trim())
+            .filter((cmd) => cmd.length > 0 && allowlist.has(cmd));
           let pairedNode = await getPairedNode(nodeId);
           if (!pairedNode) {
             const pending = await requestNodePairing({
@@ -975,7 +982,7 @@ export function attachGatewayWsMessageHandler(params: {
               deviceFamily: connectParams.client.deviceFamily,
               modelIdentifier: connectParams.client.modelIdentifier,
               caps: connectParams.caps,
-              commands: declared,
+              commands: allowlistedDeclared,
               remoteIp: reportedClientIp,
             });
             if (pending.status === "pending" && pending.created) {
@@ -986,14 +993,8 @@ export function attachGatewayWsMessageHandler(params: {
             }
             pairedNode = await getPairedNode(nodeId);
           }
-          const allowlist = resolveNodeCommandAllowlist(cfg, {
-            platform: connectParams.client.platform,
-            deviceFamily: connectParams.client.deviceFamily,
-          });
           const pairedCommands = new Set(pairedNode?.commands ?? []);
-          const filtered = declared
-            .map((cmd) => cmd.trim())
-            .filter((cmd) => cmd.length > 0 && allowlist.has(cmd) && pairedCommands.has(cmd));
+          const filtered = allowlistedDeclared.filter((cmd) => pairedCommands.has(cmd));
           connectParams.commands = filtered;
         }
 
