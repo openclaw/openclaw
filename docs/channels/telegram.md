@@ -984,6 +984,8 @@ Telegram-specific high-signal fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

@@ -1232,7 +1232,9 @@ High-signal Discord fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
 - [Channel routing](/channels/channel-routing)
+- [Security](/gateway/security)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)
 - [Slash commands](/tools/slash-commands)
