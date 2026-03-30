@@ -95,11 +95,16 @@ const fallbackManager = vi.hoisted(() => ({
 const fallbackSearch = fallbackManager.search;
 const mockMemoryIndexGet = vi.hoisted(() => vi.fn(async () => fallbackManager));
 const mockCloseAllMemoryIndexManagers = vi.hoisted(() => vi.fn(async () => {}));
+const checkQmdBinaryAvailability = vi.hoisted(() => vi.fn(async () => ({ available: true })));
 
 vi.mock("./qmd-manager.js", () => ({
   QmdMemoryManager: {
     create: vi.fn(async () => mockPrimary),
   },
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
+  checkQmdBinaryAvailability,
 }));
 
 vi.mock("./manager-runtime.js", () => ({
@@ -157,6 +162,8 @@ beforeEach(async () => {
   mockCloseAllMemoryIndexManagers.mockClear();
   mockMemoryIndexGet.mockClear();
   mockMemoryIndexGet.mockResolvedValue(fallbackManager);
+  checkQmdBinaryAvailability.mockClear();
+  checkQmdBinaryAvailability.mockResolvedValue({ available: true });
   createQmdManagerMock.mockClear();
 });
 
@@ -190,6 +197,22 @@ describe("getMemorySearchManager caching", () => {
     requireManager(second);
     expect(second.manager).not.toBe(first.manager);
     expect(createQmdManagerMock.mock.calls).toHaveLength(2);
+  });
+
+  it("falls back immediately when the qmd binary is unavailable", async () => {
+    const cfg = createQmdCfg("missing-qmd");
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId: "missing-qmd" });
+    const manager = requireManager(result);
+    const searchResults = await manager.search("hello");
+
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalled();
+    expect(searchResults).toHaveLength(1);
   });
 
   it("does not cache qmd managers for status-only requests", async () => {

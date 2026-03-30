@@ -3,6 +3,7 @@ import {
   resolveGlobalSingleton,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { checkQmdBinaryAvailability } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   resolveMemoryBackendConfig,
   type MemoryEmbeddingProbeResult,
@@ -47,52 +48,62 @@ export async function getMemorySearchManager(params: {
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
-    const statusOnly = params.purpose === "status";
-    const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
-    const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
-    const cached = QMD_MANAGER_CACHE.get(cacheKey);
-    if (cached) {
-      return { manager: cached };
-    }
-    if (statusOnly) {
-      const fullCached = QMD_MANAGER_CACHE.get(`${baseCacheKey}:full`);
-      if (fullCached) {
-        // Status callers often close the manager they receive. Wrap the live
-        // full manager with a no-op close so health/status probes do not tear
-        // down the active QMD manager for the process.
-        return { manager: new BorrowedMemoryManager(fullCached) };
+    const qmdBinary = await checkQmdBinaryAvailability({
+      command: resolved.qmd.command,
+      env: process.env,
+    });
+    if (!qmdBinary.available) {
+      log.warn(
+        `qmd binary unavailable (${resolved.qmd.command}); falling back to builtin: ${qmdBinary.error ?? "unknown error"}`,
+      );
+    } else {
+      const statusOnly = params.purpose === "status";
+      const baseCacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+      const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
+      const cached = QMD_MANAGER_CACHE.get(cacheKey);
+      if (cached) {
+        return { manager: cached };
       }
-    }
-    try {
-      const { QmdMemoryManager } = await import("./qmd-manager.js");
-      const primary = await QmdMemoryManager.create({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved,
-        mode: statusOnly ? "status" : "full",
-      });
-      if (primary) {
-        if (statusOnly) {
-          return { manager: primary };
+      if (statusOnly) {
+        const fullCached = QMD_MANAGER_CACHE.get(`${baseCacheKey}:full`);
+        if (fullCached) {
+          // Status callers often close the manager they receive. Wrap the live
+          // full manager with a no-op close so health/status probes do not tear
+          // down the active QMD manager for the process.
+          return { manager: new BorrowedMemoryManager(fullCached) };
         }
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await loadManagerRuntime();
-              return await MemoryIndexManager.get(params);
-            },
-          },
-          () => {
-            QMD_MANAGER_CACHE.delete(cacheKey);
-          },
-        );
-        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-        return { manager: wrapper };
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      try {
+        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const primary = await QmdMemoryManager.create({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          resolved,
+          mode: statusOnly ? "status" : "full",
+        });
+        if (primary) {
+          if (statusOnly) {
+            return { manager: primary };
+          }
+          const wrapper = new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await loadManagerRuntime();
+                return await MemoryIndexManager.get(params);
+              },
+            },
+            () => {
+              QMD_MANAGER_CACHE.delete(cacheKey);
+            },
+          );
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          return { manager: wrapper };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      }
     }
   }
 
