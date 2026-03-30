@@ -23,7 +23,9 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
 
 /**
  * Check whether memory search has a usable embedding provider.
- * Runs as part of `openclaw doctor` — config-only, no network calls.
+ * Runs as part of `openclaw doctor` — config-only checks where possible;
+ * may spawn a short-lived probe process when `memory.backend=qmd` to verify
+ * the configured `qmd` binary is available.
  */
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
