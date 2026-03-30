@@ -48,6 +48,18 @@ const baseCfg = {
 } as const;
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
+async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>): Promise<void> {
+  await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetTaskRegistryForTests();
+    try {
+      await run(root);
+    } finally {
+      resetTaskRegistryForTests();
+    }
+  });
+}
+
 function createRuntime(): {
   runtime: AcpRuntime;
   ensureSession: ReturnType<typeof vi.fn>;
@@ -249,10 +261,7 @@ describe("AcpSessionManager", () => {
   });
 
   it("tracks parented direct ACP turns in the task registry", async () => {
-    await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-
+    await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();
       runtimeState.runTurn.mockImplementation(async function* () {
         yield {

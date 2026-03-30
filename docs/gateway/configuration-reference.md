@@ -571,6 +571,45 @@ exec ssh -T gateway-host imsg "$@"
 
 </Accordion>
 
+### Matrix
+
+Matrix is extension-backed and configured under `channels.matrix`.
+
+```json5
+{
+  channels: {
+    matrix: {
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      accessToken: "syt_bot_xxx",
+      proxy: "http://127.0.0.1:7890",
+      encryption: true,
+      initialSyncLimit: 20,
+      defaultAccount: "ops",
+      accounts: {
+        ops: {
+          name: "Ops",
+          userId: "@ops:example.org",
+          accessToken: "syt_ops_xxx",
+        },
+        alerts: {
+          userId: "@alerts:example.org",
+          password: "secret",
+          proxy: "http://127.0.0.1:7891",
+        },
+      },
+    },
+  },
+}
+```
+
+- Token auth uses `accessToken`; password auth uses `userId` + `password`.
+- `channels.matrix.proxy` routes Matrix HTTP traffic through an explicit HTTP(S) proxy. Named accounts can override it with `channels.matrix.accounts.<id>.proxy`.
+- `channels.matrix.allowPrivateNetwork` allows private/internal homeservers. `proxy` and `allowPrivateNetwork` are independent controls.
+- `channels.matrix.defaultAccount` selects the preferred account in multi-account setups.
+- Matrix status probes and live directory lookups use the same proxy policy as runtime traffic.
+- Full Matrix configuration, targeting rules, and setup examples are documented in [Matrix](/channels/matrix).
+
 ### Microsoft Teams
 
 Microsoft Teams is extension-backed and configured under `channels.msteams`.
@@ -3277,7 +3316,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 
-See [Cron Jobs](/automation/cron-jobs).
+See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
 
 ---
 

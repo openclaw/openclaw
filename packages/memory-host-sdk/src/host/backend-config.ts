@@ -62,6 +62,7 @@ export type ResolvedQmdConfig = {
   command: string;
   mcporter: ResolvedQmdMcporterConfig;
   searchMode: MemoryQmdSearchMode;
+  searchTool?: string;
   collections: ResolvedQmdCollection[];
   sessions: ResolvedQmdSessionConfig;
   update: ResolvedQmdUpdateConfig;
@@ -200,6 +201,11 @@ function resolveSearchMode(raw?: MemoryQmdConfig["searchMode"]): MemoryQmdSearch
     return raw;
   }
   return DEFAULT_QMD_SEARCH_MODE;
+}
+
+function resolveSearchTool(raw?: MemoryQmdConfig["searchTool"]): string | undefined {
+  const value = raw?.trim();
+  return value ? value : undefined;
 }
 
 function resolveSessionConfig(
@@ -346,6 +352,7 @@ export function resolveMemoryBackendConfig(params: {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
     searchMode: resolveSearchMode(qmdCfg?.searchMode),
+    searchTool: resolveSearchTool(qmdCfg?.searchTool),
     collections,
     includeDefaultMemory,
     sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),
