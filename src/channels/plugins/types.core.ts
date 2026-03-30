@@ -83,6 +83,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   allowPrivateNetwork?: boolean;
+  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;

@@ -1,3 +1,4 @@
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 
 export type MatrixResolvedConfig = {
@@ -11,6 +12,7 @@ export type MatrixResolvedConfig = {
   encryption?: boolean;
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
 /**
@@ -33,6 +35,7 @@ export type MatrixAuth = {
   encryption?: boolean;
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
 export type MatrixStoragePaths = {

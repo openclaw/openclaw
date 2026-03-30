@@ -542,6 +542,51 @@ describe("resolveMatrixConfig", () => {
     ).toBe("http://matrix-synapse:8008");
   });
 
+  it("resolves an explicit proxy dispatcher from top-level Matrix config", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "tok-123",
+          proxy: "http://127.0.0.1:7890",
+        },
+      },
+    } as CoreConfig;
+
+    const resolved = resolveMatrixConfig(cfg, {} as NodeJS.ProcessEnv);
+
+    expect(resolved.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://127.0.0.1:7890",
+    });
+  });
+
+  it("prefers account proxy overrides over top-level Matrix proxy config", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "base-token",
+          proxy: "http://127.0.0.1:7890",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+              proxy: "http://127.0.0.1:7891",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", {} as NodeJS.ProcessEnv);
+
+    expect(resolved.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "http://127.0.0.1:7891",
+    });
+  });
+
   it("rejects public http homeservers even when private-network access is enabled", async () => {
     await expect(
       resolveValidatedMatrixHomeserverUrl("http://matrix.example.org:8008", {

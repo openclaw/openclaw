@@ -1,3 +1,4 @@
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import type { BaseProbeResult } from "../runtime-api.js";
 import { createMatrixClient, isBunRuntime } from "./client.js";
@@ -16,6 +17,7 @@ export async function probeMatrix(params: {
   accountId?: string | null;
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixProbe> {
   const started = Date.now();
   const result: MatrixProbe = {
@@ -55,6 +57,7 @@ export async function probeMatrix(params: {
       accountId: params.accountId,
       allowPrivateNetwork: params.allowPrivateNetwork,
       ssrfPolicy: params.ssrfPolicy,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
     // The client wrapper resolves user ID via whoami when needed.
     const userId = await client.getUserId();
