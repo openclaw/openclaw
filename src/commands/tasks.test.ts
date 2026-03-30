@@ -159,8 +159,8 @@ describe("tasks commands", () => {
 
     await tasksListCommand({ runtime: "acp", status: "running" }, runtime);
 
-    expect(runtimeLogs[0]).toContain("Background tasks: 1");
-    expect(runtimeLogs[1]).toContain("Task pressure: 0 queued · 1 running · 0 issues");
+    expect(runtimeLogs[0]).toContain("Detached task runs: 1");
+    expect(runtimeLogs[1]).toContain("Detached run pressure: 0 queued · 1 running · 0 issues");
     expect(runtimeLogs.join("\n")).toContain("No output for 60s. It may be waiting for input.");
   });
 
@@ -256,7 +256,7 @@ describe("tasks commands", () => {
     await tasksAuditCommand({ severity: "error", code: "stale_running", limit: 1 }, runtime);
 
     expect(summarizeTaskAuditFindingsMock).toHaveBeenCalledWith(findings);
-    expect(runtimeLogs[0]).toContain("Task audit: 2 findings · 1 errors · 1 warnings");
+    expect(runtimeLogs[0]).toContain("Detached run audit: 2 findings · 1 errors · 1 warnings");
     expect(runtimeLogs[1]).toContain("Showing 1 matching findings.");
     expect(runtimeLogs.join("\n")).toContain("stale_running");
     expect(runtimeLogs.join("\n")).toContain("running task appears stuck");
@@ -309,10 +309,10 @@ describe("tasks commands", () => {
     expect(previewTaskRegistryMaintenanceMock).toHaveBeenCalled();
     expect(runTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(runtimeLogs[0]).toContain(
-      "Task maintenance (preview): 2 reconcile · 1 cleanup stamp · 3 prune",
+      "Detached run maintenance (preview): 2 reconcile · 1 cleanup stamp · 3 prune",
     );
     expect(runtimeLogs[1]).toContain(
-      "Task health: 1 queued · 1 running · 1 audit errors · 1 audit warnings",
+      "Detached run health: 1 queued · 1 running · 1 audit errors · 1 audit warnings",
     );
     expect(runtimeLogs[2]).toContain("Dry run only.");
   });
@@ -377,11 +377,13 @@ describe("tasks commands", () => {
     expect(previewTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(runTaskRegistryMaintenanceMock).toHaveBeenCalled();
     expect(runtimeLogs[0]).toContain(
-      "Task maintenance (applied): 2 reconcile · 1 cleanup stamp · 3 prune",
+      "Detached run maintenance (applied): 2 reconcile · 1 cleanup stamp · 3 prune",
     );
     expect(runtimeLogs[1]).toContain(
-      "Task health after apply: 1 queued · 1 running · 0 audit errors · 1 audit warnings",
+      "Detached run health after apply: 1 queued · 1 running · 0 audit errors · 1 audit warnings",
     );
-    expect(runtimeLogs[2]).toContain("Task health before apply: 1 audit errors · 2 audit warnings");
+    expect(runtimeLogs[2]).toContain(
+      "Detached run health before apply: 1 audit errors · 2 audit warnings",
+    );
   });
 });
