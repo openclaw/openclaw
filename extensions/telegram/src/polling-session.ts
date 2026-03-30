@@ -56,6 +56,8 @@ type TelegramPollingSessionOpts = {
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
   createTelegramTransport?: () => TelegramTransport;
+  /** Stall detection threshold in milliseconds. Default 90s. */
+  stallThresholdMs?: number;
 };
 
 export class TelegramPollingSession {
@@ -65,8 +67,10 @@ export class TelegramPollingSession {
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
   #transportState: TelegramPollingTransportState;
+  #stallThresholdMs: number;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
+    this.#stallThresholdMs = opts.stallThresholdMs ?? 90_000;
     this.#transportState = new TelegramPollingTransportState({
       log: opts.log,
       initialTransport: opts.telegramTransport,
@@ -339,11 +343,11 @@ export class TelegramPollingSession {
       // the same liveness signal. Slow delivery should suppress the watchdog,
       // but only for the same bounded window as recent successful API traffic.
       if (
-        elapsed > POLL_STALL_THRESHOLD_MS &&
-        apiElapsed > POLL_STALL_THRESHOLD_MS &&
+        elapsed > this.#stallThresholdMs &&
+        apiElapsed > this.#stallThresholdMs &&
         runner.isRunning()
       ) {
-        if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
+        if (stallDiagLoggedAt && now - stallDiagLoggedAt < this.#stallThresholdMs / 2) {
           return;
         }
         stallDiagLoggedAt = now;
