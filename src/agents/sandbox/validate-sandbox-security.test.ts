@@ -47,6 +47,17 @@ describe("getBlockedBindReason", () => {
     );
   });
 
+  it("blocks sensitive home subdirectories under OPENCLAW_HOME", () => {
+    vi.stubEnv("HOME", "/home/tester");
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    expect(getBlockedBindReason("/srv/openclaw-home/.ssh:/mnt/ssh:ro")).toEqual(
+      expect.objectContaining({
+        kind: "targets",
+        blockedPath: "/srv/openclaw-home/.ssh",
+      }),
+    );
+  });
+
   it("blocks the resolved OpenClaw state directory override", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", "/srv/openclaw-state");
     expect(getBlockedBindReason("/srv/openclaw-state/credentials:/mnt/state:ro")).toEqual(
@@ -59,6 +70,10 @@ describe("getBlockedBindReason", () => {
 });
 
 describe("validateBindMounts", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("allows legitimate project directory mounts", () => {
     expect(() =>
       validateBindMounts([
@@ -150,6 +165,23 @@ describe("validateBindMounts", () => {
     symlinkSync("/etc", link);
     const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
     expect(run).toThrow(/blocked path/);
+  });
+
+  it("blocks canonicalized sensitive paths derived from OPENCLAW_HOME", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const realHome = join(dir, "real-home");
+    const linkedHome = join(dir, "linked-home");
+    mkdirSync(join(realHome, ".ssh"), { recursive: true });
+    symlinkSync(realHome, linkedHome);
+    vi.stubEnv("OPENCLAW_HOME", linkedHome);
+
+    expect(() => validateBindMounts([`${join(realHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
+      /blocked path/,
+    );
   });
 
   it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {

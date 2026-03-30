@@ -8,6 +8,7 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -133,24 +134,37 @@ export function getBlockedReasonForSourcePath(sourceNormalized: string): Blocked
 }
 
 export function getBlockedHostPaths(): string[] {
-  const homedir = normalizeHostPath(os.homedir());
+  const homedir = normalizeHostPath(resolveRequiredHomeDir(process.env, os.homedir));
   const stateDir = normalizeHostPath(resolveStateDir());
   const cacheKey = `${homedir}\u0000${stateDir}`;
   if (cachedBlockedHostPaths?.key === cacheKey) {
     return cachedBlockedHostPaths.paths;
   }
 
-  const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
+  const blocked = new Set<string>();
+  for (const candidate of BLOCKED_HOST_PATHS) {
+    addBlockedHostPath(blocked, candidate);
+  }
   if (homedir !== "/") {
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
-      blocked.add(normalizeHostPath(path.posix.join(homedir, suffix)));
+      addBlockedHostPath(blocked, path.posix.join(homedir, suffix));
     }
   }
-  blocked.add(stateDir);
+  addBlockedHostPath(blocked, stateDir);
 
   const paths = [...blocked];
   cachedBlockedHostPaths = { key: cacheKey, paths };
   return paths;
+}
+
+function addBlockedHostPath(blocked: Set<string>, candidate: string): void {
+  const normalized = normalizeHostPath(candidate);
+  blocked.add(normalized);
+
+  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
+  if (canonical !== normalized) {
+    blocked.add(canonical);
+  }
 }
 
 function normalizeAllowedRoots(roots: string[] | undefined): string[] {
