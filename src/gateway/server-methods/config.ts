@@ -26,6 +26,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
@@ -233,6 +234,27 @@ function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationI
   }`;
 }
 
+async function ensureResolvableSecretRefsOrRespond(params: {
+  config: OpenClawConfig;
+  respond: RespondFn;
+}): Promise<boolean> {
+  try {
+    await prepareSecretsRuntimeSnapshot({ config: params.config });
+    return true;
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid config: active SecretRef resolution failed (${details})`,
+      ),
+    );
+    return false;
+  }
+}
+
 function resolveConfigRestartRequest(params: unknown): {
   sessionKey: string | undefined;
   note: string | undefined;
@@ -358,6 +380,9 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
+    if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
+      return;
+    }
     await writeConfigFile(parsed.config, writeOptions);
     respond(
       true,
@@ -443,6 +468,9 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (!(await ensureResolvableSecretRefsOrRespond({ config: validated.config, respond }))) {
+      return;
+    }
     const changedPaths = diffConfigPaths(snapshot.config, validated.config);
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
@@ -501,6 +529,9 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
     if (!parsed) {
+      return;
+    }
+    if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
