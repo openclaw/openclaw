@@ -346,6 +346,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
   "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
+  "agents.defaults.memorySearch.remote.nonBatchConcurrency":
+    "Remote Non-Batch Embedding Concurrency",
   "agents.defaults.memorySearch.remote.batch.enabled": "Remote Batch Embedding Enabled",
   "agents.defaults.memorySearch.remote.batch.wait": "Remote Batch Wait for Completion",
   "agents.defaults.memorySearch.remote.batch.concurrency": "Remote Batch Concurrency",

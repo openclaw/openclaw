@@ -81,6 +81,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.baseUrl",
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.defaults.memorySearch.remote.headers",
+  "agents.defaults.memorySearch.remote.nonBatchConcurrency",
   "agents.defaults.memorySearch.remote.batch.enabled",
   "agents.defaults.memorySearch.remote.batch.wait",
   "agents.defaults.memorySearch.remote.batch.concurrency",
