@@ -174,6 +174,26 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(patterns).toEqual([exe]);
   });
 
+  it("does not persist interpreter-like executables for allow-always", () => {
+    const awk = path.join("/tmp", "awk");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: `${awk} '{print $1}' data.csv`,
+          argv: [awk, "{print $1}", "data.csv"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: awk,
+              resolvedPath: awk,
+              executableName: "awk",
+            }),
+          }),
+        },
+      ],
+    });
+    expect(patterns).toEqual([]);
+  });
+
   it("unwraps shell wrappers and persists the inner executable instead", () => {
     if (process.platform === "win32") {
       return;
@@ -617,6 +637,42 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       persistedPattern: echo,
     });
+  });
+
+  it("prevents allow-always bypass for awk interpreters", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: "awk '{print $1}' data.csv",
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(true);
   });
 
   it("prevents allow-always bypass for script wrapper chains", () => {

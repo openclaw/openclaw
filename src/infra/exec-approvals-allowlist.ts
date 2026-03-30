@@ -15,6 +15,7 @@ import {
   type ExecutableResolution,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { isInterpreterLikeAllowlistPattern } from "./exec-inline-eval.js";
 import {
   DEFAULT_SAFE_BINS,
   SAFE_BIN_PROFILES,
@@ -519,6 +520,9 @@ function collectAllowAlwaysPatterns(params: {
 
   const candidatePath = resolveExecutionTargetCandidatePath(segment.resolution, params.cwd);
   if (!candidatePath) {
+    return;
+  }
+  if (isInterpreterLikeAllowlistPattern(candidatePath)) {
     return;
   }
   if (!trustPlan.shellWrapperExecutable) {

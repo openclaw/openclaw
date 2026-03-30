@@ -26,8 +26,13 @@ const INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
 ];
 
-const INTERPRETER_INLINE_EVAL_NAMES = new Set(
-  INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names),
+const INTERPRETER_ALLOWLIST_NAMES = new Set(
+  INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names).concat([
+    "awk",
+    "gawk",
+    "mawk",
+    "nawk",
+  ]),
 );
 
 function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
@@ -93,11 +98,11 @@ export function isInterpreterLikeAllowlistPattern(pattern: string | undefined | 
     return false;
   }
   const normalized = normalizeExecutableToken(trimmed);
-  if (INTERPRETER_INLINE_EVAL_NAMES.has(normalized)) {
+  if (INTERPRETER_ALLOWLIST_NAMES.has(normalized)) {
     return true;
   }
   const basename = trimmed.replace(/\\/g, "/").split("/").pop() ?? trimmed;
   const withoutExe = basename.endsWith(".exe") ? basename.slice(0, -4) : basename;
   const strippedWildcards = withoutExe.replace(/[*?[\]{}()]/g, "");
-  return INTERPRETER_INLINE_EVAL_NAMES.has(strippedWildcards);
+  return INTERPRETER_ALLOWLIST_NAMES.has(strippedWildcards);
 }
