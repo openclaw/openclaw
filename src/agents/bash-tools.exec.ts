@@ -12,6 +12,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -176,14 +177,86 @@ async function validateScriptFileForShellBleed(params: {
 }
 
 function rejectExecApprovalShellCommand(command: string): void {
+  const isEnvAssignmentToken = (token: string): boolean =>
+    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
+  const sudoOptionsWithValues = new Set([
+    "-A",
+    "-C",
+    "-D",
+    "-E",
+    "-g",
+    "-h",
+    "-p",
+    "-R",
+    "-T",
+    "-U",
+    "-u",
+    "--askpass",
+    "--chdir",
+    "--close-from",
+    "--group",
+    "--host",
+    "--other-user",
+    "--preserve-env",
+    "--prompt",
+    "--role",
+    "--type",
+    "--user",
+  ]);
+  const stripApprovalCommandPrefixes = (argv: string[]): string[] => {
+    const remaining = [...argv];
+    while (remaining.length > 0) {
+      while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
+        remaining.shift();
+      }
+
+      const token = remaining[0];
+      if (!token) {
+        break;
+      }
+      if (token === "--") {
+        remaining.shift();
+        continue;
+      }
+      if (token === "env") {
+        remaining.shift();
+        continue;
+      }
+      if (token === "command" || token === "builtin" || token === "exec") {
+        remaining.shift();
+        continue;
+      }
+      if (token === "sudo") {
+        remaining.shift();
+        while (remaining[0]?.startsWith("-")) {
+          const option = remaining.shift()!;
+          if (option === "--") {
+            break;
+          }
+          const normalized = option.split("=", 1)[0];
+          if (sudoOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
+            remaining.shift();
+          }
+        }
+        continue;
+      }
+      break;
+    }
+    return remaining;
+  };
+
   const rawCommand = command.trim();
   const analysis = analyzeShellCommand({ command: rawCommand });
   const candidates = analysis.ok
-    ? analysis.segments.map((segment) => segment.raw.trim())
+    ? analysis.segments.map((segment) => stripApprovalCommandPrefixes(segment.argv).join(" "))
     : rawCommand
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((line) => {
+          const argv = splitShellArgs(line);
+          return argv ? stripApprovalCommandPrefixes(argv).join(" ") : line;
+        });
   for (const candidate of candidates) {
     if (!parseExecApprovalCommandText(candidate)) {
       continue;
