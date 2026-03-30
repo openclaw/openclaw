@@ -1,3 +1,4 @@
+import { shellTool } from "../tools/system/shell.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -50,11 +51,10 @@ export function resolvePluginTools(params: {
   allowGatewaySubagentBinding?: boolean;
   env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
-  // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
-  // This matters a lot for unit tests and for tool construction hot paths.
   const env = params.env ?? process.env;
   const effectiveConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const normalized = normalizePluginsConfig(effectiveConfig.plugins);
+
   if (!normalized.enabled) {
     return [];
   }
@@ -73,17 +73,20 @@ export function resolvePluginTools(params: {
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
-  const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
+  const existingNormalized = new Set(
+    Array.from(existing, (tool) => normalizeToolName(tool))
+  );
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
 
   for (const entry of registry.tools) {
-    if (blockedPlugins.has(entry.pluginId)) {
-      continue;
-    }
+    if (blockedPlugins.has(entry.pluginId)) {continue;}
+
     const pluginIdKey = normalizeToolName(entry.pluginId);
+
     if (existingNormalized.has(pluginIdKey)) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
+
       if (!params.suppressNameConflicts) {
         log.error(message);
         registry.diagnostics.push({
@@ -93,36 +96,42 @@ export function resolvePluginTools(params: {
           message,
         });
       }
+
       blockedPlugins.add(entry.pluginId);
       continue;
     }
-    let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined = null;
+
+    let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined;
+
     try {
       resolved = entry.factory(params.context);
     } catch (err) {
       log.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
       continue;
     }
-    if (!resolved) {
-      continue;
-    }
+
+    if (!resolved) {continue;}
+
     const listRaw = Array.isArray(resolved) ? resolved : [resolved];
+
     const list = entry.optional
       ? listRaw.filter((tool) =>
           isOptionalToolAllowed({
             toolName: tool.name,
             pluginId: entry.pluginId,
             allowlist,
-          }),
+          })
         )
       : listRaw;
-    if (list.length === 0) {
-      continue;
-    }
+
+    if (list.length === 0) {continue;}
+
     const nameSet = new Set<string>();
+
     for (const tool of list) {
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
+
         if (!params.suppressNameConflicts) {
           log.error(message);
           registry.diagnostics.push({
@@ -132,16 +141,28 @@ export function resolvePluginTools(params: {
             message,
           });
         }
+
         continue;
       }
+
       nameSet.add(tool.name);
       existing.add(tool.name);
+      existingNormalized.add(normalizeToolName(tool.name));
+
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional: entry.optional,
       });
+
       tools.push(tool);
     }
+  }
+
+  // ✅ SAFE CORE TOOL INJECTION
+  const shellName = normalizeToolName(shellTool.name);
+
+  if (!existingNormalized.has(shellName)) {
+    tools.push(shellTool as unknown as AnyAgentTool);
   }
 
   return tools;

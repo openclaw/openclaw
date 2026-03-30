@@ -54,11 +54,25 @@ export function buildOpenAITools(tools: any[]) {
   }));
 }
 
-export function safeJsonParse(input: string | undefined) {
-  if (!input) return {};
+export function safeJsonParse(input: unknown): any {
+  if (!input) {return {};}
+
+  if (typeof input === "object") {
+    return input;
+  }
+
+  if (typeof input !== "string") {
+    return {};
+  }
+
   try {
     return JSON.parse(input);
   } catch {
-    return {};
+    // 🔥 WICHTIG: fallback für kaputtes JSON vom LLM
+    try {
+      return JSON.parse(input.trim());
+    } catch {
+      return {};
+    }
   }
 }

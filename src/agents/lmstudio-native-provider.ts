@@ -13,6 +13,34 @@ import {
   safeJsonParse,
 } from "./tool-protocol.js";
 
+/**
+ * Adapter: OpenClaw Tool -> Simple ToolRuntime Tool
+ */
+function adaptTools(tools: any[] = []) {
+  return tools.map((t: any) => ({
+    name: t.name,
+    execute: async (args: any) => {
+      if (typeof t.execute === "function") {
+        const result = await t.execute(
+          "lmstudio-call",
+          args,
+          undefined,
+          undefined
+        );
+
+        // OpenClaw ToolResult unwrap
+        if (result && typeof result === "object" && "data" in result) {
+          return result.data;
+        }
+
+        return result;
+      }
+
+      throw new Error(`Tool ${t.name} has no execute()`);
+    },
+  }));
+}
+
 export const streamLMStudioNative = (
   model: Model<"lmstudio-native">,
   context: Context,
@@ -25,13 +53,7 @@ export const streamLMStudioNative = (
     const apiKey = options?.apiKey || "";
 
     const runtime = new ToolRuntime(
-      (context.tools || []).map((t: any) => ({
-        name: t.name,
-        execute: async (args: any) => {
-          if (typeof t.run === "function") return await t.run(args);
-          throw new Error(`Tool ${t.name} has no run()`);
-        },
-      }))
+      adaptTools(context.tools || [])
     );
 
     const output: AssistantMessage = {
@@ -87,7 +109,7 @@ export const streamLMStudioNative = (
         const json = await res.json();
         const msg = json?.choices?.[0]?.message;
 
-        if (!msg) break;
+        if (!msg) {break;}
 
         // TOOL CALL
         if (msg.tool_calls?.length) {
@@ -116,7 +138,7 @@ export const streamLMStudioNative = (
             messages.push({
               role: "tool",
               tool_call_id: tc.id,
-              content: JSON.stringify(result),
+              content: JSON.stringify(result ?? {}),
             });
           }
 

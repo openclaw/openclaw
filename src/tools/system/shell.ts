@@ -5,9 +5,7 @@ const execAsync = promisify(exec);
 
 export const shellTool = {
   name: "shell",
-  description:
-    "Run any command line program installed on the system (bash, cmd, powershell, git, node, pnpm, python, etc) and return stdout/stderr.",
-
+  description: "Execute a shell command",
   parameters: {
     type: "object",
     properties: {
@@ -18,25 +16,30 @@ export const shellTool = {
     required: ["command"],
   },
 
-  async run(args: {
-    command: string;
-    cwd?: string;
-    timeoutMs?: number;
-  }) {
-    const { stdout, stderr } = await execAsync(args.command, {
-      cwd: args.cwd,
-      timeout: args.timeoutMs ?? 120000,
-      shell: true,
-      windowsHide: true,
-      maxBuffer: 10 * 1024 * 1024,
+  async execute(
+    _toolCallId: string,
+    args: {
+      command: string;
+      cwd?: string;
+      timeoutMs?: number;
+    }
+  ) {
+    const { command, cwd, timeoutMs } = args;
+
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: cwd || process.cwd(),
+      timeout: timeoutMs ?? 30_000,
+      shell: "cmd.exe", // Windows safe
     });
 
     return {
-      command: args.command,
-      cwd: args.cwd || process.cwd(),
-      stdout,
-      stderr,
-      success: !stderr,
+      data: {
+        command,
+        cwd: cwd || process.cwd(),
+        stdout: String(stdout),
+        stderr: String(stderr),
+        success: true,
+      },
     };
   },
 };
