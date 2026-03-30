@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { CallMode } from "../config.js";
 import {
+  type EndReason,
   TerminalStates,
   type CallId,
   type CallRecord,
@@ -8,15 +9,11 @@ import {
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
 import type { CallManagerContext } from "./context.js";
+import { finalizeCall } from "./lifecycle.js";
 import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import {
-  clearMaxDurationTimer,
-  clearTranscriptWaiter,
-  rejectTranscriptWaiter,
-  waitForFinalTranscript,
-} from "./timers.js";
+import { clearTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
 import { generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
@@ -186,14 +183,11 @@ export async function initiateCall(
 
     return { callId, success: true };
   } catch (err) {
-    callRecord.state = "failed";
-    callRecord.endedAt = Date.now();
-    callRecord.endReason = "failed";
-    persistCallRecord(ctx.storePath, callRecord);
-    ctx.activeCalls.delete(callId);
-    if (callRecord.providerCallId) {
-      ctx.providerCallIdMap.delete(callRecord.providerCallId);
-    }
+    finalizeCall({
+      ctx,
+      call: callRecord,
+      endReason: "failed",
+    });
 
     return {
       callId,
@@ -369,6 +363,7 @@ export async function continueCall(
 export async function endCall(
   ctx: EndCallContext,
   callId: CallId,
+  options?: { reason?: EndReason },
 ): Promise<{ success: boolean; error?: string }> {
   const lookup = lookupConnectedCall(ctx, callId);
   if (lookup.kind === "error") {
@@ -378,24 +373,20 @@ export async function endCall(
     return { success: true };
   }
   const { call, providerCallId, provider } = lookup;
+  const reason = options?.reason ?? "hangup-bot";
 
   try {
     await provider.hangupCall({
       callId,
       providerCallId,
-      reason: "hangup-bot",
+      reason,
     });
 
-    call.state = "hangup-bot";
-    call.endedAt = Date.now();
-    call.endReason = "hangup-bot";
-    persistCallRecord(ctx.storePath, call);
-
-    clearMaxDurationTimer(ctx, callId);
-    rejectTranscriptWaiter(ctx, callId, "Call ended: hangup-bot");
-
-    ctx.activeCalls.delete(callId);
-    ctx.providerCallIdMap.delete(providerCallId);
+    finalizeCall({
+      ctx,
+      call,
+      endReason: reason,
+    });
 
     return { success: true };
   } catch (err) {

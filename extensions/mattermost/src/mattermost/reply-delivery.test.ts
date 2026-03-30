@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 

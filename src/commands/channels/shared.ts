@@ -7,11 +7,15 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { requireValidConfigSnapshot } from "../config-validation.js";
+import {
+  requireValidConfigFileSnapshot,
+  requireValidConfigSnapshot,
+} from "../config-validation.js";
 
 export type ChatChannel = ChannelId;
 
 export { requireValidConfigSnapshot };
+export { requireValidConfigFileSnapshot };
 
 export async function requireValidConfig(
   runtime: RuntimeEnv = defaultRuntime,

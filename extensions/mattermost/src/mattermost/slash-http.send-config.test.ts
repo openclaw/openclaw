@@ -16,7 +16,7 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildModelsProviderData: vi.fn(async () => ({ providers: [] })),
+  buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
   resolveMattermostModelPickerEntry: vi.fn(() => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
@@ -39,14 +39,29 @@ const mockState = vi.hoisted(() => ({
   normalizeMattermostAllowList: vi.fn((value: unknown) => value),
 }));
 
-vi.mock("openclaw/plugin-sdk/mattermost", () => ({
-  buildModelsProviderData: mockState.buildModelsProviderData,
-  createReplyPrefixOptions: vi.fn(() => ({})),
-  createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
-  isRequestBodyLimitError: vi.fn(() => false),
-  logTypingFailure: vi.fn(),
-  readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
-}));
+vi.mock("./runtime-api.js", () => {
+  return {
+    buildModelsProviderData: mockState.buildModelsProviderData,
+    createChannelReplyPipeline: vi.fn(() => ({
+      onModelSelected: vi.fn(),
+      typingCallbacks: {},
+    })),
+    createDedupeCache: vi.fn(() => ({
+      check: () => false,
+    })),
+    createReplyPrefixOptions: vi.fn(() => ({})),
+    createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
+    isRequestBodyLimitError: vi.fn(() => false),
+    logTypingFailure: vi.fn(),
+    formatInboundFromLabel: vi.fn(() => ""),
+    rawDataToString: vi.fn((value: unknown) => String(value ?? "")),
+    readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
+    resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
+      sessionKey: params.baseSessionKey,
+      parentSessionKey: undefined,
+    })),
+  };
+});
 
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => ({
@@ -71,12 +86,16 @@ vi.mock("../runtime.js", () => ({
   }),
 }));
 
-vi.mock("./client.js", () => ({
-  createMattermostClient: mockState.createMattermostClient,
-  fetchMattermostChannel: mockState.fetchMattermostChannel,
-  normalizeMattermostBaseUrl: vi.fn((value: string | undefined) => value?.trim() ?? ""),
-  sendMattermostTyping: vi.fn(),
-}));
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    createMattermostClient: mockState.createMattermostClient,
+    fetchMattermostChannel: mockState.fetchMattermostChannel,
+    normalizeMattermostBaseUrl: vi.fn((value: string | undefined) => value?.trim() ?? ""),
+    sendMattermostTyping: vi.fn(),
+  };
+});
 
 vi.mock("./model-picker.js", () => ({
   renderMattermostModelSummaryView: vi.fn(),
@@ -104,7 +123,7 @@ vi.mock("./slash-commands.js", () => ({
   resolveCommandText: mockState.resolveCommandText,
 }));
 
-import { createSlashCommandHttpHandler } from "./slash-http.js";
+let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
   const req = new PassThrough();
@@ -173,7 +192,8 @@ const accountFixture: ResolvedMattermostAccount = {
 };
 
 describe("slash-http cfg threading", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mockState.readRequestBodyWithLimit.mockClear();
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
@@ -184,6 +204,7 @@ describe("slash-http cfg threading", () => {
     mockState.fetchMattermostChannel.mockClear();
     mockState.sendMessageMattermost.mockClear();
     mockState.normalizeMattermostAllowList.mockClear();
+    ({ createSlashCommandHttpHandler } = await import("./slash-http.js"));
   });
 
   it("passes cfg through the no-models slash reply send path", async () => {

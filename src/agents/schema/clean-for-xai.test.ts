@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripXaiUnsupportedKeywords } from "./clean-for-xai.js";
+import { stripXaiUnsupportedKeywords } from "../../plugin-sdk/provider-tools.js";
 
 describe("stripXaiUnsupportedKeywords", () => {
   it("strips minLength and maxLength from string properties", () => {

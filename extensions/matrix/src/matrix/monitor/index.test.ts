@@ -1,6 +1,7 @@
 import path from "node:path";
+import { z } from "openclaw/plugin-sdk/zod";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/extensions/jiti-runtime-api.ts";
+import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
 
 const hoisted = vi.hoisted(() => {
   const callOrder: string[] = [];
@@ -50,24 +51,58 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../runtime-api.js")>();
+vi.mock("../../runtime-api.js", () => {
+  const normalizeAccountId = (value: string | null | undefined) => value?.trim() || "default";
   return {
-    ...actual,
+    DEFAULT_ACCOUNT_ID: "default",
     GROUP_POLICY_BLOCKED_LABEL: {
       room: "room",
     },
+    MarkdownConfigSchema: z.any().optional(),
+    PAIRING_APPROVED_MESSAGE: "paired",
+    ToolPolicySchema: z.any().optional(),
+    buildChannelConfigSchema: (schema: unknown) => schema,
+    buildChannelKeyCandidates: () => [],
+    buildProbeChannelStatusSummary: (
+      snapshot: Record<string, unknown>,
+      extra?: Record<string, unknown>,
+    ) => ({
+      ...snapshot,
+      ...(extra ?? {}),
+    }),
+    buildSecretInputSchema: () => z.string(),
+    chunkTextForOutbound: vi.fn((text: string) => [text]),
+    collectStatusIssuesFromLastError: () => [],
+    createActionGate: () => () => true,
+    createReplyPrefixOptions: () => ({}),
+    createTypingCallbacks: () => ({}),
+    formatDocsLink: (input: string) => input,
+    formatZonedTimestamp: () => "2026-03-27T00:00:00.000Z",
+    getAgentScopedMediaLocalRoots: () => [],
+    getSessionBindingService: () => ({}),
+    hasConfiguredSecretInput: (value: unknown) => Boolean(value),
     mergeAllowlist: ({ existing, additions }: { existing: string[]; additions: string[] }) => [
       ...existing,
       ...additions,
     ],
+    normalizeAccountId,
+    normalizeOptionalAccountId: normalizeAccountId,
     resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
     resolveThreadBindingMaxAgeMsForChannel: () => 0,
     resolveAllowlistProviderRuntimeGroupPolicy: () => ({
       groupPolicy: "allowlist",
       providerMissingFallbackApplied: false,
     }),
+    resolveChannelEntryMatch: () => null,
     resolveDefaultGroupPolicy: () => "allowlist",
+    resolveOutboundSendDep: () => null,
+    resolveThreadBindingFarewellText: () => null,
+    resolveAckReaction: () => null,
+    readJsonFileWithFallback: vi.fn(),
+    readNumberParam: vi.fn(),
+    readReactionParams: vi.fn(),
+    readStringArrayParam: vi.fn(),
+    readStringParam: vi.fn(),
     summarizeMapping: vi.fn(),
     warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
   };
@@ -425,12 +460,22 @@ describe("matrix plugin registration", () => {
     expect(
       loadRuntimeApiExportTypesViaJiti({
         modulePath: runtimeApiPath,
-        exportNames: ["resolveMatrixAccountStringValues"],
-        realPluginSdkSpecifiers: ["openclaw/plugin-sdk/matrix"],
+        exportNames: [],
+        realPluginSdkSpecifiers: [
+          "openclaw/plugin-sdk/account-helpers",
+          "openclaw/plugin-sdk/allow-from",
+          "openclaw/plugin-sdk/channel-config-helpers",
+          "openclaw/plugin-sdk/channel-policy",
+          "openclaw/plugin-sdk/core",
+          "openclaw/plugin-sdk/directory-runtime",
+          "openclaw/plugin-sdk/extension-shared",
+          "openclaw/plugin-sdk/irc",
+          "openclaw/plugin-sdk/signal",
+          "openclaw/plugin-sdk/status-helpers",
+          "openclaw/plugin-sdk/text-runtime",
+        ],
       }),
-    ).toEqual({
-      resolveMatrixAccountStringValues: "function",
-    });
+    ).toEqual({});
   }, 240_000);
 
   it("registers the channel without bootstrapping crypto runtime", async () => {

@@ -1,5 +1,5 @@
 // Narrow plugin-sdk surface for the bundled diagnostics-otel plugin.
-// Keep this list additive and scoped to symbols used under extensions/diagnostics-otel.
+// Keep this list additive and scoped to the bundled diagnostics-otel surface.
 
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export { emitDiagnosticEvent, onDiagnosticEvent } from "../infra/diagnostic-events.js";

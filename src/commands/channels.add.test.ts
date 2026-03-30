@@ -2,12 +2,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./channel-setup/plugin-install.js";
-import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import {
   createMSTeamsCatalogEntry,
@@ -48,6 +48,126 @@ vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
 
 const runtime = createTestRuntime();
 let channelsAddCommand: typeof import("./channels.js").channelsAddCommand;
+
+function listConfiguredAccountIds(
+  channelConfig: { accounts?: Record<string, unknown>; botToken?: string } | undefined,
+): string[] {
+  const accountIds = Object.keys(channelConfig?.accounts ?? {});
+  if (accountIds.length > 0) {
+    return accountIds;
+  }
+  if (channelConfig?.botToken) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return [];
+}
+
+function createTelegramAddTestPlugin(): ChannelPlugin {
+  const resolveTelegramAccount = (
+    cfg: Parameters<NonNullable<ChannelPlugin["config"]["resolveAccount"]>>[0],
+    accountId: string,
+  ) => {
+    const telegram = cfg.channels?.telegram as
+      | {
+          botToken?: string;
+          enabled?: boolean;
+          accounts?: Record<string, { botToken?: string; enabled?: boolean }>;
+        }
+      | undefined;
+    const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
+    const scoped = telegram?.accounts?.[resolvedAccountId];
+    return {
+      token: String(scoped?.botToken ?? telegram?.botToken ?? ""),
+      enabled:
+        typeof scoped?.enabled === "boolean"
+          ? scoped.enabled
+          : typeof telegram?.enabled === "boolean"
+            ? telegram.enabled
+            : true,
+    };
+  };
+
+  return {
+    ...createChannelTestPluginBase({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+    }),
+    config: {
+      listAccountIds: (cfg) =>
+        listConfiguredAccountIds(
+          cfg.channels?.telegram as
+            | { accounts?: Record<string, unknown>; botToken?: string }
+            | undefined,
+        ),
+      resolveAccount: resolveTelegramAccount,
+    },
+    setup: {
+      resolveAccountId: ({ accountId }) => accountId || DEFAULT_ACCOUNT_ID,
+      applyAccountConfig: ({ cfg, accountId, input }) => {
+        const telegram = (cfg.channels?.telegram as
+          | {
+              enabled?: boolean;
+              botToken?: string;
+              accounts?: Record<string, { botToken?: string }>;
+            }
+          | undefined) ?? { enabled: true };
+        const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
+        if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
+          return {
+            ...cfg,
+            channels: {
+              ...cfg.channels,
+              telegram: {
+                ...telegram,
+                enabled: true,
+                ...(input.token ? { botToken: input.token } : {}),
+              },
+            },
+          };
+        }
+        return {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            telegram: {
+              ...telegram,
+              enabled: true,
+              accounts: {
+                ...telegram.accounts,
+                [resolvedAccountId]: {
+                  ...telegram.accounts?.[resolvedAccountId],
+                  ...(input.token ? { botToken: input.token } : {}),
+                },
+              },
+            },
+          },
+        };
+      },
+    },
+    lifecycle: {
+      onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
+        const prevTelegram = resolveTelegramAccount(prevCfg, accountId) as { token?: string };
+        const nextTelegram = resolveTelegramAccount(nextCfg, accountId) as { token?: string };
+        if ((prevTelegram.token ?? "").trim() !== (nextTelegram.token ?? "").trim()) {
+          await offsetMocks.deleteTelegramUpdateOffset({ accountId });
+        }
+      },
+    },
+  } as ChannelPlugin;
+}
+
+function setMinimalChannelsAddRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createTelegramAddTestPlugin(),
+        source: "test",
+      },
+    ]),
+  );
+}
 
 function registerMSTeamsSetupPlugin(pluginId = "@openclaw/msteams-plugin"): void {
   vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
@@ -126,7 +246,7 @@ describe("channelsAddCommand", () => {
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry(),
     );
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalChannelsAddRegistryForTests();
   });
 
   it("clears telegram update offsets when the token changes", async () => {

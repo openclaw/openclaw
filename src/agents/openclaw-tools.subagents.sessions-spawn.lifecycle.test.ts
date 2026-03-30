@@ -1,13 +1,19 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
   getSessionsSpawnTool,
+  resetSessionsSpawnAnnounceFlowOverride,
   resetSessionsSpawnConfigOverride,
+  resetSessionsSpawnHookRunnerOverride,
+  setSessionsSpawnAnnounceFlowOverride,
+  setSessionsSpawnHookRunnerOverride,
   setupSessionsSpawnGatewayMock,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { resolveRequesterStoreKey } from "./subagent-announce-delivery.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const fastModeEnv = vi.hoisted(() => {
@@ -15,6 +21,23 @@ const fastModeEnv = vi.hoisted(() => {
   process.env.OPENCLAW_TEST_FAST = "1";
   return { previous };
 });
+
+const hookRunnerMocks = vi.hoisted(() => ({
+  runSubagentSpawning: vi.fn(async (event: unknown) => {
+    const input = event as {
+      threadRequested?: boolean;
+    };
+    if (!input.threadRequested) {
+      return undefined;
+    }
+    return {
+      status: "ok" as const,
+      threadBindingReady: true,
+    };
+  }),
+  runSubagentSpawned: vi.fn(async () => {}),
+  runSubagentEnded: vi.fn(async () => {}),
+}));
 
 vi.mock("./pi-embedded.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./pi-embedded.js")>();
@@ -33,6 +56,46 @@ vi.mock("./tools/agent-step.js", () => ({
 
 const callGatewayMock = getCallGatewayMock();
 const RUN_TIMEOUT_SECONDS = 1;
+
+function installDeterministicAnnounceFlow() {
+  setSessionsSpawnAnnounceFlowOverride(async (params) => {
+    const statusLabel =
+      params.outcome?.status === "timeout" ? "timed out" : "completed successfully";
+    const requesterSessionKey = resolveRequesterStoreKey(loadConfig(), params.requesterSessionKey);
+
+    await callGatewayMock({
+      method: "agent",
+      params: {
+        sessionKey: requesterSessionKey,
+        message: `subagent task ${statusLabel}`,
+        deliver: false,
+      },
+    });
+
+    if (params.label) {
+      await callGatewayMock({
+        method: "sessions.patch",
+        params: {
+          key: params.childSessionKey,
+          label: params.label,
+        },
+      });
+    }
+
+    if (params.cleanup === "delete") {
+      await callGatewayMock({
+        method: "sessions.delete",
+        params: {
+          key: params.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: params.spawnMode === "session",
+        },
+      });
+    }
+
+    return true;
+  });
+}
 
 function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
   return {
@@ -108,6 +171,8 @@ async function emitLifecycleEndAndFlush(params: {
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   beforeEach(() => {
+    resetSessionsSpawnAnnounceFlowOverride();
+    resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
     setSessionsSpawnConfigOverride({
       session: {
@@ -121,7 +186,20 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       },
     });
     resetSubagentRegistryForTests();
+    hookRunnerMocks.runSubagentSpawning.mockClear();
+    hookRunnerMocks.runSubagentSpawned.mockClear();
+    hookRunnerMocks.runSubagentEnded.mockClear();
+    setSessionsSpawnHookRunnerOverride({
+      hasHooks: (hookName: string) =>
+        hookName === "subagent_spawning" ||
+        hookName === "subagent_spawned" ||
+        hookName === "subagent_ended",
+      runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
+      runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
+      runSubagentEnded: hookRunnerMocks.runSubagentEnded,
+    });
     callGatewayMock.mockClear();
+    installDeterministicAnnounceFlow();
   });
 
   afterAll(() => {

@@ -2,20 +2,17 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
+import { createTempDownloadTarget } from "./temp-download.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
-export type ClawHubPackageCompatibility = {
-  pluginApiRange?: string;
-  builtWithOpenClawVersion?: string;
-  minGatewayVersion?: string;
-};
-
+export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
 export type ClawHubPackageListItem = {
   name: string;
   displayName: string;
@@ -32,7 +29,6 @@ export type ClawHubPackageListItem = {
   executesCode?: boolean;
   verificationTier?: string | null;
 };
-
 export type ClawHubPackageDetail = {
   package:
     | (ClawHubPackageListItem & {
@@ -157,6 +153,7 @@ export type ClawHubSkillListResponse = {
 export type ClawHubDownloadResult = {
   archivePath: string;
   integrity: string;
+  cleanup: () => Promise<void>;
 };
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -579,12 +576,16 @@ export async function downloadClawHubPackageArchive(params: {
     });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-package-"));
-  const archivePath = path.join(tmpDir, `${params.name}.zip`);
-  await fs.writeFile(archivePath, bytes);
+  const target = await createTempDownloadTarget({
+    prefix: "openclaw-clawhub-package",
+    fileName: `${params.name}.zip`,
+    tmpDir: os.tmpdir(),
+  });
+  await fs.writeFile(target.path, bytes);
   return {
-    archivePath,
+    archivePath: target.path,
     integrity: formatSha256Integrity(bytes),
+    cleanup: target.cleanup,
   };
 }
 
@@ -617,12 +618,16 @@ export async function downloadClawHubSkillArchive(params: {
     });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-skill-"));
-  const archivePath = path.join(tmpDir, `${params.slug}.zip`);
-  await fs.writeFile(archivePath, bytes);
+  const target = await createTempDownloadTarget({
+    prefix: "openclaw-clawhub-skill",
+    fileName: `${params.slug}.zip`,
+    tmpDir: os.tmpdir(),
+  });
+  await fs.writeFile(target.path, bytes);
   return {
-    archivePath,
+    archivePath: target.path,
     integrity: formatSha256Integrity(bytes),
+    cleanup: target.cleanup,
   };
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
@@ -92,6 +92,11 @@ vi.mock("./runtime.js", () => ({
 
 vi.mock("./subagent-hooks.js", () => ({
   registerFeishuSubagentHooks: registerFeishuSubagentHooksMock,
+}));
+
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
 }));
 
 const baseAccount: ResolvedFeishuAccount = {

@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
 
@@ -62,33 +63,24 @@ export function createMoonshotThinkingWrapper(
   thinkingType?: MoonshotThinkingType,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
 
-          if (thinkingType) {
-            payloadObj.thinking = { type: thinkingType };
-            effectiveThinkingType = thinkingType;
-          }
+      if (thinkingType) {
+        payloadObj.thinking = { type: thinkingType };
+        effectiveThinkingType = thinkingType;
+      }
 
-          if (
-            effectiveThinkingType === "enabled" &&
-            !isMoonshotToolChoiceCompatible(payloadObj.tool_choice)
-          ) {
-            if (payloadObj.tool_choice === "required") {
-              payloadObj.tool_choice = "auto";
-            } else if (isPinnedToolChoice(payloadObj.tool_choice)) {
-              payloadObj.thinking = { type: "disabled" };
-            }
-          }
+      if (
+        effectiveThinkingType === "enabled" &&
+        !isMoonshotToolChoiceCompatible(payloadObj.tool_choice)
+      ) {
+        if (payloadObj.tool_choice === "required") {
+          payloadObj.tool_choice = "auto";
+        } else if (isPinnedToolChoice(payloadObj.tool_choice)) {
+          payloadObj.thinking = { type: "disabled" };
         }
-        return originalOnPayload?.(payload, model);
-      },
+      }
     });
-  };
 }

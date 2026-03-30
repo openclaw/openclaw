@@ -91,6 +91,7 @@ export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
   didLogHeartbeatStrip: boolean;
+  silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   /** Payload keys sent directly (not via pipeline) during tool flush. */
@@ -153,6 +154,7 @@ export async function buildReplyPayloads(params: {
       }),
     )
   ).filter(isRenderablePayload);
+  const silentFilteredPayloads = params.silentExpected ? [] : replyTaggedPayloads;
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -197,10 +199,10 @@ export async function buildReplyPayloads(params: {
     : (params.messagingToolSentMediaUrls ?? []);
   const dedupedPayloads = dedupeMessagingToolPayloads
     ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
-        payloads: replyTaggedPayloads,
+        payloads: silentFilteredPayloads,
         sentTexts: messagingToolSentTexts,
       })
-    : replyTaggedPayloads;
+    : silentFilteredPayloads;
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
     ? (
         dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())

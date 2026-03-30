@@ -1,6 +1,8 @@
 {
   "id": "copilot-proxy",
+  "enabledByDefault": true,
   "providers": ["copilot-proxy"],
+  "autoEnableWhenConfiguredProviders": ["copilot-proxy"],
   "providerAuthChoices": [
     {
       "provider": "copilot-proxy",
