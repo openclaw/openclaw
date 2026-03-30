@@ -1,10 +1,11 @@
-import { FileDiff, preloadHighlighter, resolveLanguage } from "@pierre/diffs";
+import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type {
   FileContents,
   FileDiffMetadata,
   FileDiffOptions,
   SupportedLanguages,
 } from "@pierre/diffs";
+import { filterSupportedLanguageHints } from "./language-hints.js";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
@@ -32,23 +33,7 @@ const viewerState: ViewerState = {
 export async function filterSupportedHydrationLanguages(
   languages: Iterable<string>,
 ): Promise<SupportedLanguages[]> {
-  const supported = new Set<SupportedLanguages>();
-  for (const language of languages) {
-    if (language === "text" || language === "ansi") {
-      supported.add(language);
-      continue;
-    }
-    try {
-      await resolveLanguage(language as Exclude<SupportedLanguages, "text" | "ansi">);
-      supported.add(language);
-    } catch {
-      // Ignore invalid persisted hints and let the viewer fall back to plain text.
-    }
-  }
-  if (supported.size === 0) {
-    supported.add("text");
-  }
-  return [...supported];
+  return filterSupportedLanguageHints(languages);
 }
 
 function parsePayload(element: HTMLScriptElement): DiffViewerPayload {

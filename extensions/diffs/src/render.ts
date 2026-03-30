@@ -1,6 +1,7 @@
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
-import { parsePatchFiles, resolveLanguage } from "@pierre/diffs";
+import { parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { normalizeSupportedLanguageHint } from "./language-hints.js";
 import { ensurePierreThemesRegistered } from "./pierre-themes.js";
 import type {
   DiffInput,
@@ -178,22 +179,6 @@ function buildRenderVariants(params: { options: DiffRenderOptions; target: DiffR
   };
 }
 
-async function normalizeSupportedLanguage(value?: string): Promise<SupportedLanguages | undefined> {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "text" || normalized === "ansi") {
-    return normalized;
-  }
-  try {
-    await resolveLanguage(normalized as Exclude<SupportedLanguages, "text" | "ansi">);
-    return normalized as SupportedLanguages;
-  } catch {
-    return undefined;
-  }
-}
-
 function buildPayloadLanguages(payload: {
   fileDiff?: FileDiffMetadata;
   oldFile?: FileContents;
@@ -363,7 +348,7 @@ async function renderBeforeAfterDiff(
 ): Promise<{ viewerBodyHtml?: string; imageBodyHtml?: string; fileCount: number }> {
   ensurePierreThemesRegistered();
 
-  const lang = await normalizeSupportedLanguage(input.lang);
+  const lang = await normalizeSupportedLanguageHint(input.lang);
   const fileName = resolveBeforeAfterFileName({ input, lang });
   const oldFile: FileContents = {
     name: fileName,
