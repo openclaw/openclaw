@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -50,6 +50,11 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
+
+type ConfigOpenCommand = {
+  command: string;
+  args: string[];
+};
 
 function requireConfigBaseHash(
   params: unknown,
@@ -123,6 +128,56 @@ function sanitizeLookupPathForLog(path: string): string {
     return code < 0x20 || code === 0x7f ? "?" : char;
   }).join("");
   return sanitized.length > 120 ? `${sanitized.slice(0, 117)}...` : sanitized;
+}
+
+function escapePowerShellSingleQuotedString(value: string): string {
+  return value.replaceAll("'", "''");
+}
+
+export function resolveConfigOpenCommand(
+  configPath: string,
+  platform: NodeJS.Platform = process.platform,
+): ConfigOpenCommand {
+  if (platform === "win32") {
+    // Use a PowerShell string literal so the path stays data, not code.
+    return {
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Start-Process -LiteralPath '${escapePowerShellSingleQuotedString(configPath)}'`,
+      ],
+    };
+  }
+  return {
+    command: platform === "darwin" ? "open" : "xdg-open",
+    args: [configPath],
+  };
+}
+
+function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command.command, command.args, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function formatConfigOpenError(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+  return String(error);
 }
 
 function parseValidateConfigFromRawOrRespond(
@@ -496,19 +551,23 @@ export const configHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "config.openFile": ({ params, respond }) => {
+  "config.openFile": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.openFile", respond)) {
       return;
     }
     const configPath = createConfigIO().configPath;
-    const platform = process.platform;
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-    exec(`${cmd} ${JSON.stringify(configPath)}`, (err) => {
-      if (err) {
-        respond(true, { ok: false, path: configPath, error: err.message }, undefined);
-        return;
-      }
+    try {
+      await execConfigOpenCommand(resolveConfigOpenCommand(configPath));
       respond(true, { ok: true, path: configPath }, undefined);
-    });
+    } catch (error) {
+      context?.logGateway?.warn(
+        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${formatConfigOpenError(error)}`,
+      );
+      respond(
+        true,
+        { ok: false, path: configPath, error: "failed to open config file" },
+        undefined,
+      );
+    }
   },
 };
