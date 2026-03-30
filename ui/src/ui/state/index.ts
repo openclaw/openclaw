@@ -12,3 +12,7 @@ export { SessionsState, defaultSessionsState, sessionsStateContext } from './ses
 export { LogsState, defaultLogsState, logsStateContext } from './logs-state.ts';
 export { CronState, defaultCronState, cronStateContext } from './cron-state.ts';
 export { UsageState, defaultUsageState, usageStateContext } from './usage-state.ts';
+
+export { StateProvider } from './state-provider.ts';
+export { StateMixin, getApp, getStateUpdater } from './state-mixin.ts';
+export type { StateUpdater } from './state-mixin.ts';
