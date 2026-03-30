@@ -315,6 +315,12 @@ describe("createDiffsHttpHandler", () => {
       expectedStatusCode: 200,
     },
     {
+      name: "allows ipv4-mapped ipv6 loopback viewer access by default",
+      request: ipv4MappedLoopbackReq,
+      allowRemoteViewer: false,
+      expectedStatusCode: 200,
+    },
+    {
       name: "blocks non-loopback viewer access by default",
       request: remoteReq,
       allowRemoteViewer: false,
@@ -429,5 +435,17 @@ function remoteReq(input: {
     ...input,
     headers: input.headers ?? {},
     socket: { remoteAddress: "203.0.113.10" },
+  } as unknown as IncomingMessage;
+}
+
+function ipv4MappedLoopbackReq(input: {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
+  return {
+    ...input,
+    headers: input.headers ?? {},
+    socket: { remoteAddress: "::ffff:127.0.0.1" },
   } as unknown as IncomingMessage;
 }

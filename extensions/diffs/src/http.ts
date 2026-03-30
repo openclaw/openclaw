@@ -215,7 +215,7 @@ function resolveViewerAccess(
       : req.socket?.remoteAddress;
   const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
   const localRequest =
-    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackClientIp(clientIp);
+    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackClientIp(remoteKey);
   return { remoteKey, localRequest };
 }
 
