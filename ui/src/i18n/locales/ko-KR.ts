@@ -397,7 +397,7 @@ export const ko_KR: TranslationMap = {
     ptBR: "Português (브라질 포르투갈어)",
     de: "Deutsch (독일어)",
     es: "Español (스페인어)",
-    koKR: "한국어 (Korean)",
+    koKR: "한국어",
   },
   cron: {
     summary: {
