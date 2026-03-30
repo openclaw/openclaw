@@ -451,6 +451,8 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/save-load: {}
+
   extensions/sglang: {}
 
   extensions/signal: {}
