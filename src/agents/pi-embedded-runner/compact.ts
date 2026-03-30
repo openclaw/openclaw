@@ -15,6 +15,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { readMessagesFromSessionTranscript } from "../../hooks/session-transcript-messages.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -776,6 +777,7 @@ export async function compactEmbeddedPiSessionDirect(
           sessionAgentId,
           workspaceDir: effectiveWorkspace,
           messageProvider: resolvedMessageProvider,
+          sessionFile: params.sessionFile,
           metrics: beforeHookMetrics,
         });
         const { messageCountOriginal } = beforeHookMetrics;
@@ -999,9 +1001,11 @@ export async function compactEmbeddedPiSession(
         // can read the transcript themselves if they need exact counts.
         if (hookRunner?.hasHooks?.("before_compaction") && hookRunner.runBeforeCompaction) {
           try {
+            const transcriptMessages = await readMessagesFromSessionTranscript(params.sessionFile);
             await hookRunner.runBeforeCompaction(
               {
-                messageCount: -1,
+                messageCount: transcriptMessages?.length ?? -1,
+                messages: transcriptMessages ?? undefined,
                 sessionFile: params.sessionFile,
               },
               hookCtx,

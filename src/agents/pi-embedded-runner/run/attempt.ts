@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { readMessagesFromSessionTranscript } from "../../../hooks/session-transcript-messages.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -1748,24 +1749,30 @@ export async function runEmbeddedAttempt(
         // This is fire-and-forget, so we don't await
         // Run even on compaction timeout so plugins can log/cleanup
         if (hookRunner?.hasHooks("agent_end")) {
-          hookRunner
-            .runAgentEnd(
-              {
-                messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? describeUnknownError(promptError) : undefined,
-                durationMs: Date.now() - promptStartedAt,
-              },
-              {
-                runId: params.runId,
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider ?? undefined,
-                trigger: params.trigger,
-                channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-              },
+          // Read from transcript to preserve provenance and other extension
+          // fields that the in-memory AgentMessage[] may not carry.
+          const transcriptReadForHook = readMessagesFromSessionTranscript(params.sessionFile);
+          void transcriptReadForHook
+            .then((transcriptMessages) => transcriptMessages ?? messagesSnapshot)
+            .then((hookMessages) =>
+              hookRunner.runAgentEnd(
+                {
+                  messages: hookMessages,
+                  success: !aborted && !promptError,
+                  error: promptError ? describeUnknownError(promptError) : undefined,
+                  durationMs: Date.now() - promptStartedAt,
+                },
+                {
+                  runId: params.runId,
+                  agentId: hookAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                  messageProvider: params.messageProvider ?? undefined,
+                  trigger: params.trigger,
+                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                },
+              ),
             )
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);

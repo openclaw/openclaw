@@ -5,6 +5,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { readMessagesFromSessionTranscript } from "../../hooks/session-transcript-messages.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -384,8 +385,13 @@ export async function runEmbeddedPiAgent(
             return;
           }
           try {
+            const transcriptMessages = await readMessagesFromSessionTranscript(params.sessionFile);
             await hookRunner.runBeforeCompaction(
-              { messageCount: -1, sessionFile: params.sessionFile },
+              {
+                messageCount: transcriptMessages?.length ?? -1,
+                messages: transcriptMessages ?? undefined,
+                sessionFile: params.sessionFile,
+              },
               hookCtx,
             );
           } catch (hookErr) {

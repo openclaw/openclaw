@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { readMessagesFromSessionTranscript } from "../../hooks/session-transcript-messages.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -99,7 +100,12 @@ export async function runPostCompactionSideEffects(params: {
 export type CompactionHookRunner = {
   hasHooks?: (hookName?: string) => boolean;
   runBeforeCompaction?: (
-    metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },
+    metrics: {
+      messageCount: number;
+      messages?: unknown[];
+      tokenCount?: number;
+      sessionFile?: string;
+    },
     context: {
       sessionId: string;
       agentId: string;
@@ -176,6 +182,7 @@ export async function runBeforeCompactionHooks(params: {
   sessionAgentId: string;
   workspaceDir: string;
   messageProvider?: string;
+  sessionFile?: string;
   metrics: ReturnType<typeof buildBeforeCompactionHookMetrics>;
 }) {
   const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
@@ -198,10 +205,13 @@ export async function runBeforeCompactionHooks(params: {
   }
   if (params.hookRunner?.hasHooks?.("before_compaction")) {
     try {
+      const transcriptMessages = await readMessagesFromSessionTranscript(params.sessionFile);
       await params.hookRunner.runBeforeCompaction?.(
         {
           messageCount: params.metrics.messageCountBefore,
+          messages: transcriptMessages ?? undefined,
           tokenCount: params.metrics.tokenCountBefore,
+          sessionFile: params.sessionFile,
         },
         {
           sessionId: params.sessionId,
