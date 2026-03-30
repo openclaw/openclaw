@@ -135,8 +135,7 @@ describe("media understanding attachments SSRF", () => {
 
       openSpy.mockImplementation(async (filePath, flags) => {
         const handle = await originalOpen(filePath, flags);
-        const candidatePath =
-          (await fs.realpath(String(filePath)).catch(() => String(filePath))) ?? String(filePath);
+        const candidatePath = await fs.realpath(String(filePath)).catch(() => String(filePath));
         if (candidatePath !== canonicalAttachmentPath) {
           return handle;
         }
