@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import * as taskRegistry from "../../tasks/task-registry.js";
+import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import type { CronJob } from "../types.js";
@@ -166,7 +166,7 @@ describe("cron service ops seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(taskRegistry, "createTaskRecord")
+      .spyOn(taskExecutor, "createRunningTaskRun")
       .mockImplementation(() => {
         throw new Error("disk full");
       });
@@ -210,7 +210,7 @@ describe("cron service ops seam coverage", () => {
     });
 
     const updateTaskRecordSpy = vi
-      .spyOn(taskRegistry, "markTaskTerminalById")
+      .spyOn(taskExecutor, "completeTaskRunByRunId")
       .mockImplementation(() => {
         throw new Error("disk full");
       });
