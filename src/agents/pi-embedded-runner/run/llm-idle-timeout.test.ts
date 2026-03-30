@@ -174,7 +174,7 @@ describe("streamWithIdleTimeout", () => {
     expect(results).toHaveLength(3);
   });
 
-  it("aborts controller on idle timeout", async () => {
+  it("calls timeout hook on idle timeout", async () => {
     // Create a stream that never yields
     const slowStream: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {
@@ -188,8 +188,8 @@ describe("streamWithIdleTimeout", () => {
     };
 
     const baseFn = vi.fn().mockReturnValue(slowStream);
-    const controller = new AbortController();
-    const wrapped = streamWithIdleTimeout(baseFn, 50, controller); // 50ms timeout
+    const onIdleTimeout = vi.fn();
+    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout); // 50ms timeout
 
     const model = {} as Parameters<typeof baseFn>[0];
     const context = {} as Parameters<typeof baseFn>[1];
@@ -206,14 +206,10 @@ describe("streamWithIdleTimeout", () => {
       // Verify the error message is preserved
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toMatch(/LLM idle timeout/);
-
-      // Verify the controller was aborted
-      expect(controller.signal.aborted).toBe(true);
-
-      // Verify the abort reason is the same error
-      const reason = controller.signal.reason;
-      expect(reason).toBeInstanceOf(Error);
-      expect((reason as Error).message).toMatch(/LLM idle timeout/);
+      expect(onIdleTimeout).toHaveBeenCalledTimes(1);
+      const [timeoutError] = onIdleTimeout.mock.calls[0] ?? [];
+      expect(timeoutError).toBeInstanceOf(Error);
+      expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
     }
   });
 });
