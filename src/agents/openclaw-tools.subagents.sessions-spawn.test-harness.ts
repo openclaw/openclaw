@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   __testing as subagentAnnounceDeliveryTesting,
   resolveRequesterStoreKey,
@@ -11,7 +12,6 @@ import {
 } from "./subagent-announce.js";
 import { __testing as subagentRegistryTesting } from "./subagent-registry.js";
 import { __testing as subagentSpawnTesting } from "./subagent-spawn.js";
-import type { SubagentLifecycleHookRunner } from "./subagent-spawn.js";
 
 type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
 type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;

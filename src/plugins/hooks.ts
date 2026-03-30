@@ -1080,3 +1080,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 }
 
 export type HookRunner = ReturnType<typeof createHookRunner>;
+
+export type SubagentLifecycleHookRunner = Pick<
+  HookRunner,
+  "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+>;

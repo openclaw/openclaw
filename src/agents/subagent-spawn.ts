@@ -10,6 +10,7 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "../gateway/session-utils.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   isValidAgentId,
   isCronSessionKey,
@@ -56,11 +57,6 @@ type SubagentSpawnDeps = {
   loadConfig: typeof loadConfig;
   updateSessionStore: typeof updateSessionStore;
 };
-
-export type SubagentLifecycleHookRunner = Pick<
-  NonNullable<ReturnType<typeof getGlobalHookRunner>>,
-  "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
->;
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,

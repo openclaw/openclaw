@@ -1,5 +1,6 @@
 import os from "node:os";
 import { expect, vi } from "vitest";
+import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -7,10 +8,7 @@ type MockImplementationTarget = {
 };
 type SessionStore = Record<string, Record<string, unknown>>;
 type SessionStoreMutator = (store: SessionStore) => unknown;
-type HookRunner = {
-  hasHooks: (name?: string) => boolean;
-  runSubagentSpawning?: (...args: unknown[]) => Promise<unknown>;
-};
+type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks" | "runSubagentSpawning">;
 
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
