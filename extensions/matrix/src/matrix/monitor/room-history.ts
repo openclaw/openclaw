@@ -198,11 +198,17 @@ export function createRoomHistoryTracker(
 
     consumeHistory(agentId, roomId, snapshotIdx, messageId) {
       const key = wmKey(agentId, roomId);
+      const queue = roomQueues.get(roomId);
+      if (!queue) {
+        // The room was evicted while this trigger was in flight. Keep eviction authoritative
+        // so a late completion cannot recreate a stale watermark against a fresh queue.
+        agentWatermarks.delete(key);
+        return;
+      }
       // Monotone write: never regress an already-advanced watermark.
       // Guards against out-of-order completion when two triggers for the same
       // (agentId, roomId) are in-flight concurrently.
       agentWatermarks.set(key, Math.max(agentWatermarks.get(key) ?? 0, snapshotIdx));
-      const queue = roomQueues.get(roomId);
       const retryKey = preparedTriggerKey(agentId, messageId);
       if (queue && retryKey) {
         queue.preparedTriggers.delete(retryKey);

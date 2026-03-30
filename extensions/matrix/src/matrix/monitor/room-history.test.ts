@@ -125,4 +125,29 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
     expect(history).toHaveLength(1);
     expect(history[0]?.body).toBe("new msg in room1");
   });
+
+  it("ignores late consumeHistory calls after the room queue was evicted", () => {
+    const tracker = createRoomHistoryTracker(200, 1);
+    const room1 = "!room1:test";
+    const room2 = "!room2:test";
+
+    tracker.recordPending(room1, entry("old msg in room1"));
+    const prepared = tracker.prepareTrigger(AGENT, room1, 100, {
+      sender: "user",
+      body: "trigger in room1",
+      messageId: "$trigger",
+    });
+
+    // room2 creation evicts room1 (maxRoomQueues=1) while the trigger is still in flight.
+    tracker.recordPending(room2, entry("msg in room2"));
+
+    // Late completion for the evicted room must not recreate a stale watermark.
+    tracker.consumeHistory(AGENT, room1, prepared.snapshotIdx, "$trigger");
+
+    // Recreate room1 and add fresh content.
+    tracker.recordPending(room1, entry("new msg in room1"));
+    const history = tracker.getPendingHistory(AGENT, room1, 100);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.body).toBe("new msg in room1");
+  });
 });
