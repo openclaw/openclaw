@@ -96,7 +96,9 @@ export async function drainFormattedSystemEvents(params: {
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {
-      systemLines.unshift(...summary.map((line) => `System: ${line}`));
+      systemLines.unshift(
+        ...summary.flatMap((line) => line.split("\n").map((subline) => `System: ${subline}`)),
+      );
     }
   }
   if (systemLines.length === 0) {

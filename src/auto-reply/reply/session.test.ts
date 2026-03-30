@@ -1924,8 +1924,18 @@ describe("drainFormattedSystemEvents", () => {
             config: {
               listAccountIds: () => ["default"],
               defaultAccountId: () => "default",
-              inspectAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-              resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
+              inspectAccount: () => ({
+                accountId: "default",
+                enabled: true,
+                configured: true,
+                name: "line one\nline two",
+              }),
+              resolveAccount: () => ({
+                accountId: "default",
+                enabled: true,
+                configured: true,
+                name: "line one\nline two",
+              }),
             },
             status: {
               buildChannelSummary: async () => ({ linked: true }),
