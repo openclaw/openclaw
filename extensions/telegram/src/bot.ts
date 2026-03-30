@@ -340,8 +340,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       });
       if (replayDecision.skip) {
         // This intentionally sacrifices one repeatedly failing update so polling can recover.
+        const hasPendingReplay = pendingUpdateIds.has(updateId);
         runtime.error?.(
-          `[telegram][diag] skipping repeatedly replayed update_id=${updateId} after ${replayDecision.count} consecutive deliveries; advancing offset to break loop`,
+          hasPendingReplay
+            ? `[telegram][diag] skipping repeatedly replayed update_id=${updateId} after ${replayDecision.count} consecutive deliveries; not advancing offset because an earlier delivery is still pending`
+            : `[telegram][diag] skipping repeatedly replayed update_id=${updateId} after ${replayDecision.count} consecutive deliveries; advancing offset to break loop`,
         );
         if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
           highestCompletedUpdateId = updateId;

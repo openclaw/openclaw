@@ -107,10 +107,7 @@ export function noteTelegramReplayUpdateCompleted(params: {
 }): void {
   const current = telegramReplayGuardState.get(params.accountKey);
   if (!current || params.updateId >= current.updateId) {
-    telegramReplayGuardState.set(params.accountKey, {
-      updateId: params.updateId,
-      count: 1,
-    });
+    telegramReplayGuardState.delete(params.accountKey);
   }
 }
 
