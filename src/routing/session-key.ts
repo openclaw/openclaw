@@ -144,7 +144,7 @@ export function buildAgentPeerSessionKey(params: {
     const linkedPeerId =
       dmScope === "main"
         ? null
-        : resolveLinkedPeerId({
+        : resolveCanonicalIdentityFromLinks({
             identityLinks: params.identityLinks,
             channel: params.channel,
             peerId,
@@ -219,14 +219,6 @@ export function resolveCanonicalIdentityFromLinks(params: {
     }
   }
   return null;
-}
-
-function resolveLinkedPeerId(params: {
-  identityLinks?: Record<string, string[]>;
-  channel: string;
-  peerId: string;
-}): string | null {
-  return resolveCanonicalIdentityFromLinks(params);
 }
 
 export function buildGroupHistoryKey(params: {
