@@ -411,7 +411,7 @@ describe("test planner", () => {
     expect(targetedUnit).toBeTruthy();
     expect(defaultUnitWithSameId).toBeTruthy();
     const targetedUnitRecord = targetedUnit!;
-    const defaultUnitRecord = defaultUnitWithSameId!;
+    const defaultUnitRecord = defaultUnitWithSameId as typeof targetedUnitRecord;
 
     expect(defaultUnitRecord).not.toBe(targetedUnitRecord);
     expect(plan.topLevelSingleShardAssignments.get(targetedUnitRecord)).toBeUndefined();
@@ -495,7 +495,8 @@ describe("test planner", () => {
     await expect(
       new Promise<void>((resolve, reject) => {
         stream.on("error", reject);
-        stream.end("after cleanup\n", () => resolve());
+        stream.write("after cleanup\n");
+        stream.end(() => resolve());
       }),
     ).resolves.toBeUndefined();
     expect(fs.existsSync(artifactDir)).toBe(false);
