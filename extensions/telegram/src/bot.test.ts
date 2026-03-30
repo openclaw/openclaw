@@ -436,7 +436,6 @@ describe("createTelegramBot", () => {
       decision: "allow-once",
       allowPluginFallback: true,
       senderId: "9",
-      allowPluginFallback: true,
     });
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
@@ -545,7 +544,6 @@ describe("createTelegramBot", () => {
       decision: "allow-once",
       allowPluginFallback: true,
       senderId: "9",
-      allowPluginFallback: true,
     });
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
@@ -700,7 +698,6 @@ describe("createTelegramBot", () => {
       decision: "allow-once",
       allowPluginFallback: false,
       senderId: "9",
-      allowPluginFallback: false,
     });
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");

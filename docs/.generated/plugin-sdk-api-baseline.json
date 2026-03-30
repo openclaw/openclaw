@@ -478,7 +478,7 @@
           "exportName": "ReplyPayload",
           "kind": "type",
           "source": {
-            "line": 76,
+            "line": 79,
             "path": "src/auto-reply/types.ts"
           }
         },
@@ -1500,7 +1500,7 @@
           "exportName": "enqueueSystemEvent",
           "kind": "function",
           "source": {
-            "line": 91,
+            "line": 93,
             "path": "src/infra/system-events.ts"
           }
         },
@@ -1644,7 +1644,7 @@
           "exportName": "resetSystemEventsForTest",
           "kind": "function",
           "source": {
-            "line": 157,
+            "line": 160,
             "path": "src/infra/system-events.ts"
           }
         },
@@ -5478,7 +5478,7 @@
           "exportName": "peekSystemEvents",
           "kind": "function",
           "source": {
-            "line": 139,
+            "line": 142,
             "path": "src/infra/system-events.ts"
           }
         },
@@ -5532,7 +5532,7 @@
           "exportName": "resetSystemEventsForTest",
           "kind": "function",
           "source": {
-            "line": 157,
+            "line": 160,
             "path": "src/infra/system-events.ts"
           }
         },

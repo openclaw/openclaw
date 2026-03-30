@@ -1,6 +1,6 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGatewayClientStarts = vi.hoisted(() => vi.fn());
 const mockGatewayClientStops = vi.hoisted(() => vi.fn());
@@ -194,13 +194,11 @@ describe("createExecApprovalChannelRuntime", () => {
 
   it("can retry start after gateway client creation fails", async () => {
     const boom = new Error("boom");
-    mockCreateOperatorApprovalsGatewayClient
-      .mockRejectedValueOnce(boom)
-      .mockResolvedValueOnce({
-        start: mockGatewayClientStarts,
-        stop: mockGatewayClientStops,
-        request: mockGatewayClientRequests,
-      });
+    mockCreateOperatorApprovalsGatewayClient.mockRejectedValueOnce(boom).mockResolvedValueOnce({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
     const runtime = createExecApprovalChannelRuntime({
       label: "test/exec-approvals",
       clientDisplayName: "Test Exec Approvals",
@@ -236,8 +234,8 @@ describe("createExecApprovalChannelRuntime", () => {
     pendingClient.resolve({
       start: mockGatewayClientStarts,
       stop: mockGatewayClientStops,
-      request: mockGatewayClientRequests,
-    });
+      request: mockGatewayClientRequests as GatewayClient["request"],
+    } as unknown as GatewayClient);
     await startPromise;
     await stopPromise;
 

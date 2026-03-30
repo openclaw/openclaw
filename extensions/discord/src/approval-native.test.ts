@@ -13,6 +13,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
         id: "abc",
         request: {
           title: "Plugin approval",
+          description: "Let plugin proceed",
           turnSourceChannel: "discord",
           turnSourceTo: "channel:123456789",
           turnSourceAccountId: "main",
@@ -36,6 +37,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
         id: "abc",
         request: {
           title: "Plugin approval",
+          description: "Let plugin proceed",
           sessionKey: "agent:main:discord:channel:987654321",
         },
         createdAtMs: 1,

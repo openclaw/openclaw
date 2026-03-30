@@ -9,7 +9,6 @@ export type ResolveTelegramExecApprovalParams = {
   senderId?: string | null;
   allowPluginFallback?: boolean;
   gatewayUrl?: string;
-  allowPluginFallback?: boolean;
 };
 
 function isApprovalNotFoundError(err: unknown): boolean {
