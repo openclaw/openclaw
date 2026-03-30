@@ -33,6 +33,7 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 ]);
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
+const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   if (typeof value !== "string") {
@@ -124,6 +125,44 @@ function mergeLegacyIntoDefaults(params: {
   params.raw[params.rootKey] = root;
 }
 
+function hasLegacyTtsProviderKeys(value: unknown): boolean {
+  const tts = getRecord(value);
+  if (!tts) {
+    return false;
+  }
+  return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.prototype.hasOwnProperty.call(tts, key));
+}
+
+function hasLegacyDiscordAccountTtsProviderKeys(value: unknown): boolean {
+  const accounts = getRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.entries(accounts).some(([accountId, accountValue]) => {
+    if (isBlockedObjectKey(accountId)) {
+      return false;
+    }
+    const account = getRecord(accountValue);
+    const voice = getRecord(account?.voice);
+    return hasLegacyTtsProviderKeys(voice?.tts);
+  });
+}
+
+function hasLegacyPluginEntryTtsProviderKeys(value: unknown): boolean {
+  const entries = getRecord(value);
+  if (!entries) {
+    return false;
+  }
+  return Object.entries(entries).some(([pluginId, entryValue]) => {
+    if (isBlockedObjectKey(pluginId)) {
+      return false;
+    }
+    const entry = getRecord(entryValue);
+    const config = getRecord(entry?.config);
+    return hasLegacyTtsProviderKeys(config?.tts);
+  });
+}
+
 function getOrCreateTtsProviders(tts: Record<string, unknown>): Record<string, unknown> {
   const providers = getRecord(tts.providers) ?? {};
   tts.providers = providers;
@@ -194,6 +233,33 @@ const HEARTBEAT_RULE: LegacyConfigRule = {
   message:
     "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
 };
+
+const LEGACY_TTS_RULES: LegacyConfigRule[] = [
+  {
+    path: ["messages", "tts"],
+    message:
+      "messages.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use messages.tts.providers.<provider> (auto-migrated on load).",
+    match: (value) => hasLegacyTtsProviderKeys(value),
+  },
+  {
+    path: ["channels", "discord", "voice", "tts"],
+    message:
+      "channels.discord.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.voice.tts.providers.<provider> (auto-migrated on load).",
+    match: (value) => hasLegacyTtsProviderKeys(value),
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      "channels.discord.accounts.<id>.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.accounts.<id>.voice.tts.providers.<provider> (auto-migrated on load).",
+    match: (value) => hasLegacyDiscordAccountTtsProviderKeys(value),
+  },
+  {
+    path: ["plugins", "entries"],
+    message:
+      "plugins.entries.<id>.config.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use plugins.entries.<id>.config.tts.providers.<provider> (auto-migrated on load).",
+    match: (value) => hasLegacyPluginEntryTtsProviderKeys(value),
+  },
+];
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
@@ -307,6 +373,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tts.providers-generic-shape",
     describe: "Move legacy bundled TTS config keys into messages.tts.providers",
+    legacyRules: LEGACY_TTS_RULES,
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
       migrateLegacyTtsConfig(getRecord(messages?.tts), "messages.tts", changes);
@@ -317,18 +384,35 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
       migrateLegacyTtsConfig(getRecord(discordVoice?.tts), "channels.discord.voice.tts", changes);
 
       const discordAccounts = getRecord(discord?.accounts);
-      if (!discordAccounts) {
+      if (discordAccounts) {
+        for (const [accountId, accountValue] of Object.entries(discordAccounts)) {
+          if (isBlockedObjectKey(accountId)) {
+            continue;
+          }
+          const account = getRecord(accountValue);
+          const voice = getRecord(account?.voice);
+          migrateLegacyTtsConfig(
+            getRecord(voice?.tts),
+            `channels.discord.accounts.${accountId}.voice.tts`,
+            changes,
+          );
+        }
+      }
+
+      const plugins = getRecord(raw.plugins);
+      const pluginEntries = getRecord(plugins?.entries);
+      if (!pluginEntries) {
         return;
       }
-      for (const [accountId, accountValue] of Object.entries(discordAccounts)) {
-        if (isBlockedObjectKey(accountId)) {
+      for (const [pluginId, entryValue] of Object.entries(pluginEntries)) {
+        if (isBlockedObjectKey(pluginId)) {
           continue;
         }
-        const account = getRecord(accountValue);
-        const voice = getRecord(account?.voice);
+        const entry = getRecord(entryValue);
+        const config = getRecord(entry?.config);
         migrateLegacyTtsConfig(
-          getRecord(voice?.tts),
-          `channels.discord.accounts.${accountId}.voice.tts`,
+          getRecord(config?.tts),
+          `plugins.entries.${pluginId}.config.tts`,
           changes,
         );
       }

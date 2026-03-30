@@ -20,7 +20,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import { CONFIG_DIR, resolveUserPath, stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -665,6 +665,10 @@ export async function synthesizeSpeech(params: {
   const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
+  const primaryProvider = providers[0];
+  logVerbose(
+    `TTS: starting with provider ${primaryProvider}, fallbacks: ${providers.slice(1).join(", ") || "none"}`,
+  );
 
   for (const provider of providers) {
     const providerStart = Date.now();
@@ -676,6 +680,7 @@ export async function synthesizeSpeech(params: {
         errors,
       });
       if (!resolvedProvider) {
+        logVerbose(`TTS: provider ${provider} skipped (${errors[errors.length - 1]})`);
         continue;
       }
       const synthesis = await resolvedProvider.synthesize({
@@ -696,7 +701,17 @@ export async function synthesizeSpeech(params: {
         fileExtension: synthesis.fileExtension,
       };
     } catch (err) {
-      errors.push(formatTtsProviderError(provider, err));
+      const errorMsg = formatTtsProviderError(provider, err);
+      errors.push(errorMsg);
+      const rawError = err instanceof Error ? err.message : String(err);
+      if (provider === primaryProvider) {
+        const hasFallbacks = providers.length > 1;
+        logVerbose(
+          `TTS: primary provider ${provider} failed (${rawError})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
+        );
+      } else {
+        logVerbose(`TTS: ${provider} failed (${rawError}); trying next provider.`);
+      }
     }
   }
 
@@ -814,6 +829,16 @@ export async function maybeApplyTtsToPayload(params: {
   });
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
+  }
+
+  if (isVerbose()) {
+    const effectiveProvider = directives.overrides?.provider
+      ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ??
+        getTtsProvider(config, prefsPath))
+      : getTtsProvider(config, prefsPath);
+    logVerbose(
+      `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
+    );
   }
 
   const cleanedText = directives.cleanedText;

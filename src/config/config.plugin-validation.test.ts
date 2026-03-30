@@ -443,11 +443,13 @@ describe("config plugin validation", () => {
           "voice-call-schema-fixture": {
             config: {
               tts: {
-                openai: {
-                  baseUrl: "http://localhost:8880/v1",
-                  voice: "alloy",
-                  speed: 1.5,
-                  instructions: "Speak in a cheerful tone",
+                providers: {
+                  openai: {
+                    baseUrl: "http://localhost:8880/v1",
+                    voice: "alloy",
+                    speed: 1.5,
+                    instructions: "Speak in a cheerful tone",
+                  },
                 },
               },
             },
