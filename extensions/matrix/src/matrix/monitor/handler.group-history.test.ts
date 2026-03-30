@@ -286,6 +286,71 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
     expect(history?.some((entry) => entry.body.includes("[matrix image attachment]"))).toBe(true);
   });
+
+  it("includes skipped poll updates in next trigger history", async () => {
+    const getEvent = vi.fn(async () => ({
+      event_id: "$poll",
+      sender: "@user:example.org",
+      type: "m.poll.start",
+      origin_server_ts: Date.now(),
+      content: {
+        "m.poll.start": {
+          question: { "m.text": "Lunch?" },
+          kind: "m.poll.disclosed",
+          max_selections: 1,
+          answers: [{ id: "a1", "m.text": "Pizza" }],
+        },
+      },
+    }));
+    const getRelations = vi.fn(async () => ({
+      events: [],
+      nextBatch: null,
+      prevBatch: null,
+    }));
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createMatrixHandlerTestHarness({
+      historyLimit: 20,
+      groupPolicy: "open",
+      isDirectMessage: false,
+      client: {
+        getEvent,
+        getRelations,
+      },
+      finalizeInboundContext,
+      dispatchReplyFromConfig: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
+    });
+
+    await handler(DEFAULT_ROOM, {
+      type: "m.poll.response",
+      sender: "@user:example.org",
+      event_id: "$poll-response-1",
+      origin_server_ts: 1000,
+      content: {
+        "m.poll.response": {
+          answers: ["a1"],
+        },
+        "m.relates_to": {
+          rel_type: "m.reference",
+          event_id: "$poll",
+        },
+      },
+    } as MatrixRawEvent);
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$trigger-poll", body: "trigger", ts: 2000 }),
+    );
+
+    expect(getEvent).toHaveBeenCalledOnce();
+    expect(getRelations).toHaveBeenCalledOnce();
+    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
+    expect(history?.some((entry) => entry.body.includes("Lunch?"))).toBe(true);
+  });
 });
 
 describe("matrix group chat history — scenario 2: race condition safety", () => {

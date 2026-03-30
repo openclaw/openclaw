@@ -21,7 +21,7 @@ import {
   resolveMatrixMessageAttachment,
   resolveMatrixMessageBody,
 } from "../media-text.js";
-import { fetchMatrixPollSnapshot } from "../poll-summary.js";
+import { fetchMatrixPollSnapshot, type MatrixPollSnapshot } from "../poll-summary.js";
 import {
   formatPollAsText,
   isPollEventType,
@@ -583,6 +583,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return;
         }
 
+        let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
+        const getPollSnapshot = async (): Promise<MatrixPollSnapshot | null> => {
+          if (!isPollEvent) {
+            return null;
+          }
+          pollSnapshotPromise ??= fetchMatrixPollSnapshot(client, roomId, event).catch((err) => {
+            logVerboseMessage(
+              `matrix: failed resolving poll snapshot room=${roomId} id=${event.event_id ?? "unknown"}: ${String(err)}`,
+            );
+            return null;
+          });
+          return await pollSnapshotPromise;
+        };
+
         const mentionPrecheckText = resolveMatrixMentionPrecheckText({
           eventType,
           content,
@@ -600,6 +614,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           content,
           mediaUrl,
         });
+        const pendingHistoryPollText =
+          !pendingHistoryText && isPollEvent && historyLimit > 0
+            ? (await getPollSnapshot())?.text
+            : "";
         if (!mentionPrecheckText && !mediaUrl && !isPollEvent) {
           await commitInboundEventIfClaimed();
           return;
@@ -690,10 +708,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           hasControlCommandInMessage;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
         if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
-          if (historyLimit > 0 && pendingHistoryText) {
+          const pendingHistoryBody = pendingHistoryText || pendingHistoryPollText;
+          if (historyLimit > 0 && pendingHistoryBody) {
             const pendingEntry: HistoryEntry = {
               sender: senderId,
-              body: pendingHistoryText,
+              body: pendingHistoryBody,
               timestamp: eventTs ?? undefined,
               messageId: _messageId,
             };
@@ -705,12 +724,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
 
         if (isPollEvent) {
-          const pollSnapshot = await fetchMatrixPollSnapshot(client, roomId, event).catch((err) => {
-            logVerboseMessage(
-              `matrix: failed resolving poll snapshot room=${roomId} id=${event.event_id ?? "unknown"}: ${String(err)}`,
-            );
-            return null;
-          });
+          const pollSnapshot = await getPollSnapshot();
           if (!pollSnapshot) {
             return;
           }
