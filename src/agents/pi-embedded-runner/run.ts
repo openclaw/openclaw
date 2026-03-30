@@ -3068,6 +3068,62 @@ export async function runEmbeddedPiAgent(
             continue;
           }
           if (incompleteTurnText) {
+            const incompleteStopReason = attempt.lastAssistant?.stopReason;
+            // ── max_tokens truncation recovery ──────────────────────────────
+            // Model hit max_tokens mid-generation: tool call arguments were
+            // truncated, JSON repair failed, and arguments were cleared to {}.
+            // Inject a targeted recovery message so the model re-issues the
+            // tool call with correct args rather than retrying with an empty
+            // argument object.
+            if (incompleteStopReason === "length" && payloadCount === 0) {
+              log.warn(
+                `max_tokens truncation detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `stopReason=length payloads=0 — injecting recovery hint`,
+              );
+              const truncationHint =
+                `⚠️ Your last response was cut off because it exceeded the output token limit.\n` +
+                `The tool call arguments were incomplete and could not be used.\n` +
+                `DO NOT retry with empty arguments.\n` +
+                `To recover: break the task into smaller steps, write long content to a file first, ` +
+                `then call the tool with a short reference (e.g. a file path instead of inline text).`;
+              const replayInvalid = resolveReplayInvalidForAttempt(truncationHint);
+              const livenessState = resolveRunLivenessState({
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+                incompleteTurnText: truncationHint,
+              });
+              attempt.setTerminalLifecycleMeta?.({
+                replayInvalid,
+                livenessState,
+              });
+              return {
+                payloads: [{ text: truncationHint, isError: true }],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta,
+                  aborted,
+                  systemPromptReport: attempt.systemPromptReport,
+                  finalPromptText: attempt.finalPromptText,
+                  finalAssistantVisibleText,
+                  finalAssistantRawText,
+                  replayInvalid,
+                  livenessState,
+                  toolSummary: attemptToolSummary,
+                  ...(failureSignal ? { failureSignal } : {}),
+                  agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+                },
+                didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+                didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+                messagingToolSentTexts: attempt.messagingToolSentTexts,
+                messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+                messagingToolSentTargets: attempt.messagingToolSentTargets,
+                messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+                heartbeatToolResponse: attempt.heartbeatToolResponse,
+                successfulCronAdds: attempt.successfulCronAdds,
+              };
+            }
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
               payloadCount,
@@ -3080,7 +3136,6 @@ export async function runEmbeddedPiAgent(
               replayInvalid,
               livenessState,
             });
-            const incompleteStopReason = attempt.lastAssistant?.stopReason;
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `stopReason=${incompleteStopReason} payloads=${payloadCount} — surfacing error to user`,

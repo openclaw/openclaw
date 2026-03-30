@@ -507,6 +507,46 @@ export async function runBeforeToolCallHook(args: {
     }
   }
 
+  // Block exec/bash calls with an empty or missing command early to avoid wasting resources
+  // on hook processing when the tool call was clearly truncated during generation.
+  const toolNameNorm = toolName.trim().toLowerCase();
+  if (toolNameNorm === "exec" || toolNameNorm === "bash") {
+    const record = isPlainObject(params) ? params : {};
+    const command = record.command;
+    if (!command || typeof command !== "string" || !command.trim()) {
+      const reason =
+        `⛔ exec blocked — "command" parameter is required but was empty or missing.\n` +
+        `This usually means the tool call was truncated during generation.\n` +
+        `DO NOT retry the same empty exec call.\n` +
+        `DO NOT use exec with inline scripts or heredocs — long inline content is exactly ` +
+        `what causes truncation and empty commands.\n` +
+        `Instead: use the write tool to save the script to a file (e.g. /tmp/script.py), ` +
+        `then call exec with a short command such as: python3 /tmp/script.py\n` +
+        `Do NOT call exec again without a non-empty "command" field.`;
+      log.warn(
+        `exec blocked: empty command toolCallId=${args.toolCallId ?? "?"} sessionKey=${args.ctx?.sessionKey ?? "?"}`,
+      );
+      return { blocked: true, reason };
+    }
+  }
+
+  // Block sessions_spawn calls with an empty or missing task (same truncation guard as exec/bash).
+  if (toolNameNorm === "sessions_spawn") {
+    const record = isPlainObject(params) ? params : {};
+    const task = record.task;
+    if (!task || typeof task !== "string" || !task.trim()) {
+      const reason =
+        `⛔ sessions_spawn blocked — "task" parameter is required but was empty or missing.\n` +
+        `This usually means the tool call was truncated during generation.\n` +
+        `DO NOT retry sessions_spawn with empty arguments.\n` +
+        `Instead: describe the task in a concise single sentence and pass it as the "task" field.`;
+      log.warn(
+        `sessions_spawn blocked: empty task toolCallId=${args.toolCallId ?? "?"} sessionKey=${args.ctx?.sessionKey ?? "?"}`,
+      );
+      return { blocked: true, reason };
+    }
+  }
+
   const hookRunner = getGlobalHookRunner();
   try {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;

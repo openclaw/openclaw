@@ -2,6 +2,7 @@ import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 
 export const unitUiIncludePatterns = [
+  "ui/src/ui/presenter.test.ts",
   "ui/src/ui/app-chat.test.ts",
   "ui/src/ui/chat/**/*.test.ts",
   "ui/src/ui/views/agents-utils.test.ts",
