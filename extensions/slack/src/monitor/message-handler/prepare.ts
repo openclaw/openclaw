@@ -151,6 +151,7 @@ async function resolveSlackConversationContext(params: {
         channels: ctx.channelsConfig,
         channelKeys: ctx.channelsConfigKeys,
         defaultRequireMention: ctx.defaultRequireMention,
+        defaultRequireMentionInThreads: ctx.defaultRequireMentionInThreads,
         allowNameMatching: ctx.allowNameMatching,
       })
     : null;
@@ -493,12 +494,21 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const shouldRequireMention = isRoom
+  const baseMentionRequired = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
+  const threadMentionOverride =
+    isRoom && isThreadReply ? channelConfig?.requireMentionInThreads : undefined;
+  const shouldRequireMention =
+    threadMentionOverride !== undefined ? threadMentionOverride : baseMentionRequired;
 
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
+  // When requireMentionInThreads is true, block all implicit mention kinds so only
+  // explicit @mentions satisfy the gate. When threadRequireExplicitMention is set,
+  // that also blocks implicit kinds. Otherwise allow all implicit kinds.
+  const suppressImplicit =
+    threadMentionOverride === true || ctx.threadRequireExplicitMention;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention,
@@ -509,13 +519,18 @@ export async function prepareSlackMessage(params: {
     policy: {
       isGroup: isRoom,
       requireMention: Boolean(shouldRequireMention),
-      allowedImplicitMentionKinds: ctx.threadRequireExplicitMention ? [] : undefined,
+      allowedImplicitMentionKinds: suppressImplicit ? [] : undefined,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
     },
   });
-  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  // When requireMentionInThreads explicitly relaxes the requirement (false) for a thread
+  // that would otherwise need a mention, treat the turn as mentioned so downstream directive
+  // gating (elevated/exec) is not inadvertently stripped.
+  const effectiveWasMentioned =
+    mentionDecision.effectiveWasMentioned ||
+    (threadMentionOverride === false && baseMentionRequired);
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();

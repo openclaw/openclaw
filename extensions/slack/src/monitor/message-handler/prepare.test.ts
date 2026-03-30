@@ -5,10 +5,15 @@ import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/test-helpers.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import {
+  clearSlackThreadParticipationCache,
+  recordSlackThreadParticipation,
+} from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
+import type { SlackChannelConfigEntries } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
@@ -824,6 +829,144 @@ describe("slack thread.requireExplicitMention", () => {
       ctx,
       account,
       message,
+      opts: { source: "message" },
+    });
+    expect(result).not.toBeNull();
+  });
+});
+
+describe("requireMentionInThreads", () => {
+  afterEach(() => {
+    clearSlackThreadParticipationCache();
+  });
+
+  function createMentionGateCtx(channelsConfig: SlackChannelConfigEntries) {
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    ctx.channelsConfig = channelsConfig;
+    ctx.channelsConfigKeys = Object.keys(channelsConfig);
+    // oxlint-disable-next-line typescript/no-explicit-any
+    ctx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    ctx.resolveChannelName = async () => ({ name: "test", type: "channel" as const });
+    return ctx;
+  }
+
+  function makeMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
+    return {
+      channel: "C1",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello",
+      ts: "101.000",
+      ...overrides,
+    } as SlackMessageEvent;
+  }
+
+  const account = createSlackTestAccount();
+
+  it("drops thread reply when requireMentionInThreads is not set and no mention", async () => {
+    const ctx = createMentionGateCtx({ C1: { enabled: true, requireMention: true } });
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000" }),
+      opts: { source: "message" },
+    });
+    expect(result).toBeNull();
+  });
+
+  it("allows thread reply when requireMentionInThreads is false", async () => {
+    const ctx = createMentionGateCtx({
+      C1: { enabled: true, requireMention: true, requireMentionInThreads: false },
+    });
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000" }),
+      opts: { source: "message" },
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it("still requires mention in main channel even when requireMentionInThreads is false", async () => {
+    const ctx = createMentionGateCtx({
+      C1: { enabled: true, requireMention: true, requireMentionInThreads: false },
+    });
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({}),
+      opts: { source: "message" },
+    });
+    expect(result).toBeNull();
+  });
+
+  it("drops thread reply with implicit mention when requireMentionInThreads is true", async () => {
+    recordSlackThreadParticipation("default", "C1", "100.000");
+    const ctx = createMentionGateCtx({
+      C1: { enabled: true, requireMention: true, requireMentionInThreads: true },
+    });
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000" }),
+      opts: { source: "message" },
+    });
+    // requireMentionInThreads: true overrides implicit mention — explicit @mention needed.
+    expect(result).toBeNull();
+  });
+
+  it("allows thread reply with explicit mention when requireMentionInThreads is true", async () => {
+    const ctx = createMentionGateCtx({
+      C1: { enabled: true, requireMention: true, requireMentionInThreads: true },
+    });
+    ctx.botUserId = "BBOT";
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000", text: "<@BBOT> hello" }),
+      opts: { source: "message" },
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it("allows thread reply with implicit mention when requireMentionInThreads is not set", async () => {
+    recordSlackThreadParticipation("default", "C1", "100.000");
+    const ctx = createMentionGateCtx({ C1: { enabled: true, requireMention: true } });
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000" }),
+      opts: { source: "message" },
+    });
+    expect(result).not.toBeNull();
+  });
+
+  it("sets WasMentioned true when requireMentionInThreads false allows unmentioned thread reply", async () => {
+    const ctx = createMentionGateCtx({
+      C1: { enabled: true, requireMention: true, requireMentionInThreads: false },
+    });
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000" }),
+      opts: { source: "message" },
+    });
+    expect(result).not.toBeNull();
+    expect(result!.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("allows thread reply when account-level defaultRequireMentionInThreads is false with no per-channel override", async () => {
+    const ctx = createMentionGateCtx({ C1: { enabled: true, requireMention: true } });
+    ctx.defaultRequireMentionInThreads = false;
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000" }),
       opts: { source: "message" },
     });
     expect(result).not.toBeNull();
