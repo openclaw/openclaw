@@ -346,7 +346,19 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
+  // Answer callback queries immediately — before sequentialize queues them.
+  // Without this, the Telegram spinner persists for the entire duration of any
+  // in-progress turn because sequentialize serializes all updates by chat ID.
+  // By calling answerCallbackQuery here, the spinner dismisses instantly even
+  // when the session is busy. The full callback handler still runs in order.
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery) {
+      await ctx.api.answerCallbackQuery(ctx.callbackQuery.id).catch(() => {});
+    }
+    return next();
+  });
+
+  bot.use(sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;

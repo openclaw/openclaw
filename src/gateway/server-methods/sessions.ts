@@ -975,7 +975,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.reset": async ({ params, respond, context }) => {
+  "sessions.reset": async ({ params, respond, context: _context }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -996,10 +996,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
-    emitSessionsChanged(context, {
-      sessionKey: result.key,
-      reason,
-    });
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect, context }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
@@ -1208,3 +1204,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
   },
 };
+
+// Closing turn functionality moved to src/hooks/bundled/closing-turn/handler.ts
+// It now fires as an internal hook on command:new and command:reset events,
+// providing universal coverage across all ingress channels.

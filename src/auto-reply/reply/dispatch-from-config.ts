@@ -18,7 +18,6 @@ import {
   deriveInboundMessageHookContext,
   toPluginInboundClaimContext,
   toPluginInboundClaimEvent,
-  toInternalMessageReceivedContext,
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
@@ -163,6 +162,10 @@ export async function dispatchReplyFromConfig(params: {
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
+  // Variables used by internal message hooks (message:received, message:sent)
+  const content = typeof ctx.Body === "string" ? ctx.Body : (ctx.BodyForCommands ?? "");
+  const channelId = channel;
+  const conversationId = chatId ?? "";
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 
@@ -241,6 +244,53 @@ export async function dispatchReplyFromConfig(params: {
       typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
     wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
   });
+
+  // Trigger plugin hooks (fire-and-forget)
+  if (hookRunner?.hasHooks("message_received")) {
+    fireAndForgetHook(
+      hookRunner.runMessageReceived(
+        toPluginMessageReceivedEvent(hookContext),
+        toPluginMessageContext(hookContext),
+      ),
+      "dispatch-from-config: message_received plugin hook failed",
+    );
+  }
+
+  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
+  // Awaited (not fire-and-forget) so hooks can inject context via
+  // enqueueSystemEvent before the agent processes the message.
+  if (sessionKey) {
+    try {
+      await Promise.race([
+        triggerInternalHook(
+          createInternalHookEvent("message", "received", sessionKey, {
+            from: ctx.From ?? "",
+            content,
+            timestamp,
+            channelId,
+            accountId: ctx.AccountId,
+            conversationId,
+            messageId: messageIdForHook,
+            metadata: {
+              to: ctx.To,
+              provider: ctx.Provider,
+              surface: ctx.Surface,
+              threadId: ctx.MessageThreadId,
+              senderId: ctx.SenderId,
+              senderName: ctx.SenderName,
+              senderUsername: ctx.SenderUsername,
+              senderE164: ctx.SenderE164,
+            },
+          }),
+        ),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("message:received hook timeout")), 2000),
+        ),
+      ]);
+    } catch (err) {
+      logVerbose(`dispatch-from-config: message_received internal hook failed: ${String(err)}`);
+    }
+  }
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
@@ -413,30 +463,6 @@ export async function dispatchReplyFromConfig(params: {
         return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
       }
     }
-  }
-
-  // Trigger plugin hooks (fire-and-forget)
-  if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetHook(
-      hookRunner.runMessageReceived(
-        toPluginMessageReceivedEvent(hookContext),
-        toPluginMessageContext(hookContext),
-      ),
-      "dispatch-from-config: message_received plugin hook failed",
-    );
-  }
-
-  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
-      "dispatch-from-config: message_received internal hook failed",
-    );
   }
 
   markProcessing();

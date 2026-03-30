@@ -13,7 +13,13 @@ import type { SessionsPatchParams } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "exec";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -28,6 +34,21 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   type: "agent";
   action: "bootstrap";
   context: AgentBootstrapHookContext;
+};
+
+export type AgentLlmRequestHookContext = {
+  /** Session key for the active session */
+  sessionKey?: string;
+  /** Conversation or session ID */
+  conversationId?: string;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId?: string;
+};
+
+export type AgentLlmRequestHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "llm-request";
+  context: AgentLlmRequestHookContext;
 };
 
 export type GatewayStartupHookContext = {
@@ -454,4 +475,10 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
     typeof context.sessionEntry === "object" &&
     context.sessionEntry !== null
   );
+}
+
+export function isAgentLlmRequestEvent(
+  event: InternalHookEvent,
+): event is AgentLlmRequestHookEvent {
+  return isHookEventTypeAndAction(event, "agent", "llm-request");
 }

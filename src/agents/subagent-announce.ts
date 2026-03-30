@@ -176,14 +176,18 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  savedFilePath?: string;
 }): string {
+  const readFileNote = params.savedFilePath
+    ? ` The output above is truncated — read the full results from \`${params.savedFilePath}\` before responding if you need complete data.`
+    : "";
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words.${readFileNote} Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `A completed ${params.announceType} is ready for user delivery.${readFileNote} Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `A completed ${params.announceType} is ready for user delivery.${readFileNote} Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
 
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
@@ -514,6 +518,22 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionId || "unknown";
     const findings = childCompletionFindings || reply || "(no output)";
 
+    const cfg2 = loadConfig();
+    const outputDir = resolveSubagentOutputDir(cfg2);
+    const OUTPUT_THRESHOLD = 2_500;
+    const savedFilePath =
+      findings.length > OUTPUT_THRESHOLD
+        ? saveOutputToTempFile({
+            findings,
+            label: params.label ?? params.task?.slice(0, 40) ?? "agent",
+            runId: params.childRunId ?? "unknown",
+            outputDir,
+          })
+        : undefined;
+    const findingsForContext = savedFilePath
+      ? `${findings.slice(0, 1_500)}\n…\n\n_Full output saved: \`${savedFilePath.includes("/.openclaw/workspace/") ? savedFilePath.replace(/.*\.openclaw\/workspace\//, "") : savedFilePath}\`_`
+      : findings;
+
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
       const {
@@ -547,6 +567,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      savedFilePath,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -563,7 +584,7 @@ export async function runSubagentAnnounceFlow(params: {
         taskLabel,
         status: outcome.status,
         statusLabel,
-        result: findings,
+        result: findingsForContext,
         statsLine,
         replyInstruction,
       },
@@ -613,7 +634,17 @@ export async function runSubagentAnnounceFlow(params: {
       directIdempotencyKey,
       signal: params.signal,
     });
-    didAnnounce = delivery.delivered;
+    // Cron delivery state should only be marked as delivered when we have a
+    // direct path result. Queue/steer means "accepted for later processing",
+    // not a confirmed channel send, and can otherwise produce false positives.
+    if (
+      announceType === "cron job" &&
+      (delivery.path === "queued" || delivery.path === "steered")
+    ) {
+      didAnnounce = false;
+    } else {
+      didAnnounce = delivery.delivered;
+    }
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

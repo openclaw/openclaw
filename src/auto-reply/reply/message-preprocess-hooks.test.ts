@@ -35,7 +35,7 @@ describe("emitPreAgentMessageHooks", () => {
       actions.push(event.action);
     });
 
-    emitPreAgentMessageHooks({
+    void emitPreAgentMessageHooks({
       ctx: makeCtx(),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: false,
@@ -52,7 +52,7 @@ describe("emitPreAgentMessageHooks", () => {
       actions.push(event.action);
     });
 
-    emitPreAgentMessageHooks({
+    void emitPreAgentMessageHooks({
       ctx: makeCtx({ Transcript: undefined }),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: false,
@@ -67,7 +67,7 @@ describe("emitPreAgentMessageHooks", () => {
     const handler = vi.fn();
     registerInternalHook("message", handler);
 
-    emitPreAgentMessageHooks({
+    void emitPreAgentMessageHooks({
       ctx: makeCtx(),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: true,
@@ -81,7 +81,7 @@ describe("emitPreAgentMessageHooks", () => {
     const handler = vi.fn();
     registerInternalHook("message", handler);
 
-    emitPreAgentMessageHooks({
+    void emitPreAgentMessageHooks({
       ctx: makeCtx({ SessionKey: " " }),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: false,

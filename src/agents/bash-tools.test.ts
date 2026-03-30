@@ -566,6 +566,45 @@ describe("exec notifyOnExit", () => {
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
 });
 
+describe("exec onComplete", () => {
+  it("backgrounds the process and includes completion notification hint", async () => {
+    const tool = createNotifyOnExitExecTool();
+    const result = await executeExecCommand(tool, echoAfterDelay("on-complete-test"), {
+      onComplete: "notify",
+    });
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+    const text = readTextContent(result.content) ?? "";
+    expect(text).toContain("completion notification will be delivered automatically");
+    expect(text).not.toContain("Use process");
+  });
+
+  it("enqueues a system event on process exit even without explicit notifyOnExit config", async () => {
+    // onComplete="notify" should force notifyOnExit regardless of tool defaults
+    const tool = createTestExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      notifyOnExit: false,
+      sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+    });
+    const result = await executeExecCommand(tool, echoAfterDelay("forced-notify"), {
+      onComplete: "notify",
+    });
+    const sessionId = requireRunningSessionId(result);
+    const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
+    expect(finished).toBeTruthy();
+    expect(hasEvent).toBe(true);
+  });
+
+  it("implies background mode without explicit background param", async () => {
+    const tool = createNotifyOnExitExecTool();
+    // No background: true, only onComplete: "notify"
+    const result = await executeExecCommand(tool, echoAfterDelay("bg-implied"), {
+      onComplete: "notify",
+    });
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+  });
+});
+
 describe("exec PATH handling", () => {
   useCapturedEnv([...PATH_SHELL_ENV_KEYS], applyDefaultShellEnv);
 

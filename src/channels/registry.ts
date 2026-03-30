@@ -19,8 +19,28 @@ type RegisteredChannelPluginEntry = {
   };
 };
 
+// [FORK] Last-known-good for registered channel plugin entries.
+// When a peripheral plugin swap empties the global registry (image-gen, TTS, etc.),
+// normalizeAnyChannelId → findRegisteredChannelPluginEntry → listRegisteredChannelPluginEntries
+// returns [] → normalizeChannelId returns null → routeReply returns "Unknown channel: telegram".
+// Same pattern as channels/plugins/registry.ts and channels/plugins/registry-loader.ts.
+let lastGoodChannelPluginEntries: RegisteredChannelPluginEntry[] | null = null;
+
 function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
-  return getActivePluginRegistry()?.channels ?? [];
+  const entries = getActivePluginRegistry()?.channels ?? [];
+  // [FORK] If the registry is empty but we had entries before, return last-known-good.
+  if (
+    entries.length === 0 &&
+    lastGoodChannelPluginEntries &&
+    lastGoodChannelPluginEntries.length > 0
+  ) {
+    return lastGoodChannelPluginEntries;
+  }
+  // [FORK] Save as last-known-good when we have entries.
+  if (entries.length > 0) {
+    lastGoodChannelPluginEntries = entries;
+  }
+  return entries;
 }
 
 function findRegisteredChannelPluginEntry(

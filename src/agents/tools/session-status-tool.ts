@@ -32,6 +32,7 @@ import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
+  normalizeProviderId,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../model-selection.js";
@@ -197,7 +198,17 @@ async function resolveModelOverride(params: {
     throw new Error(`Unrecognized model "${raw}".`);
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowed.allowedKeys.size > 0 && !allowed.allowedKeys.has(key)) {
+  const configuredProviderKeysForTool = Object.keys(params.cfg.models?.providers ?? {}).map(
+    normalizeProviderId,
+  );
+  const isConfiguredProviderForTool = configuredProviderKeysForTool.includes(
+    normalizeProviderId(resolved.ref.provider),
+  );
+  if (
+    allowed.allowedKeys.size > 0 &&
+    !allowed.allowedKeys.has(key) &&
+    !isConfiguredProviderForTool
+  ) {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =

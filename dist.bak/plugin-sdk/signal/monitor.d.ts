@@ -1,0 +1,25 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { BackoffPolicy } from "../infra/backoff.js";
+import { type RuntimeEnv } from "../runtime.js";
+export type MonitorSignalOpts = {
+    runtime?: RuntimeEnv;
+    abortSignal?: AbortSignal;
+    account?: string;
+    accountId?: string;
+    config?: OpenClawConfig;
+    baseUrl?: string;
+    autoStart?: boolean;
+    startupTimeoutMs?: number;
+    cliPath?: string;
+    httpHost?: string;
+    httpPort?: number;
+    receiveMode?: "on-start" | "manual";
+    ignoreAttachments?: boolean;
+    ignoreStories?: boolean;
+    sendReadReceipts?: boolean;
+    allowFrom?: Array<string | number>;
+    groupAllowFrom?: Array<string | number>;
+    mediaMaxMb?: number;
+    reconnectPolicy?: Partial<BackoffPolicy>;
+};
+export declare function monitorSignalProvider(opts?: MonitorSignalOpts): Promise<void>;
