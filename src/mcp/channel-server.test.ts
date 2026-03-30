@@ -166,8 +166,9 @@ describe("openclaw channel mcp server", () => {
             gatewayUrl: `ws://127.0.0.1:${harness.port}`,
             gatewayToken: "test-gateway-token-1234567890",
           });
+          const connectedMcp = mcp;
 
-          const listed = (await mcp.client.callTool({
+          const listed = (await connectedMcp.client.callTool({
             name: "conversations_list",
             arguments: {},
           })) as {
@@ -185,7 +186,7 @@ describe("openclaw channel mcp server", () => {
             ]),
           );
 
-          const read = (await mcp.client.callTool({
+          const read = (await connectedMcp.client.callTool({
             name: "messages_read",
             arguments: { session_key: sessionKey, limit: 5 },
           })) as {
@@ -201,7 +202,7 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          const attachments = (await mcp.client.callTool({
+          const attachments = (await connectedMcp.client.callTool({
             name: "attachments_fetch",
             arguments: { session_key: sessionKey, message_id: "msg-attachment" },
           })) as {
@@ -217,13 +218,6 @@ describe("openclaw channel mcp server", () => {
             ]),
           );
 
-          const waitPromise = mcp.client.callTool({
-            name: "events_wait",
-            arguments: { session_key: sessionKey, after_cursor: 0, timeout_ms: 5_000 },
-          }) as Promise<{
-            structuredContent?: { event?: Record<string, unknown> };
-          }>;
-
           emitSessionTranscriptUpdate({
             sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
             sessionKey,
@@ -235,7 +229,32 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          const waited = await waitPromise;
+          await vi.waitFor(async () => {
+            const polled = (await connectedMcp.client.callTool({
+              name: "events_poll",
+              arguments: { session_key: sessionKey, after_cursor: 0, limit: 5 },
+            })) as {
+              structuredContent?: { events?: Array<Record<string, unknown>> };
+            };
+            expect(polled.structuredContent?.events).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  type: "message",
+                  sessionKey,
+                  messageId: "msg-2",
+                  role: "user",
+                  text: "inbound live message",
+                }),
+              ]),
+            );
+          });
+
+          const waited = (await connectedMcp.client.callTool({
+            name: "events_wait",
+            arguments: { session_key: sessionKey, after_cursor: 0, timeout_ms: 250 },
+          })) as {
+            structuredContent?: { event?: Record<string, unknown> };
+          };
           expect(waited.structuredContent?.event).toMatchObject({
             type: "message",
             sessionKey,
