@@ -3,11 +3,8 @@
   "version": "2026.3.30",
   "description": "OpenClaw save/load conversation context plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "peerDependencies": {
-    "openclaw": ">=2026.3.30"
+    "openclaw": ">=2026.3.11"
   },
   "peerDependenciesMeta": {
     "openclaw": {
