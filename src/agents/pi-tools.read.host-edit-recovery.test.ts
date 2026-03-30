@@ -213,4 +213,65 @@ describe("edit tool recovery hardening", () => {
       text: `Successfully replaced text in ${filePath}.`,
     });
   });
+
+  it("recovers edits[] multi-edit mode by reading first entry's oldText/newText", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "alpha\nbeta\ngamma\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "ALPHA\nbeta\nGAMMA\n", "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
+    });
+
+    // Use edits[] array mode — no top-level oldText/newText
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "alpha", newText: "ALPHA" },
+          { oldText: "gamma", newText: "GAMMA" },
+        ],
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Successfully replaced text in ${filePath}.`,
+    });
+  });
+
+  it("adds mismatch hint for edits[] mode when edit fails", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "actual current content", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        throw new Error(
+          "Could not find the exact text in demo.txt. The old text must match exactly including all whitespace and newlines.",
+        );
+      },
+    });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "missing text", newText: "replacement" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/Current file contents:\nactual current content/);
+  });
 });

@@ -216,6 +216,42 @@ export function assertRequiredParams(
   }
 }
 
+/**
+ * Check whether the record contains a valid `edits` array (the multi-edit
+ * mode defined by the upstream pi-coding-agent edit tool schema).  When
+ * present, top-level `oldText`/`newText` are **not** required because each
+ * edit entry carries its own `oldText`/`newText` pair.
+ */
+function hasValidEditsArray(record: Record<string, unknown> | undefined): boolean {
+  if (!record) {
+    return false;
+  }
+  const edits = record.edits;
+  return Array.isArray(edits) && edits.length > 0;
+}
+
+/**
+ * For the edit tool, derive the effective required-param groups based on
+ * whether the caller supplied the `edits[]` array or top-level params.
+ *
+ * - **`edits[]` mode**: only `path` is required at the top level; each
+ *   array entry is validated by the upstream tool implementation.
+ * - **top-level mode**: `path`, `oldText`, and `newText` are all required.
+ */
+function resolveEditRequiredParamGroups(
+  record: Record<string, unknown> | undefined,
+  groups: readonly RequiredParamGroup[],
+): readonly RequiredParamGroup[] {
+  if (!hasValidEditsArray(record)) {
+    return groups;
+  }
+  // Keep only the "path" group — oldText/newText live inside each edits[] entry.
+  return groups.filter((group) => {
+    const label = group.label ?? "";
+    return !label.includes("oldText") && !label.includes("newText");
+  });
+}
+
 // Generic wrapper to normalize parameters for any tool.
 export function wrapToolParamNormalization(
   tool: AnyAgentTool,
@@ -230,7 +266,13 @@ export function wrapToolParamNormalization(
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       if (requiredParamGroups?.length) {
-        assertRequiredParams(record, requiredParamGroups, tool.name);
+        // For the edit tool, when `edits[]` is supplied, skip the top-level
+        // oldText/newText requirement (they live inside each array entry).
+        const effectiveGroups =
+          tool.name === "edit"
+            ? resolveEditRequiredParamGroups(record, requiredParamGroups)
+            : requiredParamGroups;
+        assertRequiredParams(record, effectiveGroups, tool.name);
       }
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
     },

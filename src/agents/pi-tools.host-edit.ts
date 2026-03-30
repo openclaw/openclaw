@@ -39,11 +39,29 @@ function readStringParam(record: Record<string, unknown> | undefined, ...keys: s
 function readEditToolParams(params: unknown): EditToolParams {
   const record =
     params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-  return {
-    pathParam: readStringParam(record, "path", "file_path", "file"),
-    oldText: readStringParam(record, "oldText", "old_string", "old_text", "oldString"),
-    newText: readStringParam(record, "newText", "new_string", "new_text", "newString"),
-  };
+  const pathParam = readStringParam(record, "path", "file_path", "file");
+
+  // Try top-level oldText/newText first (single-edit mode).
+  let oldText = readStringParam(record, "oldText", "old_string", "old_text", "oldString");
+  let newText = readStringParam(record, "newText", "new_string", "new_text", "newString");
+
+  // Fall back to the first entry in edits[] (multi-edit mode) so recovery
+  // logic can snapshot/verify at least the first replacement.
+  if (oldText === undefined && newText === undefined && record) {
+    const edits = record.edits;
+    if (Array.isArray(edits) && edits.length > 0) {
+      const first =
+        edits[0] && typeof edits[0] === "object"
+          ? (edits[0] as Record<string, unknown>)
+          : undefined;
+      if (first) {
+        oldText = readStringParam(first, "oldText", "old_string", "old_text", "oldString");
+        newText = readStringParam(first, "newText", "new_string", "new_text", "newString");
+      }
+    }
+  }
+
+  return { pathParam, oldText, newText };
 }
 
 function normalizeToLF(value: string): string {
