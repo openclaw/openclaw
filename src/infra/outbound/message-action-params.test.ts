@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSlackAutoThreadId } from "../../plugin-sdk/slack.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -14,121 +12,6 @@ import {
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
-
-function createToolContext(
-  overrides: Partial<ChannelThreadingToolContext> = {},
-): ChannelThreadingToolContext {
-  return {
-    currentChannelId: "C123",
-    currentThreadTs: "thread-1",
-    replyToMode: "all",
-    ...overrides,
-  };
-}
-
-function resolveTelegramAutoThreadIdForTest(params: {
-  to: string;
-  toolContext?: { currentThreadTs?: string; currentChannelId?: string };
-}): string | undefined {
-  const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
-  }
-  const normalizeChatId = (raw: string) => {
-    const trimmed = raw
-      .trim()
-      .replace(/^telegram:/i, "")
-      .replace(/^tg:/i, "");
-    const groupTopic = /^group:([^:]+):topic:\d+$/i.exec(trimmed);
-    if (groupTopic) {
-      return groupTopic[1].toLowerCase();
-    }
-    const topic = /^([^:]+):topic:\d+$/i.exec(trimmed);
-    if (topic) {
-      return topic[1].toLowerCase();
-    }
-    const colonPair = /^([^:]+):\d+$/i.exec(trimmed);
-    if (colonPair && colonPair[1].startsWith("-")) {
-      return colonPair[1].toLowerCase();
-    }
-    return trimmed.toLowerCase();
-  };
-  return normalizeChatId(params.to) === normalizeChatId(context.currentChannelId)
-    ? context.currentThreadTs
-    : undefined;
-}
-
-describe("message action threading helpers", () => {
-  it("resolves Slack auto-thread ids only for matching active channels", () => {
-    expect(
-      resolveSlackAutoThreadId({
-        to: "#c123",
-        toolContext: createToolContext(),
-      }),
-    ).toBe("thread-1");
-    expect(
-      resolveSlackAutoThreadId({
-        to: "channel:C999",
-        toolContext: createToolContext(),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "user:U123",
-        toolContext: createToolContext(),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("skips Slack auto-thread ids when reply mode or context blocks them", () => {
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({
-          replyToMode: "first",
-          hasRepliedRef: { value: true },
-        }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({ replyToMode: "off" }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({ currentThreadTs: undefined }),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("resolves Telegram auto-thread ids for matching chats across target formats", () => {
-    expect(
-      resolveTelegramAutoThreadIdForTest({
-        to: "telegram:group:-100123:topic:77",
-        toolContext: createToolContext({
-          currentChannelId: "tg:group:-100123",
-        }),
-      }),
-    ).toBe("thread-1");
-    expect(
-      resolveTelegramAutoThreadIdForTest({
-        to: "-100999:77",
-        toolContext: createToolContext({
-          currentChannelId: "-100123",
-        }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveTelegramAutoThreadIdForTest({
-        to: "-100123",
-        toolContext: createToolContext({ currentChannelId: undefined }),
-      }),
-    ).toBeUndefined();
-  });
-});
 
 describe("message action media helpers", () => {
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {

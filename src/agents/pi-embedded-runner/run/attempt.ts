@@ -177,6 +177,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -1056,13 +1057,24 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
-
       // Anthropic-compatible providers can add new stop reasons before pi-ai maps them.
       // Recover the known "sensitive" stop reason here so a model refusal does not
       // bubble out as an uncaught runner error and stall channel polling.
       activeSession.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(
         activeSession.agent.streamFn,
       );
+
+      let idleTimeoutTrigger: ((error: Error) => void) | undefined;
+
+      // Wrap stream with idle timeout detection
+      const idleTimeoutMs = resolveLlmIdleTimeoutMs(params.config);
+      if (idleTimeoutMs > 0) {
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          idleTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+        );
+      }
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -1156,6 +1168,13 @@ export async function runEmbeddedAttempt(
       };
       const makeAbortError = (signal: AbortSignal): Error => {
         const reason = getAbortReason(signal);
+        // If the reason is already an Error, preserve it to keep the original message
+        // (e.g., "LLM idle timeout (60s): no response from model" instead of "aborted")
+        if (reason instanceof Error) {
+          const err = new Error(reason.message, { cause: reason });
+          err.name = "AbortError";
+          return err;
+        }
         const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
         err.name = "AbortError";
         return err;
@@ -1186,6 +1205,9 @@ export async function runEmbeddedAttempt(
         }
         abortCompaction();
         void activeSession.abort();
+      };
+      idleTimeoutTrigger = (error) => {
+        abortRun(true, error);
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
