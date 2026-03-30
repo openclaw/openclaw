@@ -7,6 +7,7 @@ import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
   extractToolErrorMessage,
+  extractToolResultMediaUrls,
   extractToolResultText,
   extractMessagingToolSend,
   isToolResultError,
@@ -227,9 +228,19 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
+  if (ctx.params.onToolResult) {
     const outputText = extractToolResultText(sanitizedResult);
-    if (outputText) {
+    const mediaUrls = extractToolResultMediaUrls(sanitizedResult);
+    if (mediaUrls?.length) {
+      try {
+        void ctx.params.onToolResult({
+          text: outputText,
+          mediaUrls,
+        });
+      } catch {
+        // ignore tool result delivery failures
+      }
+    } else if (ctx.shouldEmitToolOutput() && outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
     }
   }

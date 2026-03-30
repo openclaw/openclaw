@@ -118,6 +118,64 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
+export function extractToolResultMediaUrls(result: unknown): string[] | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    seen.add(trimmed);
+    urls.push(trimmed);
+  };
+  const pushMany = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        push(entry);
+      }
+      return;
+    }
+    push(value);
+  };
+
+  const record = result as Record<string, unknown>;
+  pushMany(record.mediaUrls);
+  push(record.mediaUrl);
+  pushMany(record.paths);
+  push(record.path);
+  push(record.filePath);
+
+  const details = record.details;
+  if (details && typeof details === "object") {
+    const detailRecord = details as Record<string, unknown>;
+    pushMany(detailRecord.mediaUrls);
+    push(detailRecord.mediaUrl);
+    pushMany(detailRecord.paths);
+    push(detailRecord.path);
+    push(detailRecord.filePath);
+
+    const media = detailRecord.media;
+    if (media && typeof media === "object") {
+      const mediaRecord = media as Record<string, unknown>;
+      pushMany(mediaRecord.mediaUrls);
+      push(mediaRecord.mediaUrl);
+      pushMany(mediaRecord.paths);
+      push(mediaRecord.path);
+      push(mediaRecord.filePath);
+    }
+  }
+
+  return urls.length > 0 ? urls : undefined;
+}
+
 export function isToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
     return false;

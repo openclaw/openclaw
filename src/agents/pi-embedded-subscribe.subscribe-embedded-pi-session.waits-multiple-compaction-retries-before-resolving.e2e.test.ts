@@ -236,4 +236,58 @@ describe("subscribeEmbeddedPiSession", () => {
     const readOutput = onToolResult.mock.calls[2][0];
     expect(readOutput.text).toContain("file data");
   });
+
+  it("emits media attachments from tool result details without requiring full verbose output", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onToolResult = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-image-generate",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "image_generate",
+      toolCallId: "tool-image-1",
+      args: { prompt: "cat" },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tool-image-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated 1 image with minimax/image-01." }],
+        details: {
+          media: {
+            mediaUrls: ["/home/openclaw/.openclaw/media/tool-image-generation/cat.png"],
+          },
+          paths: ["/home/openclaw/.openclaw/media/tool-image-generation/cat.png"],
+        },
+      },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(onToolResult.mock.calls[1]?.[0]).toEqual({
+      text: "Generated 1 image with minimax/image-01.",
+      mediaUrls: ["/home/openclaw/.openclaw/media/tool-image-generation/cat.png"],
+    });
+  });
 });
