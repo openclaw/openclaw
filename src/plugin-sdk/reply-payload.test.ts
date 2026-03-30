@@ -302,8 +302,30 @@ describe("resolveToolDeliveryPayload", () => {
     });
   });
 
+  it("trims and deduplicates media URLs from payload fields", () => {
+    expect(
+      resolveToolDeliveryPayload({
+        text: "No direct text",
+        mediaUrl: "   https://example.com/voice.ogg  ",
+        mediaUrls: [
+          "https://example.com/voice.ogg",
+          "  https://example.com/voice.ogg  ",
+          "https://example.com/image.png ",
+        ],
+      }),
+    ).toEqual({
+      text: undefined,
+      mediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
+      mediaUrl: "https://example.com/voice.ogg",
+    });
+  });
+
   it("returns null for payloads with no media and no allowed text", () => {
     expect(resolveToolDeliveryPayload({ text: "   " })).toBeNull();
+  });
+
+  it("returns null for whitespace-only media URLs", () => {
+    expect(resolveToolDeliveryPayload({ text: "", mediaUrl: "   " })).toBeNull();
   });
 });
 

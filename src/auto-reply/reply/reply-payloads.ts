@@ -19,7 +19,8 @@ function extractToolDeliveryMediaUrls(payload: ReplyPayload): string[] {
   const parsed = payload.text ? parseReplyDirectives(payload.text) : undefined;
   const textMediaUrls = parsed?.mediaUrls ?? [];
   const seen = new Set<string>();
-  for (const url of [...mediaUrls, ...mediaUrl, ...textMediaUrls]) {
+  for (const rawUrl of [...mediaUrls, ...mediaUrl, ...textMediaUrls]) {
+    const url = rawUrl.trim();
     if (!url || seen.has(url)) {
       continue;
     }
