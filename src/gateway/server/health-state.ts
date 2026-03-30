@@ -1,8 +1,9 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
-import { CONFIG_PATH, STATE_DIR, loadConfig } from "../../config/config.js";
+import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
+import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { Snapshot } from "../protocol/index.js";
@@ -15,6 +16,7 @@ let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
+  const configPath = createConfigIO().configPath;
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const mainSessionKey = resolveMainSessionKey(cfg);
@@ -22,6 +24,7 @@ export function buildGatewaySnapshot(): Snapshot {
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
+  const updateAvailable = getUpdateAvailable() ?? undefined;
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
   return {
@@ -30,7 +33,7 @@ export function buildGatewaySnapshot(): Snapshot {
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
     // Surface resolved paths so UIs can display the true config location.
-    configPath: CONFIG_PATH,
+    configPath,
     stateDir: STATE_DIR,
     sessionDefaults: {
       defaultAgentId,
@@ -39,6 +42,7 @@ export function buildGatewaySnapshot(): Snapshot {
       scope,
     },
     authMode: auth.mode,
+    updateAvailable,
   };
 }
 

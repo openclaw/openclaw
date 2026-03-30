@@ -13,7 +13,7 @@ export async function setupInternalHooks(
   await prompter.note(
     [
       "Hooks let you automate actions when agent commands are issued.",
-      "Example: Save session context to memory when you issue /new.",
+      "Example: Save session context to memory when you issue /new or /reset.",
       "",
       "Learn more: https://docs.openclaw.ai/automation/hooks",
     ].join("\n"),
@@ -24,8 +24,8 @@ export async function setupInternalHooks(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
-  // Show every eligible hook so users can opt in during onboarding.
-  const eligibleHooks = report.hooks.filter((h) => h.eligible);
+  // Show every eligible hook so users can opt in during setup.
+  const eligibleHooks = report.hooks.filter((h) => h.loadable);
 
   if (eligibleHooks.length === 0) {
     await prompter.note(

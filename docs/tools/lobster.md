@@ -1,7 +1,6 @@
 ---
 title: Lobster
 summary: "Typed workflow runtime for OpenClaw with resumable approval gates."
-description: Typed workflow runtime for OpenClaw — composable pipelines with approval gates.
 read_when:
   - You want deterministic multi-step workflows with explicit approvals
   - You need to resume a workflow without re-running earlier steps
@@ -106,6 +105,7 @@ Use it in a pipeline:
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",
+  "thinking": "low",
   "input": { "subject": "Hello", "body": "Can you help?" },
   "schema": {
     "type": "object",
@@ -154,7 +154,6 @@ Notes:
 ## Install Lobster
 
 Install the Lobster CLI on the **same host** that runs the OpenClaw Gateway (see the [Lobster repo](https://github.com/openclaw/lobster)), and ensure `lobster` is on `PATH`.
-If you want to use a custom binary location, pass an **absolute** `lobsterPath` in the tool call.
 
 ## Enable the tool
 
@@ -256,7 +255,7 @@ Run a pipeline in tool mode.
 {
   "action": "run",
   "pipeline": "gog.gmail.search --query 'newer_than:1d' | email.triage",
-  "cwd": "/path/to/workspace",
+  "cwd": "workspace",
   "timeoutMs": 30000,
   "maxStdoutBytes": 512000
 }
@@ -286,8 +285,7 @@ Continue a halted workflow after approval.
 
 ### Optional inputs
 
-- `lobsterPath`: Absolute path to the Lobster binary (omit to use `PATH`).
-- `cwd`: Working directory for the pipeline (defaults to the current process working directory).
+- `cwd`: Relative working directory for the pipeline (must stay within the current process working directory).
 - `timeoutMs`: Kill the subprocess if it exceeds this duration (default: 20000).
 - `maxStdoutBytes`: Kill the subprocess if stdout exceeds this size (default: 512000).
 - `argsJson`: JSON string passed to `lobster run --args-json` (workflow files only).
@@ -320,7 +318,7 @@ OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent prep,
 - **Local subprocess only** — no network calls from the plugin itself.
 - **No secrets** — Lobster doesn't manage OAuth; it calls OpenClaw tools that do.
 - **Sandbox-aware** — disabled when the tool context is sandboxed.
-- **Hardened** — `lobsterPath` must be absolute if specified; timeouts and output caps enforced.
+- **Hardened** — fixed executable name (`lobster`) on `PATH`; timeouts and output caps enforced.
 
 ## Troubleshooting
 
@@ -332,7 +330,7 @@ OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent prep,
 ## Learn more
 
 - [Plugins](/tools/plugin)
-- [Plugin tool authoring](/plugins/agent-tools)
+- [Plugin tool authoring](/plugins/building-plugins#registering-agent-tools)
 
 ## Case study: community workflows
 

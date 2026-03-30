@@ -1,9 +1,40 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import { sendMessageMatrix } from "../send.js";
+import type { MatrixClient } from "../sdk.js";
+import { chunkMatrixText, sendMessageMatrix } from "../send.js";
+
+const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_BLOCK_RE =
+  /<\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+
+function shouldSuppressReasoningReplyText(text?: string): boolean {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const trimmedStart = text.trimStart();
+  if (!trimmedStart) {
+    return false;
+  }
+  if (trimmedStart.toLowerCase().startsWith("reasoning:")) {
+    return true;
+  }
+  THINKING_TAG_RE.lastIndex = 0;
+  if (!THINKING_TAG_RE.test(text)) {
+    return false;
+  }
+  THINKING_BLOCK_RE.lastIndex = 0;
+  const withoutThinkingBlocks = text.replace(THINKING_BLOCK_RE, "");
+  THINKING_TAG_RE.lastIndex = 0;
+  return !withoutThinkingBlocks.replace(THINKING_TAG_RE, "").trim();
+}
 
 export async function deliverMatrixReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   roomId: string;
   client: MatrixClient;
@@ -12,14 +43,14 @@ export async function deliverMatrixReplies(params: {
   replyToMode: "off" | "first" | "all";
   threadId?: string;
   accountId?: string;
+  mediaLocalRoots?: readonly string[];
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
   const core = getMatrixRuntime();
-  const cfg = core.config.loadConfig();
   const tableMode =
     params.tableMode ??
     core.channel.text.resolveMarkdownTableMode({
-      cfg,
+      cfg: params.cfg,
       channel: "matrix",
       accountId: params.accountId,
     });
@@ -28,10 +59,12 @@ export async function deliverMatrixReplies(params: {
       params.runtime.log?.(message);
     }
   };
-  const chunkLimit = Math.min(params.textLimit, 4000);
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "matrix", params.accountId);
   let hasReplied = false;
   for (const reply of params.replies) {
+    if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
+      logVerbose("matrix reply suppressed as reasoning-only");
+      continue;
+    }
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
@@ -44,7 +77,6 @@ export async function deliverMatrixReplies(params: {
     const replyToIdRaw = reply.replyToId?.trim();
     const replyToId = params.threadId || params.replyToMode === "off" ? undefined : replyToIdRaw;
     const rawText = reply.text ?? "";
-    const text = core.channel.text.convertMarkdownTables(rawText, tableMode);
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
@@ -57,17 +89,19 @@ export async function deliverMatrixReplies(params: {
 
     if (mediaList.length === 0) {
       let sentTextChunk = false;
-      for (const chunk of core.channel.text.chunkMarkdownTextWithMode(
-        text,
-        chunkLimit,
-        chunkMode,
-      )) {
+      const { chunks } = chunkMatrixText(rawText, {
+        cfg: params.cfg,
+        accountId: params.accountId,
+        tableMode,
+      });
+      for (const chunk of chunks) {
         const trimmed = chunk.trim();
         if (!trimmed) {
           continue;
         }
         await sendMessageMatrix(params.roomId, trimmed, {
           client: params.client,
+          cfg: params.cfg,
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
@@ -82,10 +116,12 @@ export async function deliverMatrixReplies(params: {
 
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first ? text : "";
+      const caption = first ? rawText : "";
       await sendMessageMatrix(params.roomId, caption, {
         client: params.client,
+        cfg: params.cfg,
         mediaUrl,
+        mediaLocalRoots: params.mediaLocalRoots,
         replyToId: replyToIdForReply,
         threadId: params.threadId,
         audioAsVoice: reply.audioAsVoice,

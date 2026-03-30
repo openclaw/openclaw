@@ -6,7 +6,7 @@ enum NodeServiceManager {
 
     static func start() async -> String? {
         let result = await self.runServiceCommandResult(
-            ["node", "start"],
+            ["start"],
             timeout: 20,
             quiet: false)
         if let error = self.errorMessage(from: result, treatNotLoadedAsError: true) {
@@ -18,7 +18,7 @@ enum NodeServiceManager {
 
     static func stop() async -> String? {
         let result = await self.runServiceCommandResult(
-            ["node", "stop"],
+            ["stop"],
             timeout: 15,
             quiet: false)
         if let error = self.errorMessage(from: result, treatNotLoadedAsError: false) {
@@ -30,6 +30,14 @@ enum NodeServiceManager {
 }
 
 extension NodeServiceManager {
+    private static func serviceCommand(_ args: [String]) -> [String] {
+        CommandResolver.openclawCommand(
+            subcommand: "node",
+            extraArgs: self.withJsonFlag(args),
+            // Service management must always run locally, even if remote mode is configured.
+            configRoot: ["gateway": ["mode": "local"]])
+    }
+
     private struct CommandResult {
         let success: Bool
         let payload: Data?
@@ -52,11 +60,7 @@ extension NodeServiceManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let command = CommandResolver.openclawCommand(
-            subcommand: "service",
-            extraArgs: self.withJsonFlag(args),
-            // Service management must always run locally, even if remote mode is configured.
-            configRoot: ["gateway": ["mode": "local"]])
+        let command = self.serviceCommand(args)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
@@ -103,15 +107,9 @@ extension NodeServiceManager {
     }
 
     private static func parseServiceJson(from raw: String) -> ParsedServiceJson? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let start = trimmed.firstIndex(of: "{"),
-              let end = trimmed.lastIndex(of: "}")
-        else {
-            return nil
-        }
-        let jsonText = String(trimmed[start...end])
-        guard let data = jsonText.data(using: .utf8) else { return nil }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
+        let jsonText = parsed.text
+        let object = parsed.object
         let ok = object["ok"] as? Bool
         let result = object["result"] as? String
         let message = object["message"] as? String
@@ -139,12 +137,14 @@ extension NodeServiceManager {
     }
 
     private static func summarize(_ text: String) -> String? {
-        let lines = text
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard let last = lines.last else { return nil }
-        let normalized = last.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return normalized.count > 200 ? String(normalized.prefix(199)) + "…" : normalized
+        TextSummarySupport.summarizeLastLine(text)
     }
 }
+
+#if DEBUG
+extension NodeServiceManager {
+    static func _testServiceCommand(_ args: [String]) -> [String] {
+        self.serviceCommand(args)
+    }
+}
+#endif

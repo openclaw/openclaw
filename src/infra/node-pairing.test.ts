@@ -28,6 +28,28 @@ async function setupPairedNode(baseDir: string): Promise<string> {
 }
 
 describe("node pairing tokens", () => {
+  test("reuses existing pending requests for the same node", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const first = await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+      },
+      baseDir,
+    );
+    const second = await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+      },
+      baseDir,
+    );
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.request.requestId).toBe(first.request.requestId);
+  });
+
   test("generates base64url node tokens with 256-bit entropy output length", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
     const token = await setupPairedNode(baseDir);
@@ -55,6 +77,62 @@ describe("node pairing tokens", () => {
 
     await expect(verifyNodeToken("node-1", multibyteToken, baseDir)).resolves.toEqual({
       ok: false,
+    });
+  });
+
+  test("requires operator.admin to approve system.run node commands", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const request = await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+        commands: ["system.run"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toEqual({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
+    await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("requires operator.write to approve non-exec node commands", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const request = await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+        commands: ["canvas.present"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toEqual({
+      status: "forbidden",
+      missingScope: "operator.write",
+    });
+    await expect(
+      approveNodePairing(request.request.requestId, { callerScopes: ["operator.write"] }, baseDir),
+    ).resolves.toEqual({
+      requestId: request.request.requestId,
+      node: expect.objectContaining({
+        nodeId: "node-1",
+        commands: ["canvas.present"],
+      }),
     });
   });
 });

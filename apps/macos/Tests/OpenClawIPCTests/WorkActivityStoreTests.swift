@@ -1,12 +1,11 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-@Suite
 @MainActor
 struct WorkActivityStoreTests {
-    @Test func mainSessionJobPreemptsOther() {
+    @Test func `main session job preempts other`() {
         let store = WorkActivityStore()
 
         store.handleJob(sessionKey: "discord:group:1", state: "started")
@@ -26,7 +25,7 @@ struct WorkActivityStoreTests {
         #expect(store.current == nil)
     }
 
-    @Test func jobStaysWorkingAfterToolResultGrace() async {
+    @Test func `job stays working after tool result grace`() async {
         let store = WorkActivityStore()
 
         store.handleJob(sessionKey: "main", state: "started")
@@ -57,7 +56,7 @@ struct WorkActivityStoreTests {
         #expect(store.iconState == .idle)
     }
 
-    @Test func toolLabelExtractsFirstLineAndShortensHome() {
+    @Test func `tool label extracts first line and shortens home`() {
         let store = WorkActivityStore()
         let home = NSHomeDirectory()
 
@@ -85,7 +84,7 @@ struct WorkActivityStoreTests {
         #expect(store.iconState == .workingMain(.tool(.read)))
     }
 
-    @Test func resolveIconStateHonorsOverrideSelection() {
+    @Test func `resolve icon state honors override selection`() {
         let store = WorkActivityStore()
         store.handleJob(sessionKey: "main", state: "started")
         #expect(store.iconState == .workingMain(.job))

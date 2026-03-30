@@ -92,16 +92,18 @@ You will need to create a new application with a bot, add the bot to your server
 
   </Step>
 
-  <Step title="Step 0: Set your bot token securely (do not send it in chat)">
+  <Step title="Set your bot token securely (do not send it in chat)">
     Your Discord bot token is a secret (like a password). Set it on the machine running OpenClaw before messaging your agent.
 
 ```bash
-openclaw config set channels.discord.token '"YOUR_BOT_TOKEN"' --json
-openclaw config set channels.discord.enabled true --json
+export DISCORD_BOT_TOKEN="YOUR_BOT_TOKEN"
+openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
+openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
+openclaw config set channels.discord.enabled true --strict-json
 openclaw gateway
 ```
 
-    If OpenClaw is already running as a background service, use `openclaw gateway restart` instead.
+    If OpenClaw is already running as a background service, restart it via the OpenClaw Mac app or by stopping and restarting the `openclaw gateway run` process.
 
   </Step>
 
@@ -121,7 +123,11 @@ openclaw gateway
   channels: {
     discord: {
       enabled: true,
-      token: "YOUR_BOT_TOKEN",
+      token: {
+        source: "env",
+        provider: "default",
+        id: "DISCORD_BOT_TOKEN",
+      },
     },
   },
 }
@@ -132,6 +138,8 @@ openclaw gateway
 ```bash
 DISCORD_BOT_TOKEN=...
 ```
+
+        Plaintext `token` values are supported. SecretRef values are also supported for `channels.discord.token` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
 
       </Tab>
     </Tabs>
@@ -166,6 +174,7 @@ openclaw pairing approve discord <CODE>
 
 <Note>
 Token resolution is account-aware. Config token values win over env fallback. `DISCORD_BOT_TOKEN` is only used for the default account.
+For advanced outbound calls (message tool/channel actions), an explicit per-call `token` is used for that call. This applies to send and read/probe-style actions (for example read/search/fetch/thread/pins/permissions). Account policy/retry settings still come from the selected account in the active runtime snapshot.
 </Note>
 
 ## Recommended: Set up a guild workspace
@@ -258,6 +267,29 @@ Now create some channels on your Discord server and start chatting. Your agent c
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
 
+## Forum channels
+
+Discord forum and media channels only accept thread posts. OpenClaw supports two ways to create them:
+
+- Send a message to the forum parent (`channel:<forumId>`) to auto-create a thread. The thread title uses the first non-empty line of your message.
+- Use `openclaw message thread create` to create a thread directly. Do not pass `--message-id` for forum channels.
+
+Example: send to forum parent to create a thread
+
+```bash
+openclaw message send --channel discord --target channel:<forumId> \
+  --message "Topic title\nBody of the post"
+```
+
+Example: create a forum thread explicitly
+
+```bash
+openclaw message thread create --channel discord --target channel:<forumId> \
+  --thread-name "Topic title" --message "Body of the post"
+```
+
+Forum parents do not accept Discord components. If you need components, send to the thread itself (`channel:<threadId>`).
+
 ## Interactive components
 
 OpenClaw supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results are routed back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
@@ -271,6 +303,8 @@ Supported blocks:
 By default, components are single use. Set `components.reusable=true` to allow buttons, selects, and forms to be used multiple times until they expire.
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
+
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 
@@ -351,6 +385,12 @@ Example:
 
     If DM policy is not open, unknown users are blocked (or prompted for pairing in `pairing` mode).
 
+    Multi-account precedence:
+
+    - `channels.discord.accounts.default.allowFrom` applies only to the `default` account.
+    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` is unset.
+    - Named accounts do not inherit `channels.discord.accounts.default.allowFrom`.
+
     DM target format for delivery:
 
     - `user:<id>`
@@ -372,7 +412,9 @@ Example:
     `allowlist` behavior:
 
     - guild must match `channels.discord.guilds` (`id` preferred, slug accepted)
-    - optional sender allowlists: `users` (IDs or names) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - optional sender allowlists: `users` (stable IDs recommended) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - direct name/tag matching is disabled by default; enable `channels.discord.dangerouslyAllowNameMatching: true` only as break-glass compatibility mode
+    - names/tags are supported for `users`, but IDs are safer; `openclaw security audit` warns when name/tag entries are used
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
 
@@ -386,6 +428,7 @@ Example:
       guilds: {
         "123456789012345678": {
           requireMention: true,
+          ignoreOtherMentions: true,
           users: ["987654321098765432"],
           roles: ["123456789012345678"],
           channels: {
@@ -399,7 +442,7 @@ Example:
 }
 ```
 
-    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="open"` (with a warning in logs).
+    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="allowlist"` (with a warning in logs), even if `channels.defaults.groupPolicy` is `open`.
 
   </Tab>
 
@@ -413,6 +456,7 @@ Example:
     - implicit reply-to-bot behavior in supported cases
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
+    `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
 
     Group DMs:
 
@@ -509,6 +553,10 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
 See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
+Default slash command settings:
+
+- `ephemeral: true`
+
 ## Feature details
 
 <AccordionGroup>
@@ -527,6 +575,52 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
     Message IDs are surfaced in context/history so agents can target specific messages.
+
+  </Accordion>
+
+  <Accordion title="Live stream preview">
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives.
+
+    - `channels.discord.streaming` controls preview streaming (`off` | `partial` | `block` | `progress`, default: `off`).
+    - Default stays `off` because Discord preview edits can hit rate limits quickly, especially when multiple bots or gateways share the same account or guild traffic.
+    - `progress` is accepted for cross-channel consistency and maps to `partial` on Discord.
+    - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
+    - `partial` edits a single preview message as tokens arrive.
+    - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
+
+    Example:
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: "partial",
+    },
+  },
+}
+```
+
+    `block` mode chunking defaults (clamped to `channels.discord.textChunkLimit`):
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: "block",
+      draftChunk: {
+        minChars: 200,
+        maxChars: 800,
+        breakPreference: "paragraph",
+      },
+    },
+  },
+}
+```
+
+    Preview streaming is text-only; media replies fall back to normal delivery.
+
+    Note: preview streaming is separate from block streaming. When block streaming is explicitly
+    enabled for Discord, OpenClaw skips the preview stream to avoid double streaming.
 
   </Accordion>
 
@@ -549,6 +643,122 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - thread config inherits parent channel config unless a thread-specific entry exists
 
     Channel topics are injected as **untrusted** context (not as system prompt).
+
+  </Accordion>
+
+  <Accordion title="Thread-bound sessions for subagents">
+    Discord can bind a thread to a session target so follow-up messages in that thread keep routing to the same session (including subagent sessions).
+
+    Commands:
+
+    - `/focus <target>` bind current/new thread to a subagent/session target
+    - `/unfocus` remove current thread binding
+    - `/agents` show active runs and binding state
+    - `/session idle <duration|off>` inspect/update inactivity auto-unfocus for focused bindings
+    - `/session max-age <duration|off>` inspect/update hard max age for focused bindings
+
+    Config:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true,
+      idleHours: 24,
+      maxAgeHours: 0,
+    },
+  },
+  channels: {
+    discord: {
+      threadBindings: {
+        enabled: true,
+        idleHours: 24,
+        maxAgeHours: 0,
+        spawnSubagentSessions: false, // opt-in
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - `session.threadBindings.*` sets global defaults.
+    - `channels.discord.threadBindings.*` overrides Discord behavior.
+    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
+    - `spawnAcpSessions` must be true to auto-create/bind threads for ACP (`/acp spawn ... --thread ...` or `sessions_spawn({ runtime: "acp", thread: true })`).
+    - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
+
+    See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
+
+  </Accordion>
+
+  <Accordion title="Persistent ACP channel bindings">
+    For stable "always-on" ACP workspaces, configure top-level typed ACP bindings targeting Discord conversations.
+
+    Config path:
+
+    - `bindings[]` with `type: "acp"` and `match.channel: "discord"`
+
+    Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "222222222222222222" },
+      },
+      acp: { label: "codex-main" },
+    },
+  ],
+  channels: {
+    discord: {
+      guilds: {
+        "111111111111111111": {
+          channels: {
+            "222222222222222222": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - `/acp spawn codex --bind here` binds the current Discord channel or thread in place and keeps future messages routed to the same ACP session.
+    - That can still mean "start a fresh Codex ACP session", but it does not create a new Discord thread by itself. The existing channel stays the chat surface.
+    - Codex may still run in its own `cwd` or backend workspace on disk. That workspace is runtime state, not a Discord thread.
+    - Thread messages can inherit the parent channel ACP binding.
+    - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place.
+    - Temporary thread bindings still work and can override target resolution while active.
+    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`. It is not required for `/acp spawn ... --bind here` in the current channel.
+
+    See [ACP Agents](/tools/acp-agents) for binding behavior details.
 
   </Accordion>
 
@@ -650,14 +860,14 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     Notes:
 
     - allowlists can use `pk:<memberId>`
-    - member display names are matched by name/slug
+    - member display names are matched by name/slug only when `channels.discord.dangerouslyAllowNameMatching: true`
     - lookups use original message ID and are time-window constrained
     - if lookup fails, proxied messages are treated as bot messages and dropped unless `allowBots=true`
 
   </Accordion>
 
   <Accordion title="Presence configuration">
-    Presence updates are applied only when you set a status or activity field.
+    Presence updates are applied when you set a status or activity field, or when you enable auto presence.
 
     Status only example:
 
@@ -707,6 +917,29 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - 4: Custom (uses the activity text as the status state; emoji is optional)
     - 5: Competing
 
+    Auto presence example (runtime health signal):
+
+```json5
+{
+  channels: {
+    discord: {
+      autoPresence: {
+        enabled: true,
+        intervalMs: 30000,
+        minUpdateIntervalMs: 15000,
+        exhaustedText: "token exhausted",
+      },
+    },
+  },
+}
+```
+
+    Auto presence maps runtime availability to Discord status: healthy => online, degraded or unknown => idle, exhausted or unavailable => dnd. Optional text overrides:
+
+    - `autoPresence.healthyText`
+    - `autoPresence.degradedText`
+    - `autoPresence.exhaustedText` (supports `{reason}` placeholder)
+
   </Accordion>
 
   <Accordion title="Exec approvals in Discord">
@@ -715,13 +948,24 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     Config path:
 
     - `channels.discord.execApprovals.enabled`
-    - `channels.discord.execApprovals.approvers`
+    - `channels.discord.execApprovals.approvers` (optional; falls back to owner IDs inferred from `allowFrom` and explicit DM `defaultTo` when possible)
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only configured approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
+    Discord becomes an approval client when `enabled: true` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's existing owner config (`allowFrom`, legacy `dm.allowFrom`, or explicit DM `defaultTo`).
 
-    If approvals fail with unknown approval IDs, verify approver list and feature enablement.
+    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only resolved approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
+
+    Discord also renders the shared approval buttons used by other chat channels. The native Discord adapter mainly adds approver DM routing and channel fanout.
+
+    Gateway auth for this handler uses the same shared credential resolution contract as other Gateway clients:
+
+    - env-first local auth (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` then `gateway.auth.*`)
+    - in local mode, `gateway.remote.*` can be used as fallback only when `gateway.auth.*` is unset; configured-but-unresolved local SecretRefs fail closed
+    - remote-mode support via `gateway.remote.*` when applicable
+    - URL overrides are override-safe: CLI overrides do not reuse implicit credentials, and env overrides use env credentials only
+
+    Exec approvals expire after 30 minutes by default. If approvals fail with unknown approval IDs, verify approver resolution and feature enablement.
 
     Related docs: [Exec approvals](/tools/exec-approvals)
 
@@ -752,7 +996,7 @@ Default gate behavior:
 
 ## Components v2 UI
 
-OpenClaw uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires Carbon component instances), while legacy `embeds` remain available but are not recommended.
+OpenClaw uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires constructing a component payload via the discord tool), while legacy `embeds` remain available but are not recommended.
 
 - `channels.discord.ui.components.accentColor` sets the accent color used by Discord component containers (hex).
 - Set per account with `channels.discord.accounts.<id>.ui.components.accentColor`.
@@ -773,6 +1017,54 @@ Example:
   },
 }
 ```
+
+## Voice channels
+
+OpenClaw can join Discord voice channels for realtime, continuous conversations. This is separate from voice message attachments.
+
+Requirements:
+
+- Enable native commands (`commands.native` or `channels.discord.commands.native`).
+- Configure `channels.discord.voice`.
+- The bot needs Connect + Speak permissions in the target voice channel.
+
+Use the Discord-only native command `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+
+Auto-join example:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        autoJoin: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
+        tts: {
+          provider: "openai",
+          openai: { voice: "alloy" },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `voice.tts` overrides `messages.tts` for voice playback only.
+- Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
+- Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
+- `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
+- `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
+- OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
+- If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
 
 ## Voice messages
 
@@ -827,6 +1119,51 @@ openclaw logs --follow
 
   </Accordion>
 
+  <Accordion title="Long-running handlers time out or duplicate replies">
+
+    Typical logs:
+
+    - `Listener DiscordMessageListener timed out after 30000ms for event MESSAGE_CREATE`
+    - `Slow listener detected ...`
+    - `discord inbound worker timed out after ...`
+
+    Listener budget knob:
+
+    - single-account: `channels.discord.eventQueue.listenerTimeout`
+    - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
+
+    Worker run timeout knob:
+
+    - single-account: `channels.discord.inboundWorker.runTimeoutMs`
+    - multi-account: `channels.discord.accounts.<accountId>.inboundWorker.runTimeoutMs`
+    - default: `1800000` (30 minutes); set `0` to disable
+
+    Recommended baseline:
+
+```json5
+{
+  channels: {
+    discord: {
+      accounts: {
+        default: {
+          eventQueue: {
+            listenerTimeout: 120000,
+          },
+          inboundWorker: {
+            runTimeoutMs: 1800000,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+    Use `eventQueue.listenerTimeout` for slow listener setup and `inboundWorker.runTimeoutMs`
+    only if you want a separate safety valve for queued agent turns.
+
+  </Accordion>
+
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
@@ -846,6 +1183,19 @@ openclaw logs --follow
     By default bot-authored messages are ignored.
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
+    Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+
+  </Accordion>
+
+  <Accordion title="Voice STT drops with DecryptionFailed(...)">
+
+    - keep OpenClaw current (`openclaw update`) so the Discord voice receive recovery logic is present
+    - confirm `channels.discord.voice.daveEncryption=true` (default)
+    - start from `channels.discord.voice.decryptionFailureTolerance=24` (upstream default) and tune only if needed
+    - watch logs for:
+      - `discord voice: DAVE decrypt failures detected`
+      - `discord voice: repeated decrypt failures; attempting rejoin`
+    - if failures continue after automatic rejoin, collect logs and compare against [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419)
 
   </Accordion>
 </AccordionGroup>
@@ -860,14 +1210,18 @@ High-signal Discord fields:
 
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
-- command: `commands.native`, `commands.useAccessGroups`, `configWrites`
+- command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
+- event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
+- inbound worker: `inboundWorker.runTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
+- streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
+  - `mediaMaxMb` caps outbound Discord uploads (default: `8MB`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`
-- features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
 ## Safety and operations
 

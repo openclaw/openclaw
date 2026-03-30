@@ -7,6 +7,14 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
+function isThinkingOrRedactedBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const rec = block as { type?: unknown };
+  return rec.type === "thinking" || rec.type === "redacted_thinking";
+}
+
 export function isEmptyAssistantMessageContent(
   message: Extract<AgentMessage, { role: "assistant" }>,
 ): boolean {
@@ -54,12 +62,12 @@ export async function sanitizeSessionMessagesImages(
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
   };
+  const shouldSanitizeToolCallIds = options?.sanitizeToolCallIds === true;
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (default max side 1200px).
-  const sanitizedIds =
-    allowNonImageSanitization && options?.sanitizeToolCallIds
-      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
-      : messages;
+  const sanitizedIds = shouldSanitizeToolCallIds
+    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
+    : messages;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
@@ -125,16 +133,20 @@ export async function sanitizeSessionMessagesImages(
           ? content // Keep signatures for Antigravity Claude
           : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
-        const filteredContent = strippedContent.filter((block) => {
-          if (!block || typeof block !== "object") {
-            return true;
-          }
-          const rec = block as { type?: unknown; text?: unknown };
-          if (rec.type !== "text" || typeof rec.text !== "string") {
-            return true;
-          }
-          return rec.text.trim().length > 0;
-        });
+        const filteredContent =
+          options?.preserveSignatures &&
+          strippedContent.some((block) => isThinkingOrRedactedBlock(block))
+            ? strippedContent
+            : strippedContent.filter((block) => {
+                if (!block || typeof block !== "object") {
+                  return true;
+                }
+                const rec = block as { type?: unknown; text?: unknown };
+                if (rec.type !== "text" || typeof rec.text !== "string") {
+                  return true;
+                }
+                return rec.text.trim().length > 0;
+              });
         const finalContent = (await sanitizeContentBlocksImages(
           filteredContent as unknown as ContentBlock[],
           label,

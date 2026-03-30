@@ -3,9 +3,13 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
+import {
+  buildSystemRunApprovalBinding,
+  buildSystemRunApprovalEnvBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
@@ -21,18 +25,36 @@ vi.mock("../../commands/status.js", () => ({
 }));
 
 describe("waitForAgentJob", () => {
-  it("maps lifecycle end events with aborted=true to timeout", async () => {
-    const runId = `run-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  async function runLifecycleScenario(params: {
+    runIdPrefix: string;
+    startedAt: number;
+    endedAt: number;
+    aborted?: boolean;
+  }) {
+    const runId = `${params.runIdPrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
 
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
     emitAgentEvent({
       runId,
       stream: "lifecycle",
-      data: { phase: "end", endedAt: 200, aborted: true },
+      data: { phase: "start", startedAt: params.startedAt },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: params.endedAt, aborted: params.aborted },
     });
 
-    const snapshot = await waitPromise;
+    return waitPromise;
+  }
+
+  it("maps lifecycle end events with aborted=true to timeout", async () => {
+    const snapshot = await runLifecycleScenario({
+      runIdPrefix: "run-timeout",
+      startedAt: 100,
+      endedAt: 200,
+      aborted: true,
+    });
     expect(snapshot).not.toBeNull();
     expect(snapshot?.status).toBe("timeout");
     expect(snapshot?.startedAt).toBe(100);
@@ -40,17 +62,52 @@ describe("waitForAgentJob", () => {
   });
 
   it("keeps non-aborted lifecycle end events as ok", async () => {
-    const runId = `run-ok-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
-
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 300 } });
-    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", endedAt: 400 } });
-
-    const snapshot = await waitPromise;
+    const snapshot = await runLifecycleScenario({
+      runIdPrefix: "run-ok",
+      startedAt: 300,
+      endedAt: 400,
+    });
     expect(snapshot).not.toBeNull();
     expect(snapshot?.status).toBe("ok");
     expect(snapshot?.startedAt).toBe(300);
     expect(snapshot?.endedAt).toBe(400);
+  });
+
+  it("can ignore cached snapshots and wait for fresh lifecycle events", async () => {
+    const runId = `run-ignore-cache-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 110 },
+    });
+
+    const cached = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+    expect(cached?.status).toBe("ok");
+    expect(cached?.startedAt).toBe(100);
+    expect(cached?.endedAt).toBe(110);
+
+    const freshWait = waitForAgentJob({
+      runId,
+      timeoutMs: 1_000,
+      ignoreCachedSnapshot: true,
+    });
+    queueMicrotask(() => {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 200 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 200, endedAt: 210 },
+      });
+    });
+
+    const fresh = await freshWait;
+    expect(fresh?.status).toBe("ok");
+    expect(fresh?.startedAt).toBe(200);
+    expect(fresh?.endedAt).toBe(210);
   });
 });
 
@@ -167,71 +224,107 @@ describe("injectTimestamp", () => {
 });
 
 describe("timestampOptsFromConfig", () => {
-  it("extracts timezone from config", () => {
-    const opts = timestampOptsFromConfig({
-      agents: {
-        defaults: {
-          userTimezone: "America/Chicago",
-        },
-      },
+  it.each([
+    {
+      name: "extracts timezone from config",
       // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-
-    expect(opts.timezone).toBe("America/Chicago");
-  });
-
-  it("falls back gracefully with empty config", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const opts = timestampOptsFromConfig({} as any);
-
-    expect(opts.timezone).toBeDefined();
+      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
+      expected: "America/Chicago",
+    },
+    {
+      name: "falls back gracefully with empty config",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: {} as any,
+      expected: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+  ])("$name", ({ cfg, expected }) => {
+    expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
 });
 
 describe("normalizeRpcAttachmentsToChatAttachments", () => {
-  it("passes through string content", () => {
-    const res = normalizeRpcAttachmentsToChatAttachments([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
-    ]);
-    expect(res).toEqual([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
-    ]);
+  it.each([
+    {
+      name: "passes through string content",
+      attachments: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+      expected: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+    },
+    {
+      name: "converts Uint8Array content to base64",
+      attachments: [{ content: new TextEncoder().encode("foo") }],
+      expected: [{ type: undefined, mimeType: undefined, fileName: undefined, content: "Zm9v" }],
+    },
+    {
+      name: "converts ArrayBuffer content to base64",
+      attachments: [{ content: new TextEncoder().encode("bar").buffer }],
+      expected: [{ type: undefined, mimeType: undefined, fileName: undefined, content: "YmFy" }],
+    },
+    {
+      name: "drops attachments without usable content",
+      attachments: [{ content: undefined }, { mimeType: "image/png" }],
+      expected: [],
+    },
+  ])("$name", ({ attachments, expected }) => {
+    expect(normalizeRpcAttachmentsToChatAttachments(attachments)).toEqual(expected);
   });
 
-  it("converts Uint8Array content to base64", () => {
-    const bytes = new TextEncoder().encode("foo");
-    const res = normalizeRpcAttachmentsToChatAttachments([{ content: bytes }]);
-    expect(res[0]?.content).toBe("Zm9v");
+  it("accepts dashboard image attachments with nested base64 source", () => {
+    const res = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "Zm9v",
+        },
+      },
+    ]);
+    expect(res).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: undefined,
+        content: "Zm9v",
+      },
+    ]);
   });
 });
 
 describe("sanitizeChatSendMessageInput", () => {
-  it("rejects null bytes", () => {
-    expect(sanitizeChatSendMessageInput("before\u0000after")).toEqual({
-      ok: false,
-      error: "message must not contain null bytes",
-    });
-  });
-
-  it("strips unsafe control characters while preserving tab/newline/carriage return", () => {
-    const result = sanitizeChatSendMessageInput("a\u0001b\tc\nd\re\u0007f\u007f");
-    expect(result).toEqual({ ok: true, message: "ab\tc\nd\ref" });
-  });
-
-  it("normalizes unicode to NFC", () => {
-    expect(sanitizeChatSendMessageInput("Cafe\u0301")).toEqual({ ok: true, message: "Café" });
+  it.each([
+    {
+      name: "rejects null bytes",
+      input: "before\u0000after",
+      expected: { ok: false as const, error: "message must not contain null bytes" },
+    },
+    {
+      name: "strips unsafe control characters while preserving tab/newline/carriage return",
+      input: "a\u0001b\tc\nd\re\u0007f\u007f",
+      expected: { ok: true as const, message: "ab\tc\nd\ref" },
+    },
+    {
+      name: "normalizes unicode to NFC",
+      input: "Cafe\u0301",
+      expected: { ok: true as const, message: "Café" },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
   });
 });
 
 describe("gateway chat transcript writes (guardrail)", () => {
-  it("does not append transcript messages via raw fs.appendFileSync(transcriptPath, ...)", () => {
+  it("routes transcript writes through helper and SessionManager parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
-    const src = fs.readFileSync(chatTs, "utf-8");
+    const chatSrc = fs.readFileSync(chatTs, "utf-8");
+    const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
+    const helperSrc = fs.readFileSync(helperTs, "utf-8");
 
-    expect(src.includes("fs.appendFileSync(transcriptPath")).toBe(false);
+    expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
+    expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(src).toContain("SessionManager.open(transcriptPath)");
-    expect(src).toContain("appendMessage(");
+    expect(helperSrc.includes("fs.appendFileSync(params.transcriptPath")).toBe(false);
+    expect(helperSrc).toContain("SessionManager.open(params.transcriptPath)");
+    expect(helperSrc).toContain("appendMessage(messageBody)");
   });
 });
 
@@ -243,13 +336,23 @@ describe("exec approval handlers", () => {
 
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
+    commandArgv: ["echo", "ok"],
+    systemRunPlan: {
+      argv: ["/usr/bin/echo", "ok"],
+      cwd: "/tmp",
+      commandText: "/usr/bin/echo ok",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    },
     cwd: "/tmp",
+    nodeId: "node-1",
     host: "node",
     timeoutMs: 2000,
   } as const;
 
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
+    hasExecApprovalClients?: () => boolean;
   }): ExecApprovalRequestArgs["context"] {
     return context as unknown as ExecApprovalRequestArgs["context"];
   }
@@ -270,10 +373,44 @@ describe("exec approval handlers", () => {
       ...defaultExecApprovalRequestParams,
       ...params.params,
     } as unknown as ExecApprovalRequestArgs["params"];
+    const hasExplicitPlan = !!params.params && Object.hasOwn(params.params, "systemRunPlan");
+    if (
+      !hasExplicitPlan &&
+      (requestParams as { host?: string }).host === "node" &&
+      Array.isArray((requestParams as { commandArgv?: unknown }).commandArgv)
+    ) {
+      const commandArgv = (requestParams as { commandArgv: unknown[] }).commandArgv.map((entry) =>
+        String(entry),
+      );
+      const cwdValue =
+        typeof (requestParams as { cwd?: unknown }).cwd === "string"
+          ? ((requestParams as { cwd: string }).cwd ?? null)
+          : null;
+      const commandText =
+        typeof (requestParams as { command?: unknown }).command === "string"
+          ? ((requestParams as { command: string }).command ?? null)
+          : null;
+      requestParams.systemRunPlan = {
+        argv: commandArgv,
+        cwd: cwdValue,
+        commandText: commandText ?? commandArgv.join(" "),
+        agentId:
+          typeof (requestParams as { agentId?: unknown }).agentId === "string"
+            ? ((requestParams as { agentId: string }).agentId ?? null)
+            : null,
+        sessionKey:
+          typeof (requestParams as { sessionKey?: unknown }).sessionKey === "string"
+            ? ((requestParams as { sessionKey: string }).sessionKey ?? null)
+            : null,
+      };
+    }
     return params.handlers["exec.approval.request"]({
       params: requestParams,
       respond: params.respond as unknown as ExecApprovalRequestArgs["respond"],
-      context: toExecApprovalRequestContext(params.context),
+      context: toExecApprovalRequestContext({
+        hasExecApprovalClients: () => true,
+        ...params.context,
+      }),
       client: null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
@@ -305,49 +442,88 @@ describe("exec approval handlers", () => {
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
       },
+      hasExecApprovalClients: () => true,
     };
     return { handlers, broadcasts, respond, context };
   }
 
+  function createForwardingExecApprovalFixture() {
+    const manager = new ExecApprovalManager();
+    const forwarder = {
+      handleRequested: vi.fn(async () => false),
+      handleResolved: vi.fn(async () => {}),
+      stop: vi.fn(),
+    };
+    const handlers = createExecApprovalHandlers(manager, { forwarder });
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+      hasExecApprovalClients: () => false,
+    };
+    return { manager, handlers, forwarder, respond, context };
+  }
+
+  async function drainApprovalRequestTicks() {
+    for (let idx = 0; idx < 20; idx += 1) {
+      await Promise.resolve();
+    }
+  }
+
   describe("ExecApprovalRequestParams validation", () => {
-    it("accepts request with resolvedPath omitted", () => {
-      const params = {
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "node",
-      };
-      expect(validateExecApprovalRequestParams(params)).toBe(true);
-    });
+    const baseParams = {
+      command: "echo hi",
+      cwd: "/tmp",
+      nodeId: "node-1",
+      host: "node",
+    };
 
-    it("accepts request with resolvedPath as string", () => {
-      const params = {
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "node",
-        resolvedPath: "/usr/bin/echo",
-      };
+    it.each([
+      { label: "omitted", extra: {} },
+      { label: "string", extra: { resolvedPath: "/usr/bin/echo" } },
+      { label: "undefined", extra: { resolvedPath: undefined } },
+      { label: "null", extra: { resolvedPath: null } },
+    ])("accepts request with resolvedPath $label", ({ extra }) => {
+      const params = { ...baseParams, ...extra };
       expect(validateExecApprovalRequestParams(params)).toBe(true);
     });
+  });
 
-    it("accepts request with resolvedPath as undefined", () => {
-      const params = {
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "node",
-        resolvedPath: undefined,
-      };
-      expect(validateExecApprovalRequestParams(params)).toBe(true);
+  it("rejects host=node approval requests without nodeId", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        nodeId: undefined,
+      },
     });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "nodeId is required for host=node",
+      }),
+    );
+  });
 
-    it("accepts request with resolvedPath as null", () => {
-      const params = {
-        command: "echo hi",
-        cwd: "/tmp",
-        host: "node",
-        resolvedPath: null,
-      };
-      expect(validateExecApprovalRequestParams(params)).toBe(true);
+  it("rejects host=node approval requests without systemRunPlan", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        systemRunPlan: undefined,
+      },
     });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "systemRunPlan is required for host=node",
+      }),
+    );
   });
 
   it("broadcasts request + resolve", async () => {
@@ -388,6 +564,169 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+  });
+
+  it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
+    const manager = new ExecApprovalManager();
+    const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");
+    void manager.register(resolvedRecord, 2_000);
+    expect(manager.resolve("abc", "allow-once")).toBe(true);
+
+    const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
+    void manager.register(pendingRecord, 2_000);
+
+    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+  });
+
+  it("stores versioned system.run binding and sorted env keys on approval request", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        commandArgv: ["echo", "ok"],
+        env: {
+          Z_VAR: "z",
+          A_VAR: "a",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["envKeys"]).toEqual(["A_VAR", "Z_VAR"]);
+    expect(request["systemRunBinding"]).toEqual(
+      buildSystemRunApprovalBinding({
+        argv: ["echo", "ok"],
+        cwd: "/tmp",
+        env: { A_VAR: "a", Z_VAR: "z" },
+      }).binding,
+    );
+  });
+
+  it("stores sorted env keys for gateway approvals without node-only binding", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        env: {
+          Z_VAR: "z",
+          A_VAR: "a",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["envKeys"]).toEqual(
+      buildSystemRunApprovalEnvBinding({ A_VAR: "a", Z_VAR: "z" }).envKeys,
+    );
+    expect(request["systemRunBinding"]).toBeNull();
+  });
+
+  it("prefers systemRunPlan canonical command/cwd when present", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "echo stale",
+        commandArgv: ["echo", "stale"],
+        cwd: "/tmp/link/sub",
+        systemRunPlan: {
+          argv: ["/usr/bin/echo", "ok"],
+          cwd: "/real/cwd",
+          commandText: "/usr/bin/echo ok",
+          commandPreview: "echo ok",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe("/usr/bin/echo ok");
+    expect(request["commandPreview"]).toBeUndefined();
+    expect(request["commandArgv"]).toBeUndefined();
+    expect(request["cwd"]).toBe("/real/cwd");
+    expect(request["agentId"]).toBe("main");
+    expect(request["sessionKey"]).toBe("agent:main:main");
+    expect(request["systemRunPlan"]).toEqual({
+      argv: ["/usr/bin/echo", "ok"],
+      cwd: "/real/cwd",
+      commandText: "/usr/bin/echo ok",
+      commandPreview: "echo ok",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("derives a command preview from the fallback command for older node plans", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "jq --version",
+        commandArgv: ["./env", "sh", "-c", "jq --version"],
+        systemRunPlan: {
+          argv: ["./env", "sh", "-c", "jq --version"],
+          cwd: "/real/cwd",
+          commandText: './env sh -c "jq --version"',
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe('./env sh -c "jq --version"');
+    expect(request["commandPreview"]).toBeUndefined();
+    expect((request["systemRunPlan"] as { commandPreview?: string }).commandPreview).toBe(
+      "jq --version",
+    );
+  });
+
+  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "bash safe\u200B.sh",
+        commandArgv: ["bash", "safe\u200B.sh"],
+        systemRunPlan: {
+          argv: ["bash", "safe\u200B.sh"],
+          cwd: "/real/cwd",
+          commandText: "bash safe\u200B.sh",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe("bash safe\\u{200B}.sh");
+    expect((request["systemRunPlan"] as { commandText?: string }).commandText).toBe(
+      "bash safe\u200B.sh",
+    );
   });
 
   it("accepts resolve during broadcast", async () => {
@@ -459,18 +798,284 @@ describe("exec approval handlers", () => {
     );
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
+
+  it("accepts unique short approval id prefixes", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
+    void manager.register(record, 60_000);
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-1234",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+  });
+
+  it("rejects ambiguous short approval id prefixes", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+
+    void manager.register(
+      manager.create({ command: "echo one" }, 60_000, "approval-abcd-1111"),
+      60_000,
+    );
+    void manager.register(
+      manager.create({ command: "echo two" }, 60_000, "approval-abcd-2222"),
+      60_000,
+    );
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-abcd",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("ambiguous approval id prefix"),
+      }),
+    );
+  });
+
+  it("returns deterministic unknown/expired message for missing approval ids", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+
+    await resolveExecApproval({
+      handlers,
+      id: "missing-approval-id",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
+      }),
+    );
+  });
+
+  it("resolves only the targeted approval id when multiple requests are pending", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+      hasExecApprovalClients: () => true,
+    };
+    const respondOne = vi.fn();
+    const respondTwo = vi.fn();
+
+    const requestOne = requestExecApproval({
+      handlers,
+      respond: respondOne,
+      context,
+      params: { id: "approval-one", host: "gateway", timeoutMs: 60_000 },
+    });
+    const requestTwo = requestExecApproval({
+      handlers,
+      respond: respondTwo,
+      context,
+      params: { id: "approval-two", host: "gateway", timeoutMs: 60_000 },
+    });
+
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-one",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-one")?.decision).toBe("allow-once");
+    expect(manager.getSnapshot("approval-two")?.decision).toBeUndefined();
+    expect(manager.getSnapshot("approval-two")?.resolvedAtMs).toBeUndefined();
+
+    expect(manager.expire("approval-two", "test-expire")).toBe(true);
+    await requestOne;
+    await requestTwo;
+
+    expect(respondOne).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-one", decision: "allow-once" }),
+      undefined,
+    );
+    expect(respondTwo).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-two", decision: null }),
+      undefined,
+    );
+  });
+
+  it("forwards turn-source metadata to exec approval forwarding", async () => {
+    vi.useFakeTimers();
+    try {
+      const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          timeoutMs: 60_000,
+          turnSourceChannel: "whatsapp",
+          turnSourceTo: "+15555550123",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "1739201675.123",
+        },
+      });
+      await drainApprovalRequestTicks();
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(forwarder.handleRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            turnSourceChannel: "whatsapp",
+            turnSourceTo: "+15555550123",
+            turnSourceAccountId: "work",
+            turnSourceThreadId: "1739201675.123",
+          }),
+        }),
+      );
+
+      await vi.runOnlyPendingTimersAsync();
+      await requestPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
+    const { manager, handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture();
+    const expireSpy = vi.spyOn(manager, "expire");
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
+    });
+
+    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-no-approver", "no-approval-route");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-no-approver", decision: null }),
+      undefined,
+    );
+  });
+
+  it("keeps approvals pending when the originating chat can handle /approve directly", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
+      const expireSpy = vi.spyOn(manager, "expire");
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          twoPhase: true,
+          timeoutMs: 60_000,
+          id: "approval-chat-route",
+          host: "gateway",
+          turnSourceChannel: "slack",
+          turnSourceTo: "D123",
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: "approval-chat-route" }),
+          undefined,
+        );
+      });
+
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).not.toHaveBeenCalled();
+
+      manager.resolve("approval-chat-route", "allow-once");
+      await requestPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {
+    const { manager, handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture();
+    const expireSpy = vi.spyOn(manager, "expire");
+    const resolveRespond = vi.fn();
+    forwarder.handleRequested.mockResolvedValueOnce(true);
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
+    });
+    await drainApprovalRequestTicks();
+
+    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).not.toHaveBeenCalled();
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-forwarded",
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-forwarded", decision: "allow-once" }),
+      undefined,
+    );
+  });
 });
 
 describe("gateway healthHandlers.status scope handling", () => {
-  beforeEach(async () => {
-    const status = await import("../../commands/status.js");
-    vi.mocked(status.getStatusSummary).mockClear();
+  let statusModule: typeof import("../../commands/status.js");
+  let healthHandlers: typeof import("./health.js").healthHandlers;
+
+  beforeAll(async () => {
+    statusModule = await import("../../commands/status.js");
+    ({ healthHandlers } = await import("./health.js"));
+  });
+
+  beforeEach(() => {
+    vi.mocked(statusModule.getStatusSummary).mockClear();
   });
 
   async function runHealthStatus(scopes: string[]) {
     const respond = vi.fn();
-    const status = await import("../../commands/status.js");
-    const { healthHandlers } = await import("./health.js");
 
     await healthHandlers.status({
       req: {} as never,
@@ -481,22 +1086,21 @@ describe("gateway healthHandlers.status scope handling", () => {
       isWebchatConnect: () => false,
     });
 
-    return { respond, status };
+    return respond;
   }
 
-  it("requests redacted status for non-admin clients", async () => {
-    const { respond, status } = await runHealthStatus(["operator.read"]);
+  it.each([
+    { scopes: ["operator.read"], includeSensitive: false },
+    { scopes: ["operator.admin"], includeSensitive: true },
+  ])(
+    "requests includeSensitive=$includeSensitive for scopes $scopes",
+    async ({ scopes, includeSensitive }) => {
+      const respond = await runHealthStatus(scopes);
 
-    expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: false });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
-
-  it("requests full status for admin clients", async () => {
-    const { respond, status } = await runHealthStatus(["operator.admin"]);
-
-    expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: true });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
+      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    },
+  );
 });
 
 describe("logs.tail", () => {

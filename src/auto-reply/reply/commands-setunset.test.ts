@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 import {
   parseSetUnsetCommand,
   parseSetUnsetCommandAction,
@@ -9,6 +10,28 @@ type ParsedSetUnsetAction =
   | { action: "set"; path: string; value: unknown }
   | { action: "unset"; path: string }
   | { action: "error"; message: string };
+
+function createActionMappers() {
+  return {
+    onSet: (path: string, value: unknown): ParsedSetUnsetAction => ({ action: "set", path, value }),
+    onUnset: (path: string): ParsedSetUnsetAction => ({ action: "unset", path }),
+    onError: (message: string): ParsedSetUnsetAction => ({ action: "error", message }),
+  };
+}
+
+function createSlashParams(params: {
+  raw: string;
+  onKnownAction?: (action: string) => ParsedSetUnsetAction | undefined;
+}) {
+  return {
+    raw: params.raw,
+    slash: "/config",
+    invalidMessage: "Invalid /config syntax.",
+    usageMessage: "Usage: /config show|set|unset",
+    onKnownAction: params.onKnownAction ?? (() => undefined),
+    ...createActionMappers(),
+  };
+}
 
 describe("parseSetUnsetCommand", () => {
   it("parses unset values", () => {
@@ -34,25 +57,23 @@ describe("parseSetUnsetCommand", () => {
 
 describe("parseSetUnsetCommandAction", () => {
   it("returns null for non set/unset actions", () => {
+    const mappers = createActionMappers();
     const result = parseSetUnsetCommandAction<ParsedSetUnsetAction>({
       slash: "/config",
       action: "show",
       args: "",
-      onSet: (path, value) => ({ action: "set", path, value }),
-      onUnset: (path) => ({ action: "unset", path }),
-      onError: (message) => ({ action: "error", message }),
+      ...mappers,
     });
     expect(result).toBeNull();
   });
 
   it("maps parse errors through onError", () => {
+    const mappers = createActionMappers();
     const result = parseSetUnsetCommandAction<ParsedSetUnsetAction>({
       slash: "/config",
       action: "set",
       args: "",
-      onSet: (path, value) => ({ action: "set", path, value }),
-      onUnset: (path) => ({ action: "unset", path }),
-      onError: (message) => ({ action: "error", message }),
+      ...mappers,
     });
     expect(result).toEqual({ action: "error", message: "Usage: /config set path=value" });
   });
@@ -60,57 +81,61 @@ describe("parseSetUnsetCommandAction", () => {
 
 describe("parseSlashCommandWithSetUnset", () => {
   it("returns null when the input does not match the slash command", () => {
-    const result = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
-      raw: "/debug show",
-      slash: "/config",
-      invalidMessage: "Invalid /config syntax.",
-      usageMessage: "Usage: /config show|set|unset",
-      onKnownAction: () => undefined,
-      onSet: (path, value) => ({ action: "set", path, value }),
-      onUnset: (path) => ({ action: "unset", path }),
-      onError: (message) => ({ action: "error", message }),
-    });
+    const result = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({ raw: "/debug show" }),
+    );
     expect(result).toBeNull();
   });
 
   it("prefers set/unset mapping and falls back to known actions", () => {
-    const setResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
+    const setResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({
+        raw: '/config set a.b={"ok":true}',
+      }),
+    );
+    expect(setResult).toEqual({ action: "set", path: "a.b", value: { ok: true } });
+
+    const showResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({
+        raw: "/config show",
+        onKnownAction: (action) =>
+          action === "show" ? { action: "unset", path: "dummy" } : undefined,
+      }),
+    );
+    expect(showResult).toEqual({ action: "unset", path: "dummy" });
+  });
+
+  it("returns onError for unknown actions", () => {
+    const unknownAction = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({
+        raw: "/config whoami",
+      }),
+    );
+    expect(unknownAction).toEqual({ action: "error", message: "Usage: /config show|set|unset" });
+  });
+});
+
+describe("parseStandardSetUnsetSlashCommand", () => {
+  it("uses default set/unset/error mappings", () => {
+    const result = parseStandardSetUnsetSlashCommand<ParsedSetUnsetAction>({
       raw: '/config set a.b={"ok":true}',
       slash: "/config",
       invalidMessage: "Invalid /config syntax.",
       usageMessage: "Usage: /config show|set|unset",
       onKnownAction: () => undefined,
-      onSet: (path, value) => ({ action: "set", path, value }),
-      onUnset: (path) => ({ action: "unset", path }),
-      onError: (message) => ({ action: "error", message }),
     });
-    expect(setResult).toEqual({ action: "set", path: "a.b", value: { ok: true } });
-
-    const showResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
-      raw: "/config show",
-      slash: "/config",
-      invalidMessage: "Invalid /config syntax.",
-      usageMessage: "Usage: /config show|set|unset",
-      onKnownAction: (action) =>
-        action === "show" ? { action: "unset", path: "dummy" } : undefined,
-      onSet: (path, value) => ({ action: "set", path, value }),
-      onUnset: (path) => ({ action: "unset", path }),
-      onError: (message) => ({ action: "error", message }),
-    });
-    expect(showResult).toEqual({ action: "unset", path: "dummy" });
+    expect(result).toEqual({ action: "set", path: "a.b", value: { ok: true } });
   });
 
-  it("returns onError for unknown actions", () => {
-    const unknownAction = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>({
-      raw: "/config whoami",
+  it("supports caller-provided mappings", () => {
+    const result = parseStandardSetUnsetSlashCommand<ParsedSetUnsetAction>({
+      raw: "/config unset a.b",
       slash: "/config",
       invalidMessage: "Invalid /config syntax.",
       usageMessage: "Usage: /config show|set|unset",
       onKnownAction: () => undefined,
-      onSet: (path, value) => ({ action: "set", path, value }),
-      onUnset: (path) => ({ action: "unset", path }),
-      onError: (message) => ({ action: "error", message }),
+      onUnset: (path) => ({ action: "unset", path: `wrapped:${path}` }),
     });
-    expect(unknownAction).toEqual({ action: "error", message: "Usage: /config show|set|unset" });
+    expect(result).toEqual({ action: "unset", path: "wrapped:a.b" });
   });
 });

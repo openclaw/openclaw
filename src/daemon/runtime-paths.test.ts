@@ -12,6 +12,7 @@ vi.mock("node:fs/promises", () => ({
 import {
   renderSystemNodeWarning,
   resolvePreferredNodePath,
+  resolveStableNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
 
@@ -19,17 +20,21 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function mockNodePathPresent(...nodePaths: string[]) {
+  fsMocks.access.mockImplementation(async (target: string) => {
+    if (nodePaths.includes(target)) {
+      return;
+    }
+    throw new Error("missing");
+  });
+}
+
 describe("resolvePreferredNodePath", () => {
   const darwinNode = "/opt/homebrew/bin/node";
   const fnmNode = "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
 
   it("prefers execPath (version manager node) over system node", async () => {
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) {
-        return;
-      }
-      throw new Error("missing");
-    });
+    mockNodePathPresent(darwinNode);
 
     const execFile = vi.fn().mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
 
@@ -46,17 +51,12 @@ describe("resolvePreferredNodePath", () => {
   });
 
   it("falls back to system node when execPath version is unsupported", async () => {
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) {
-        return;
-      }
-      throw new Error("missing");
-    });
+    mockNodePathPresent(darwinNode);
 
     const execFile = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "18.0.0\n", stderr: "" }) // execPath too old
-      .mockResolvedValueOnce({ stdout: "22.12.0\n", stderr: "" }); // system node ok
+      .mockResolvedValueOnce({ stdout: "22.14.0\n", stderr: "" }); // system node ok
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -71,14 +71,9 @@ describe("resolvePreferredNodePath", () => {
   });
 
   it("ignores execPath when it is not node", async () => {
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) {
-        return;
-      }
-      throw new Error("missing");
-    });
+    mockNodePathPresent(darwinNode);
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.14.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -96,15 +91,10 @@ describe("resolvePreferredNodePath", () => {
   });
 
   it("uses system node when it meets the minimum version", async () => {
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) {
-        return;
-      }
-      throw new Error("missing");
-    });
+    mockNodePathPresent(darwinNode);
 
-    // Node 22.12.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    // Node 22.14.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.14.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -119,15 +109,10 @@ describe("resolvePreferredNodePath", () => {
   });
 
   it("skips system node when it is too old", async () => {
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) {
-        return;
-      }
-      throw new Error("missing");
-    });
+    mockNodePathPresent(darwinNode);
 
-    // Node 22.11.x is below minimum 22.12.0
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.11.0\n", stderr: "" });
+    // Node 22.13.x is below minimum 22.14.0
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.13.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -158,19 +143,83 @@ describe("resolvePreferredNodePath", () => {
   });
 });
 
+describe("resolveStableNodePath", () => {
+  it("resolves Homebrew Cellar path to opt symlink", async () => {
+    mockNodePathPresent("/opt/homebrew/opt/node/bin/node");
+
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/opt/homebrew/opt/node/bin/node");
+  });
+
+  it("falls back to bin symlink for default node formula", async () => {
+    mockNodePathPresent("/opt/homebrew/bin/node");
+
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/opt/homebrew/bin/node");
+  });
+
+  it("resolves Intel Mac Cellar path to opt symlink", async () => {
+    mockNodePathPresent("/usr/local/opt/node/bin/node");
+
+    const result = await resolveStableNodePath("/usr/local/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/usr/local/opt/node/bin/node");
+  });
+
+  it("resolves versioned node@22 formula to opt symlink", async () => {
+    mockNodePathPresent("/opt/homebrew/opt/node@22/bin/node");
+
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node@22/22.14.0/bin/node");
+    expect(result).toBe("/opt/homebrew/opt/node@22/bin/node");
+  });
+
+  it("returns original path when no stable symlink exists", async () => {
+    fsMocks.access.mockRejectedValue(new Error("missing"));
+
+    const cellarPath = "/opt/homebrew/Cellar/node/25.7.0/bin/node";
+    const result = await resolveStableNodePath(cellarPath);
+    expect(result).toBe(cellarPath);
+  });
+
+  it("returns non-Cellar paths unchanged", async () => {
+    const fnmPath = "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
+    const result = await resolveStableNodePath(fnmPath);
+    expect(result).toBe(fnmPath);
+  });
+
+  it("returns system paths unchanged", async () => {
+    const result = await resolveStableNodePath("/opt/homebrew/bin/node");
+    expect(result).toBe("/opt/homebrew/bin/node");
+  });
+});
+
+describe("resolvePreferredNodePath — Homebrew Cellar", () => {
+  it("resolves Cellar execPath to stable Homebrew symlink", async () => {
+    const cellarNode = "/opt/homebrew/Cellar/node/25.7.0/bin/node";
+    const stableNode = "/opt/homebrew/opt/node/bin/node";
+    mockNodePathPresent(stableNode);
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "25.7.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: {},
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: cellarNode,
+    });
+
+    expect(result).toBe(stableNode);
+  });
+});
+
 describe("resolveSystemNodeInfo", () => {
   const darwinNode = "/opt/homebrew/bin/node";
 
   it("returns supported info when version is new enough", async () => {
-    fsMocks.access.mockImplementation(async (target: string) => {
-      if (target === darwinNode) {
-        return;
-      }
-      throw new Error("missing");
-    });
+    mockNodePathPresent(darwinNode);
 
-    // Node 22.12.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    // Node 22.14.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.14.0\n", stderr: "" });
 
     const result = await resolveSystemNodeInfo({
       env: {},
@@ -180,9 +229,16 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: darwinNode,
-      version: "22.12.0",
+      version: "22.14.0",
       supported: true,
     });
+  });
+
+  it("returns undefined when system node is missing", async () => {
+    fsMocks.access.mockRejectedValue(new Error("missing"));
+    const execFile = vi.fn();
+    const result = await resolveSystemNodeInfo({ env: {}, platform: "darwin", execFile });
+    expect(result).toBeNull();
   });
 
   it("renders a warning when system node is too old", () => {
@@ -195,7 +251,43 @@ describe("resolveSystemNodeInfo", () => {
       "/Users/me/.fnm/node-22/bin/node",
     );
 
-    expect(warning).toContain("below the required Node 22+");
+    expect(warning).toContain("below the required Node 22.14+");
     expect(warning).toContain(darwinNode);
+  });
+
+  it("uses validated custom Program Files roots on Windows", async () => {
+    const customNode = "D:\\Programs\\nodejs\\node.exe";
+    mockNodePathPresent(customNode);
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
+    const result = await resolveSystemNodeInfo({
+      env: {
+        ProgramFiles: "D:\\Programs",
+        "ProgramFiles(x86)": "E:\\Programs (x86)",
+      },
+      platform: "win32",
+      execFile,
+    });
+
+    expect(result?.path).toBe(customNode);
+  });
+
+  it("prefers ProgramW6432 over ProgramFiles on Windows", async () => {
+    const preferredNode = "D:\\Programs\\nodejs\\node.exe";
+    const x86Node = "E:\\Programs (x86)\\nodejs\\node.exe";
+    mockNodePathPresent(preferredNode, x86Node);
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
+    const result = await resolveSystemNodeInfo({
+      env: {
+        ProgramFiles: "E:\\Programs (x86)",
+        "ProgramFiles(x86)": "E:\\Programs (x86)",
+        ProgramW6432: "D:\\Programs",
+      },
+      platform: "win32",
+      execFile,
+    });
+
+    expect(result?.path).toBe(preferredNode);
   });
 });

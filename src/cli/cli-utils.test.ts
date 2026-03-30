@@ -19,9 +19,11 @@ describe("waitForever", () => {
 });
 
 describe("shouldSkipRespawnForArgv", () => {
-  it("skips respawn for help/version calls", () => {
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "--help"])).toBe(true);
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "-V"])).toBe(true);
+  it.each([
+    { argv: ["node", "openclaw", "--help"] },
+    { argv: ["node", "openclaw", "-V"] },
+  ] as const)("skips respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
   });
 
   it("keeps respawn path for normal commands", () => {
@@ -61,50 +63,41 @@ describe("dns cli", () => {
 });
 
 describe("parseByteSize", () => {
-  it("parses bytes with units", () => {
-    expect(parseByteSize("10kb")).toBe(10 * 1024);
-    expect(parseByteSize("1mb")).toBe(1024 * 1024);
-    expect(parseByteSize("2gb")).toBe(2 * 1024 * 1024 * 1024);
-  });
-
-  it("parses shorthand units", () => {
-    expect(parseByteSize("5k")).toBe(5 * 1024);
-    expect(parseByteSize("1m")).toBe(1024 * 1024);
+  it.each([
+    ["parses 10kb", "10kb", 10 * 1024],
+    ["parses 1mb", "1mb", 1024 * 1024],
+    ["parses 2gb", "2gb", 2 * 1024 * 1024 * 1024],
+    ["parses shorthand 5k", "5k", 5 * 1024],
+    ["parses shorthand 1m", "1m", 1024 * 1024],
+  ] as const)("%s", (_name, input, expected) => {
+    expect(parseByteSize(input)).toBe(expected);
   });
 
   it("uses default unit when omitted", () => {
     expect(parseByteSize("123")).toBe(123);
   });
 
-  it("rejects invalid values", () => {
-    expect(() => parseByteSize("")).toThrow();
-    expect(() => parseByteSize("nope")).toThrow();
-    expect(() => parseByteSize("-5kb")).toThrow();
+  it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
+    expect(() => parseByteSize(input)).toThrow();
   });
 });
 
 describe("parseDurationMs", () => {
-  it("parses bare ms", () => {
-    expect(parseDurationMs("10000")).toBe(10_000);
+  it.each([
+    ["parses bare ms", "10000", 10_000],
+    ["parses seconds suffix", "10s", 10_000],
+    ["parses minutes suffix", "1m", 60_000],
+    ["parses hours suffix", "2h", 7_200_000],
+    ["parses days suffix", "2d", 172_800_000],
+    ["supports decimals", "0.5s", 500],
+    ["parses composite hours+minutes", "1h30m", 5_400_000],
+    ["parses composite with milliseconds", "2m500ms", 120_500],
+  ] as const)("%s", (_name, input, expected) => {
+    expect(parseDurationMs(input)).toBe(expected);
   });
 
-  it("parses seconds suffix", () => {
-    expect(parseDurationMs("10s")).toBe(10_000);
-  });
-
-  it("parses minutes suffix", () => {
-    expect(parseDurationMs("1m")).toBe(60_000);
-  });
-
-  it("parses hours suffix", () => {
-    expect(parseDurationMs("2h")).toBe(7_200_000);
-  });
-
-  it("parses days suffix", () => {
-    expect(parseDurationMs("2d")).toBe(172_800_000);
-  });
-
-  it("supports decimals", () => {
-    expect(parseDurationMs("0.5s")).toBe(500);
+  it("rejects invalid composite strings", () => {
+    expect(() => parseDurationMs("1h30")).toThrow();
+    expect(() => parseDurationMs("1h-30m")).toThrow();
   });
 });

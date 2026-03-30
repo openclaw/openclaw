@@ -1,15 +1,24 @@
+import { isValueToken } from "../../infra/cli-root-options.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getFlagValue, getPositiveIntFlagValue, getVerboseFlag, hasFlag } from "../argv.js";
+import {
+  getCommandPositionalsWithRootOptions,
+  getFlagValue,
+  getPositiveIntFlagValue,
+  getVerboseFlag,
+  hasFlag,
+} from "../argv.js";
 
 export type RouteSpec = {
   match: (path: string[]) => boolean;
-  loadPlugins?: boolean;
+  loadPlugins?: boolean | ((argv: string[]) => boolean);
   run: (argv: string[]) => Promise<boolean>;
 };
 
 const routeHealth: RouteSpec = {
   match: (path) => path[0] === "health",
-  loadPlugins: true,
+  // `health --json` only relays gateway RPC output and does not need local plugin metadata.
+  // Keep plugin preload for text output where channel diagnostics/logSelfId are rendered.
+  loadPlugins: (argv) => !hasFlag(argv, "--json"),
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const verbose = getVerboseFlag(argv, { includeDebug: true });
@@ -25,7 +34,9 @@ const routeHealth: RouteSpec = {
 
 const routeStatus: RouteSpec = {
   match: (path) => path[0] === "status",
-  loadPlugins: true,
+  // `status --json` can defer channel plugin loading until config/env inspection
+  // proves it is needed, which keeps the fast-path startup lightweight.
+  loadPlugins: (argv) => !hasFlag(argv, "--json"),
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");
@@ -36,16 +47,85 @@ const routeStatus: RouteSpec = {
     if (timeoutMs === null) {
       return false;
     }
+    if (json) {
+      const { statusJsonCommand } = await import("../../commands/status-json.js");
+      await statusJsonCommand({ deep, all, usage, timeoutMs }, defaultRuntime);
+      return true;
+    }
     const { statusCommand } = await import("../../commands/status.js");
     await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
     return true;
   },
 };
 
+const routeGatewayStatus: RouteSpec = {
+  match: (path) => path[0] === "gateway" && path[1] === "status",
+  run: async (argv) => {
+    const url = getFlagValue(argv, "--url");
+    if (url === null) {
+      return false;
+    }
+    const token = getFlagValue(argv, "--token");
+    if (token === null) {
+      return false;
+    }
+    const password = getFlagValue(argv, "--password");
+    if (password === null) {
+      return false;
+    }
+    const timeout = getFlagValue(argv, "--timeout");
+    if (timeout === null) {
+      return false;
+    }
+    const ssh = getFlagValue(argv, "--ssh");
+    if (ssh === null) {
+      return false;
+    }
+    if (ssh !== undefined) {
+      return false;
+    }
+    const sshIdentity = getFlagValue(argv, "--ssh-identity");
+    if (sshIdentity === null) {
+      return false;
+    }
+    if (sshIdentity !== undefined) {
+      return false;
+    }
+    if (hasFlag(argv, "--ssh-auto")) {
+      return false;
+    }
+    const deep = hasFlag(argv, "--deep");
+    const json = hasFlag(argv, "--json");
+    const requireRpc = hasFlag(argv, "--require-rpc");
+    const probe = !hasFlag(argv, "--no-probe");
+    const { runDaemonStatus } = await import("../daemon-cli/status.js");
+    await runDaemonStatus({
+      rpc: {
+        url: url ?? undefined,
+        token: token ?? undefined,
+        password: password ?? undefined,
+        timeout: timeout ?? undefined,
+      },
+      probe,
+      requireRpc,
+      deep,
+      json,
+    });
+    return true;
+  },
+};
+
 const routeSessions: RouteSpec = {
-  match: (path) => path[0] === "sessions",
+  // Fast-path only bare `sessions`; subcommands (e.g. `sessions cleanup`)
+  // must fall through to Commander so nested handlers run.
+  match: (path) => path[0] === "sessions" && !path[1],
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
+    const allAgents = hasFlag(argv, "--all-agents");
+    const agent = getFlagValue(argv, "--agent");
+    if (agent === null) {
+      return false;
+    }
     const store = getFlagValue(argv, "--store");
     if (store === null) {
       return false;
@@ -55,7 +135,7 @@ const routeSessions: RouteSpec = {
       return false;
     }
     const { sessionsCommand } = await import("../../commands/sessions.js");
-    await sessionsCommand({ json, store, active }, defaultRuntime);
+    await sessionsCommand({ json, store, agent, allAgents, active }, defaultRuntime);
     return true;
   },
 };
@@ -71,38 +151,6 @@ const routeAgentsList: RouteSpec = {
   },
 };
 
-const routeMemoryStatus: RouteSpec = {
-  match: (path) => path[0] === "memory" && path[1] === "status",
-  run: async (argv) => {
-    const agent = getFlagValue(argv, "--agent");
-    if (agent === null) {
-      return false;
-    }
-    const json = hasFlag(argv, "--json");
-    const deep = hasFlag(argv, "--deep");
-    const index = hasFlag(argv, "--index");
-    const verbose = hasFlag(argv, "--verbose");
-    const { runMemoryStatus } = await import("../memory-cli.js");
-    await runMemoryStatus({ agent, json, deep, index, verbose });
-    return true;
-  },
-};
-
-function getCommandPositionals(argv: string[]): string[] {
-  const out: string[] = [];
-  const args = argv.slice(2);
-  for (const arg of args) {
-    if (!arg || arg === "--") {
-      break;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    out.push(arg);
-  }
-  return out;
-}
-
 function getFlagValues(argv: string[], name: string): string[] | null {
   const values: string[] = [];
   const args = argv.slice(2);
@@ -113,7 +161,7 @@ function getFlagValues(argv: string[], name: string): string[] | null {
     }
     if (arg === name) {
       const next = args[i + 1];
-      if (!next || next === "--" || next.startsWith("-")) {
+      if (!isValueToken(next)) {
         return null;
       }
       values.push(next);
@@ -134,8 +182,14 @@ function getFlagValues(argv: string[], name: string): string[] | null {
 const routeConfigGet: RouteSpec = {
   match: (path) => path[0] === "config" && path[1] === "get",
   run: async (argv) => {
-    const positionals = getCommandPositionals(argv);
-    const pathArg = positionals[2];
+    const positionals = getCommandPositionalsWithRootOptions(argv, {
+      commandPath: ["config", "get"],
+      booleanFlags: ["--json"],
+    });
+    if (!positionals || positionals.length !== 1) {
+      return false;
+    }
+    const pathArg = positionals[0];
     if (!pathArg) {
       return false;
     }
@@ -149,8 +203,13 @@ const routeConfigGet: RouteSpec = {
 const routeConfigUnset: RouteSpec = {
   match: (path) => path[0] === "config" && path[1] === "unset",
   run: async (argv) => {
-    const positionals = getCommandPositionals(argv);
-    const pathArg = positionals[2];
+    const positionals = getCommandPositionalsWithRootOptions(argv, {
+      commandPath: ["config", "unset"],
+    });
+    if (!positionals || positionals.length !== 1) {
+      return false;
+    }
+    const pathArg = positionals[0];
     if (!pathArg) {
       return false;
     }
@@ -237,9 +296,9 @@ const routeModelsStatus: RouteSpec = {
 const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
+  routeGatewayStatus,
   routeSessions,
   routeAgentsList,
-  routeMemoryStatus,
   routeConfigGet,
   routeConfigUnset,
   routeModelsList,

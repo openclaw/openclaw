@@ -1,3 +1,8 @@
+import type { ModelCompatConfig } from "../config/types.models.js";
+import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
+import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
+import { copyPluginToolMeta } from "../plugins/tools.js";
+import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
@@ -64,8 +69,13 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 
 export function normalizeToolParameters(
   tool: AnyAgentTool,
-  options?: { modelProvider?: string },
+  options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
 ): AnyAgentTool {
+  function preserveToolMeta(target: AnyAgentTool): AnyAgentTool {
+    copyPluginToolMeta(tool, target);
+    copyChannelAgentToolMeta(tool as never, target as never);
+    return target;
+  }
   const schema =
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
@@ -78,24 +88,34 @@ export function normalizeToolParameters(
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
-  // - Anthropic (google-antigravity) expects full JSON Schema draft 2020-12 compliance.
+  // - Anthropic expects full JSON Schema draft 2020-12 compliance.
+  // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
 
   const isGeminiProvider =
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
-  const isAnthropicProvider =
-    options?.modelProvider?.toLowerCase().includes("anthropic") ||
-    options?.modelProvider?.toLowerCase().includes("google-antigravity");
+  const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
+  const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
+
+  function applyProviderCleaning(s: unknown): unknown {
+    if (isGeminiProvider && !isAnthropicProvider) {
+      return cleanSchemaForGemini(s);
+    }
+    if (unsupportedToolSchemaKeywords.size > 0) {
+      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords);
+    }
+    return s;
+  }
 
   // If schema already has type + properties (no top-level anyOf to merge),
-  // clean it for Gemini compatibility (but only if using Gemini, not Anthropic)
+  // clean it for Gemini/xAI compatibility as appropriate.
   if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
-    return {
+    return preserveToolMeta({
       ...tool,
-      parameters: isGeminiProvider && !isAnthropicProvider ? cleanSchemaForGemini(schema) : schema,
-    };
+      parameters: applyProviderCleaning(schema),
+    });
   }
 
   // Some tool schemas (esp. unions) may omit `type` at the top-level. If we see
@@ -107,13 +127,10 @@ export function normalizeToolParameters(
     !Array.isArray(schema.oneOf)
   ) {
     const schemaWithType = { ...schema, type: "object" };
-    return {
+    return preserveToolMeta({
       ...tool,
-      parameters:
-        isGeminiProvider && !isAnthropicProvider
-          ? cleanSchemaForGemini(schemaWithType)
-          : schemaWithType,
-    };
+      parameters: applyProviderCleaning(schemaWithType),
+    });
   }
 
   const variantKey = Array.isArray(schema.anyOf)
@@ -179,18 +196,15 @@ export function normalizeToolParameters(
     additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
   };
 
-  return {
+  return preserveToolMeta({
     ...tool,
     // Flatten union schemas into a single object schema:
     // - Gemini doesn't allow top-level `type` together with `anyOf`.
     // - OpenAI rejects schemas without top-level `type: "object"`.
     // - Anthropic accepts proper JSON Schema with constraints.
     // Merging properties preserves useful enums like `action` while keeping schemas portable.
-    parameters:
-      isGeminiProvider && !isAnthropicProvider
-        ? cleanSchemaForGemini(flattenedSchema)
-        : flattenedSchema,
-  };
+    parameters: applyProviderCleaning(flattenedSchema),
+  });
 }
 
 /**

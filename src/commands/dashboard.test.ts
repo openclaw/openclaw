@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
-import { dashboardCommand } from "./dashboard.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -30,6 +29,7 @@ const runtime = {
   error: vi.fn(),
   exit: vi.fn(),
 };
+let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
 
 function mockSnapshot(params?: {
   token?: string;
@@ -62,31 +62,23 @@ function mockSnapshot(params?: {
 }
 
 describe("dashboardCommand bind selection", () => {
-  beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockReset();
-    mocks.resolveGatewayPort.mockReset();
-    mocks.resolveControlUiLinks.mockReset();
-    mocks.copyToClipboard.mockReset();
-    runtime.log.mockReset();
-    runtime.error.mockReset();
-    runtime.exit.mockReset();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ dashboardCommand } = await import("./dashboard.js"));
+    mocks.readConfigFileSnapshot.mockClear();
+    mocks.resolveGatewayPort.mockClear();
+    mocks.resolveControlUiLinks.mockClear();
+    mocks.copyToClipboard.mockClear();
+    runtime.log.mockClear();
+    runtime.error.mockClear();
+    runtime.exit.mockClear();
   });
 
-  it("maps lan bind to loopback for dashboard URLs", async () => {
-    mockSnapshot({ bind: "lan" });
-
-    await dashboardCommand(runtime, { noOpen: true });
-
-    expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
-      port: 18789,
-      bind: "loopback",
-      customBindHost: undefined,
-      basePath: undefined,
-    });
-  });
-
-  it("defaults to loopback when bind is unset", async () => {
-    mockSnapshot();
+  it.each([
+    { label: "maps lan bind to loopback", snapshot: { bind: "lan" as const } },
+    { label: "defaults unset bind to loopback", snapshot: undefined },
+  ])("$label for dashboard URLs", async ({ snapshot }) => {
+    mockSnapshot(snapshot);
 
     await dashboardCommand(runtime, { noOpen: true });
 

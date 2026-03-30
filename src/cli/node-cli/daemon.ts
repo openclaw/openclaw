@@ -3,18 +3,20 @@ import {
   DEFAULT_NODE_DAEMON_RUNTIME,
   isNodeDaemonRuntime,
 } from "../../commands/node-daemon-runtime.js";
-import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "../../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
+import {
+  buildPlatformRuntimeLogHints,
+  buildPlatformServiceStartHints,
+} from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, theme } from "../../terminal/theme.js";
+import { colorize } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -22,12 +24,15 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "../daemon-cli/lifecycle-core.js";
+import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daemon-cli/response.js";
 import {
-  buildDaemonServiceSnapshot,
-  createDaemonActionContext,
-  installDaemonServiceAndEmit,
-} from "../daemon-cli/response.js";
-import { createCliStatusTextStyles, formatRuntimeStatus, parsePort } from "../daemon-cli/shared.js";
+  createCliStatusTextStyles,
+  createDaemonInstallActionContext,
+  failIfNixDaemonInstallMode,
+  formatRuntimeStatus,
+  parsePort,
+  resolveRuntimeStatusColor,
+} from "../daemon-cli/shared.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -50,39 +55,21 @@ type NodeDaemonStatusOptions = {
 };
 
 function renderNodeServiceStartHints(): string[] {
-  const base = [formatCliCommand("openclaw node install"), formatCliCommand("openclaw node start")];
-  switch (process.platform) {
-    case "darwin":
-      return [
-        ...base,
-        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
-      ];
-    case "linux":
-      return [...base, `systemctl --user start ${resolveNodeSystemdServiceName()}.service`];
-    case "win32":
-      return [...base, `schtasks /Run /TN "${resolveNodeWindowsTaskName()}"`];
-    default:
-      return base;
-  }
+  return buildPlatformServiceStartHints({
+    installCommand: formatCliCommand("openclaw node install"),
+    startCommand: formatCliCommand("openclaw node start"),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
+    systemdServiceName: resolveNodeSystemdServiceName(),
+    windowsTaskName: resolveNodeWindowsTaskName(),
+  });
 }
 
 function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (process.platform === "darwin") {
-    const logs = resolveGatewayLogPaths(env);
-    return [
-      `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      `Launchd stderr (if installed): ${logs.stderrPath}`,
-    ];
-  }
-  if (process.platform === "linux") {
-    const unit = resolveNodeSystemdServiceName();
-    return [`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`];
-  }
-  if (process.platform === "win32") {
-    const task = resolveNodeWindowsTaskName();
-    return [`Logs: schtasks /Query /TN "${task}" /V /FO LIST`];
-  }
-  return [];
+  return buildPlatformRuntimeLogHints({
+    env,
+    systemdServiceName: resolveNodeSystemdServiceName(),
+    windowsTaskName: resolveNodeWindowsTaskName(),
+  });
 }
 
 function resolveNodeDefaults(
@@ -99,11 +86,8 @@ function resolveNodeDefaults(
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
-  const json = Boolean(opts.json);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
-
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service install is disabled.");
+  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
 
@@ -239,7 +223,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.log(JSON.stringify(payload, null, 2));
+    defaultRuntime.writeJson(payload);
     return;
   }
 
@@ -261,15 +245,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
 
   const runtimeLine = formatRuntimeStatus(runtime);
   if (runtimeLine) {
-    const runtimeStatus = runtime?.status ?? "unknown";
-    const runtimeColor =
-      runtimeStatus === "running"
-        ? theme.success
-        : runtimeStatus === "stopped"
-          ? theme.error
-          : runtimeStatus === "unknown"
-            ? theme.muted
-            : theme.warn;
+    const runtimeColor = resolveRuntimeStatusColor(runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 

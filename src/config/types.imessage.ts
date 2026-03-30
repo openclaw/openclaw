@@ -4,7 +4,10 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -23,7 +26,7 @@ export type IMessageAccountConfig = {
   cliPath?: string;
   /** Optional Messages db path override. */
   dbPath?: string;
-  /** Remote host for SCP when attachments live on a different machine (e.g., openclaw@192.168.64.3). */
+  /** Remote SSH host token for SCP attachment fetches (`host` or `user@host`). */
   remoteHost?: string;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
@@ -33,6 +36,8 @@ export type IMessageAccountConfig = {
   dmPolicy?: DmPolicy;
   /** Optional allowlist for inbound handles or chat_id targets. */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Optional allowlist for group senders or chat_id targets. */
   groupAllowFrom?: Array<string | number>;
   /**
@@ -50,6 +55,10 @@ export type IMessageAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
+  /** Allowed local iMessage attachment roots (supports single-segment `*` wildcards). */
+  attachmentRoots?: string[];
+  /** Allowed remote iMessage attachment roots for SCP fetches (supports `*`). */
+  remoteAttachmentRoots?: string[];
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /** Timeout for probe/RPC operations in milliseconds (default: 10000). */
@@ -71,6 +80,8 @@ export type IMessageAccountConfig = {
   >;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
 };
@@ -78,4 +89,12 @@ export type IMessageAccountConfig = {
 export type IMessageConfig = {
   /** Optional per-account iMessage configuration (multi-account). */
   accounts?: Record<string, IMessageAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & IMessageAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    imessage?: IMessageConfig;
+  }
+}

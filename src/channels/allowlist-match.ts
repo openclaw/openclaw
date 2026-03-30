@@ -16,37 +16,100 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
   matchSource?: TSource;
 };
 
+export type CompiledAllowlist = {
+  set: ReadonlySet<string>;
+  wildcard: boolean;
+};
+
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
 ): string {
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
-export function resolveAllowlistMatchSimple(params: {
-  allowFrom: Array<string | number>;
-  senderId: string;
-  senderName?: string | null;
-}): AllowlistMatch<"wildcard" | "id" | "name"> {
-  const allowFrom = params.allowFrom
-    .map((entry) => String(entry).trim().toLowerCase())
-    .filter(Boolean);
+export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowlist {
+  const set = new Set(entries.filter(Boolean));
+  return {
+    set,
+    wildcard: set.has("*"),
+  };
+}
 
-  if (allowFrom.length === 0) {
+function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): CompiledAllowlist {
+  return compileAllowlist(
+    entries.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean),
+  );
+}
+
+export function resolveAllowlistCandidates<TSource extends string>(params: {
+  compiledAllowlist: CompiledAllowlist;
+  candidates: Array<{ value?: string; source: TSource }>;
+}): AllowlistMatch<TSource> {
+  for (const candidate of params.candidates) {
+    if (!candidate.value) {
+      continue;
+    }
+    if (params.compiledAllowlist.set.has(candidate.value)) {
+      return {
+        allowed: true,
+        matchKey: candidate.value,
+        matchSource: candidate.source,
+      };
+    }
+  }
+  return { allowed: false };
+}
+
+export function resolveCompiledAllowlistMatch<TSource extends string>(params: {
+  compiledAllowlist: CompiledAllowlist;
+  candidates: Array<{ value?: string; source: TSource }>;
+}): AllowlistMatch<TSource> {
+  if (params.compiledAllowlist.set.size === 0) {
     return { allowed: false };
   }
-  if (allowFrom.includes("*")) {
+  if (params.compiledAllowlist.wildcard) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" as TSource };
+  }
+  return resolveAllowlistCandidates(params);
+}
+
+export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
+  allowList: ReadonlyArray<string>;
+  candidates: Array<{ value?: string; source: TSource }>;
+}): AllowlistMatch<TSource> {
+  return resolveCompiledAllowlistMatch({
+    compiledAllowlist: compileAllowlist(params.allowList),
+    candidates: params.candidates,
+  });
+}
+
+export function resolveAllowlistMatchSimple(params: {
+  allowFrom: ReadonlyArray<string | number>;
+  senderId: string;
+  senderName?: string | null;
+  allowNameMatching?: boolean;
+}): AllowlistMatch<"wildcard" | "id" | "name"> {
+  const allowFrom = compileSimpleAllowlist(params.allowFrom);
+
+  if (allowFrom.set.size === 0) {
+    return { allowed: false };
+  }
+  if (allowFrom.wildcard) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
 
   const senderId = params.senderId.toLowerCase();
-  if (allowFrom.includes(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-
   const senderName = params.senderName?.toLowerCase();
-  if (senderName && allowFrom.includes(senderName)) {
-    return { allowed: true, matchKey: senderName, matchSource: "name" };
-  }
-
-  return { allowed: false };
+  return resolveAllowlistCandidates({
+    compiledAllowlist: allowFrom,
+    candidates: [
+      { value: senderId, source: "id" },
+      ...(params.allowNameMatching === true && senderName
+        ? ([{ value: senderName, source: "name" as const }] satisfies Array<{
+            value?: string;
+            source: "id" | "name";
+          }>)
+        : []),
+    ],
+  });
 }

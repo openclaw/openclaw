@@ -101,6 +101,24 @@ You can persist a remote target so CLI commands use it by default:
 
 When the gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first.
 
+## Credential precedence
+
+Gateway credential resolution follows one shared contract across call/probe/status paths and Discord exec-approval monitoring. Node-host uses the same base contract with one local-mode exception (it intentionally ignores `gateway.remote.*`):
+
+- Explicit credentials (`--token`, `--password`, or tool `gatewayToken`) always win on call paths that accept explicit auth.
+- URL override safety:
+  - CLI URL overrides (`--url`) never reuse implicit config/env credentials.
+  - Env URL overrides (`OPENCLAW_GATEWAY_URL`) may use env credentials only (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
+- Local mode defaults:
+  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token` (remote fallback applies only when local auth token input is unset)
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password` (remote fallback applies only when local auth password input is unset)
+- Remote mode defaults:
+  - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
+- Node-host local-mode exception: `gateway.remote.token` / `gateway.remote.password` are ignored.
+- Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
+- Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
+
 ## Chat UI over SSH
 
 WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects directly to the Gateway WebSocket.
@@ -108,7 +126,7 @@ WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects direct
 - Forward `18789` over SSH (see above), then connect clients to `ws://127.0.0.1:18789`.
 - On macOS, prefer the app’s “Remote over SSH” mode, which manages the tunnel automatically.
 
-## macOS app “Remote over SSH”
+## macOS app "Remote over SSH"
 
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 
@@ -119,11 +137,17 @@ Runbook: [macOS remote access](/platforms/mac/remote).
 Short version: **keep the Gateway loopback-only** unless you’re sure you need a bind.
 
 - **Loopback + SSH/Tailscale Serve** is the safest default (no public exposure).
+- Plaintext `ws://` is loopback-only by default. For trusted private networks,
+  set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
-- `gateway.remote.token` is **only** for remote CLI calls — it does **not** enable local auth.
+- `gateway.remote.token` / `.password` are client credential sources. They do **not** configure server auth by themselves.
+- Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
+- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
-- **Tailscale Serve** can authenticate via identity headers when `gateway.auth.allowTailscale: true`.
-  Set it to `false` if you want tokens/passwords instead.
+- **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
+  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
+  require token/password auth. This tokenless flow assumes the gateway host is
+  trusted. Set it to `false` if you want tokens/passwords everywhere.
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.
 
 Deep dive: [Security](/gateway/security).

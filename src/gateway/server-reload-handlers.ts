@@ -2,6 +2,7 @@ import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js"
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
+import { isRestartEnabled } from "../config/commands.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -15,16 +16,21 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
+import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
+import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { ChannelKind } from "./config-reload-plan.js";
+import type { GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
+import type { HookClientIpConfig } from "./server-http.js";
+import { resolveHookClientIpConfig } from "./server/hooks.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
-  browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
+  channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
 export function createGatewayReloadHandlers(params: {
@@ -39,16 +45,20 @@ export function createGatewayReloadHandlers(params: {
     warn: (msg: string) => void;
     error: (msg: string) => void;
   };
-  logBrowser: { error: (msg: string) => void };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
+  createHealthMonitor: (opts: {
+    checkIntervalMs: number;
+    staleEventThresholdMs?: number;
+    maxRestartsPerHour?: number;
+  }) => ChannelHealthMonitor;
 }) {
   const applyHotReload = async (
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
   ) => {
-    setGatewaySigusr1RestartPolicy({ allowExternal: nextConfig.commands?.restart === true });
+    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
 
@@ -59,6 +69,7 @@ export function createGatewayReloadHandlers(params: {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
       }
     }
+    nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
@@ -78,15 +89,20 @@ export function createGatewayReloadHandlers(params: {
         .catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
     }
 
-    if (plan.restartBrowserControl) {
-      if (state.browserControl) {
-        await state.browserControl.stop().catch(() => {});
-      }
-      try {
-        nextState.browserControl = await startBrowserControlServerIfEnabled();
-      } catch (err) {
-        params.logBrowser.error(`server failed to start: ${String(err)}`);
-      }
+    if (plan.restartHealthMonitor) {
+      state.channelHealthMonitor?.stop();
+      const minutes = nextConfig.gateway?.channelHealthCheckMinutes;
+      const staleMinutes = nextConfig.gateway?.channelStaleEventThresholdMinutes;
+      nextState.channelHealthMonitor =
+        minutes === 0
+          ? null
+          : params.createHealthMonitor({
+              checkIntervalMs: (minutes ?? 5) * 60_000,
+              ...(staleMinutes != null && { staleEventThresholdMs: staleMinutes * 60_000 }),
+              ...(nextConfig.gateway?.channelMaxRestartsPerHour != null && {
+                maxRestartsPerHour: nextConfig.gateway.channelMaxRestartsPerHour,
+              }),
+            });
     }
 
     if (plan.restartGmailWatcher) {
@@ -138,7 +154,7 @@ export function createGatewayReloadHandlers(params: {
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
   ) => {
-    setGatewaySigusr1RestartPolicy({ allowExternal: nextConfig.commands?.restart === true });
+    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
       : plan.changedPaths.join(", ");
@@ -152,11 +168,13 @@ export function createGatewayReloadHandlers(params: {
       const queueSize = getTotalQueueSize();
       const pendingReplies = getTotalPendingReplies();
       const embeddedRuns = getActiveEmbeddedRunCount();
+      const activeTasks = getInspectableTaskRegistrySummary().active;
       return {
         queueSize,
         pendingReplies,
         embeddedRuns,
-        totalActive: queueSize + pendingReplies + embeddedRuns,
+        activeTasks,
+        totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
       };
     };
     const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -169,6 +187,9 @@ export function createGatewayReloadHandlers(params: {
       }
       if (counts.embeddedRuns > 0) {
         details.push(`${counts.embeddedRuns} embedded run(s)`);
+      }
+      if (counts.activeTasks > 0) {
+        details.push(`${counts.activeTasks} task run(s)`);
       }
       return details;
     };
@@ -190,6 +211,7 @@ export function createGatewayReloadHandlers(params: {
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
+        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
         hooks: {
           onReady: () => {
             restartPending = false;

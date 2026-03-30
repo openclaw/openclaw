@@ -1,56 +1,44 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
-  type ExecAsk,
   type ExecHost,
-  type ExecSecurity,
-  type ExecApprovalsFile,
-  addAllowlistEntry,
-  evaluateShellAllowlist,
+  loadExecApprovals,
   maxAsk,
   minSecurity,
-  requiresExecApproval,
-  resolveSafeBins,
-  recordAllowlistUse,
-  resolveExecApprovals,
-  resolveExecApprovalsFromFile,
-  buildSafeShellCommand,
-  buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
-import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { markBackgrounded } from "./bash-process-registry.js";
+import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
+import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
-  DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_MAX_OUTPUT,
-  DEFAULT_NOTIFY_TAIL_CHARS,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
+  type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
-  createApprovalSlug,
-  emitExecSystemEvent,
   normalizeExecAsk,
-  normalizeExecHost,
   normalizeExecSecurity,
-  normalizeNotifyOutput,
+  normalizeExecTarget,
   normalizePathPrepend,
-  renderExecHostLabel,
+  resolveExecTarget,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
   execSchema,
-  type ExecProcessHandle,
-  validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type {
+  ExecElevatedDefaults,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -60,65 +48,39 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { callGatewayTool } from "./tools/gateway.js";
-import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
-
-export type ExecToolDefaults = {
-  host?: ExecHost;
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  node?: string;
-  pathPrepend?: string[];
-  safeBins?: string[];
-  agentId?: string;
-  backgroundMs?: number;
-  timeoutSec?: number;
-  approvalRunningNoticeMs?: number;
-  sandbox?: BashSandboxConfig;
-  elevated?: ExecElevatedDefaults;
-  allowBackground?: boolean;
-  scopeKey?: string;
-  sessionKey?: string;
-  messageProvider?: string;
-  notifyOnExit?: boolean;
-  notifyOnExitEmptySuccess?: boolean;
-  cwd?: string;
-};
+import { assertSandboxPath } from "./sandbox-paths.js";
+import { failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
+export type {
+  ExecElevatedDefaults,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 
-export type ExecElevatedDefaults = {
-  enabled: boolean;
-  allowed: boolean;
-  defaultLevel: "on" | "off" | "ask" | "full";
-};
-
-export type ExecToolDetails =
-  | {
-      status: "running";
-      sessionId: string;
-      pid?: number;
-      startedAt: number;
-      cwd?: string;
-      tail?: string;
-    }
-  | {
-      status: "completed" | "failed";
-      exitCode: number | null;
-      durationMs: number;
-      aggregated: string;
-      cwd?: string;
-    }
-  | {
-      status: "approval-pending";
-      approvalId: string;
-      approvalSlug: string;
-      expiresAtMs: number;
-      host: ExecHost;
-      command: string;
-      cwd?: string;
-      nodeId?: string;
-    };
+function buildExecForegroundResult(params: {
+  outcome: ExecProcessOutcome;
+  cwd?: string;
+  warningText?: string;
+}): AgentToolResult<ExecToolDetails> {
+  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  if (params.outcome.status === "failed") {
+    return failedTextResult(`${warningText}${params.outcome.reason}`, {
+      status: "failed",
+      exitCode: params.outcome.exitCode ?? null,
+      durationMs: params.outcome.durationMs,
+      aggregated: params.outcome.aggregated,
+      cwd: params.cwd,
+    });
+  }
+  return textResult(`${warningText}${params.outcome.aggregated || "(no output)"}`, {
+    status: "completed",
+    exitCode: params.outcome.exitCode,
+    durationMs: params.outcome.durationMs,
+    aggregated: params.outcome.aggregated,
+    cwd: params.cwd,
+  });
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -161,6 +123,11 @@ async function validateScriptFileForShellBleed(params: {
   // Best-effort: only validate if file exists and is reasonably small.
   let stat: { isFile(): boolean; size: number };
   try {
+    await assertSandboxPath({
+      filePath: absPath,
+      cwd: params.workdir,
+      root: params.workdir,
+    });
     stat = await fs.stat(absPath);
   } catch {
     return;
@@ -227,7 +194,32 @@ export function createExecTool(
       ? defaults.timeoutSec
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
-  const safeBins = resolveSafeBins(defaults?.safeBins);
+  const {
+    safeBins,
+    safeBinProfiles,
+    trustedSafeBinDirs,
+    unprofiledSafeBins,
+    unprofiledInterpreterSafeBins,
+  } = resolveExecSafeBinRuntimePolicy({
+    local: {
+      safeBins: defaults?.safeBins,
+      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
+      safeBinProfiles: defaults?.safeBinProfiles,
+    },
+    onWarning: (message) => {
+      logInfo(message);
+    },
+  });
+  if (unprofiledSafeBins.length > 0) {
+    logInfo(
+      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+    );
+  }
+  if (unprofiledInterpreterSafeBins.length > 0) {
+    logInfo(
+      `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
+    );
+  }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
@@ -342,18 +334,13 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      const configuredHost = defaults?.host ?? "sandbox";
-      const requestedHost = normalizeExecHost(params.host) ?? null;
-      let host: ExecHost = requestedHost ?? configuredHost;
-      if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
-        throw new Error(
-          `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
-            `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
-        );
-      }
-      if (elevatedRequested) {
-        host = "gateway";
-      }
+      const target = resolveExecTarget({
+        configuredTarget: defaults?.host,
+        requestedTarget: normalizeExecTarget(params.host),
+        elevatedRequested,
+        sandboxAvailable: Boolean(defaults?.sandbox),
+      });
+      const host: ExecHost = target.effectiveHost;
 
       const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
       const requestedSecurity = normalizeExecSecurity(params.security);
@@ -361,7 +348,8 @@ export function createExecTool(
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
-      const configuredAsk = defaults?.ask ?? "on-miss";
+      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
+      const configuredAsk = defaults?.ask ?? loadExecApprovals().defaults?.ask ?? "on-miss";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
@@ -370,6 +358,14 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
+      if (target.selectedTarget === "sandbox" && !sandbox) {
+        throw new Error(
+          [
+            "exec host=sandbox requires a sandbox runtime for this session.",
+            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
+          ].join("\n"),
+        );
+      }
       const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
@@ -381,28 +377,66 @@ export function createExecTool(
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
-      } else {
+      } else if (host !== "node") {
+        // Skip local workdir resolution for remote node execution: the remote node's
+        // filesystem is not visible to the gateway, so resolveWorkdir() would incorrectly
+        // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
-      const baseEnv = coerceEnv(process.env);
-
-      // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
-      // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
-      if (host !== "sandbox" && params.env) {
-        validateHostEnv(params.env);
+      const inheritedBaseEnv = coerceEnv(process.env);
+      const hostEnvResult =
+        host === "sandbox"
+          ? null
+          : sanitizeHostExecEnvWithDiagnostics({
+              baseEnv: inheritedBaseEnv,
+              overrides: params.env,
+              blockPathOverrides: true,
+            });
+      if (
+        hostEnvResult &&
+        params.env &&
+        (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
+          hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
+      ) {
+        const blockedKeys = hostEnvResult.rejectedOverrideBlockedKeys;
+        const invalidKeys = hostEnvResult.rejectedOverrideInvalidKeys;
+        const pathBlocked = blockedKeys.includes("PATH");
+        if (pathBlocked && blockedKeys.length === 1 && invalidKeys.length === 0) {
+          throw new Error(
+            "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
+          );
+        }
+        if (blockedKeys.length === 1 && invalidKeys.length === 0) {
+          throw new Error(
+            `Security Violation: Environment variable '${blockedKeys[0]}' is forbidden during host execution.`,
+          );
+        }
+        const details: string[] = [];
+        if (blockedKeys.length > 0) {
+          details.push(`blocked override keys: ${blockedKeys.join(", ")}`);
+        }
+        if (invalidKeys.length > 0) {
+          details.push(`invalid non-portable override keys: ${invalidKeys.join(", ")}`);
+        }
+        const suffix = details.join("; ");
+        if (pathBlocked) {
+          throw new Error(
+            `Security Violation: Custom 'PATH' variable is forbidden during host execution (${suffix}).`,
+          );
+        }
+        throw new Error(`Security Violation: ${suffix}.`);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
-
-      const env = sandbox
-        ? buildSandboxEnv({
-            defaultPath: DEFAULT_PATH,
-            paramsEnv: params.env,
-            sandboxEnv: sandbox.env,
-            containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
-          })
-        : mergedEnv;
+      const env =
+        sandbox && host === "sandbox"
+          ? buildSandboxEnv({
+              defaultPath: DEFAULT_PATH,
+              paramsEnv: params.env,
+              sandboxEnv: sandbox.env,
+              containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            })
+          : (hostEnvResult?.env ?? inheritedBaseEnv);
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
@@ -423,548 +457,71 @@ export function createExecTool(
       }
 
       if (host === "node") {
-        const approvals = resolveExecApprovals(agentId, { security, ask });
-        const hostSecurity = minSecurity(security, approvals.agent.security);
-        const hostAsk = maxAsk(ask, approvals.agent.ask);
-        const askFallback = approvals.agent.askFallback;
-        if (hostSecurity === "deny") {
-          throw new Error("exec denied: host=node security=deny");
-        }
-        const boundNode = defaults?.node?.trim();
-        const requestedNode = params.node?.trim();
-        if (boundNode && requestedNode && boundNode !== requestedNode) {
-          throw new Error(`exec node not allowed (bound to ${boundNode})`);
-        }
-        const nodeQuery = boundNode || requestedNode;
-        const nodes = await listNodes({});
-        if (nodes.length === 0) {
-          throw new Error(
-            "exec host=node requires a paired node (none available). This requires a companion app or node host.",
-          );
-        }
-        let nodeId: string;
-        try {
-          nodeId = resolveNodeIdFromList(nodes, nodeQuery, !nodeQuery);
-        } catch (err) {
-          if (!nodeQuery && String(err).includes("node required")) {
-            throw new Error(
-              "exec host=node requires a node id when multiple nodes are available (set tools.exec.node or exec.node).",
-              { cause: err },
-            );
-          }
-          throw err;
-        }
-        const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
-        const supportsSystemRun = Array.isArray(nodeInfo?.commands)
-          ? nodeInfo?.commands?.includes("system.run")
-          : false;
-        if (!supportsSystemRun) {
-          throw new Error(
-            "exec host=node requires a node that supports system.run (companion app or node host).",
-          );
-        }
-        const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
-
-        const nodeEnv = params.env ? { ...params.env } : undefined;
-        const baseAllowlistEval = evaluateShellAllowlist({
+        return executeNodeHostCommand({
           command: params.command,
-          allowlist: [],
-          safeBins: new Set(),
-          cwd: workdir,
+          workdir,
           env,
-          platform: nodeInfo?.platform,
+          requestedEnv: params.env,
+          requestedNode: params.node?.trim(),
+          boundNode: defaults?.node?.trim(),
+          sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          agentId,
+          security,
+          ask,
+          strictInlineEval: defaults?.strictInlineEval,
+          timeoutSec: params.timeout,
+          defaultTimeoutSec,
+          approvalRunningNoticeMs,
+          warnings,
+          notifySessionKey,
+          trustedSafeBinDirs,
         });
-        let analysisOk = baseAllowlistEval.analysisOk;
-        let allowlistSatisfied = false;
-        if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
-          try {
-            const approvalsSnapshot = await callGatewayTool<{ file: string }>(
-              "exec.approvals.node.get",
-              { timeoutMs: 10_000 },
-              { nodeId },
-            );
-            const approvalsFile =
-              approvalsSnapshot && typeof approvalsSnapshot === "object"
-                ? approvalsSnapshot.file
-                : undefined;
-            if (approvalsFile && typeof approvalsFile === "object") {
-              const resolved = resolveExecApprovalsFromFile({
-                file: approvalsFile as ExecApprovalsFile,
-                agentId,
-                overrides: { security: "allowlist" },
-              });
-              // Allowlist-only precheck; safe bins are node-local and may diverge.
-              const allowlistEval = evaluateShellAllowlist({
-                command: params.command,
-                allowlist: resolved.allowlist,
-                safeBins: new Set(),
-                cwd: workdir,
-                env,
-                platform: nodeInfo?.platform,
-              });
-              allowlistSatisfied = allowlistEval.allowlistSatisfied;
-              analysisOk = allowlistEval.analysisOk;
-            }
-          } catch {
-            // Fall back to requiring approval if node approvals cannot be fetched.
-          }
-        }
-        const requiresAsk = requiresExecApproval({
-          ask: hostAsk,
-          security: hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-        });
-        const commandText = params.command;
-        const invokeTimeoutMs = Math.max(
-          10_000,
-          (typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec) * 1000 + 5_000,
-        );
-        const buildInvokeParams = (
-          approvedByAsk: boolean,
-          approvalDecision: "allow-once" | "allow-always" | null,
-          runId?: string,
-        ) =>
-          ({
-            nodeId,
-            command: "system.run",
-            params: {
-              command: argv,
-              rawCommand: params.command,
-              cwd: workdir,
-              env: nodeEnv,
-              timeoutMs: typeof params.timeout === "number" ? params.timeout * 1000 : undefined,
-              agentId,
-              sessionKey: defaults?.sessionKey,
-              approved: approvedByAsk,
-              approvalDecision: approvalDecision ?? undefined,
-              runId: runId ?? undefined,
-            },
-            idempotencyKey: crypto.randomUUID(),
-          }) satisfies Record<string, unknown>;
-
-        if (requiresAsk) {
-          const approvalId = crypto.randomUUID();
-          const approvalSlug = createApprovalSlug(approvalId);
-          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
-          const contextKey = `exec:${approvalId}`;
-          const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
-          const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
-
-          void (async () => {
-            let decision: string | null = null;
-            try {
-              const decisionResult = await callGatewayTool<{ decision: string }>(
-                "exec.approval.request",
-                { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-                {
-                  id: approvalId,
-                  command: commandText,
-                  cwd: workdir,
-                  host: "node",
-                  security: hostSecurity,
-                  ask: hostAsk,
-                  agentId,
-                  resolvedPath: undefined,
-                  sessionKey: defaults?.sessionKey,
-                  timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-                },
-              );
-              const decisionValue =
-                decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult as { decision?: unknown }).decision
-                  : undefined;
-              decision = typeof decisionValue === "string" ? decisionValue : null;
-            } catch {
-              emitExecSystemEvent(
-                `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${commandText}`,
-                { sessionKey: notifySessionKey, contextKey },
-              );
-              return;
-            }
-
-            let approvedByAsk = false;
-            let approvalDecision: "allow-once" | "allow-always" | null = null;
-            let deniedReason: string | null = null;
-
-            if (decision === "deny") {
-              deniedReason = "user-denied";
-            } else if (!decision) {
-              if (askFallback === "full") {
-                approvedByAsk = true;
-                approvalDecision = "allow-once";
-              } else if (askFallback === "allowlist") {
-                // Defer allowlist enforcement to the node host.
-              } else {
-                deniedReason = "approval-timeout";
-              }
-            } else if (decision === "allow-once") {
-              approvedByAsk = true;
-              approvalDecision = "allow-once";
-            } else if (decision === "allow-always") {
-              approvedByAsk = true;
-              approvalDecision = "allow-always";
-            }
-
-            if (deniedReason) {
-              emitExecSystemEvent(
-                `Exec denied (node=${nodeId} id=${approvalId}, ${deniedReason}): ${commandText}`,
-                { sessionKey: notifySessionKey, contextKey },
-              );
-              return;
-            }
-
-            let runningTimer: NodeJS.Timeout | null = null;
-            if (approvalRunningNoticeMs > 0) {
-              runningTimer = setTimeout(() => {
-                emitExecSystemEvent(
-                  `Exec running (node=${nodeId} id=${approvalId}, >${noticeSeconds}s): ${commandText}`,
-                  { sessionKey: notifySessionKey, contextKey },
-                );
-              }, approvalRunningNoticeMs);
-            }
-
-            try {
-              await callGatewayTool(
-                "node.invoke",
-                { timeoutMs: invokeTimeoutMs },
-                buildInvokeParams(approvedByAsk, approvalDecision, approvalId),
-              );
-            } catch {
-              emitExecSystemEvent(
-                `Exec denied (node=${nodeId} id=${approvalId}, invoke-failed): ${commandText}`,
-                { sessionKey: notifySessionKey, contextKey },
-              );
-            } finally {
-              if (runningTimer) {
-                clearTimeout(runningTimer);
-              }
-            }
-          })();
-
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `${warningText}Approval required (id ${approvalSlug}). ` +
-                  "Approve to run; updates will arrive after completion.",
-              },
-            ],
-            details: {
-              status: "approval-pending",
-              approvalId,
-              approvalSlug,
-              expiresAtMs,
-              host: "node",
-              command: commandText,
-              cwd: workdir,
-              nodeId,
-            },
-          };
-        }
-
-        const startedAt = Date.now();
-        const raw = await callGatewayTool(
-          "node.invoke",
-          { timeoutMs: invokeTimeoutMs },
-          buildInvokeParams(false, null),
-        );
-        const payload =
-          raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;
-        const payloadObj =
-          payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-        const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
-        const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
-        const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
-        const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
-        const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
-        return {
-          content: [
-            {
-              type: "text",
-              text: stdout || stderr || errorText || "",
-            },
-          ],
-          details: {
-            status: success ? "completed" : "failed",
-            exitCode,
-            durationMs: Date.now() - startedAt,
-            aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
-            cwd: workdir,
-          } satisfies ExecToolDetails,
-        };
       }
 
       if (host === "gateway" && !bypassApprovals) {
-        const approvals = resolveExecApprovals(agentId, { security, ask });
-        const hostSecurity = minSecurity(security, approvals.agent.security);
-        const hostAsk = maxAsk(ask, approvals.agent.ask);
-        const askFallback = approvals.agent.askFallback;
-        if (hostSecurity === "deny") {
-          throw new Error("exec denied: host=gateway security=deny");
-        }
-        const allowlistEval = evaluateShellAllowlist({
+        const gatewayResult = await processGatewayAllowlist({
           command: params.command,
-          allowlist: approvals.allowlist,
-          safeBins,
-          cwd: workdir,
+          workdir,
           env,
-          platform: process.platform,
+          requestedEnv: params.env,
+          pty: params.pty === true && !sandbox,
+          timeoutSec: params.timeout,
+          defaultTimeoutSec,
+          security,
+          ask,
+          safeBins,
+          safeBinProfiles,
+          strictInlineEval: defaults?.strictInlineEval,
+          agentId,
+          sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          scopeKey: defaults?.scopeKey,
+          warnings,
+          notifySessionKey,
+          approvalRunningNoticeMs,
+          maxOutput,
+          pendingMaxOutput,
+          trustedSafeBinDirs,
         });
-        const allowlistMatches = allowlistEval.allowlistMatches;
-        const analysisOk = allowlistEval.analysisOk;
-        const allowlistSatisfied =
-          hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-        const requiresAsk = requiresExecApproval({
-          ask: hostAsk,
-          security: hostSecurity,
-          analysisOk,
-          allowlistSatisfied,
-        });
-
-        if (requiresAsk) {
-          const approvalId = crypto.randomUUID();
-          const approvalSlug = createApprovalSlug(approvalId);
-          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
-          const contextKey = `exec:${approvalId}`;
-          const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
-          const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
-          const commandText = params.command;
-          const effectiveTimeout =
-            typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
-          const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
-
-          void (async () => {
-            let decision: string | null = null;
-            try {
-              const decisionResult = await callGatewayTool<{ decision: string }>(
-                "exec.approval.request",
-                { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-                {
-                  id: approvalId,
-                  command: commandText,
-                  cwd: workdir,
-                  host: "gateway",
-                  security: hostSecurity,
-                  ask: hostAsk,
-                  agentId,
-                  resolvedPath,
-                  sessionKey: defaults?.sessionKey,
-                  timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-                },
-              );
-              const decisionValue =
-                decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult as { decision?: unknown }).decision
-                  : undefined;
-              decision = typeof decisionValue === "string" ? decisionValue : null;
-            } catch {
-              emitExecSystemEvent(
-                `Exec denied (gateway id=${approvalId}, approval-request-failed): ${commandText}`,
-                { sessionKey: notifySessionKey, contextKey },
-              );
-              return;
-            }
-
-            let approvedByAsk = false;
-            let deniedReason: string | null = null;
-
-            if (decision === "deny") {
-              deniedReason = "user-denied";
-            } else if (!decision) {
-              if (askFallback === "full") {
-                approvedByAsk = true;
-              } else if (askFallback === "allowlist") {
-                if (!analysisOk || !allowlistSatisfied) {
-                  deniedReason = "approval-timeout (allowlist-miss)";
-                } else {
-                  approvedByAsk = true;
-                }
-              } else {
-                deniedReason = "approval-timeout";
-              }
-            } else if (decision === "allow-once") {
-              approvedByAsk = true;
-            } else if (decision === "allow-always") {
-              approvedByAsk = true;
-              if (hostSecurity === "allowlist") {
-                for (const segment of allowlistEval.segments) {
-                  const pattern = segment.resolution?.resolvedPath ?? "";
-                  if (pattern) {
-                    addAllowlistEntry(approvals.file, agentId, pattern);
-                  }
-                }
-              }
-            }
-
-            if (
-              hostSecurity === "allowlist" &&
-              (!analysisOk || !allowlistSatisfied) &&
-              !approvedByAsk
-            ) {
-              deniedReason = deniedReason ?? "allowlist-miss";
-            }
-
-            if (deniedReason) {
-              emitExecSystemEvent(
-                `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${commandText}`,
-                { sessionKey: notifySessionKey, contextKey },
-              );
-              return;
-            }
-
-            if (allowlistMatches.length > 0) {
-              const seen = new Set<string>();
-              for (const match of allowlistMatches) {
-                if (seen.has(match.pattern)) {
-                  continue;
-                }
-                seen.add(match.pattern);
-                recordAllowlistUse(
-                  approvals.file,
-                  agentId,
-                  match,
-                  commandText,
-                  resolvedPath ?? undefined,
-                );
-              }
-            }
-
-            let run: ExecProcessHandle | null = null;
-            try {
-              run = await runExecProcess({
-                command: commandText,
-                workdir,
-                env,
-                sandbox: undefined,
-                containerWorkdir: null,
-                usePty: params.pty === true && !sandbox,
-                warnings,
-                maxOutput,
-                pendingMaxOutput,
-                notifyOnExit: false,
-                notifyOnExitEmptySuccess: false,
-                scopeKey: defaults?.scopeKey,
-                sessionKey: notifySessionKey,
-                timeoutSec: effectiveTimeout,
-              });
-            } catch {
-              emitExecSystemEvent(
-                `Exec denied (gateway id=${approvalId}, spawn-failed): ${commandText}`,
-                { sessionKey: notifySessionKey, contextKey },
-              );
-              return;
-            }
-
-            markBackgrounded(run.session);
-
-            let runningTimer: NodeJS.Timeout | null = null;
-            if (approvalRunningNoticeMs > 0) {
-              runningTimer = setTimeout(() => {
-                emitExecSystemEvent(
-                  `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${commandText}`,
-                  { sessionKey: notifySessionKey, contextKey },
-                );
-              }, approvalRunningNoticeMs);
-            }
-
-            const outcome = await run.promise;
-            if (runningTimer) {
-              clearTimeout(runningTimer);
-            }
-            const output = normalizeNotifyOutput(
-              tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-            );
-            const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-            const summary = output
-              ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
-              : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
-            emitExecSystemEvent(summary, { sessionKey: notifySessionKey, contextKey });
-          })();
-
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `${warningText}Approval required (id ${approvalSlug}). ` +
-                  "Approve to run; updates will arrive after completion.",
-              },
-            ],
-            details: {
-              status: "approval-pending",
-              approvalId,
-              approvalSlug,
-              expiresAtMs,
-              host: "gateway",
-              command: params.command,
-              cwd: workdir,
-            },
-          };
+        if (gatewayResult.pendingResult) {
+          return gatewayResult.pendingResult;
         }
-
-        if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
-          throw new Error("exec denied: allowlist miss");
-        }
-
-        // If allowlist uses safeBins, sanitize only those stdin-only segments:
-        // disable glob/var expansion by forcing argv tokens to be literal via single-quoting.
-        if (
-          hostSecurity === "allowlist" &&
-          analysisOk &&
-          allowlistSatisfied &&
-          allowlistEval.segmentSatisfiedBy.some((by) => by === "safeBins")
-        ) {
-          const safe = buildSafeBinsShellCommand({
-            command: params.command,
-            segments: allowlistEval.segments,
-            segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
-            platform: process.platform,
-          });
-          if (!safe.ok || !safe.command) {
-            // Fallback: quote everything (safe, but may change glob behavior).
-            const fallback = buildSafeShellCommand({
-              command: params.command,
-              platform: process.platform,
-            });
-            if (!fallback.ok || !fallback.command) {
-              throw new Error(
-                `exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`,
-              );
-            }
-            warnings.push(
-              "Warning: safeBins hardening used fallback quoting due to parser mismatch.",
-            );
-            execCommandOverride = fallback.command;
-          } else {
-            warnings.push(
-              "Warning: safeBins hardening disabled glob/variable expansion for stdin-only segments.",
-            );
-            execCommandOverride = safe.command;
-          }
-        }
-
-        if (allowlistMatches.length > 0) {
-          const seen = new Set<string>();
-          for (const match of allowlistMatches) {
-            if (seen.has(match.pattern)) {
-              continue;
-            }
-            seen.add(match.pattern);
-            recordAllowlistUse(
-              approvals.file,
-              agentId,
-              match,
-              params.command,
-              allowlistEval.segments[0]?.resolution?.resolvedPath,
-            );
-          }
-        }
+        execCommandOverride = gatewayResult.execCommandOverride;
       }
 
-      const effectiveTimeout =
-        typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+      const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+      const backgroundTimeoutBypass =
+        allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
+      const effectiveTimeout = backgroundTimeoutBypass
+        ? null
+        : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
@@ -1064,25 +621,13 @@ export function createExecTool(
             if (yielded || run.session.backgrounded) {
               return;
             }
-            if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
-              return;
-            }
-            resolve({
-              content: [
-                {
-                  type: "text",
-                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
-                },
-              ],
-              details: {
-                status: "completed",
-                exitCode: outcome.exitCode ?? 0,
-                durationMs: outcome.durationMs,
-                aggregated: outcome.aggregated,
+            resolve(
+              buildExecForegroundResult({
+                outcome,
                 cwd: run.session.cwd,
-              },
-            });
+                warningText: getWarningText(),
+              }),
+            );
           })
           .catch((err) => {
             if (yieldTimer) {

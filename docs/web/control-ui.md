@@ -27,8 +27,8 @@ Auth is supplied during the WebSocket handshake via:
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-  The dashboard settings panel lets you store a token; passwords are not persisted.
-  The onboarding wizard generates a gateway token by default, so paste it here on first connect.
+  The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
+  Onboarding generates a gateway token by default, so paste it here on first connect.
 
 ## Device pairing (first connection)
 
@@ -49,6 +49,10 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
+If the browser retries pairing with changed auth details (role/scopes/public
+key), the previous pending request is superseded and a new `requestId` is
+created. Re-run `openclaw devices list` before approval.
+
 Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
@@ -60,14 +64,23 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Each browser profile generates a unique device ID, so switching browsers or
   clearing browser data will require re-pairing.
 
+## Language support
+
+The Control UI can localize itself on first load based on your browser locale, and you can override it later from the language picker in the Access card.
+
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`
+- Non-English translations are lazy-loaded in the browser.
+- The selected locale is saved in browser storage and reused on future visits.
+- Missing translation keys fall back to English.
+
 ## What it can do (today)
 
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
-- Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
+- Sessions: list + per-session thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
 - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)
@@ -85,6 +98,9 @@ Cron jobs panel notes:
 - Channel/target fields appear when announce is selected.
 - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
 - For main-session jobs, webhook and none delivery modes are available.
+- Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options,
+  agent model/thinking overrides, and best-effort delivery toggles.
+- Form validation is inline with field-level errors; invalid values disable the save button until fixed.
 - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
 - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
 
@@ -96,7 +112,7 @@ Cron jobs panel notes:
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - Stop:
   - Click **Stop** (calls `chat.abort`)
-  - Type `/stop` (or `stop|esc|abort|wait|exit|interrupt`) to abort out-of-band
+  - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
 - Abort partial retention:
   - When a run is aborted, partial assistant text can still be shown in the UI
@@ -117,13 +133,15 @@ Open:
 
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
-By default, Serve requests can authenticate via Tailscale identity headers
+By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers
 (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw
 verifies the identity by resolving the `x-forwarded-for` address with
 `tailscale whois` and matching it to the header, and only accepts these when the
 request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
 `gateway.auth.allowTailscale: false` (or force `gateway.auth.mode: "password"`)
 if you want to require a token/password even for Serve traffic.
+Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
+code may run on that host, require token/password auth.
 
 ### Bind to tailnet + token
 
@@ -148,7 +166,7 @@ OpenClaw **blocks** Control UI connections without device identity.
 - `https://<magicdns>/` (Serve)
 - `http://127.0.0.1:18789/` (on the gateway host)
 
-**Downgrade example (token-only over HTTP):**
+**Insecure-auth toggle behavior:**
 
 ```json5
 {
@@ -160,8 +178,27 @@ OpenClaw **blocks** Control UI connections without device identity.
 }
 ```
 
-This disables device identity + pairing for the Control UI (even on HTTPS). Use
-only if you trust the network.
+`allowInsecureAuth` is a local compatibility toggle only:
+
+- It allows localhost Control UI sessions to proceed without device identity in
+  non-secure HTTP contexts.
+- It does not bypass pairing checks.
+- It does not relax remote (non-localhost) device identity requirements.
+
+**Break-glass only:**
+
+```json5
+{
+  gateway: {
+    controlUi: { dangerouslyDisableDeviceAuth: true },
+    bind: "tailnet",
+    auth: { mode: "token", token: "replace-me" },
+  },
+}
+```
+
+`dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a
+severe security downgrade. Revert quickly after emergency use.
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
@@ -203,19 +240,25 @@ http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
 Optional one-time auth (if needed):
 
 ```text
-http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-token>
+http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789#token=<gateway-token>
 ```
 
 Notes:
 
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
-- `token` is stored in localStorage; `password` is kept in memory only.
+- `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
+- `password` is kept in memory only.
 - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
   Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
 - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-- For cross-origin dev setups (e.g. `pnpm ui:dev` to a remote Gateway), add the UI
-  origin to `gateway.controlUi.allowedOrigins`.
+- Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins`
+  explicitly (full origins). This includes remote dev setups.
+- Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled
+  local testing. It means allow any browser origin, not “match whatever host I am
+  using.”
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
+  Host-header origin fallback mode, but it is a dangerous security mode.
 
 Example:
 

@@ -1,10 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { __test__, isSensitiveConfigPath } from "./schema.hints.js";
+import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
+import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
+import { FIELD_HELP } from "./schema.help.js";
+import { __test__, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
+import { FIELD_LABELS } from "./schema.labels.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { mapSensitivePaths } = __test__;
+const { collectMatchingSchemaPaths, mapSensitivePaths } = __test__;
+const BUNDLED_CHANNEL_HINT_PREFIXES = [
+  "channels.bluebubbles",
+  "channels.discord",
+  "channels.imessage",
+  "channels.irc",
+  "channels.msteams",
+  "channels.signal",
+  "channels.slack",
+  "channels.telegram",
+  "channels.whatsapp",
+] as const;
 
 describe("isSensitiveConfigPath", () => {
   it("matches whitelist suffixes case-insensitively", () => {
@@ -30,6 +45,23 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.slack.token")).toBe(true);
     expect(isSensitiveConfigPath("models.providers.openai.apiKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
+    expect(isSensitiveConfigPath("channels.feishu.encryptKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
+  });
+});
+
+describe("plugin-owned channel hint paths", () => {
+  it("keeps bundled channel help and labels out of core tables", () => {
+    for (const key of [...Object.keys(FIELD_HELP), ...Object.keys(FIELD_LABELS)]) {
+      if (
+        !BUNDLED_CHANNEL_HINT_PREFIXES.some(
+          (prefix) => key === prefix || key.startsWith(`${prefix}.`),
+        )
+      ) {
+        continue;
+      }
+      expect(isPluginOwnedChannelHintPath(key), `core still owns ${key}`).toBe(false);
+    }
   });
 });
 
@@ -98,6 +130,30 @@ describe("mapSensitivePaths", () => {
     expect(result["merged.nested"]?.sensitive).toBe(undefined);
   });
 
+  it("maps sensitive fields nested under object catchall schemas", () => {
+    const schema = z.object({
+      custom: z.object({}).catchall(
+        z.object({
+          apiKey: z.string().register(sensitive),
+          label: z.string(),
+        }),
+      ),
+    });
+
+    const result = mapSensitivePaths(schema, "", {});
+    expect(result["custom.*.apiKey"]?.sensitive).toBe(true);
+    expect(result["custom.*.label"]?.sensitive).toBe(undefined);
+  });
+
+  it("does not mark plain catchall values sensitive by default", () => {
+    const schema = z.object({
+      env: z.object({}).catchall(z.string()),
+    });
+
+    const result = mapSensitivePaths(schema, "", {});
+    expect(result["env.*"]?.sensitive).toBe(undefined);
+  });
+
   it("main schema yields correct hints (samples)", () => {
     const schema = OpenClawSchema.toJSONSchema({
       target: "draft-07",
@@ -108,8 +164,32 @@ describe("mapSensitivePaths", () => {
 
     expect(hints["agents.defaults.memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
-    expect(hints["channels.discord.accounts.*.token"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
+  });
+
+  it("marks buildSecretInputSchema fields as sensitive via registry", () => {
+    const schema = z.object({
+      encryptKey: buildSecretInputSchema().optional(),
+      appSecret: buildSecretInputSchema().optional(),
+      nested: z.object({
+        verificationToken: buildSecretInputSchema().optional(),
+      }),
+    });
+    const hints = mapSensitivePaths(schema, "", {});
+
+    expect(hints["encryptKey"]?.sensitive).toBe(true);
+    expect(hints["appSecret"]?.sensitive).toBe(true);
+    expect(hints["nested.verificationToken"]?.sensitive).toBe(true);
+  });
+});
+
+describe("collectMatchingSchemaPaths", () => {
+  it("finds base-config URL fields that may embed secrets", () => {
+    const paths = collectMatchingSchemaPaths(OpenClawSchema, "", isSensitiveUrlConfigPath);
+
+    expect(paths.has("mcp.servers.*.url")).toBe(true);
+    expect(paths.has("models.providers.*.baseUrl")).toBe(true);
   });
 });

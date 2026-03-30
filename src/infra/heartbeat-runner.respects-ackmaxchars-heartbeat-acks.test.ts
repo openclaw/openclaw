@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
-
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
+import {
+  seedMainSessionStore,
+  withTempHeartbeatSandbox,
+  withTempTelegramHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime();
 
-describe("resolveHeartbeatIntervalMs", () => {
+describe("runHeartbeatOnce ack handling", () => {
+  const WHATSAPP_GROUP = "120363140186826074@g.us";
+  const TELEGRAM_GROUP = "-1001234567890";
+
   function createHeartbeatConfig(params: {
     tmpDir: string;
     storePath: string;
@@ -32,22 +35,6 @@ describe("resolveHeartbeatIntervalMs", () => {
     };
   }
 
-  async function seedMainSession(
-    storePath: string,
-    cfg: OpenClawConfig,
-    session: {
-      sessionId?: string;
-      updatedAt?: number;
-      lastChannel: string;
-      lastProvider: string;
-      lastTo: string;
-    },
-  ) {
-    const sessionKey = resolveMainSessionKey(cfg);
-    await seedSessionStore(storePath, sessionKey, session);
-    return sessionKey;
-  }
-
   function makeWhatsAppDeps(
     params: {
       sendWhatsApp?: ReturnType<typeof vi.fn>;
@@ -58,9 +45,7 @@ describe("resolveHeartbeatIntervalMs", () => {
     } = {},
   ) {
     return {
-      ...(params.sendWhatsApp
-        ? { sendWhatsApp: params.sendWhatsApp as unknown as HeartbeatDeps["sendWhatsApp"] }
-        : {}),
+      ...(params.sendWhatsApp ? { whatsapp: params.sendWhatsApp as unknown } : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
       webAuthExists: params.webAuthExists ?? (async () => true),
@@ -76,22 +61,10 @@ describe("resolveHeartbeatIntervalMs", () => {
     } = {},
   ) {
     return {
-      ...(params.sendTelegram
-        ? { sendTelegram: params.sendTelegram as unknown as HeartbeatDeps["sendTelegram"] }
-        : {}),
+      ...(params.sendTelegram ? { telegram: params.sendTelegram as unknown } : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
     } satisfies HeartbeatDeps;
-  }
-
-  async function withTempTelegramHeartbeatSandbox<T>(
-    fn: (ctx: {
-      tmpDir: string;
-      storePath: string;
-      replySpy: ReturnType<typeof vi.spyOn>;
-    }) => Promise<T>,
-  ) {
-    return withTempHeartbeatSandbox(fn, { unsetEnvVars: ["TELEGRAM_BOT_TOKEN"] });
   }
 
   function createMessageSendSpy(extra: Record<string, unknown> = {}) {
@@ -125,10 +98,10 @@ describe("resolveHeartbeatIntervalMs", () => {
       ...(params.messages ? { messages: params.messages } : {}),
     });
 
-    await seedMainSession(params.storePath, cfg, {
+    await seedMainSessionStore(params.storePath, cfg, {
       lastChannel: "telegram",
       lastProvider: "telegram",
-      lastTo: "12345",
+      lastTo: TELEGRAM_GROUP,
     });
 
     params.replySpy.mockResolvedValue({ text: params.replyText });
@@ -140,23 +113,56 @@ describe("resolveHeartbeatIntervalMs", () => {
     return sendTelegram;
   }
 
+  function createWhatsAppHeartbeatConfig(params: {
+    tmpDir: string;
+    storePath: string;
+    heartbeat?: Record<string, unknown>;
+    visibility?: Record<string, unknown>;
+  }): OpenClawConfig {
+    return createHeartbeatConfig({
+      tmpDir: params.tmpDir,
+      storePath: params.storePath,
+      heartbeat: {
+        every: "5m",
+        target: "whatsapp",
+        ...params.heartbeat,
+      },
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          ...(params.visibility ? { heartbeat: params.visibility } : {}),
+        },
+      },
+    });
+  }
+
+  async function createSeededWhatsAppHeartbeatConfig(params: {
+    tmpDir: string;
+    storePath: string;
+    heartbeat?: Record<string, unknown>;
+    visibility?: Record<string, unknown>;
+  }): Promise<OpenClawConfig> {
+    const cfg = createWhatsAppHeartbeatConfig(params);
+    await seedMainSessionStore(params.storePath, cfg, {
+      lastChannel: "whatsapp",
+      lastProvider: "whatsapp",
+      lastTo: WHATSAPP_GROUP,
+    });
+    return cfg;
+  }
+
   it("respects ackMaxChars for heartbeat acks", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-          ackMaxChars: 0,
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
+        heartbeat: { ackMaxChars: 0 },
       });
 
-      await seedMainSession(storePath, cfg, {
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "whatsapp",
         lastProvider: "whatsapp",
-        lastTo: "+1555",
+        lastTo: WHATSAPP_GROUP,
       });
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK 🦞" });
@@ -173,20 +179,16 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("sends HEARTBEAT_OK when visibility.showOk is true", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: { whatsapp: { allowFrom: ["*"], heartbeat: { showOk: true } } },
+        visibility: { showOk: true },
       });
 
-      await seedMainSession(storePath, cfg, {
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "whatsapp",
         lastProvider: "whatsapp",
-        lastTo: "+1555",
+        lastTo: WHATSAPP_GROUP,
       });
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
@@ -198,77 +200,58 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "HEARTBEAT_OK", expect.any(Object));
+      expect(sendWhatsApp).toHaveBeenCalledWith(WHATSAPP_GROUP, "HEARTBEAT_OK", expect.any(Object));
     });
   });
 
-  it("does not deliver HEARTBEAT_OK to telegram when showOk is false", async () => {
+  it.each([
+    {
+      title: "does not deliver HEARTBEAT_OK to telegram when showOk is false",
+      replyText: "HEARTBEAT_OK",
+      expectedCalls: 0,
+    },
+    {
+      title: "strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text",
+      replyText: "[openclaw] HEARTBEAT_OK all good",
+      messages: { responsePrefix: "[openclaw]" },
+      expectedCalls: 0,
+    },
+    {
+      title: "does not strip alphanumeric responsePrefix from larger words",
+      replyText: "History check complete",
+      messages: { responsePrefix: "Hi" },
+      expectedCalls: 1,
+      expectedText: "History check complete",
+    },
+  ])("$title", async ({ replyText, messages, expectedCalls, expectedText }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const sendTelegram = await runTelegramHeartbeatWithDefaults({
         tmpDir,
         storePath,
         replySpy,
-        replyText: "HEARTBEAT_OK",
+        replyText,
+        messages,
       });
 
-      expect(sendTelegram).not.toHaveBeenCalled();
-    });
-  });
-
-  it("strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const sendTelegram = await runTelegramHeartbeatWithDefaults({
-        tmpDir,
-        storePath,
-        replySpy,
-        replyText: "[openclaw] HEARTBEAT_OK all good",
-        messages: { responsePrefix: "[openclaw]" },
-      });
-
-      expect(sendTelegram).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not strip alphanumeric responsePrefix from larger words", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const sendTelegram = await runTelegramHeartbeatWithDefaults({
-        tmpDir,
-        storePath,
-        replySpy,
-        replyText: "History check complete",
-        messages: { responsePrefix: "Hi" },
-      });
-
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "12345",
-        "History check complete",
-        expect.any(Object),
-      );
+      expect(sendTelegram).toHaveBeenCalledTimes(expectedCalls);
+      if (expectedText) {
+        expect(sendTelegram).toHaveBeenCalledWith(TELEGRAM_GROUP, expectedText, expect.any(Object));
+      }
     });
   });
 
   it("skips heartbeat LLM calls when visibility disables all output", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: {
-          whatsapp: {
-            allowFrom: ["*"],
-            heartbeat: { showOk: false, showAlerts: false, useIndicator: false },
-          },
-        },
+        visibility: { showOk: false, showAlerts: false, useIndicator: false },
       });
 
-      await seedMainSession(storePath, cfg, {
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "whatsapp",
         lastProvider: "whatsapp",
-        lastTo: "+1555",
+        lastTo: WHATSAPP_GROUP,
       });
 
       const sendWhatsApp = createMessageSendSpy();
@@ -286,20 +269,9 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("skips delivery for markup-wrapped HEARTBEAT_OK", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      });
-
-      await seedMainSession(storePath, cfg, {
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
       });
 
       replySpy.mockResolvedValue({ text: "<b>HEARTBEAT_OK</b>" });
@@ -318,21 +290,16 @@ describe("resolveHeartbeatIntervalMs", () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const originalUpdatedAt = 1000;
       const bumpedUpdatedAt = 2000;
-      const cfg = createHeartbeatConfig({
+      const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "whatsapp",
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
       });
 
-      const sessionKey = await seedMainSession(storePath, cfg, {
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
         updatedAt: originalUpdatedAt,
         lastChannel: "whatsapp",
         lastProvider: "whatsapp",
-        lastTo: "+1555",
+        lastTo: WHATSAPP_GROUP,
       });
 
       replySpy.mockImplementationOnce(async () => {
@@ -363,16 +330,9 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("skips WhatsApp delivery when not linked or running", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: { every: "5m", target: "whatsapp" },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      });
-      await seedMainSession(storePath, cfg, {
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
       });
 
       replySpy.mockResolvedValue({ text: "Heartbeat alert" });
@@ -405,14 +365,14 @@ describe("resolveHeartbeatIntervalMs", () => {
         heartbeat: params.heartbeat,
         channels: { telegram: params.telegram },
       });
-      await seedMainSession(storePath, cfg, {
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
         lastProvider: "telegram",
-        lastTo: "123456",
+        lastTo: TELEGRAM_GROUP,
       });
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendTelegram = createMessageSendSpy({ chatId: "123456" });
+      const sendTelegram = createMessageSendSpy({ chatId: TELEGRAM_GROUP });
 
       await runHeartbeatOnce({
         cfg,
@@ -421,7 +381,7 @@ describe("resolveHeartbeatIntervalMs", () => {
 
       expect(sendTelegram).toHaveBeenCalledTimes(1);
       expect(sendTelegram).toHaveBeenCalledWith(
-        "123456",
+        TELEGRAM_GROUP,
         "Hello from heartbeat",
         expect.objectContaining({ accountId: params.expectedAccountId, verbose: false }),
       );

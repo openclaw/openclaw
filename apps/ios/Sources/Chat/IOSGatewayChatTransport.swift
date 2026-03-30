@@ -39,6 +39,20 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
         // (chat.subscribe is a node event, not an operator RPC method.)
     }
 
+    func resetSession(sessionKey: String) async throws {
+        struct Params: Codable { var key: String }
+        let data = try JSONEncoder().encode(Params(key: sessionKey))
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.gateway.request(method: "sessions.reset", paramsJSON: json, timeoutSeconds: 10)
+    }
+
+    func compactSession(sessionKey: String) async throws {
+        struct Params: Codable { var key: String }
+        let data = try JSONEncoder().encode(Params(key: sessionKey))
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.gateway.request(method: "sessions.compact", paramsJSON: json, timeoutSeconds: 10)
+    }
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         struct Params: Codable { var sessionKey: String }
         let data = try JSONEncoder().encode(Params(sessionKey: sessionKey))
@@ -54,7 +68,12 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        Self.logger.info("chat.send start sessionKey=\(sessionKey, privacy: .public) len=\(message.count, privacy: .public) attachments=\(attachments.count, privacy: .public)")
+        let startLogMessage =
+            "chat.send start sessionKey=\(sessionKey) "
+            + "len=\(message.count) attachments=\(attachments.count)"
+        Self.logger.info(
+            "\(startLogMessage, privacy: .public)"
+        )
         struct Params: Codable {
             var sessionKey: String
             var message: String

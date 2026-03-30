@@ -33,13 +33,16 @@ function createStubPtyAdapter() {
 }
 
 describe("process supervisor PTY command contract", () => {
-  beforeEach(() => {
-    createPtyAdapterMock.mockReset();
+  let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createProcessSupervisor } = await import("./supervisor.js"));
+    createPtyAdapterMock.mockClear();
   });
 
   it("passes PTY command verbatim to shell args", async () => {
     createPtyAdapterMock.mockResolvedValue(createStubPtyAdapter());
-    const { createProcessSupervisor } = await import("./supervisor.js");
     const supervisor = createProcessSupervisor();
     const command = `printf '%s\\n' "a b" && printf '%s\\n' '$HOME'`;
 
@@ -60,7 +63,6 @@ describe("process supervisor PTY command contract", () => {
 
   it("rejects empty PTY command", async () => {
     createPtyAdapterMock.mockResolvedValue(createStubPtyAdapter());
-    const { createProcessSupervisor } = await import("./supervisor.js");
     const supervisor = createProcessSupervisor();
 
     await expect(

@@ -1,10 +1,31 @@
-import type { MSTeamsConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
+import type { MSTeamsConfig } from "../runtime-api.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
+
+function resolveNamedTeamRouteConfig(allowNameMatching = false) {
+  const cfg: MSTeamsConfig = {
+    teams: {
+      "My Team": {
+        requireMention: true,
+        channels: {
+          "General Chat": { requireMention: false },
+        },
+      },
+    },
+  };
+
+  return resolveMSTeamsRouteConfig({
+    cfg,
+    teamName: "My Team",
+    channelName: "General Chat",
+    conversationId: "ignored",
+    allowNameMatching,
+  });
+}
 
 describe("msteams policy", () => {
   describe("resolveMSTeamsRouteConfig", () => {
@@ -26,8 +47,11 @@ describe("msteams policy", () => {
         conversationId: "chan456",
       });
 
-      expect(res.teamConfig?.requireMention).toBe(false);
-      expect(res.channelConfig?.requireMention).toBe(true);
+      if (!res.teamConfig || !res.channelConfig) {
+        throw new Error("expected matched team and channel config");
+      }
+      expect(res.teamConfig.requireMention).toBe(false);
+      expect(res.channelConfig.requireMention).toBe(true);
       expect(res.allowlistConfigured).toBe(true);
       expect(res.allowed).toBe(true);
       expect(res.channelMatchKey).toBe("chan456");
@@ -50,27 +74,22 @@ describe("msteams policy", () => {
       expect(res.allowed).toBe(false);
     });
 
-    it("matches team and channel by name", () => {
-      const cfg: MSTeamsConfig = {
-        teams: {
-          "My Team": {
-            requireMention: true,
-            channels: {
-              "General Chat": { requireMention: false },
-            },
-          },
-        },
-      };
+    it("blocks team and channel name matches by default", () => {
+      const res = resolveNamedTeamRouteConfig();
 
-      const res = resolveMSTeamsRouteConfig({
-        cfg,
-        teamName: "My Team",
-        channelName: "General Chat",
-        conversationId: "ignored",
-      });
+      expect(res.teamConfig).toBeUndefined();
+      expect(res.channelConfig).toBeUndefined();
+      expect(res.allowed).toBe(false);
+    });
 
-      expect(res.teamConfig?.requireMention).toBe(true);
-      expect(res.channelConfig?.requireMention).toBe(false);
+    it("matches team and channel by name when dangerous name matching is enabled", () => {
+      const res = resolveNamedTeamRouteConfig(true);
+
+      if (!res.teamConfig || !res.channelConfig) {
+        throw new Error("expected matched named team and channel config");
+      }
+      expect(res.teamConfig.requireMention).toBe(true);
+      expect(res.channelConfig.requireMention).toBe(false);
       expect(res.allowed).toBe(true);
     });
   });
@@ -184,13 +203,25 @@ describe("msteams policy", () => {
       ).toBe(true);
     });
 
-    it("allows allowlist when sender name matches", () => {
+    it("blocks sender-name allowlist matches by default", () => {
       expect(
         isMSTeamsGroupAllowed({
           groupPolicy: "allowlist",
           allowFrom: ["user"],
           senderId: "other",
           senderName: "User",
+        }),
+      ).toBe(false);
+    });
+
+    it("allows sender-name allowlist matches when explicitly enabled", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "allowlist",
+          allowFrom: ["user"],
+          senderId: "other",
+          senderName: "User",
+          allowNameMatching: true,
         }),
       ).toBe(true);
     });

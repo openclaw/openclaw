@@ -1,15 +1,10 @@
-import { defineConfig } from "vitest/config";
-import baseConfig from "./vitest.config.ts";
+import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-const base = baseConfig as unknown as Record<string, unknown>;
-const baseTest = (baseConfig as { test?: { exclude?: string[] } }).test ?? {};
-const exclude = baseTest.exclude ?? [];
+export function createGatewayVitestConfig(env?: Record<string, string | undefined>) {
+  return createScopedVitestConfig(["src/gateway/**/*.test.ts"], {
+    dir: "src/gateway",
+    env,
+  });
+}
 
-export default defineConfig({
-  ...base,
-  test: {
-    ...baseTest,
-    include: ["src/gateway/**/*.test.ts"],
-    exclude,
-  },
-});
+export default createGatewayVitestConfig();

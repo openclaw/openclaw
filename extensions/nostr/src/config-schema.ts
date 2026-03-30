@@ -1,7 +1,10 @@
-import { MarkdownConfigSchema, buildChannelConfigSchema } from "openclaw/plugin-sdk";
-import { z } from "zod";
-
-const allowFromEntry = z.union([z.string(), z.number()]);
+import {
+  AllowFromListSchema,
+  buildChannelConfigSchema,
+  DmPolicySchema,
+  MarkdownConfigSchema,
+} from "openclaw/plugin-sdk/channel-config-primitives";
+import { z } from "openclaw/plugin-sdk/zod";
 
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
@@ -60,6 +63,9 @@ export const NostrConfigSchema = z.object({
   /** Account name (optional display name) */
   name: z.string().optional(),
 
+  /** Optional default account id for routing/account selection. */
+  defaultAccount: z.string().optional(),
+
   /** Whether this channel is enabled */
   enabled: z.boolean().optional(),
 
@@ -73,10 +79,10 @@ export const NostrConfigSchema = z.object({
   relays: z.array(z.string()).optional(),
 
   /** DM access policy: pairing, allowlist, open, or disabled */
-  dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
+  dmPolicy: DmPolicySchema.optional(),
 
   /** Allowed sender pubkeys (npub or hex format) */
-  allowFrom: z.array(allowFromEntry).optional(),
+  allowFrom: AllowFromListSchema,
 
   /** Profile metadata (NIP-01 kind:0 content) */
   profile: NostrProfileSchema.optional(),

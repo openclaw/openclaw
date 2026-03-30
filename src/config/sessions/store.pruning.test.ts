@@ -1,28 +1,21 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { capEntryCount, pruneStaleEntries, rotateSessionFile } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-let fixtureRoot = "";
-let fixtureCount = 0;
-
-async function createCaseDir(prefix: string): Promise<string> {
-  const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
-}
+const fixtureSuite = createFixtureSuite("openclaw-pruning-suite-");
 
 beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruning-suite-"));
+  await fixtureSuite.setup();
 });
 
 afterAll(async () => {
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
+  await fixtureSuite.cleanup();
 });
 
 function makeEntry(updatedAt: number): SessionEntry {
@@ -82,7 +75,7 @@ describe("rotateSessionFile", () => {
   let storePath: string;
 
   beforeEach(async () => {
-    testDir = await createCaseDir("rotate");
+    testDir = await fixtureSuite.createCaseDir("rotate");
     storePath = path.join(testDir, "sessions.json");
   });
 
@@ -105,7 +98,8 @@ describe("rotateSessionFile", () => {
     let now = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 5));
     try {
-      for (let i = 0; i < 5; i++) {
+      // 4 rotations are enough to verify pruning to <=3 backups.
+      for (let i = 0; i < 4; i++) {
         await fs.writeFile(storePath, `data-${i}-${"x".repeat(100)}`, "utf-8");
         await rotateSessionFile(storePath, 50);
       }

@@ -5,11 +5,14 @@ import { fileURLToPath } from "node:url";
 
 const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
 
+function parsePackageName(raw: string): string | null {
+  const parsed = JSON.parse(raw) as { name?: unknown };
+  return typeof parsed.name === "string" ? parsed.name : null;
+}
+
 async function readPackageName(dir: string): Promise<string | null> {
   try {
-    const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: unknown };
-    return typeof parsed.name === "string" ? parsed.name : null;
+    return parsePackageName(await fs.readFile(path.join(dir, "package.json"), "utf-8"));
   } catch {
     return null;
   }
@@ -17,44 +20,42 @@ async function readPackageName(dir: string): Promise<string | null> {
 
 function readPackageNameSync(dir: string): string | null {
   try {
-    const raw = fsSync.readFileSync(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: unknown };
-    return typeof parsed.name === "string" ? parsed.name : null;
+    return parsePackageName(fsSync.readFileSync(path.join(dir, "package.json"), "utf-8"));
   } catch {
     return null;
   }
 }
 
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
-  let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
       return current;
     }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
   }
   return null;
 }
 
 function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
-  let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = readPackageNameSync(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
       return current;
     }
+  }
+  return null;
+}
+
+function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string> {
+  let current = path.resolve(startDir);
+  for (let i = 0; i < maxDepth; i += 1) {
+    yield current;
     const parent = path.dirname(current);
     if (parent === current) {
       break;
     }
     current = parent;
   }
-  return null;
 }
 
 function candidateDirsFromArgv1(argv1: string): string[] {
@@ -116,7 +117,11 @@ function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: strin
   const candidates: string[] = [];
 
   if (opts.moduleUrl) {
-    candidates.push(path.dirname(fileURLToPath(opts.moduleUrl)));
+    try {
+      candidates.push(path.dirname(fileURLToPath(opts.moduleUrl)));
+    } catch {
+      // Ignore invalid file:// URLs and keep other package-root hints.
+    }
   }
   if (opts.argv1) {
     candidates.push(...candidateDirsFromArgv1(opts.argv1));

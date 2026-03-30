@@ -1,56 +1,69 @@
-import { describe, expect, it } from "vitest";
-import * as channelWeb from "../channel-web.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeChatType } from "./chat-type.js";
-import * as webEntry from "./web/index.js";
-
-describe("channel-web barrel", () => {
-  it("exports the expected web helpers", () => {
-    expect(channelWeb.createWaSocket).toBeTypeOf("function");
-    expect(channelWeb.loginWeb).toBeTypeOf("function");
-    expect(channelWeb.monitorWebChannel).toBeTypeOf("function");
-    expect(channelWeb.sendMessageWhatsApp).toBeTypeOf("function");
-    expect(channelWeb.monitorWebInbox).toBeTypeOf("function");
-    expect(channelWeb.pickWebChannel).toBeTypeOf("function");
-    expect(channelWeb.WA_WEB_AUTH_DIR).toBeTruthy();
-  });
-});
 
 describe("normalizeChatType", () => {
-  it("normalizes common inputs", () => {
-    expect(normalizeChatType("direct")).toBe("direct");
-    expect(normalizeChatType("dm")).toBe("direct");
-    expect(normalizeChatType("group")).toBe("group");
-    expect(normalizeChatType("channel")).toBe("channel");
-  });
-
-  it("returns undefined for empty/unknown values", () => {
-    expect(normalizeChatType(undefined)).toBeUndefined();
-    expect(normalizeChatType("")).toBeUndefined();
-    expect(normalizeChatType("nope")).toBeUndefined();
-    expect(normalizeChatType("room")).toBeUndefined();
-  });
+  it.each([
+    { name: "normalizes direct", value: "direct", expected: "direct" },
+    { name: "normalizes dm alias", value: "dm", expected: "direct" },
+    { name: "normalizes group", value: "group", expected: "group" },
+    { name: "normalizes channel", value: "channel", expected: "channel" },
+    { name: "returns undefined for undefined", value: undefined, expected: undefined },
+    { name: "returns undefined for empty", value: "", expected: undefined },
+    { name: "returns undefined for unknown value", value: "nope", expected: undefined },
+    { name: "returns undefined for unsupported room", value: "room", expected: undefined },
+  ] satisfies Array<{ name: string; value: string | undefined; expected: string | undefined }>)(
+    "$name",
+    ({ value, expected }) => {
+      expect(normalizeChatType(value)).toBe(expected);
+    },
+  );
 
   describe("backward compatibility", () => {
-    it("accepts legacy 'dm' value and normalizes to 'direct'", () => {
-      // Legacy config/input may use "dm" - ensure smooth upgrade path
-      expect(normalizeChatType("dm")).toBe("direct");
+    it("accepts legacy 'dm' value shape variants and normalizes to 'direct'", () => {
+      // Legacy config/input may use "dm" with non-canonical casing/spacing.
       expect(normalizeChatType("DM")).toBe("direct");
       expect(normalizeChatType(" dm ")).toBe("direct");
     });
   });
 });
 
-describe("channels/web entrypoint", () => {
-  it("re-exports web channel helpers", () => {
-    expect(webEntry.createWaSocket).toBe(channelWeb.createWaSocket);
-    expect(webEntry.loginWeb).toBe(channelWeb.loginWeb);
-    expect(webEntry.logWebSelfId).toBe(channelWeb.logWebSelfId);
-    expect(webEntry.monitorWebInbox).toBe(channelWeb.monitorWebInbox);
-    expect(webEntry.monitorWebChannel).toBe(channelWeb.monitorWebChannel);
-    expect(webEntry.pickWebChannel).toBe(channelWeb.pickWebChannel);
-    expect(webEntry.sendMessageWhatsApp).toBe(channelWeb.sendMessageWhatsApp);
-    expect(webEntry.WA_WEB_AUTH_DIR).toBe(channelWeb.WA_WEB_AUTH_DIR);
-    expect(webEntry.waitForWaConnection).toBe(channelWeb.waitForWaConnection);
-    expect(webEntry.webAuthExists).toBe(channelWeb.webAuthExists);
+describe("WA_WEB_AUTH_DIR", () => {
+  afterEach(() => {
+    vi.doUnmock("../plugins/runtime/runtime-whatsapp-boundary.js");
+    vi.resetModules();
+  });
+
+  it("resolves lazily and caches across the legacy and channels/web entrypoints", async () => {
+    const resolveWaWebAuthDir = vi.fn(() => "/tmp/openclaw-whatsapp-auth");
+
+    vi.resetModules();
+    vi.doMock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+      createWaSocket: vi.fn(),
+      extractMediaPlaceholder: vi.fn(),
+      extractText: vi.fn(),
+      formatError: vi.fn(),
+      getStatusCode: vi.fn(),
+      logWebSelfId: vi.fn(),
+      loginWeb: vi.fn(),
+      logoutWeb: vi.fn(),
+      monitorWebChannel: vi.fn(),
+      monitorWebInbox: vi.fn(),
+      pickWebChannel: vi.fn(),
+      resolveHeartbeatRecipients: vi.fn(),
+      resolveWaWebAuthDir,
+      runWebHeartbeatOnce: vi.fn(),
+      sendMessageWhatsApp: vi.fn(),
+      sendReactionWhatsApp: vi.fn(),
+      waitForWaConnection: vi.fn(),
+      webAuthExists: vi.fn(),
+    }));
+
+    const channelWeb = await import("../channel-web.js");
+    const webEntry = await import("./web/index.js");
+
+    expect(resolveWaWebAuthDir).not.toHaveBeenCalled();
+    expect(String(channelWeb.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-whatsapp-auth");
+    expect(String(webEntry.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-whatsapp-auth");
+    expect(resolveWaWebAuthDir).toHaveBeenCalledTimes(1);
   });
 });

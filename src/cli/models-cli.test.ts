@@ -1,17 +1,18 @@
+import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runRegisteredCli } from "../test-utils/command-runner.js";
 
-const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
 const noopAsync = vi.fn(async () => undefined);
+const modelsAuthLoginCommand = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/models.js", () => ({
-  githubCopilotLoginCommand,
   modelsStatusCommand,
   modelsAliasesAddCommand: noopAsync,
   modelsAliasesListCommand: noopAsync,
   modelsAliasesRemoveCommand: noopAsync,
   modelsAuthAddCommand: noopAsync,
-  modelsAuthLoginCommand: noopAsync,
+  modelsAuthLoginCommand,
   modelsAuthOrderClearCommand: noopAsync,
   modelsAuthOrderGetCommand: noopAsync,
   modelsAuthOrderSetCommand: noopAsync,
@@ -32,17 +33,15 @@ vi.mock("../commands/models.js", () => ({
 }));
 
 describe("models cli", () => {
-  let Command: typeof import("commander").Command;
   let registerModelsCli: (typeof import("./models-cli.js"))["registerModelsCli"];
 
   beforeAll(async () => {
     // Load once; vi.mock above ensures command handlers are already mocked.
-    ({ Command } = await import("commander"));
     ({ registerModelsCli } = await import("./models-cli.js"));
   });
 
   beforeEach(() => {
-    githubCopilotLoginCommand.mockClear();
+    modelsAuthLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
   });
 
@@ -50,6 +49,13 @@ describe("models cli", () => {
     const program = new Command();
     registerModelsCli(program);
     return program;
+  }
+
+  async function runModelsCommand(args: string[]) {
+    await runRegisteredCli({
+      register: registerModelsCli as (program: Command) => void,
+      argv: args,
+    });
   }
 
   it("registers github-copilot login command", async () => {
@@ -67,29 +73,22 @@ describe("models cli", () => {
       from: "user",
     });
 
-    expect(githubCopilotLoginCommand).toHaveBeenCalledTimes(1);
-    expect(githubCopilotLoginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ yes: true }),
+    expect(modelsAuthLoginCommand).toHaveBeenCalledTimes(1);
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        method: "device",
+        yes: true,
+      }),
       expect.any(Object),
     );
   });
 
-  it("passes --agent to models status", async () => {
-    const program = createProgram();
-
-    await program.parseAsync(["models", "status", "--agent", "poe"], { from: "user" });
-
-    expect(modelsStatusCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "poe" }),
-      expect.any(Object),
-    );
-  });
-
-  it("passes parent --agent to models status", async () => {
-    const program = createProgram();
-
-    await program.parseAsync(["models", "--agent", "poe", "status"], { from: "user" });
-
+  it.each([
+    { label: "status flag", args: ["models", "status", "--agent", "poe"] },
+    { label: "parent flag", args: ["models", "--agent", "poe", "status"] },
+  ])("passes --agent to models status ($label)", async ({ args }) => {
+    await runModelsCommand(args);
     expect(modelsStatusCommand).toHaveBeenCalledWith(
       expect.objectContaining({ agent: "poe" }),
       expect.any(Object),

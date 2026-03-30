@@ -6,6 +6,7 @@ export type TranscriptWaiter = {
   resolve: (text: string) => void;
   reject: (err: Error) => void;
   timeout: NodeJS.Timeout;
+  turnToken?: string;
 };
 
 export type CallManagerRuntimeState = {
@@ -27,6 +28,7 @@ export type CallManagerTransientState = {
   activeTurnCalls: Set<CallId>;
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
+  initialMessageInFlight: Set<CallId>;
 };
 
 export type CallManagerHooks = {

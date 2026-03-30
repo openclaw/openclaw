@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeIMessageMessagingTarget } from "./normalize/imessage.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize/signal.js";
-import { normalizeSignalAccountInput } from "./onboarding/signal.js";
-import { telegramOutbound } from "./outbound/telegram.js";
-import { whatsappOutbound } from "./outbound/whatsapp.js";
+
+function expectWhatsAppTargetResolutionError(result: unknown) {
+  expect(result).toEqual({
+    ok: false,
+    error: expect.any(Error),
+  });
+}
 
 describe("imessage target normalization", () => {
   it("preserves service prefixes for handles", () => {
@@ -14,7 +19,7 @@ describe("imessage target normalization", () => {
   it("drops service prefixes for chat targets", () => {
     expect(normalizeIMessageMessagingTarget("sms:chat_id:123")).toBe("chat_id:123");
     expect(normalizeIMessageMessagingTarget("imessage:CHAT_GUID:abc")).toBe("chat_guid:abc");
-    expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chat_identifier:foo");
+    expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chatidentifier:foo");
   });
 });
 
@@ -35,6 +40,12 @@ describe("signal target normalization", () => {
     expect(
       normalizeSignalMessagingTarget("signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg="),
     ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
+  });
+
+  it("preserves case for base64-like group IDs without signal prefix", () => {
+    expect(
+      normalizeSignalMessagingTarget("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD="),
+    ).toBe("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=");
   });
 
   it("accepts uuid prefixes for target detection", () => {
@@ -74,7 +85,7 @@ describe("telegramOutbound.sendPayload", () => {
           },
         },
       },
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(1);
@@ -108,7 +119,7 @@ describe("telegramOutbound.sendPayload", () => {
           },
         },
       },
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(2);
@@ -143,10 +154,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("returns error when implicit target is not in allowFrom", () => {
@@ -156,10 +164,13 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
+    if (!result || result.ok) {
+      throw new Error("expected WhatsApp target resolution to fail");
+    }
+    expect(result.error.message).toBe(
+      'Target "+15550000000" is not listed in the configured WhatsApp allowFrom policy.',
+    );
   });
 
   it("keeps group JID targets even when allowFrom does not contain them", () => {
@@ -173,34 +184,5 @@ describe("whatsappOutbound.resolveTarget", () => {
       ok: true,
       to: "120363401234567890@g.us",
     });
-  });
-});
-
-describe("normalizeSignalAccountInput", () => {
-  it("accepts already normalized numbers", () => {
-    expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
-  });
-
-  it("normalizes formatted input", () => {
-    expect(normalizeSignalAccountInput("  +1 (555) 000-1234 ")).toBe("+15550001234");
-  });
-
-  it("rejects empty input", () => {
-    expect(normalizeSignalAccountInput("   ")).toBeNull();
-  });
-
-  it("rejects non-numeric input", () => {
-    expect(normalizeSignalAccountInput("ok")).toBeNull();
-    expect(normalizeSignalAccountInput("++--")).toBeNull();
-  });
-
-  it("rejects inputs with stray + characters", () => {
-    expect(normalizeSignalAccountInput("++12345")).toBeNull();
-    expect(normalizeSignalAccountInput("+1+2345")).toBeNull();
-  });
-
-  it("rejects numbers that are too short or too long", () => {
-    expect(normalizeSignalAccountInput("+1234")).toBeNull();
-    expect(normalizeSignalAccountInput("+1234567890123456")).toBeNull();
   });
 });

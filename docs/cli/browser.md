@@ -1,9 +1,9 @@
 ---
-summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, extension relay)"
+summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, Chrome MCP, and CDP)"
 read_when:
   - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
-  - You want to use the Chrome extension relay (attach/detach via toolbar button)
+  - You want to attach to your local signed-in Chrome via Chrome MCP
 title: "browser"
 ---
 
@@ -14,7 +14,6 @@ Manage OpenClaw’s browser control server and run browser actions (tabs, snapsh
 Related:
 
 - Browser tool + API: [Browser tool](/tools/browser)
-- Chrome extension relay: [Chrome extension](/tools/chrome-extension)
 
 ## Common flags
 
@@ -27,22 +26,45 @@ Related:
 ## Quick start (local)
 
 ```bash
-openclaw browser --browser-profile chrome tabs
+openclaw browser profiles
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
+## If the command is missing
+
+If `openclaw browser` is an unknown command, check `plugins.allow` in
+`~/.openclaw/openclaw.json`.
+
+When `plugins.allow` is present, the bundled browser plugin must be listed
+explicitly:
+
+```json5
+{
+  plugins: {
+    allow: ["telegram", "browser"],
+  },
+}
+```
+
+`browser.enabled=true` does not restore the CLI subcommand when the plugin
+allowlist excludes `browser`.
+
+Related: [Browser tool](/tools/browser#missing-browser-command-or-tool)
+
 ## Profiles
 
 Profiles are named browser routing configs. In practice:
 
-- `openclaw`: launches/attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
-- `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
+- `openclaw`: launches or attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
+- `user`: controls your existing signed-in Chrome session via Chrome DevTools MCP.
+- custom CDP profiles: point at a local or remote CDP endpoint.
 
 ```bash
 openclaw browser profiles
 openclaw browser create-profile --name work --color "#FF5A36"
+openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser delete-profile --name work
 ```
 
@@ -83,20 +105,18 @@ openclaw browser click <ref>
 openclaw browser type <ref> "hello"
 ```
 
-## Chrome extension relay (attach via toolbar button)
+## Existing Chrome via MCP
 
-This mode lets the agent control an existing Chrome tab that you attach manually (it does not auto-attach).
-
-Install the unpacked extension to a stable path:
+Use the built-in `user` profile, or create your own `existing-session` profile:
 
 ```bash
-openclaw browser extension install
-openclaw browser extension path
+openclaw browser --browser-profile user tabs
+openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
+openclaw browser --browser-profile chrome-live tabs
 ```
 
-Then Chrome → `chrome://extensions` → enable “Developer mode” → “Load unpacked” → select the printed folder.
-
-Full guide: [Chrome extension](/tools/chrome-extension)
+This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
 
 ## Remote browser control (node host proxy)
 

@@ -1,0 +1,59 @@
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+
+export type GatewayServiceEnv = Record<string, string | undefined>;
+
+export type GatewayServiceInstallArgs = {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: GatewayServiceEnv;
+  description?: string;
+};
+
+export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
+
+export type GatewayServiceManageArgs = {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+};
+
+export type GatewayServiceControlArgs = {
+  stdout: NodeJS.WritableStream;
+  env?: GatewayServiceEnv;
+};
+
+export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
+
+export type GatewayServiceEnvArgs = {
+  env?: GatewayServiceEnv;
+};
+
+export type GatewayServiceCommandConfig = {
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
+  sourcePath?: string;
+};
+
+export type GatewayServiceState = {
+  installed: boolean;
+  loaded: boolean;
+  running: boolean;
+  env: GatewayServiceEnv;
+  command: GatewayServiceCommandConfig | null;
+  runtime?: GatewayServiceRuntime;
+};
+
+export type GatewayServiceStartResult =
+  | { outcome: "started"; state: GatewayServiceState }
+  | { outcome: "scheduled"; state: GatewayServiceState }
+  | { outcome: "missing-install"; state: GatewayServiceState };
+
+export type GatewayServiceRenderArgs = {
+  description?: string;
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: GatewayServiceEnv;
+};

@@ -27,21 +27,32 @@ function mockCiaoService(params?: {
   advertise?: ReturnType<typeof vi.fn>;
   destroy?: ReturnType<typeof vi.fn>;
   serviceState?: string;
+  stateRef?: { value: string };
   on?: ReturnType<typeof vi.fn>;
 }) {
   const advertise = params?.advertise ?? vi.fn().mockResolvedValue(undefined);
   const destroy = params?.destroy ?? vi.fn().mockResolvedValue(undefined);
   const on = params?.on ?? vi.fn();
   createService.mockImplementation((options: Record<string, unknown>) => {
-    return {
+    const service = {
       advertise,
       destroy,
-      serviceState: params?.serviceState ?? "announced",
       on,
       getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
       getHostname: () => asString(options.hostname, "unknown"),
       getPort: () => Number(options.port ?? -1),
     };
+    Object.defineProperty(service, "serviceState", {
+      configurable: true,
+      enumerable: true,
+      get: () => params?.stateRef?.value ?? params?.serviceState ?? "announced",
+      set: (value: string) => {
+        if (params?.stateRef) {
+          params.stateRef.value = value;
+        }
+      },
+    });
+    return service;
   });
   return { advertise, destroy, on };
 }
@@ -103,11 +114,11 @@ describe("gateway bonjour advertiser", () => {
       process.env[key] = value;
     }
 
-    createService.mockReset();
-    shutdown.mockReset();
-    registerUnhandledRejectionHandler.mockReset();
-    logWarn.mockReset();
-    logDebug.mockReset();
+    createService.mockClear();
+    shutdown.mockClear();
+    registerUnhandledRejectionHandler.mockClear();
+    logWarn.mockClear();
+    logDebug.mockClear();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -230,6 +241,39 @@ describe("gateway bonjour advertiser", () => {
     expect(order).toEqual(["shutdown", "cleanup"]);
   });
 
+  it("logs ciao handler classifications at the bonjour caller", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
+    expect(handler).toBeTypeOf("function");
+
+    expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
+    expect(logDebug).toHaveBeenCalledWith(
+      expect.stringContaining("ignoring unhandled ciao rejection"),
+    );
+
+    logDebug.mockClear();
+    expect(
+      handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
+    ).toBe(true);
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao interface assertion"),
+    );
+
+    await started.stop();
+  });
+
   it("logs advertise failures and retries via watchdog", async () => {
     enableAdvertiserUnitMode();
     vi.useFakeTimers();
@@ -253,14 +297,16 @@ describe("gateway bonjour advertiser", () => {
     await Promise.resolve();
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise failed"));
 
-    // watchdog should attempt re-advertise at the 60s interval tick
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(advertise).toHaveBeenCalledTimes(2);
+    // watchdog first retries, then recreates the advertiser after the service
+    // stays unhealthy across multiple 5s ticks.
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(advertise).toHaveBeenCalledTimes(3);
+    expect(createService).toHaveBeenCalledTimes(2);
 
     await started.stop();
 
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(advertise).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(advertise).toHaveBeenCalledTimes(3);
   });
 
   it("handles advertise throwing synchronously", async () => {
@@ -279,6 +325,119 @@ describe("gateway bonjour advertiser", () => {
 
     expect(advertise).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
+
+    await started.stop();
+  });
+
+  it("suppresses ciao self-probe retry console noise while advertising", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const originalConsoleLog = console.log;
+    const baseConsoleLog = vi.fn();
+    console.log = baseConsoleLog as typeof console.log;
+
+    try {
+      const started = await startGatewayBonjourAdvertiser({
+        gatewayPort: 18789,
+        sshPort: 2222,
+      });
+
+      console.log(
+        "[test._openclaw-gw._tcp.local.] failed probing with reason: Error: Can't probe for a service which is announced already. Received announcing for service test._openclaw-gw._tcp.local.. Trying again in 2 seconds!",
+      );
+      console.log("ordinary console line");
+
+      expect(baseConsoleLog).toHaveBeenCalledTimes(1);
+      expect(baseConsoleLog).toHaveBeenCalledWith("ordinary console line");
+
+      await started.stop();
+    } finally {
+      console.log = originalConsoleLog;
+    }
+  });
+
+  it("recreates the advertiser when ciao gets stuck announcing", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const stateRef = { value: "announcing" };
+    const events: string[] = [];
+    let advertiseCount = 0;
+    const destroy = vi.fn().mockImplementation(async () => {
+      events.push("destroy");
+    });
+    const advertise = vi.fn().mockImplementation(() => {
+      advertiseCount += 1;
+      events.push(`advertise:${advertiseCount}`);
+      if (advertiseCount === 1) {
+        stateRef.value = "announcing";
+        return new Promise<void>(() => {});
+      }
+      stateRef.value = "announced";
+      return Promise.resolve();
+    });
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(createService).toHaveBeenCalledTimes(2);
+    expect(advertise).toHaveBeenCalledTimes(2);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["advertise:1", "destroy", "advertise:2"]);
+
+    await started.stop();
+    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(shutdown).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats probing-to-announcing churn as one unhealthy window", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const stateRef = { value: "probing" };
+    let advertiseCount = 0;
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockImplementation(() => {
+      advertiseCount += 1;
+      if (advertiseCount === 2) {
+        stateRef.value = "announcing";
+      }
+      if (advertiseCount >= 3) {
+        stateRef.value = "announced";
+      }
+      return Promise.resolve();
+    });
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("service stuck in announcing"));
+    expect(createService).toHaveBeenCalledTimes(2);
+    expect(advertise).toHaveBeenCalledTimes(3);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
 
     await started.stop();
   });

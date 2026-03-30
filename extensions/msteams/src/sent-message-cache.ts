@@ -1,19 +1,27 @@
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MSTEAMS_SENT_MESSAGES_KEY = Symbol.for("openclaw.msteamsSentMessages");
 
-type CacheEntry = {
-  messageIds: Set<string>;
-  timestamps: Map<string, number>;
-};
+let sentMessageCache: Map<string, Map<string, number>> | undefined;
 
-const sentMessages = new Map<string, CacheEntry>();
+function getSentMessageCache(): Map<string, Map<string, number>> {
+  if (!sentMessageCache) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    sentMessageCache =
+      (globalStore[MSTEAMS_SENT_MESSAGES_KEY] as Map<string, Map<string, number>> | undefined) ??
+      new Map<string, Map<string, number>>();
+    globalStore[MSTEAMS_SENT_MESSAGES_KEY] = sentMessageCache;
+  }
+  return sentMessageCache;
+}
 
-function cleanupExpired(entry: CacheEntry): void {
-  const now = Date.now();
-  for (const [msgId, timestamp] of entry.timestamps) {
+function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: number): void {
+  for (const [id, timestamp] of entry) {
     if (now - timestamp > TTL_MS) {
-      entry.messageIds.delete(msgId);
-      entry.timestamps.delete(msgId);
+      entry.delete(id);
     }
+  }
+  if (entry.size === 0) {
+    getSentMessageCache().delete(scopeKey);
   }
 }
 
@@ -21,27 +29,28 @@ export function recordMSTeamsSentMessage(conversationId: string, messageId: stri
   if (!conversationId || !messageId) {
     return;
   }
-  let entry = sentMessages.get(conversationId);
+  const now = Date.now();
+  const store = getSentMessageCache();
+  let entry = store.get(conversationId);
   if (!entry) {
-    entry = { messageIds: new Set(), timestamps: new Map() };
-    sentMessages.set(conversationId, entry);
+    entry = new Map<string, number>();
+    store.set(conversationId, entry);
   }
-  entry.messageIds.add(messageId);
-  entry.timestamps.set(messageId, Date.now());
-  if (entry.messageIds.size > 200) {
-    cleanupExpired(entry);
+  entry.set(messageId, now);
+  if (entry.size > 200) {
+    cleanupExpired(conversationId, entry, now);
   }
 }
 
 export function wasMSTeamsMessageSent(conversationId: string, messageId: string): boolean {
-  const entry = sentMessages.get(conversationId);
+  const entry = getSentMessageCache().get(conversationId);
   if (!entry) {
     return false;
   }
-  cleanupExpired(entry);
-  return entry.messageIds.has(messageId);
+  cleanupExpired(conversationId, entry, Date.now());
+  return entry.has(messageId);
 }
 
 export function clearMSTeamsSentMessageCache(): void {
-  sentMessages.clear();
+  getSentMessageCache().clear();
 }

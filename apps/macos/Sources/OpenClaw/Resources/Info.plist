@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.2.18</string>
+    <string>2026.3.30</string>
     <key>CFBundleVersion</key>
-    <string>202602180</string>
+    <string>2026033000</string>
     <key>CFBundleIconFile</key>
     <string>OpenClaw</string>
     <key>CFBundleURLTypes</key>
@@ -59,6 +59,8 @@
     <string>OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>OpenClaw can access Reminders when requested by the agent for the apple-reminders skill.</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>

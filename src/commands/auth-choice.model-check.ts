@@ -1,47 +1,23 @@
-import { resolveAgentModelPrimary } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
+import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
   prompter: WizardPrompter,
   options?: { agentId?: string; agentDir?: string },
 ) {
-  const agentModelOverride = options?.agentId
-    ? resolveAgentModelPrimary(config, options.agentId)
-    : undefined;
-  const configWithModel =
-    agentModelOverride && agentModelOverride.length > 0
-      ? {
-          ...config,
-          agents: {
-            ...config.agents,
-            defaults: {
-              ...config.agents?.defaults,
-              model: {
-                ...(typeof config.agents?.defaults?.model === "object"
-                  ? config.agents.defaults.model
-                  : undefined),
-                primary: agentModelOverride,
-              },
-            },
-          },
-        }
-      : config;
-  const ref = resolveConfiguredModelRef({
-    cfg: configWithModel,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+  const ref = resolveDefaultModelForAgent({
+    cfg: config,
+    agentId: options?.agentId,
   });
   const warnings: string[] = [];
   const catalog = await loadModelCatalog({
-    config: configWithModel,
+    config,
     useCache: false,
   });
   if (catalog.length > 0) {
@@ -58,20 +34,17 @@ export async function warnIfModelConfigLooksOff(
   const store = ensureAuthProfileStore(options?.agentDir);
   const hasProfile = listProfilesForProvider(store, ref.provider).length > 0;
   const envKey = resolveEnvApiKey(ref.provider);
-  const customKey = getCustomProviderApiKey(config, ref.provider);
-  if (!hasProfile && !envKey && !customKey) {
+  const hasCustomKey = hasUsableCustomProviderApiKey(config, ref.provider);
+  if (!hasProfile && !envKey && !hasCustomKey) {
     warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`,
+      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+        {
+          provider: ref.provider,
+          config,
+          includeEnvVar: true,
+        },
+      )}`,
     );
-  }
-
-  if (ref.provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      warnings.push(
-        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
-      );
-    }
   }
 
   if (warnings.length > 0) {

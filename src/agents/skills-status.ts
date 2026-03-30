@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { evaluateEntryMetadataRequirements } from "../shared/entry-status.js";
+import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
@@ -17,6 +17,7 @@ import {
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
+import { resolveSkillSource } from "./skills/source.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -179,33 +180,33 @@ function buildSkillStatus(
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;
+  const isEnvSatisfied = (envName: string) =>
+    Boolean(
+      process.env[envName] ||
+      skillConfig?.env?.[envName] ||
+      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+    );
+  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const skillSource = resolveSkillSource(entry.skill);
   const bundled =
-    bundledNames && bundledNames.size > 0
-      ? bundledNames.has(entry.skill.name)
-      : entry.skill.source === "openclaw-bundled";
+    skillSource === "openclaw-bundled" ||
+    (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
-    evaluateEntryMetadataRequirements({
+    evaluateEntryRequirementsForCurrentPlatform({
       always,
-      metadata: entry.metadata,
-      frontmatter: entry.frontmatter,
+      entry,
       hasLocalBin: hasBinary,
-      localPlatform: process.platform,
       remote: eligibility?.remote,
-      isEnvSatisfied: (envName) =>
-        Boolean(
-          process.env[envName] ||
-          skillConfig?.env?.[envName] ||
-          (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-        ),
-      isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
+      isEnvSatisfied,
+      isConfigSatisfied,
     });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
 
   return {
     name: entry.skill.name,
     description: entry.skill.description,
-    source: entry.skill.source,
+    source: skillSource,
     bundled,
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,
