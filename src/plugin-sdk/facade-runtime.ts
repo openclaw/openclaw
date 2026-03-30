@@ -168,7 +168,7 @@ export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: (
   return createLazyFacadeProxyValue({ load, target: [] });
 }
 
-export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
+export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
 }): T {
@@ -200,7 +200,23 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   }
   fs.closeSync(opened.fd);
 
-  const loaded = getJiti(location.modulePath)(location.modulePath) as T;
-  loadedFacadeModules.set(location.modulePath, loaded);
-  return loaded;
+  // Place a sentinel object in the cache *before* the Jiti load begins.
+  // If a transitive dependency of the loaded module re-enters this function
+  // for the same modulePath (circular facade reference), it will receive the
+  // sentinel instead of recursing infinitely.  Once the real module finishes
+  // loading, Object.assign() back-fills the sentinel so any references
+  // captured during the circular load phase see the final exports.
+  const sentinel = {} as T;
+  loadedFacadeModules.set(location.modulePath, sentinel);
+
+  let loaded: T;
+  try {
+    loaded = getJiti(location.modulePath)(location.modulePath) as T;
+  } catch (err) {
+    loadedFacadeModules.delete(location.modulePath);
+    throw err;
+  }
+  Object.assign(sentinel, loaded);
+
+  return sentinel;
 }
