@@ -10826,16 +10826,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 exclusiveMinimum: 0,
                 maximum: 100000,
               },
-              transcriptUsageMaxBytes: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 134217728,
-              },
-              transcriptUsageMaxLineChars: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 8388608,
-              },
               prewarmUsageCache: {
                 type: "boolean",
               },
@@ -12150,22 +12140,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "gateway.sessionsList": {
       label: "Gateway Sessions List",
-      help: "Gateway sessions.list performance tuning for transcript-derived metadata. Leave defaults alone unless large session inventories cause sessions.list slowdowns.",
+      help: "Gateway sessions.list performance tuning for transcript-derived metadata and startup warming. Leave defaults alone unless large session inventories cause sessions.list slowdowns.",
       tags: ["network", "storage"],
     },
     "gateway.sessionsList.usageCacheMaxEntries": {
       label: "Gateway Sessions List Usage Cache Max Entries",
       help: "Maximum entries in the in-memory usage cache for transcript reads. Default: 5000.",
-      tags: ["network", "performance", "storage"],
-    },
-    "gateway.sessionsList.transcriptUsageMaxBytes": {
-      label: "Gateway Sessions List Transcript Usage Max Bytes",
-      help: "Maximum transcript size scanned when deriving usage from session JSONL files. Default: 16 MiB.",
-      tags: ["network", "performance", "storage"],
-    },
-    "gateway.sessionsList.transcriptUsageMaxLineChars": {
-      label: "Gateway Sessions List Transcript Usage Max Line Chars",
-      help: "Maximum single-line length accepted when deriving usage from session JSONL files. Default: 1 MiB.",
       tags: ["network", "performance", "storage"],
     },
     "gateway.sessionsList.prewarmUsageCache": {

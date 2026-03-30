@@ -31,7 +31,7 @@ import {
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
-import { applyConfiguredSessionUsageGuardrails } from "./session-utils.fs.js";
+import { applyConfiguredSessionUsageCacheSettings } from "./session-utils.fs.js";
 import { prewarmSessionUsageCache } from "./session-utils.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
@@ -80,7 +80,7 @@ export async function startGatewaySidecars(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
 }) {
-  applyConfiguredSessionUsageGuardrails(params.cfg);
+  applyConfiguredSessionUsageCacheSettings(params.cfg);
 
   try {
     const stateDir = resolveStateDir(process.env);

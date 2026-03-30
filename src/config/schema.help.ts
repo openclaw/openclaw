@@ -96,13 +96,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
   "gateway.sessionsList":
-    "Gateway sessions.list performance tuning for transcript-derived metadata. Leave defaults alone unless large session inventories cause sessions.list slowdowns.",
+    "Gateway sessions.list performance tuning for transcript-derived metadata and startup warming. Leave defaults alone unless large session inventories cause sessions.list slowdowns.",
   "gateway.sessionsList.usageCacheMaxEntries":
     "Maximum entries in the in-memory usage cache for transcript reads. Default: 5000.",
-  "gateway.sessionsList.transcriptUsageMaxBytes":
-    "Maximum transcript size scanned when deriving usage from session JSONL files. Default: 16 MiB.",
-  "gateway.sessionsList.transcriptUsageMaxLineChars":
-    "Maximum single-line length accepted when deriving usage from session JSONL files. Default: 1 MiB.",
   "gateway.sessionsList.prewarmUsageCache":
     "Pre-warm the usage cache at gateway startup by reading transcripts for sessions lacking stored usage metadata. Default: false.",
   "gateway.sessionsList.prewarmConcurrency":

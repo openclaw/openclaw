@@ -721,11 +721,7 @@ function extractLatestUsageFromTranscriptChunk(
   chunk: string,
 ): SessionTranscriptUsageSnapshot | null {
   const state = createTranscriptUsageAccumulator();
-  const maxLineChars = getSessionUsageTranscriptMaxLineChars();
   for (const line of chunk.split(/\r?\n/)) {
-    if (line.length > maxLineChars) {
-      return null;
-    }
     accumulateTranscriptUsageLine(state, line);
   }
   return finalizeTranscriptUsageAccumulator(state);
@@ -740,26 +736,16 @@ type SessionUsageCacheEntry = {
 const sessionUsageCache = new Map<string, SessionUsageCacheEntry>();
 const DEFAULT_SESSION_USAGE_CACHE_MAX_ENTRIES = 5000;
 export const MAX_SESSION_USAGE_CACHE_MAX_ENTRIES = 100_000;
-const DEFAULT_SESSION_USAGE_TRANSCRIPT_MAX_BYTES = 16 * 1024 * 1024;
-const DEFAULT_SESSION_USAGE_TRANSCRIPT_MAX_LINE_CHARS = 1 * 1024 * 1024;
-export const MAX_SESSION_USAGE_TRANSCRIPT_BYTES = 128 * 1024 * 1024;
-export const MAX_SESSION_USAGE_TRANSCRIPT_LINE_CHARS = 8 * 1024 * 1024;
 let configuredSessionUsageCacheMaxEntries: number | undefined;
-let configuredSessionUsageTranscriptMaxBytes: number | undefined;
-let configuredSessionUsageTranscriptMaxLineChars: number | undefined;
 
-export function applyConfiguredSessionUsageGuardrails(config: {
+export function applyConfiguredSessionUsageCacheSettings(config: {
   gateway?: {
     sessionsList?: {
       usageCacheMaxEntries?: number;
-      transcriptUsageMaxBytes?: number;
-      transcriptUsageMaxLineChars?: number;
     };
   };
 }) {
   setSessionUsageCacheMaxEntries(config.gateway?.sessionsList?.usageCacheMaxEntries);
-  setSessionUsageTranscriptMaxBytes(config.gateway?.sessionsList?.transcriptUsageMaxBytes);
-  setSessionUsageTranscriptMaxLineChars(config.gateway?.sessionsList?.transcriptUsageMaxLineChars);
 }
 
 export function setSessionUsageCacheMaxEntries(value: number | undefined) {
@@ -785,38 +771,6 @@ export function getSessionUsageCacheMaxEntries(): number {
 
 export function getSessionTitleFieldsCacheMaxEntries(): number {
   return MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES;
-}
-
-export function setSessionUsageTranscriptMaxBytes(value: number | undefined) {
-  const nextValue =
-    typeof value === "number" && Number.isFinite(value) && value > 0
-      ? Math.min(value, MAX_SESSION_USAGE_TRANSCRIPT_BYTES)
-      : undefined;
-  if (configuredSessionUsageTranscriptMaxBytes !== nextValue) {
-    configuredSessionUsageTranscriptMaxBytes = nextValue;
-    sessionUsageCache.clear();
-  }
-}
-
-export function getSessionUsageTranscriptMaxBytes(): number {
-  return configuredSessionUsageTranscriptMaxBytes ?? DEFAULT_SESSION_USAGE_TRANSCRIPT_MAX_BYTES;
-}
-
-export function setSessionUsageTranscriptMaxLineChars(value: number | undefined) {
-  const nextValue =
-    typeof value === "number" && Number.isFinite(value) && value > 0
-      ? Math.min(value, MAX_SESSION_USAGE_TRANSCRIPT_LINE_CHARS)
-      : undefined;
-  if (configuredSessionUsageTranscriptMaxLineChars !== nextValue) {
-    configuredSessionUsageTranscriptMaxLineChars = nextValue;
-    sessionUsageCache.clear();
-  }
-}
-
-export function getSessionUsageTranscriptMaxLineChars(): number {
-  return (
-    configuredSessionUsageTranscriptMaxLineChars ?? DEFAULT_SESSION_USAGE_TRANSCRIPT_MAX_LINE_CHARS
-  );
 }
 
 function getCachedSessionUsage(
@@ -878,10 +832,6 @@ export function readLatestSessionUsageFromTranscript(
       setCachedSessionUsage(filePath, stat, null);
       return null;
     }
-    if (stat.size > getSessionUsageTranscriptMaxBytes()) {
-      setCachedSessionUsage(filePath, stat, null);
-      return null;
-    }
     const chunk = fs.readFileSync(fd, "utf-8");
     const result = extractLatestUsageFromTranscriptChunk(chunk);
     setCachedSessionUsage(filePath, stat, result);
@@ -891,9 +841,8 @@ export function readLatestSessionUsageFromTranscript(
 
 async function readLatestSessionUsageFromStream(params: {
   stream: fs.ReadStream;
-  maxLineChars: number;
 }): Promise<SessionTranscriptUsageSnapshot | null> {
-  const { stream, maxLineChars } = params;
+  const { stream } = params;
   const state = createTranscriptUsageAccumulator();
   let pending = "";
   try {
@@ -906,23 +855,14 @@ async function readLatestSessionUsageFromStream(params: {
         if (line.endsWith("\r")) {
           line = line.slice(0, -1);
         }
-        if (line.length > maxLineChars) {
-          return null;
-        }
         accumulateTranscriptUsageLine(state, line);
         newlineIndex = pending.indexOf("\n");
-      }
-      if (pending.length > maxLineChars) {
-        return null;
       }
     }
 
     let tail = pending;
     if (tail.endsWith("\r")) {
       tail = tail.slice(0, -1);
-    }
-    if (tail.length > maxLineChars) {
-      return null;
     }
     accumulateTranscriptUsageLine(state, tail);
     return finalizeTranscriptUsageAccumulator(state);
@@ -956,11 +896,6 @@ export async function readLatestSessionUsageFromTranscriptAsync(
       setCachedSessionUsage(filePath, stat, null);
       return null;
     }
-    if (stat.size > getSessionUsageTranscriptMaxBytes()) {
-      setCachedSessionUsage(filePath, stat, null);
-      return null;
-    }
-    const maxLineChars = getSessionUsageTranscriptMaxLineChars();
     const stream = fileHandle.createReadStream({
       encoding: "utf-8",
       start: 0,
@@ -968,7 +903,6 @@ export async function readLatestSessionUsageFromTranscriptAsync(
     });
     const result = await readLatestSessionUsageFromStream({
       stream,
-      maxLineChars,
     });
     setCachedSessionUsage(filePath, stat, result);
     return result;

@@ -4,13 +4,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
-  applyConfiguredSessionUsageGuardrails,
+  applyConfiguredSessionUsageCacheSettings,
   getSessionUsageCacheMaxEntries,
-  getSessionUsageTranscriptMaxBytes,
-  getSessionUsageTranscriptMaxLineChars,
   MAX_SESSION_USAGE_CACHE_MAX_ENTRIES,
-  MAX_SESSION_USAGE_TRANSCRIPT_BYTES,
-  MAX_SESSION_USAGE_TRANSCRIPT_LINE_CHARS,
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
@@ -22,8 +18,6 @@ import {
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
   setSessionUsageCacheMaxEntries,
-  setSessionUsageTranscriptMaxBytes,
-  setSessionUsageTranscriptMaxLineChars,
 } from "./session-utils.fs.js";
 
 function registerTempSessionStore(
@@ -1032,11 +1026,6 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
     storePath = nextStorePath;
   });
 
-  afterEach(() => {
-    setSessionUsageTranscriptMaxBytes(undefined);
-    setSessionUsageTranscriptMaxLineChars(undefined);
-  });
-
   test("streams transcript reads without using fs.promises.readFile", async () => {
     const sessionId = "usage-async-stream";
     writeTranscript(tmpDir, sessionId, [
@@ -1089,39 +1078,6 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
 
     readFileSpy.mockRestore();
-  });
-
-  test("returns null for oversized transcript lines", async () => {
-    const sessionId = "usage-async-oversized-line";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    setSessionUsageTranscriptMaxLineChars(64);
-    fs.writeFileSync(
-      transcriptPath,
-      `${"x".repeat(65)}\n${JSON.stringify({
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: { input: 100, output: 50 },
-        },
-      })}`,
-      "utf-8",
-    );
-
-    await expect(
-      readLatestSessionUsageFromTranscriptAsync(sessionId, storePath),
-    ).resolves.toBeNull();
-  });
-
-  test("returns null when a line exceeds the cap before any newline is seen", async () => {
-    const sessionId = "usage-async-oversized-pending-line";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    setSessionUsageTranscriptMaxLineChars(64);
-    fs.writeFileSync(transcriptPath, "x".repeat(65), "utf-8");
-
-    await expect(
-      readLatestSessionUsageFromTranscriptAsync(sessionId, storePath),
-    ).resolves.toBeNull();
   });
 
   test("checks transcript metadata from the opened file handle instead of path stat", async () => {
@@ -1186,7 +1142,7 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
   });
 });
 
-describe("session usage transcript guardrails", () => {
+describe("session usage cache settings", () => {
   let tmpDir: string;
   let storePath: string;
 
@@ -1200,8 +1156,6 @@ describe("session usage transcript guardrails", () => {
 
   afterEach(() => {
     setSessionUsageCacheMaxEntries(undefined);
-    setSessionUsageTranscriptMaxBytes(undefined);
-    setSessionUsageTranscriptMaxLineChars(undefined);
   });
 
   test("clamps configured usage cache max entries to a bounded limit", () => {
@@ -1209,43 +1163,15 @@ describe("session usage transcript guardrails", () => {
     expect(getSessionUsageCacheMaxEntries()).toBe(MAX_SESSION_USAGE_CACHE_MAX_ENTRIES);
   });
 
-  test("defaults transcript usage guardrails to bounded values", () => {
-    expect(getSessionUsageTranscriptMaxBytes()).toBe(16 * 1024 * 1024);
-    expect(getSessionUsageTranscriptMaxLineChars()).toBe(1 * 1024 * 1024);
-  });
-
-  test("clamps configured transcript usage limits to bounded values", () => {
-    setSessionUsageTranscriptMaxBytes(Number.MAX_SAFE_INTEGER);
-    setSessionUsageTranscriptMaxLineChars(Number.MAX_SAFE_INTEGER);
-    expect(getSessionUsageTranscriptMaxBytes()).toBe(MAX_SESSION_USAGE_TRANSCRIPT_BYTES);
-    expect(getSessionUsageTranscriptMaxLineChars()).toBe(MAX_SESSION_USAGE_TRANSCRIPT_LINE_CHARS);
-  });
-
-  test("applies transcript and cache guardrails from gateway config", () => {
-    applyConfiguredSessionUsageGuardrails({
+  test("applies usage cache settings from gateway config", () => {
+    applyConfiguredSessionUsageCacheSettings({
       gateway: {
         sessionsList: {
           usageCacheMaxEntries: Number.MAX_SAFE_INTEGER,
-          transcriptUsageMaxBytes: Number.MAX_SAFE_INTEGER,
-          transcriptUsageMaxLineChars: Number.MAX_SAFE_INTEGER,
         },
       },
     });
     expect(getSessionUsageCacheMaxEntries()).toBe(MAX_SESSION_USAGE_CACHE_MAX_ENTRIES);
-    expect(getSessionUsageTranscriptMaxBytes()).toBe(MAX_SESSION_USAGE_TRANSCRIPT_BYTES);
-    expect(getSessionUsageTranscriptMaxLineChars()).toBe(MAX_SESSION_USAGE_TRANSCRIPT_LINE_CHARS);
-  });
-
-  test("returns null for oversized transcript files without reading them into memory", () => {
-    const sessionId = "usage-sync-oversized-file";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    setSessionUsageTranscriptMaxBytes(1024);
-    fs.writeFileSync(transcriptPath, "x".repeat(1025), "utf-8");
-
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
-    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
-    expect(readFileSpy).not.toHaveBeenCalled();
-    readFileSpy.mockRestore();
   });
 });
 

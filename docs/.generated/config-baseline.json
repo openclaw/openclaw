@@ -41102,7 +41102,7 @@
         "storage"
       ],
       "label": "Gateway Sessions List",
-      "help": "Gateway sessions.list performance tuning for transcript-derived metadata. Leave defaults alone unless large session inventories cause sessions.list slowdowns.",
+      "help": "Gateway sessions.list performance tuning for transcript-derived metadata and startup warming. Leave defaults alone unless large session inventories cause sessions.list slowdowns.",
       "hasChildren": true
     },
     {
@@ -41134,38 +41134,6 @@
       ],
       "label": "Gateway Sessions List Prewarm Usage Cache",
       "help": "Pre-warm the usage cache at gateway startup by reading transcripts for sessions lacking stored usage metadata. Default: false.",
-      "hasChildren": false
-    },
-    {
-      "path": "gateway.sessionsList.transcriptUsageMaxBytes",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "network",
-        "performance",
-        "storage"
-      ],
-      "label": "Gateway Sessions List Transcript Usage Max Bytes",
-      "help": "Maximum transcript size scanned when deriving usage from session JSONL files. Default: 16 MiB.",
-      "hasChildren": false
-    },
-    {
-      "path": "gateway.sessionsList.transcriptUsageMaxLineChars",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "network",
-        "performance",
-        "storage"
-      ],
-      "label": "Gateway Sessions List Transcript Usage Max Line Chars",
-      "help": "Maximum single-line length accepted when deriving usage from session JSONL files. Default: 1 MiB.",
       "hasChildren": false
     },
     {

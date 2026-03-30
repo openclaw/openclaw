@@ -58,7 +58,7 @@ import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
-  applyConfiguredSessionUsageGuardrails,
+  applyConfiguredSessionUsageCacheSettings,
   getSessionTitleFieldsCacheMaxEntries,
   getSessionUsageCacheMaxEntries,
   readLatestSessionUsageFromTranscript,
@@ -74,7 +74,7 @@ import type {
 } from "./session-utils.types.js";
 
 export {
-  applyConfiguredSessionUsageGuardrails,
+  applyConfiguredSessionUsageCacheSettings,
   archiveFileOnDisk,
   archiveSessionTranscripts,
   attachOpenClawTranscriptMeta,
@@ -1575,9 +1575,9 @@ export async function prewarmSessionUsageCache(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<void> {
   const { cfg, log } = params;
-  // Re-apply the configured guardrails before the deferred prewarm kicks off so
+  // Re-apply the configured cache settings before the deferred prewarm kicks off so
   // callers that invoke this helper directly keep the current limits.
-  applyConfiguredSessionUsageGuardrails(cfg);
+  applyConfiguredSessionUsageCacheSettings(cfg);
 
   // Yield to the macrotask queue so the synchronous store scan below
   // does not block early HTTP request handling. The HTTP server is

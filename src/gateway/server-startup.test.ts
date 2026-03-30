@@ -20,7 +20,7 @@ const resolveModelMock = vi.fn<
   },
 }));
 const resolveAgentSessionDirsMock = vi.fn<(stateDir: unknown) => Promise<string[]>>();
-const applyConfiguredSessionUsageGuardrailsMock = vi.fn<(cfg: unknown) => void>();
+const applyConfiguredSessionUsageCacheSettingsMock = vi.fn<(cfg: unknown) => void>();
 
 vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/agent",
@@ -51,8 +51,8 @@ vi.mock("./session-utils.fs.js", async () => {
     await vi.importActual<typeof import("./session-utils.fs.js")>("./session-utils.fs.js");
   return {
     ...actual,
-    applyConfiguredSessionUsageGuardrails: (cfg: unknown) =>
-      applyConfiguredSessionUsageGuardrailsMock(cfg),
+    applyConfiguredSessionUsageCacheSettings: (cfg: unknown) =>
+      applyConfiguredSessionUsageCacheSettingsMock(cfg),
   };
 });
 
@@ -62,7 +62,7 @@ describe("gateway startup primary model warmup", () => {
     resolveModelMock.mockClear();
     resolveAgentSessionDirsMock.mockReset();
     resolveAgentSessionDirsMock.mockResolvedValue([]);
-    applyConfiguredSessionUsageGuardrailsMock.mockClear();
+    applyConfiguredSessionUsageCacheSettingsMock.mockClear();
   });
 
   it("prewarms an explicit configured primary model", async () => {
@@ -100,7 +100,7 @@ describe("gateway startup primary model warmup", () => {
     expect(resolveModelMock).not.toHaveBeenCalled();
   });
 
-  it("reapplies sessions.list guardrails before the first awaited startup work", async () => {
+  it("reapplies sessions.list cache settings before the first awaited startup work", async () => {
     let release!: () => void;
     const blocked = new Promise<string[]>((resolve) => {
       release = () => resolve([]);
@@ -112,8 +112,6 @@ describe("gateway startup primary model warmup", () => {
       gateway: {
         sessionsList: {
           usageCacheMaxEntries: 123,
-          transcriptUsageMaxBytes: 456,
-          transcriptUsageMaxLineChars: 789,
         },
       },
     } as OpenClawConfig;
@@ -129,7 +127,7 @@ describe("gateway startup primary model warmup", () => {
       logChannels: { info: vi.fn(), error: vi.fn() },
     });
 
-    expect(applyConfiguredSessionUsageGuardrailsMock).toHaveBeenCalledWith(cfg);
+    expect(applyConfiguredSessionUsageCacheSettingsMock).toHaveBeenCalledWith(cfg);
 
     release();
     await promise;

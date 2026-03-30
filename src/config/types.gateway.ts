@@ -397,16 +397,6 @@ export type GatewaySessionsListConfig = {
    */
   usageCacheMaxEntries?: number;
   /**
-   * Maximum transcript size scanned when deriving usage from JSONL transcripts.
-   * Default: 16 MiB.
-   */
-  transcriptUsageMaxBytes?: number;
-  /**
-   * Maximum single-line length accepted when deriving usage from JSONL transcripts.
-   * Default: 1 MiB.
-   */
-  transcriptUsageMaxLineChars?: number;
-  /**
    * Pre-warm the usage cache at gateway startup by reading transcript
    * files for all sessions that lack stored usage metadata.
    * Default: false.
