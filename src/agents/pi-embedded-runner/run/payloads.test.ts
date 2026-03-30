@@ -601,4 +601,30 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       absentDetail: "Source:",
     });
   });
+
+  it("does not fall back to raw first line when scrubbing removes entire content (prefix-only errors)", () => {
+    // A prefix-only error like those from nodes-tool has no actionable text
+    // after the key=value prefixes. After scrubbing, `cleaned` is empty.
+    // The warning should show just the generic tool name without leaking
+    // internal agent IDs, node names, or gateway URLs (#46592 review thread).
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "nodes",
+        error: "agent=main node=server gateway=https://gw.example.com action=invoke:",
+        mutatingAction: false,
+      },
+      // Force warning to appear even without a mutating action.
+      assistantTexts: [],
+      verboseLevel: "off",
+    });
+
+    // The warning should not include any of the leaked internal values.
+    const warningPayload = payloads.find((p) => p.text?.startsWith("⚠️"));
+    expect(warningPayload).toBeDefined();
+    expect(warningPayload?.text).not.toContain("agent=main");
+    expect(warningPayload?.text).not.toContain("node=server");
+    expect(warningPayload?.text).not.toContain("gw.example.com");
+    // The warning ends with just "failed" (no " — " suffix) when reason is empty.
+    expect(warningPayload?.text).toMatch(/failed\s*$/);
+  });
 });

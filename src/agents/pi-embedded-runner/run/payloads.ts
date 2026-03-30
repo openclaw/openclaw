@@ -141,7 +141,11 @@ function truncateErrorReason(error: string): string {
   );
   // Collapse runs of whitespace left after scrubbing.
   cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
-  const line = cleaned || firstLine;
+  // Do NOT fall back to `firstLine` when `cleaned` is empty: a prefix-only
+  // error (e.g. "agent=… node=… gateway=… action=invoke:") should produce an
+  // empty reason rather than leaking raw internal identifiers into a
+  // non-verbose chat warning (#46592 review thread PRRT_kwDOQb6kR853kLOL).
+  const line = cleaned;
   if (line.length <= FAILURE_REASON_MAX_LENGTH) {
     return line;
   }
@@ -399,11 +403,20 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix = params.lastToolError.error
-        ? warningPolicy.includeDetails
-          ? `: ${params.lastToolError.error}`
-          : ` — ${truncateErrorReason(params.lastToolError.error)}`
-        : "";
+      const errorSuffix = (() => {
+        if (!params.lastToolError.error) {
+          return "";
+        }
+        if (warningPolicy.includeDetails) {
+          return `: ${params.lastToolError.error}`;
+        }
+        // Only include the " — reason" suffix when scrubbing produces a
+        // non-empty reason; prefix-only errors (e.g. "agent=… action=…:")
+        // reduce to "" after scrubbing and should not produce a trailing
+        // " — " in the warning text (#46592).
+        const reason = truncateErrorReason(params.lastToolError.error);
+        return reason ? ` — ${reason}` : "";
+      })();
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
