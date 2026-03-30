@@ -760,13 +760,15 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_tools_resolve",
       event,
       ctx,
-      (acc, next) => ({
-        deny: [...(acc?.deny ?? []), ...(next.deny ?? [])],
-        allow:
-          acc?.allow !== undefined && next.allow !== undefined
-            ? acc.allow.filter((n) => (next.allow as string[]).includes(n))
-            : (next.allow ?? acc?.allow),
-      }),
+      {
+        mergeResults: (acc, next) => ({
+          deny: [...(acc?.deny ?? []), ...(next.deny ?? [])],
+          allow:
+            acc?.allow !== undefined && next.allow !== undefined
+              ? acc.allow.filter((n) => (next.allow as string[]).includes(n))
+              : (next.allow ?? acc?.allow),
+        }),
+      },
     );
   }
 
