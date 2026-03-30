@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Agents/context pruning: count supplementary-plane CJK characters with the shared code-point-aware estimator so context pruning stops underestimating Japanese and Chinese text that uses Extension B ideographs. (#39985) Thanks @Edward-Qiang-2024.
 - Slack/status reactions: add a reaction lifecycle for queued, thinking, tool, done, and error phases in Slack monitors, with safer cleanup so queued ack reactions stay correct across silent runs, pre-reply failures, and delayed transitions. (#56430) Thanks @hsiaoa.
 - macOS/local gateway: stop OpenClaw.app from killing healthy local gateway listeners after startup by recognizing the current `openclaw-gateway` process title and using the current `openclaw gateway` launch shape.
+- Gateway/OpenAI compatibility: accept flat Responses API function tool definitions on `/v1/responses` and preserve `strict` when normalizing hosted tools into the embedded runner, so spec-compliant clients like Codex no longer fail validation or silently lose strict tool enforcement. Thanks @malaiwah and @vincentkoc.
 - Memory/QMD: resolve slugified `memory_search` file hints back to the indexed filesystem path before returning search hits, so `memory_get` works again for mixed-case and spaced paths. (#50313) Thanks @erra9x.
 - OpenAI/Codex fast mode: map `/fast` to priority processing on native OpenAI and Codex Responses endpoints instead of rewriting reasoning settings, and document the exact endpoint and override behavior.
 - Memory/QMD: weight CJK-heavy text correctly when estimating chunk sizes, preserve surrogate-pair characters during fine splits, and keep long Latin lines on the old chunk boundaries so memory indexing produces better-sized chunks for CJK notes. (#40271) Thanks @AaronLuo00.
@@ -78,6 +79,8 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI: collect root-help plugin descriptors through a dedicated non-activating CLI metadata path so enabled plugins keep validated config semantics without triggering runtime-only plugin registration work, while preserving runtime CLI command registration for legacy channel plugins that still wire commands from full registration. (#57294) thanks @gumadeiras.
 - Anthropic/OAuth: inject `/fast` `service_tier` hints for direct `sk-ant-oat-*` requests so OAuth-authenticated Anthropic runs stop missing the same overload-routing signal as API-key traffic. Fixes #55758. Thanks @Cypherm and @vincentkoc.
 - Anthropic/service tiers: support explicit `serviceTier` model params for direct Anthropic requests and let them override `/fast` defaults when both are set. (#45453) Thanks @vincentkoc.
+- Auto-reply/fast: accept `/fast status` on the directive-only path, align help/status text with the documented `status|on|off` syntax, and keep current-state replies consistent across command surfaces. Fixes #46095. Thanks @weissfl and @vincentkoc.
+- Telegram/native commands: prefix native command menu callback payloads and preserve `CommandSource: "native"` when Telegram replays them through callback queries, so `/fast` and other native command menus keep working even when text-command routing is disabled. Thanks @vincentkoc.
 - Docs/anchors: fix broken English docs links and make Mint anchor audits run against the English-source docs tree. (#57039) thanks @velvet-shark.
 - Cron/announce: preserve all deliverable text payloads for announce mode instead of collapsing to the last chunk, so multi-line cron reports deliver in full to Telegram forum topics.
 
@@ -4844,6 +4847,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) - thanks @juanpablodlc.
 - Auto-reply: treat whitespace-only sender ids as missing for command authorization (WhatsApp self-chat). (#766) - thanks @steipete.
 - Heartbeat: refresh prompt text for updated defaults.
+- Memory/QMD: prefer `qmd collection add --glob` for current QMD releases and fall back to legacy `--mask` when older builds reject it. (#55123) Thanks @ForceConstant and @vincentkoc.
 - Agents/Tools: use PowerShell on Windows to capture system utility output. (#748) - thanks @myfunc.
 - Docker: tolerate unset optional env vars in docker-setup.sh under strict mode. (#725) - thanks @petradonka.
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) - thanks @danielz1z.

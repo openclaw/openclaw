@@ -332,7 +332,12 @@ describe("QmdMemoryManager", () => {
     await vi.advanceTimersByTimeAsync(500);
     await expect(searchPromise).resolves.toEqual([]);
 
-    releaseUpdate?.();
+    (
+      releaseUpdate ??
+      (() => {
+        throw new Error("expected qmd update process to start");
+      })
+    )();
     await manager.close();
   });
 
@@ -622,12 +627,12 @@ describe("QmdMemoryManager", () => {
       string,
       {
         path: string;
-        mask: string;
+        pattern: string;
       }
     >([
-      ["memory-root", { path: workspaceDir, mask: "MEMORY.md" }],
-      ["memory-alt", { path: workspaceDir, mask: "memory.md" }],
-      ["memory-dir", { path: path.join(workspaceDir, "memory"), mask: "**/*.md" }],
+      ["memory-root", { path: workspaceDir, pattern: "MEMORY.md" }],
+      ["memory-alt", { path: workspaceDir, pattern: "memory.md" }],
+      ["memory-dir", { path: path.join(workspaceDir, "memory"), pattern: "**/*.md" }],
     ]);
     const removeCalls: string[] = [];
 
@@ -641,7 +646,7 @@ describe("QmdMemoryManager", () => {
             [...legacyCollections.entries()].map(([name, info]) => ({
               name,
               path: info.path,
-              mask: info.mask,
+              mask: info.pattern,
             })),
           ),
         );
@@ -659,16 +664,16 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const mask = args[args.indexOf("--mask") + 1] ?? "";
+        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
         const hasConflict = [...legacyCollections.entries()].some(
           ([existingName, info]) =>
-            existingName !== name && info.path === pathArg && info.mask === mask,
+            existingName !== name && info.path === pathArg && info.pattern === pattern,
         );
         if (hasConflict) {
           emitAndClose(child, "stderr", "collection already exists", 1);
           return child;
         }
-        legacyCollections.set(name, { path: pathArg, mask });
+        legacyCollections.set(name, { path: pathArg, pattern });
         queueMicrotask(() => child.closeWith(0));
         return child;
       }
@@ -704,9 +709,9 @@ describe("QmdMemoryManager", () => {
       string,
       {
         path: string;
-        mask: string;
+        pattern: string;
       }
-    >([["memory-root-sonnet", { path: workspaceDir, mask: "MEMORY.md" }]]);
+    >([["memory-root-sonnet", { path: workspaceDir, pattern: "MEMORY.md" }]]);
     const removeCalls: string[] = [];
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
@@ -719,7 +724,7 @@ describe("QmdMemoryManager", () => {
             [...listedCollections.entries()].map(([name, info]) => ({
               name,
               path: info.path,
-              mask: info.mask,
+              mask: info.pattern,
             })),
           ),
         );
@@ -737,16 +742,16 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const mask = args[args.indexOf("--mask") + 1] ?? "";
+        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
         const hasConflict = [...listedCollections.entries()].some(
           ([existingName, info]) =>
-            existingName !== name && info.path === pathArg && info.mask === mask,
+            existingName !== name && info.path === pathArg && info.pattern === pattern,
         );
         if (hasConflict) {
           emitAndClose(child, "stderr", "A collection already exists for this path and pattern", 1);
           return child;
         }
-        listedCollections.set(name, { path: pathArg, mask });
+        listedCollections.set(name, { path: pathArg, pattern });
         queueMicrotask(() => child.closeWith(0));
         return child;
       }
@@ -794,6 +799,49 @@ describe("QmdMemoryManager", () => {
 
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("qmd collection add skipped for workspace-main"),
+    );
+  });
+
+  it("falls back to --mask when qmd collection add rejects --glob", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const addFlagCalls: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const flag = args.includes("--glob") ? "--glob" : args.includes("--mask") ? "--mask" : "";
+        addFlagCalls.push(flag);
+        if (flag === "--glob") {
+          emitAndClose(child, "stderr", "unknown flag: --glob", 1);
+          return child;
+        }
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(addFlagCalls).toEqual(["--glob", "--mask", "--mask", "--mask"]);
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("retrying with legacy compatibility flag"),
     );
   });
 
