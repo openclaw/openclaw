@@ -20,13 +20,15 @@ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
+import type { PartialExecution } from "../failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { isCliProvider } from "../model-selection.js";
+import type { FailoverReason } from "../pi-embedded-helpers.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { resolveAgentRunContext } from "./run-context.js";
-import type { AgentCommandOpts } from "./types.js";
+import type { AgentCommandOpts, ImageContent } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -299,6 +301,56 @@ export async function persistAcpTurnTranscript(params: {
 
   emitSessionTranscriptUpdate(sessionFile);
   return sessionEntry;
+}
+
+/**
+ * Resolve which images to forward on a fallback retry.
+ *
+ * - First attempt (not a retry): always forward images.
+ * - Same-provider retry with format error: strip (model can't handle them).
+ * - Cross-provider retry: strip (privacy — don't leak to a different provider).
+ * - Same-provider retry for non-format reasons (rate_limit, timeout, etc.): preserve.
+ */
+export function resolveRetryImages(params: {
+  images: ImageContent[] | undefined;
+  isFallbackRetry: boolean;
+  previousFailureReason: FailoverReason | undefined;
+  primaryProvider: string | undefined;
+  currentProvider: string;
+}): ImageContent[] | undefined {
+  if (!params.isFallbackRetry || !params.images) {
+    return params.images;
+  }
+  // Format error: model can't handle the images
+  if (params.previousFailureReason === "format") {
+    return undefined;
+  }
+  // Cross-provider: don't leak images to a different provider
+  if (params.primaryProvider && params.primaryProvider !== params.currentProvider) {
+    return undefined;
+  }
+  return params.images;
+}
+
+/**
+ * Build a system context block warning the fallback model about tools that
+ * already executed in a prior attempt. This prevents replaying non-idempotent
+ * operations (sending messages, shell commands, API calls).
+ *
+ * Only used on same-provider retries. Cross-provider retries skip this to
+ * avoid leaking tool names to a different provider (CWE-200).
+ */
+export function buildPartialExecutionSystemContext(
+  partialExecution: PartialExecution,
+): string | undefined {
+  if (partialExecution.toolNames.length === 0) {
+    return undefined;
+  }
+  const toolList = partialExecution.toolNames.join(", ");
+  const messagingWarning = partialExecution.didSendViaMessagingTool
+    ? " At least one of these tools sent a user-visible message — do not resend it."
+    : "";
+  return `[System: The previous model attempt already executed these tools before failing: ${toolList}.${messagingWarning} Do not repeat actions that already completed successfully.]`;
 }
 
 export function runAgentAttempt(params: {

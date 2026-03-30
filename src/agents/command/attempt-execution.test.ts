@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveFallbackRetryPrompt, sessionFileHasContent } from "./attempt-execution.js";
+import {
+  buildPartialExecutionSystemContext,
+  resolveFallbackRetryPrompt,
+  resolveRetryImages,
+  sessionFileHasContent,
+} from "./attempt-execution.js";
+import type { ImageContent } from "./types.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -155,5 +161,109 @@ describe("sessionFileHasContent", () => {
     const link = path.join(tmpDir, "link.jsonl");
     await fs.symlink(realFile, link);
     expect(await sessionFileHasContent(link)).toBe(false);
+  });
+});
+
+describe("resolveRetryImages", () => {
+  const fakeImages: ImageContent[] = [{ type: "image", mimeType: "image/png", data: "abc" }];
+
+  it("returns images on first attempt (not a retry)", () => {
+    expect(
+      resolveRetryImages({
+        images: fakeImages,
+        isFallbackRetry: false,
+        previousFailureReason: undefined,
+        primaryProvider: "anthropic",
+        currentProvider: "anthropic",
+      }),
+    ).toEqual(fakeImages);
+  });
+
+  it("strips images on format error retry (same provider)", () => {
+    expect(
+      resolveRetryImages({
+        images: fakeImages,
+        isFallbackRetry: true,
+        previousFailureReason: "format",
+        primaryProvider: "anthropic",
+        currentProvider: "anthropic",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves images on rate_limit retry (same provider)", () => {
+    expect(
+      resolveRetryImages({
+        images: fakeImages,
+        isFallbackRetry: true,
+        previousFailureReason: "rate_limit",
+        primaryProvider: "anthropic",
+        currentProvider: "anthropic",
+      }),
+    ).toEqual(fakeImages);
+  });
+
+  it("strips images on cross-provider retry", () => {
+    expect(
+      resolveRetryImages({
+        images: fakeImages,
+        isFallbackRetry: true,
+        previousFailureReason: "rate_limit",
+        primaryProvider: "anthropic",
+        currentProvider: "openai",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves images when primaryProvider is undefined (no cross-provider detection)", () => {
+    expect(
+      resolveRetryImages({
+        images: fakeImages,
+        isFallbackRetry: true,
+        previousFailureReason: "rate_limit",
+        primaryProvider: undefined,
+        currentProvider: "openai",
+      }),
+    ).toEqual(fakeImages);
+  });
+
+  it("returns undefined when images are undefined regardless of retry state", () => {
+    expect(
+      resolveRetryImages({
+        images: undefined,
+        isFallbackRetry: false,
+        previousFailureReason: undefined,
+        primaryProvider: "anthropic",
+        currentProvider: "anthropic",
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("buildPartialExecutionSystemContext", () => {
+  it("returns context string listing tool names", () => {
+    const ctx = buildPartialExecutionSystemContext({
+      toolNames: ["bash", "web_search"],
+      didSendViaMessagingTool: false,
+    });
+    expect(ctx).toContain("bash");
+    expect(ctx).toContain("web_search");
+    expect(ctx).toContain("already executed");
+  });
+
+  it("includes messaging warning when didSendViaMessagingTool is true", () => {
+    const ctx = buildPartialExecutionSystemContext({
+      toolNames: ["send_message"],
+      didSendViaMessagingTool: true,
+    });
+    expect(ctx).toMatch(/messag/i);
+  });
+
+  it("returns undefined when toolNames is empty", () => {
+    const ctx = buildPartialExecutionSystemContext({
+      toolNames: [],
+      didSendViaMessagingTool: false,
+    });
+    expect(ctx).toBeUndefined();
   });
 });
