@@ -160,6 +160,32 @@ describe("createWebhookHandler", () => {
     }
   });
 
+  it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "preauth-inflight-test-" + Date.now() }),
+      deliver: vi.fn(),
+      log,
+    });
+
+    const requests = Array.from({ length: 12 }, () => {
+      const req = makeStalledReq("POST");
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+      return req;
+    });
+    const responses = requests.map(() => makeRes());
+    const runs = requests.map((req, index) => handler(req, responses[index]));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(responses.filter((res) => res._status === 0)).toHaveLength(8);
+    expect(responses.filter((res) => res._status === 429)).toHaveLength(4);
+
+    for (const req of requests) {
+      req.emit("end");
+    }
+    await Promise.all(runs);
+  });
+
   it("returns 401 for invalid token", async () => {
     const handler = createWebhookHandler({
       account: makeAccount(),
