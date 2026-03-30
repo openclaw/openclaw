@@ -36,7 +36,10 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
     // values that need to end with one of these tokens must use a different suffix.
     const styleDelimiter = value.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = value.slice(styleDelimiter + 1).trim().toLowerCase();
+      const maybeStyle = value
+        .slice(styleDelimiter + 1)
+        .trim()
+        .toLowerCase();
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
@@ -54,7 +57,11 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
   return style ? { label, value, style } : { label, value };
 }
 
-function parseChoices(raw: string, maxItems: number, options?: { allowStyle?: boolean }): SlackChoice[] {
+function parseChoices(
+  raw: string,
+  maxItems: number,
+  options?: { allowStyle?: boolean },
+): SlackChoice[] {
   return raw
     .split(",")
     .map((entry) => parseChoice(entry, options))

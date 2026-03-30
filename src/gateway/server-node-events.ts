@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -12,12 +13,19 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsRegistration } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { deleteMediaBuffer } from "../media/store.js";
 import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
+import {
+  loadSessionEntry,
+  migrateAndPruneGatewaySessionStoreKey,
+  resolveGatewayModelSupportsImages,
+  resolveSessionModelRef,
+} from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -347,33 +355,74 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         timeoutSeconds?: number | null;
         key?: string | null;
       };
+
       let link: AgentDeepLink | null = null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
         return;
       }
+
+      const sessionKeyRaw = (link?.sessionKey ?? "").trim();
+      const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+      const cfg = loadConfig();
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+
       let message = (link?.message ?? "").trim();
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let imageOrder: PromptImageOrderEntry[] = [];
+      if (!message && normalizedAttachments.length === 0) {
+        return;
+      }
+      if (message.length > 20_000) {
+        return;
+      }
       if (normalizedAttachments.length > 0) {
+        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+        const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
+        const supportsImages = await resolveGatewayModelSupportsImages({
+          loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          provider: modelRef.provider,
+          model: modelRef.model,
+        });
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: 5_000_000,
             log: ctx.logGateway,
+            supportsImages,
           });
           message = parsed.message.trim();
           images = parsed.images;
-        } catch {
+          imageOrder = parsed.imageOrder;
+          if (message.length > 20_000) {
+            ctx.logGateway.warn(
+              `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
+            );
+            if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
+              for (const ref of parsed.offloadedRefs) {
+                try {
+                  await deleteMediaBuffer(ref.id);
+                } catch (cleanupErr) {
+                  ctx.logGateway.warn(
+                    `Failed to cleanup orphaned media ${ref.id}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+                  );
+                }
+              }
+            }
+            return;
+          }
+        } catch (err) {
+          ctx.logGateway.warn(
+            `agent.request attachment parse failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
           return;
         }
       }
-      if (!message) {
-        return;
-      }
-      if (message.length > 20_000) {
+
+      if (!message && images.length === 0) {
         return;
       }
 
@@ -386,10 +435,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const receiptText =
         receiptTextRaw || "Just received your iOS share + request, working on it.";
 
-      const sessionKeyRaw = (link?.sessionKey ?? "").trim();
-      const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
-      const cfg = loadConfig();
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
@@ -438,6 +483,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           runId: sessionId,
           message,
           images,
+          imageOrder,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
