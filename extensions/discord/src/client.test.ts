@@ -66,7 +66,7 @@ describe("createDiscordRestClient", () => {
     expect(result.account.config.retry).toMatchObject({ attempts: 7 });
   });
 
-  it("still throws when no explicit token is provided and config token is unresolved", () => {
+  it("skips token resolution when a pre-authenticated rest client is provided", () => {
     const cfg = {
       channels: {
         discord: {
@@ -79,13 +79,16 @@ describe("createDiscordRestClient", () => {
       },
     } as OpenClawConfig;
 
-    expect(() =>
-      createDiscordRestClient(
-        {
-          rest: fakeRest,
-        },
-        cfg,
-      ),
-    ).toThrow(/unresolved SecretRef/i);
+    // When a pre-authenticated REST client is provided, token resolution
+    // should be skipped to support multi-account setups where the caller
+    // already holds a valid client for the active account.
+    const result = createDiscordRestClient(
+      {
+        rest: fakeRest,
+      },
+      cfg,
+    );
+    expect(result.rest).toBe(fakeRest);
+    expect(result.token).toBe("");
   });
 });

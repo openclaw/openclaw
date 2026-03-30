@@ -57,6 +57,16 @@ export function createDiscordRestClient(
 ) {
   const resolvedCfg = opts.cfg ?? cfg ?? loadConfig();
   const explicitToken = normalizeDiscordToken(opts.token, "channels.discord.token");
+
+  // If a pre-authenticated REST client is provided and no explicit token was
+  // given, skip token resolution entirely to avoid failing when the resolved
+  // account has no token configured (e.g. non-default accounts in multi-account
+  // setups where the caller already holds a valid client).
+  if (opts.rest && !explicitToken) {
+    const account = resolveAccountWithoutToken({ cfg: resolvedCfg, accountId: opts.accountId });
+    return { token: "", rest: opts.rest, account };
+  }
+
   const account = explicitToken
     ? resolveAccountWithoutToken({ cfg: resolvedCfg, accountId: opts.accountId })
     : resolveDiscordAccount({ cfg: resolvedCfg, accountId: opts.accountId });
