@@ -143,15 +143,55 @@ export async function requestNodePairing(
   });
 }
 
+/**
+ * Validate that caller has permissions to approve a node with the given permissions.
+ * Caller must have each permission that the node requests.
+ * When callerPermissions is not provided, the validation is skipped but a warning is logged.
+ */
+function validateCallerPermissions(
+  callerPermissions: Record<string, boolean> | undefined,
+  nodePermissions: Record<string, boolean> | undefined,
+  log?: (msg: string) => void,
+): boolean {
+  if (!nodePermissions || Object.keys(nodePermissions).length === 0) {
+    return true; // No permissions required, always allowed
+  }
+  if (!callerPermissions) {
+    // GHSA-2x4x-cc5g-qmmg: No caller permissions provided - log warning but allow for backward compatibility
+    log?.("warn: node.pair.approve called without callerPermissions - scope validation skipped");
+    return true; // Skip validation for backward compatibility
+  }
+  // Caller must have every permission that the node requests
+  for (const perm of Object.keys(nodePermissions)) {
+    if (!callerPermissions[perm]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function approveNodePairing(
   requestId: string,
   baseDir?: string,
+  callerPermissions?: Record<string, boolean>,
 ): Promise<{ requestId: string; node: NodePairingPairedNode } | null> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
     if (!pending) {
       return null;
+    }
+
+    // GHSA-2x4x-cc5g-qmmg: Validate caller has permissions to approve this node
+    const validationOk = validateCallerPermissions(
+      callerPermissions,
+      pending.permissions,
+      (msg) => console.warn(msg),
+    );
+    if (!validationOk) {
+      throw new Error(
+        "caller_scope_mismatch: caller does not have required permissions to approve this node request",
+      );
     }
 
     const now = Date.now();
