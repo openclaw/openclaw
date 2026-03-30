@@ -710,6 +710,7 @@ export async function spawnSubagentDirect(
         lane: AGENT_LANE_SUBAGENT,
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
+        model: resolvedModel || undefined,
         timeout: runTimeoutSeconds,
         label: label || undefined,
         ...publicSpawnedMetadata,
