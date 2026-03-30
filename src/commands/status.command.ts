@@ -543,6 +543,12 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+  if (summary.taskAudit.errors > 0) {
+    runtime.log("");
+    runtime.log(
+      theme.muted(`Task maintenance: ${formatCliCommand("openclaw tasks maintenance --apply")}`),
+    );
+  }
 
   if (pluginCompatibility.length > 0) {
     runtime.log("");

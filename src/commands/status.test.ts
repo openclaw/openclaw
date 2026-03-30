@@ -213,6 +213,40 @@ const mocks = vi.hoisted(() => ({
   }),
   runSecurityAudit: vi.fn().mockResolvedValue(createDefaultSecurityAuditResult()),
   buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
+  getInspectableTaskRegistrySummary: vi.fn().mockReturnValue({
+    total: 0,
+    active: 0,
+    terminal: 0,
+    failures: 0,
+    byStatus: {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      lost: 0,
+    },
+    byRuntime: {
+      subagent: 0,
+      acp: 0,
+      cli: 0,
+      cron: 0,
+    },
+  }),
+  getInspectableTaskAuditSummary: vi.fn().mockReturnValue({
+    total: 0,
+    warnings: 0,
+    errors: 0,
+    byCode: {
+      stale_queued: 0,
+      stale_running: 0,
+      lost: 0,
+      delivery_failed: 0,
+      missing_cleanup: 0,
+      inconsistent_timestamps: 0,
+    },
+  }),
   resolveGatewayService: vi.fn().mockReturnValue({
     label: "LaunchAgent",
     loadedText: "loaded",
@@ -433,6 +467,10 @@ vi.mock("../daemon/node-service.js", () => ({
 vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
+  getInspectableTaskAuditSummary: mocks.getInspectableTaskAuditSummary,
+}));
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
@@ -485,6 +523,42 @@ describe("statusCommand", () => {
     });
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
+    mocks.getInspectableTaskRegistrySummary.mockReset();
+    mocks.getInspectableTaskRegistrySummary.mockReturnValue({
+      total: 0,
+      active: 0,
+      terminal: 0,
+      failures: 0,
+      byStatus: {
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: 0,
+        acp: 0,
+        cli: 0,
+        cron: 0,
+      },
+    });
+    mocks.getInspectableTaskAuditSummary.mockReset();
+    mocks.getInspectableTaskAuditSummary.mockReturnValue({
+      total: 0,
+      warnings: 0,
+      errors: 0,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
     mocks.hasPotentialConfiguredChannels.mockReset();
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.runSecurityAudit.mockReset();
@@ -630,6 +704,47 @@ describe("statusCommand", () => {
           line.includes("openclaw --profile isolated status --all"),
       ),
     ).toBe(true);
+  });
+
+  it("shows a maintenance hint when task audit errors are present", async () => {
+    mocks.getInspectableTaskRegistrySummary.mockReturnValue({
+      total: 1,
+      active: 1,
+      terminal: 0,
+      failures: 1,
+      byStatus: {
+        queued: 0,
+        running: 1,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: 0,
+        acp: 1,
+        cli: 0,
+        cron: 0,
+      },
+    });
+    mocks.getInspectableTaskAuditSummary.mockReturnValue({
+      total: 1,
+      warnings: 0,
+      errors: 1,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 1,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+
+    const joined = await runStatusAndGetJoinedLogs();
+
+    expect(joined).toContain("tasks maintenance --apply");
   });
 
   it("caps cached percentage at the prompt-token denominator for legacy session totals", async () => {
