@@ -436,6 +436,70 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("scrubs URLs with uppercase schemes case-insensitively", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "web_fetch",
+        error: "Failed to connect: HTTPS://example.com/api?token=secret123",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Web Fetch",
+      detail: "<url>",
+      absentDetail: "secret123",
+    });
+  });
+
+  it("scrubs data: URIs with mixed-case scheme case-insensitively", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "pdf",
+        error: "Expected PDF but got text/html: Data:text/html;base64,PGh0bWw+",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Pdf",
+      detail: "<data-uri>",
+      absentDetail: "PGh0bWw+",
+    });
+  });
+
+  it("scrubs Unix paths whose first segment starts with a dot (/.ssh/…)", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Cannot open /.ssh/id_rsa: permission denied",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "permission denied",
+      absentDetail: "/.ssh",
+    });
+  });
+
+  it("scrubs Unix paths whose first segment starts with non-ASCII characters (/資料/…)", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Cannot open /資料/report.md: access denied",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "access denied",
+      absentDetail: "/資料",
+    });
+  });
+
   it("does not redact /dev/null in prose", () => {
     const payloads = buildPayloads({
       lastToolError: {
