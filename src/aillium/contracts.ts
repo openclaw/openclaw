@@ -85,10 +85,32 @@ export interface ContextLifecycleHook {
   onContextLifecycle(event: ContextLifecycleEvent): Promise<void>;
 }
 
+/**
+ * Capsule lifecycle events forwarded from OpenClaw runtime to Aillium Core.
+ *
+ * These allow the control plane to track execution capsule state transitions,
+ * heartbeats, and workspace/artifact events in real time.
+ */
+export interface CapsuleLifecycleEvent {
+  kind: "provision" | "activate" | "heartbeat" | "pause" | "dispose" | "fail" | "artifact";
+  capsuleId: string;
+  sessionKey: string;
+  payload: Record<string, JsonValue>;
+}
+
+export interface CapsuleLifecycleHook {
+  /**
+   * Called by the OpenClaw runtime when a capsule lifecycle event occurs.
+   * Best-effort delivery — must not block runtime execution.
+   */
+  onCapsuleLifecycle(event: CapsuleLifecycleEvent): Promise<void>;
+}
+
 export interface AilliumIntegrationBoundary {
   runtimeRegistration: RuntimeRegistrationAdapter;
   contractAdapter: ContractAdapter;
   evidenceHooks: readonly EvidenceCallbackHook[];
   tenantSessionMetadata: TenantSessionMetadataAdapter;
   contextLifecycle?: ContextLifecycleHook;
+  capsuleLifecycle?: CapsuleLifecycleHook;
 }

@@ -1,5 +1,7 @@
 export type {
   AilliumIntegrationBoundary,
+  CapsuleLifecycleEvent,
+  CapsuleLifecycleHook,
   ContextLifecycleEvent,
   ContextLifecycleHook,
   ContractAdapter,

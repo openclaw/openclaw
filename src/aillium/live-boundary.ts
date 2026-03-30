@@ -9,6 +9,8 @@
 
 import type {
   AilliumIntegrationBoundary,
+  CapsuleLifecycleEvent,
+  CapsuleLifecycleHook,
   ContextLifecycleEvent,
   ContextLifecycleHook,
   ContractAdapter,
@@ -171,6 +173,34 @@ class LiveContextLifecycleHook implements ContextLifecycleHook {
   }
 }
 
+class LiveCapsuleLifecycleHook implements CapsuleLifecycleHook {
+  constructor(private readonly config: AilliumCoreConnectionConfig) {}
+
+  async onCapsuleLifecycle(event: CapsuleLifecycleEvent): Promise<void> {
+    try {
+      await fetch(
+        `${this.config.baseUrl}/execution-capsules/runtime/lifecycle`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-aillium-runtime-token": this.config.syncToken,
+          },
+          body: JSON.stringify({
+            capsule_id: event.capsuleId,
+            session_key: event.sessionKey,
+            event_kind: event.kind,
+            payload: event.payload,
+          }),
+          signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+        },
+      );
+    } catch {
+      // Best-effort capsule lifecycle delivery; do not block runtime execution
+    }
+  }
+}
+
 export function createLiveAilliumBoundary(
   config: AilliumCoreConnectionConfig,
 ): AilliumIntegrationBoundary {
@@ -180,5 +210,6 @@ export function createLiveAilliumBoundary(
     evidenceHooks: [new LiveEvidenceCallbackHook(config)],
     tenantSessionMetadata: new LiveTenantSessionMetadataAdapter(),
     contextLifecycle: new LiveContextLifecycleHook(config),
+    capsuleLifecycle: new LiveCapsuleLifecycleHook(config),
   };
 }
