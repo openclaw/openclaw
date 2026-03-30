@@ -53,6 +53,41 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 
+/**
+ * The regex used to detect /approve slash commands in executable lines.
+ * Case-insensitive, supports optional @mention suffix.
+ */
+const APPROVE_COMMAND_RE = /^\s*\/approve(?:@[^\s]*)?(\s|$)/i;
+
+/**
+ * Check whether any *executable* line in a shell command contains /approve.
+ * Heredoc / here-string bodies are skipped so that `/approve` literals
+ * inside data blocks do not trigger a false positive.
+ */
+export function containsApproveCommand(command: string): boolean {
+  const lines = command.split("\n");
+  let heredocDelimiter: string | null = null;
+  for (const line of lines) {
+    // If we are inside a heredoc body, check for the closing delimiter.
+    if (heredocDelimiter !== null) {
+      if (line.trim() === heredocDelimiter) {
+        heredocDelimiter = null;
+      }
+      continue; // skip data lines
+    }
+    // Detect heredoc start: <<[-]?['"\\]?DELIM['"\\]?
+    const heredocMatch = line.match(/<<-?\s*['"]?(\w+)['"]?/);
+    if (heredocMatch) {
+      heredocDelimiter = heredocMatch[1];
+    }
+    // Test the line (even if it also starts a heredoc, the command part is real).
+    if (APPROVE_COMMAND_RE.test(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
@@ -255,15 +290,12 @@ export function createExecTool(
       // Executing it via exec triggers a new approval-pending, causing an infinite loop.
       // See: https://github.com/openclaw/openclaw/issues/57432
       //
-      // We test the first non-empty line — the actual command the shell executes.
-      // Leading blank lines are skipped so "\n/approve ..." cannot bypass the guard.
-      // Subsequent non-empty lines may be heredoc/stdin data containing "/approve"
-      // literals and must not trigger a false positive (see codex review feedback).
+      // All executable lines are checked. Heredoc/here-string bodies are skipped
+      // so that `/approve` literals inside data blocks do not false-positive.
       // Flag: i (case-insensitive) matches /APPROVE, /Approve, etc. aligned with
       //       the slash-command parser in commands-approve.ts.
       // The optional @mention group covers `/approve@botname ...` foreign-mention syntax.
-      const firstNonEmptyLine = params.command.split("\n").find((l) => l.trim() !== "") ?? "";
-      if (/^\s*\/approve(?:@[^\s]*)?(\s|$)/i.test(firstNonEmptyLine)) {
+      if (containsApproveCommand(params.command)) {
         throw new Error(
           "/approve is a chat slash command, not a shell command. " +
             "Show the /approve command to the user as a chat message instead of executing it via exec.",

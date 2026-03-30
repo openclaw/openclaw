@@ -507,8 +507,7 @@ describe("exec /approve guard", () => {
     expect(readTextContent(result.content)).toBeDefined();
   });
 
-  it("does not reject /approve in heredoc or non-first-line data", async () => {
-    // /approve on a non-first line is heredoc/stdin data, not an executed command
+  it("does not reject /approve inside heredoc data", async () => {
     const result = await executeExecCommand(
       execTool,
       "cat <<'EOF'\n/approve abc123 allow-always\nEOF",
@@ -519,6 +518,18 @@ describe("exec /approve guard", () => {
   it("rejects /approve as the first line even in a multiline command", async () => {
     await expect(
       executeExecCommand(execTool, "/approve abc123 allow-always\necho done"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve on a later executable line after a comment", async () => {
+    await expect(
+      executeExecCommand(execTool, "# note\n/approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve on a later executable line after true", async () => {
+    await expect(
+      executeExecCommand(execTool, "true\n/approve abc123 allow-always"),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
@@ -538,6 +549,14 @@ describe("exec /approve guard", () => {
     await expect(
       executeExecCommand(execTool, "\n\n/approve abc123 allow-always"),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("does not reject /approve inside heredoc even with executable lines around it", async () => {
+    const result = await executeExecCommand(
+      execTool,
+      "echo start\ncat <<'DELIM'\n/approve abc123 allow-always\nDELIM\necho end",
+    );
+    expect(readTextContent(result.content)).toBeDefined();
   });
 });
 
