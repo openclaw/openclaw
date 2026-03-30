@@ -819,8 +819,10 @@ export async function runWithModelFallback<T>(params: {
         mergedPartialExecution = mergedPartialExecution
           ? {
               toolNames: [
-                ...mergedPartialExecution.toolNames,
-                ...described.partialExecution.toolNames,
+                ...new Set([
+                  ...mergedPartialExecution.toolNames,
+                  ...described.partialExecution.toolNames,
+                ]),
               ],
               didSendViaMessagingTool:
                 mergedPartialExecution.didSendViaMessagingTool ||

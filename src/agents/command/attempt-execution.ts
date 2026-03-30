@@ -343,10 +343,11 @@ export function resolveRetryImages(params: {
 export function buildPartialExecutionSystemContext(
   partialExecution: PartialExecution,
 ): string | undefined {
-  if (partialExecution.toolNames.length === 0) {
+  const safeNames = FailoverError.sanitizeToolNames(partialExecution.toolNames);
+  if (safeNames.length === 0) {
     return undefined;
   }
-  const toolList = partialExecution.toolNames.join(", ");
+  const toolList = safeNames.join(", ");
   const messagingWarning = partialExecution.didSendViaMessagingTool
     ? " At least one of these tools sent a user-visible message — do not resend it."
     : "";

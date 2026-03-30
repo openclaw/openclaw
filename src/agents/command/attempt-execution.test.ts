@@ -266,4 +266,12 @@ describe("buildPartialExecutionSystemContext", () => {
     });
     expect(ctx).toBeUndefined();
   });
+
+  it("returns undefined when all tool names sanitize to empty", () => {
+    const ctx = buildPartialExecutionSystemContext({
+      toolNames: ["!!!", "<<<>>>"],
+      didSendViaMessagingTool: false,
+    });
+    expect(ctx).toBeUndefined();
+  });
 });

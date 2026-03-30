@@ -1631,7 +1631,7 @@ describe("runWithModelFallback", () => {
           throw new FailoverError("rate_limit", {
             reason: "rate_limit",
             partialExecution: {
-              toolNames: ["web_search"],
+              toolNames: ["bash", "web_search"],
               didSendViaMessagingTool: true,
             },
           });
@@ -1639,6 +1639,7 @@ describe("runWithModelFallback", () => {
         return "ok";
       },
     });
+    // bash appears in both attempts; Set dedup should keep it only once
     expect(captured[2]?.previousPartialExecution).toEqual({
       toolNames: ["bash", "web_search"],
       didSendViaMessagingTool: true,
