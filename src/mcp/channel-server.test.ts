@@ -14,8 +14,6 @@ import {
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 
-installGatewayTestHooks();
-
 const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
   params: z.object({
@@ -114,410 +112,415 @@ async function connectMcp(params: {
 }
 
 describe("openclaw channel mcp server", () => {
-  test("lists conversations, reads messages, and waits for events", async () => {
-    const storePath = await createSessionStoreFile();
-    const sessionKey = "agent:main:main";
-    await seedSession({
-      storePath,
-      sessionKey,
-      sessionId: "sess-main",
-      route: {
+  describe("gateway-backed flows", () => {
+    installGatewayTestHooks({ scope: "suite" });
+
+    test("lists conversations, reads messages, and waits for events", async () => {
+      const storePath = await createSessionStoreFile();
+      const sessionKey = "agent:main:main";
+      await seedSession({
+        storePath,
+        sessionKey,
+        sessionId: "sess-main",
+        route: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          threadId: 42,
+        },
+        transcriptMessages: [
+          {
+            id: "msg-1",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello from transcript" }],
+              timestamp: Date.now(),
+            },
+          },
+          {
+            id: "msg-attachment",
+            message: {
+              role: "assistant",
+              content: [
+                { type: "text", text: "attached image" },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: "abc",
+                  },
+                },
+              ],
+              timestamp: Date.now() + 1,
+            },
+          },
+        ],
+      });
+
+      const harness = await createGatewaySuiteHarness();
+      let mcp: Awaited<ReturnType<typeof connectMcp>> | null = null;
+      try {
+        mcp = await connectMcp({
+          gatewayUrl: `ws://127.0.0.1:${harness.port}`,
+          gatewayToken: "test-gateway-token-1234567890",
+        });
+
+        const listed = (await mcp.client.callTool({
+          name: "conversations_list",
+          arguments: {},
+        })) as {
+          structuredContent?: { conversations?: Array<Record<string, unknown>> };
+        };
+        expect(listed.structuredContent?.conversations).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              sessionKey,
+              channel: "telegram",
+              to: "-100123",
+              accountId: "acct-1",
+              threadId: 42,
+            }),
+          ]),
+        );
+
+        const read = (await mcp.client.callTool({
+          name: "messages_read",
+          arguments: { session_key: sessionKey, limit: 5 },
+        })) as {
+          structuredContent?: { messages?: Array<Record<string, unknown>> };
+        };
+        expect(read.structuredContent?.messages?.[0]).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "hello from transcript" }],
+        });
+        expect(read.structuredContent?.messages?.[1]).toMatchObject({
+          __openclaw: {
+            id: "msg-attachment",
+          },
+        });
+
+        const attachments = (await mcp.client.callTool({
+          name: "attachments_fetch",
+          arguments: { session_key: sessionKey, message_id: "msg-attachment" },
+        })) as {
+          structuredContent?: { attachments?: Array<Record<string, unknown>> };
+          isError?: boolean;
+        };
+        expect(attachments.isError).not.toBe(true);
+        expect(attachments.structuredContent?.attachments).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "image",
+            }),
+          ]),
+        );
+
+        const waitPromise = mcp.client.callTool({
+          name: "events_wait",
+          arguments: { session_key: sessionKey, after_cursor: 0, timeout_ms: 5_000 },
+        }) as Promise<{
+          structuredContent?: { event?: Record<string, unknown> };
+        }>;
+
+        emitSessionTranscriptUpdate({
+          sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
+          sessionKey,
+          messageId: "msg-2",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "inbound live message" }],
+            timestamp: Date.now(),
+          },
+        });
+
+        const waited = await waitPromise;
+        expect(waited.structuredContent?.event).toMatchObject({
+          type: "message",
+          sessionKey,
+          messageId: "msg-2",
+          role: "user",
+          text: "inbound live message",
+        });
+      } finally {
+        await mcp?.close();
+        await harness.close();
+      }
+    });
+
+    test("sendMessage normalizes route metadata for gateway send", async () => {
+      const bridge = new OpenClawChannelBridge({} as never, {
+        claudeChannelMode: "off",
+        verbose: false,
+      });
+      const gatewayRequest = vi.fn().mockResolvedValue({ ok: true, channel: "telegram" });
+
+      (
+        bridge as unknown as {
+          gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+          readySettled: boolean;
+          resolveReady: () => void;
+        }
+      ).gateway = {
+        request: gatewayRequest,
+        stopAndWait: async () => {},
+      };
+      (
+        bridge as unknown as {
+          readySettled: boolean;
+          resolveReady: () => void;
+        }
+      ).readySettled = true;
+      (
+        bridge as unknown as {
+          resolveReady: () => void;
+        }
+      ).resolveReady();
+
+      vi.spyOn(bridge, "getConversation").mockResolvedValue({
+        sessionKey: "agent:main:main",
         channel: "telegram",
         to: "-100123",
         accountId: "acct-1",
         threadId: 42,
-      },
-      transcriptMessages: [
-        {
-          id: "msg-1",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "hello from transcript" }],
-            timestamp: Date.now(),
-          },
-        },
-        {
-          id: "msg-attachment",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "text", text: "attached image" },
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: "image/png",
-                  data: "abc",
-                },
-              },
-            ],
-            timestamp: Date.now() + 1,
-          },
-        },
-      ],
-    });
-
-    const harness = await createGatewaySuiteHarness();
-    let mcp: Awaited<ReturnType<typeof connectMcp>> | null = null;
-    try {
-      mcp = await connectMcp({
-        gatewayUrl: `ws://127.0.0.1:${harness.port}`,
-        gatewayToken: "test-gateway-token-1234567890",
       });
 
-      const listed = (await mcp.client.callTool({
-        name: "conversations_list",
-        arguments: {},
-      })) as {
-        structuredContent?: { conversations?: Array<Record<string, unknown>> };
-      };
-      expect(listed.structuredContent?.conversations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            sessionKey,
-            channel: "telegram",
-            to: "-100123",
-            accountId: "acct-1",
-            threadId: 42,
-          }),
-        ]),
-      );
-
-      const read = (await mcp.client.callTool({
-        name: "messages_read",
-        arguments: { session_key: sessionKey, limit: 5 },
-      })) as {
-        structuredContent?: { messages?: Array<Record<string, unknown>> };
-      };
-      expect(read.structuredContent?.messages?.[0]).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "hello from transcript" }],
-      });
-      expect(read.structuredContent?.messages?.[1]).toMatchObject({
-        __openclaw: {
-          id: "msg-attachment",
-        },
-      });
-
-      const attachments = (await mcp.client.callTool({
-        name: "attachments_fetch",
-        arguments: { session_key: sessionKey, message_id: "msg-attachment" },
-      })) as {
-        structuredContent?: { attachments?: Array<Record<string, unknown>> };
-        isError?: boolean;
-      };
-      expect(attachments.isError).not.toBe(true);
-      expect(attachments.structuredContent?.attachments).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "image",
-          }),
-        ]),
-      );
-
-      const waitPromise = mcp.client.callTool({
-        name: "events_wait",
-        arguments: { session_key: sessionKey, after_cursor: 0, timeout_ms: 5_000 },
-      }) as Promise<{
-        structuredContent?: { event?: Record<string, unknown> };
-      }>;
-
-      emitSessionTranscriptUpdate({
-        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
-        sessionKey,
-        messageId: "msg-2",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "inbound live message" }],
-          timestamp: Date.now(),
-        },
-      });
-
-      const waited = await waitPromise;
-      expect(waited.structuredContent?.event).toMatchObject({
-        type: "message",
-        sessionKey,
-        messageId: "msg-2",
-        role: "user",
-        text: "inbound live message",
-      });
-    } finally {
-      await mcp?.close();
-      await harness.close();
-    }
-  });
-
-  test("sendMessage normalizes route metadata for gateway send", async () => {
-    const bridge = new OpenClawChannelBridge({} as never, {
-      claudeChannelMode: "off",
-      verbose: false,
-    });
-    const gatewayRequest = vi.fn().mockResolvedValue({ ok: true, channel: "telegram" });
-
-    (
-      bridge as unknown as {
-        gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-        readySettled: boolean;
-        resolveReady: () => void;
-      }
-    ).gateway = {
-      request: gatewayRequest,
-      stopAndWait: async () => {},
-    };
-    (
-      bridge as unknown as {
-        readySettled: boolean;
-        resolveReady: () => void;
-      }
-    ).readySettled = true;
-    (
-      bridge as unknown as {
-        resolveReady: () => void;
-      }
-    ).resolveReady();
-
-    vi.spyOn(bridge, "getConversation").mockResolvedValue({
-      sessionKey: "agent:main:main",
-      channel: "telegram",
-      to: "-100123",
-      accountId: "acct-1",
-      threadId: 42,
-    });
-
-    await bridge.sendMessage({
-      sessionKey: "agent:main:main",
-      text: "reply from mcp",
-    });
-
-    expect(gatewayRequest).toHaveBeenCalledWith(
-      "send",
-      expect.objectContaining({
-        to: "-100123",
-        channel: "telegram",
-        accountId: "acct-1",
-        threadId: "42",
+      await bridge.sendMessage({
         sessionKey: "agent:main:main",
-        message: "reply from mcp",
-      }),
-    );
-  });
+        text: "reply from mcp",
+      });
 
-  test("lists routed sessions that only expose modern channel fields", async () => {
-    const bridge = new OpenClawChannelBridge({} as never, {
-      claudeChannelMode: "off",
-      verbose: false,
-    });
-    const gatewayRequest = vi.fn().mockResolvedValue({
-      sessions: [
-        {
-          key: "agent:main:channel-field",
+      expect(gatewayRequest).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({
+          to: "-100123",
           channel: "telegram",
-          deliveryContext: {
-            to: "-100111",
-          },
-        },
-        {
-          key: "agent:main:origin-field",
-          origin: {
-            provider: "imessage",
-            accountId: "imessage-default",
-            threadId: "thread-7",
-          },
-          deliveryContext: {
-            to: "+15551230000",
-          },
-        },
-      ],
+          accountId: "acct-1",
+          threadId: "42",
+          sessionKey: "agent:main:main",
+          message: "reply from mcp",
+        }),
+      );
     });
 
-    (
-      bridge as unknown as {
-        gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-        readySettled: boolean;
-        resolveReady: () => void;
-      }
-    ).gateway = {
-      request: gatewayRequest,
-      stopAndWait: async () => {},
-    };
-    (
-      bridge as unknown as {
-        readySettled: boolean;
-        resolveReady: () => void;
-      }
-    ).readySettled = true;
-    (
-      bridge as unknown as {
-        resolveReady: () => void;
-      }
-    ).resolveReady();
+    test("lists routed sessions that only expose modern channel fields", async () => {
+      const bridge = new OpenClawChannelBridge({} as never, {
+        claudeChannelMode: "off",
+        verbose: false,
+      });
+      const gatewayRequest = vi.fn().mockResolvedValue({
+        sessions: [
+          {
+            key: "agent:main:channel-field",
+            channel: "telegram",
+            deliveryContext: {
+              to: "-100111",
+            },
+          },
+          {
+            key: "agent:main:origin-field",
+            origin: {
+              provider: "imessage",
+              accountId: "imessage-default",
+              threadId: "thread-7",
+            },
+            deliveryContext: {
+              to: "+15551230000",
+            },
+          },
+        ],
+      });
 
-    await expect(bridge.listConversations()).resolves.toEqual([
-      expect.objectContaining({
-        sessionKey: "agent:main:channel-field",
-        channel: "telegram",
-        to: "-100111",
-      }),
-      expect.objectContaining({
-        sessionKey: "agent:main:origin-field",
-        channel: "imessage",
-        to: "+15551230000",
-        accountId: "imessage-default",
-        threadId: "thread-7",
-      }),
-    ]);
-  });
-
-  test("swallows notification send errors after channel replies are matched", async () => {
-    const bridge = new OpenClawChannelBridge({} as never, {
-      claudeChannelMode: "on",
-      verbose: false,
-    });
-
-    (
-      bridge as unknown as {
-        pendingClaudePermissions: Map<string, Record<string, unknown>>;
-        server: { server: { notification: ReturnType<typeof vi.fn> } };
-      }
-    ).pendingClaudePermissions.set("abcde", {
-      toolName: "Bash",
-      description: "run npm test",
-      inputPreview: '{"cmd":"npm test"}',
-    });
-    (
-      bridge as unknown as {
-        server: { server: { notification: ReturnType<typeof vi.fn> } };
-      }
-    ).server = {
-      server: {
-        notification: vi.fn().mockRejectedValue(new Error("Not connected")),
-      },
-    };
-
-    await expect(
       (
         bridge as unknown as {
-          handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+          gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+          readySettled: boolean;
+          resolveReady: () => void;
         }
-      ).handleSessionMessageEvent({
-        sessionKey: "agent:main:main",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "yes abcde" }],
-        },
-      }),
-    ).resolves.toBeUndefined();
-  });
+      ).gateway = {
+        request: gatewayRequest,
+        stopAndWait: async () => {},
+      };
+      (
+        bridge as unknown as {
+          readySettled: boolean;
+          resolveReady: () => void;
+        }
+      ).readySettled = true;
+      (
+        bridge as unknown as {
+          resolveReady: () => void;
+        }
+      ).resolveReady();
 
-  test("emits Claude channel and permission notifications", async () => {
-    const storePath = await createSessionStoreFile();
-    const sessionKey = "agent:main:main";
-    await seedSession({
-      storePath,
-      sessionKey,
-      sessionId: "sess-claude",
-      route: {
-        channel: "imessage",
-        to: "+15551234567",
-      },
-      transcriptMessages: [],
+      await expect(bridge.listConversations()).resolves.toEqual([
+        expect.objectContaining({
+          sessionKey: "agent:main:channel-field",
+          channel: "telegram",
+          to: "-100111",
+        }),
+        expect.objectContaining({
+          sessionKey: "agent:main:origin-field",
+          channel: "imessage",
+          to: "+15551230000",
+          accountId: "imessage-default",
+          threadId: "thread-7",
+        }),
+      ]);
     });
 
-    const harness = await createGatewaySuiteHarness();
-    let mcp: Awaited<ReturnType<typeof connectMcp>> | null = null;
-    try {
-      const channelNotifications: Array<{ content: string; meta: Record<string, string> }> = [];
-      const permissionNotifications: Array<{ request_id: string; behavior: "allow" | "deny" }> = [];
-
-      mcp = await connectMcp({
-        gatewayUrl: `ws://127.0.0.1:${harness.port}`,
-        gatewayToken: "test-gateway-token-1234567890",
+    test("swallows notification send errors after channel replies are matched", async () => {
+      const bridge = new OpenClawChannelBridge({} as never, {
         claudeChannelMode: "on",
-      });
-      mcp.client.setNotificationHandler(ClaudeChannelNotificationSchema, ({ params }) => {
-        channelNotifications.push(params);
-      });
-      mcp.client.setNotificationHandler(ClaudePermissionNotificationSchema, ({ params }) => {
-        permissionNotifications.push(params);
+        verbose: false,
       });
 
-      emitSessionTranscriptUpdate({
-        sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
-        sessionKey,
-        messageId: "msg-user-1",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "hello Claude" }],
-          timestamp: Date.now(),
+      (
+        bridge as unknown as {
+          pendingClaudePermissions: Map<string, Record<string, unknown>>;
+          server: { server: { notification: ReturnType<typeof vi.fn> } };
+        }
+      ).pendingClaudePermissions.set("abcde", {
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: '{"cmd":"npm test"}',
+      });
+      (
+        bridge as unknown as {
+          server: { server: { notification: ReturnType<typeof vi.fn> } };
+        }
+      ).server = {
+        server: {
+          notification: vi.fn().mockRejectedValue(new Error("Not connected")),
         },
-      });
+      };
 
-      await vi.waitFor(() => {
-        expect(channelNotifications).toHaveLength(1);
-      });
-      expect(channelNotifications[0]).toMatchObject({
-        content: "hello Claude",
-        meta: expect.objectContaining({
-          session_key: sessionKey,
+      await expect(
+        (
+          bridge as unknown as {
+            handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+          }
+        ).handleSessionMessageEvent({
+          sessionKey: "agent:main:main",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "yes abcde" }],
+          },
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    test("emits Claude channel and permission notifications", async () => {
+      const storePath = await createSessionStoreFile();
+      const sessionKey = "agent:main:main";
+      await seedSession({
+        storePath,
+        sessionKey,
+        sessionId: "sess-claude",
+        route: {
           channel: "imessage",
           to: "+15551234567",
-          message_id: "msg-user-1",
-        }),
+        },
+        transcriptMessages: [],
       });
 
-      await mcp.client.notification({
-        method: "notifications/claude/channel/permission_request",
-        params: {
+      const harness = await createGatewaySuiteHarness();
+      let mcp: Awaited<ReturnType<typeof connectMcp>> | null = null;
+      try {
+        const channelNotifications: Array<{ content: string; meta: Record<string, string> }> = [];
+        const permissionNotifications: Array<{ request_id: string; behavior: "allow" | "deny" }> =
+          [];
+
+        mcp = await connectMcp({
+          gatewayUrl: `ws://127.0.0.1:${harness.port}`,
+          gatewayToken: "test-gateway-token-1234567890",
+          claudeChannelMode: "on",
+        });
+        mcp.client.setNotificationHandler(ClaudeChannelNotificationSchema, ({ params }) => {
+          channelNotifications.push(params);
+        });
+        mcp.client.setNotificationHandler(ClaudePermissionNotificationSchema, ({ params }) => {
+          permissionNotifications.push(params);
+        });
+
+        emitSessionTranscriptUpdate({
+          sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+          sessionKey,
+          messageId: "msg-user-1",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "hello Claude" }],
+            timestamp: Date.now(),
+          },
+        });
+
+        await vi.waitFor(() => {
+          expect(channelNotifications).toHaveLength(1);
+        });
+        expect(channelNotifications[0]).toMatchObject({
+          content: "hello Claude",
+          meta: expect.objectContaining({
+            session_key: sessionKey,
+            channel: "imessage",
+            to: "+15551234567",
+            message_id: "msg-user-1",
+          }),
+        });
+
+        await mcp.client.notification({
+          method: "notifications/claude/channel/permission_request",
+          params: {
+            request_id: "abcde",
+            tool_name: "Bash",
+            description: "run npm test",
+            input_preview: '{"cmd":"npm test"}',
+          },
+        });
+
+        emitSessionTranscriptUpdate({
+          sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+          sessionKey,
+          messageId: "msg-user-2",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "yes abcde" }],
+            timestamp: Date.now(),
+          },
+        });
+
+        await vi.waitFor(() => {
+          expect(permissionNotifications).toHaveLength(1);
+        });
+        expect(permissionNotifications[0]).toEqual({
           request_id: "abcde",
-          tool_name: "Bash",
-          description: "run npm test",
-          input_preview: '{"cmd":"npm test"}',
-        },
-      });
+          behavior: "allow",
+        });
 
-      emitSessionTranscriptUpdate({
-        sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
-        sessionKey,
-        messageId: "msg-user-2",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "yes abcde" }],
-          timestamp: Date.now(),
-        },
-      });
+        emitSessionTranscriptUpdate({
+          sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+          sessionKey,
+          messageId: "msg-user-3",
+          message: {
+            role: "user",
+            content: "plain string user turn",
+            timestamp: Date.now(),
+          },
+        });
 
-      await vi.waitFor(() => {
-        expect(permissionNotifications).toHaveLength(1);
-      });
-      expect(permissionNotifications[0]).toEqual({
-        request_id: "abcde",
-        behavior: "allow",
-      });
-
-      emitSessionTranscriptUpdate({
-        sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
-        sessionKey,
-        messageId: "msg-user-3",
-        message: {
-          role: "user",
+        await vi.waitFor(() => {
+          expect(channelNotifications).toHaveLength(2);
+        });
+        expect(channelNotifications[1]).toMatchObject({
           content: "plain string user turn",
-          timestamp: Date.now(),
-        },
-      });
-
-      await vi.waitFor(() => {
-        expect(channelNotifications).toHaveLength(2);
-      });
-      expect(channelNotifications[1]).toMatchObject({
-        content: "plain string user turn",
-        meta: expect.objectContaining({
-          session_key: sessionKey,
-          message_id: "msg-user-3",
-        }),
-      });
-    } finally {
-      await mcp?.close();
-      await harness.close();
-    }
+          meta: expect.objectContaining({
+            session_key: sessionKey,
+            message_id: "msg-user-3",
+          }),
+        });
+      } finally {
+        await mcp?.close();
+        await harness.close();
+      }
+    });
   });
 });
