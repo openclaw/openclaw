@@ -5,6 +5,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ReplayControlError } from "./errors.js";
 import { createReplayRun, stepReplayRun, toReplayRunStateResponse } from "./runner.js";
 
+async function expectReplayControlError(
+  fn: () => Promise<unknown>,
+  expected: { code: string; status: number },
+) {
+  await expect(fn()).rejects.toMatchObject(expected);
+}
+
 const cleanupDirs: string[] = [];
 
 afterEach(async () => {
@@ -33,6 +40,35 @@ async function writeTrajectoryFixture(): Promise<string> {
 }
 
 describe("replay runner", () => {
+  it("maps missing trajectory file to not_found", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-runner-"));
+    cleanupDirs.push(dir);
+    const missing = path.join(dir, "nope.json");
+    await expectReplayControlError(
+      () =>
+        createReplayRun({
+          runId: "run-missing",
+          request: { trajectoryPath: missing, mode: "recorded" },
+        }),
+      { code: "not_found", status: 404 },
+    );
+  });
+
+  it("maps invalid trajectory JSON to invalid_request", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-runner-"));
+    cleanupDirs.push(dir);
+    const badPath = path.join(dir, "bad.json");
+    await fs.writeFile(badPath, "{ not json", "utf8");
+    await expectReplayControlError(
+      () =>
+        createReplayRun({
+          runId: "run-bad-json",
+          request: { trajectoryPath: badPath, mode: "recorded" },
+        }),
+      { code: "invalid_request", status: 400 },
+    );
+  });
+
   it("replays deterministic step sequence from trajectory", async () => {
     const trajectoryPath = await writeTrajectoryFixture();
     const run = await createReplayRun({
