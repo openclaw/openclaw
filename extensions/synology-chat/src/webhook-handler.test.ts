@@ -177,6 +177,7 @@ describe("createWebhookHandler", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
     expect(responses.filter((res) => res._status === 0)).toHaveLength(8);
     expect(responses.filter((res) => res._status === 429)).toHaveLength(4);
 
