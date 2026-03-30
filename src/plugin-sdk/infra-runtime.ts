@@ -8,6 +8,7 @@ export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
 export * from "../infra/errors.js";
 export * from "../infra/exec-approval-command-display.ts";
+export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";
 export * from "../infra/exec-approval-session-target.ts";
 export * from "../infra/exec-approvals.ts";
