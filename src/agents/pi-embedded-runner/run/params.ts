@@ -132,4 +132,10 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * Dispose bundled MCP runtimes when an attempt ends instead of preserving
+   * the session-scoped cache. Intended for one-shot local CLI runs that must
+   * exit promptly after emitting the final JSON result.
+   */
+  cleanupBundleMcpOnAttemptEnd?: boolean;
 };

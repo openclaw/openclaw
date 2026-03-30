@@ -497,9 +497,11 @@ export async function runEmbeddedAttempt(
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
           ],
-          disposeRuntime: async () => {
-            await disposeSessionMcpRuntime(params.sessionId);
-          },
+          disposeRuntime: params.cleanupBundleMcpOnAttemptEnd
+            ? async () => {
+                await disposeSessionMcpRuntime(params.sessionId);
+              }
+            : undefined,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled

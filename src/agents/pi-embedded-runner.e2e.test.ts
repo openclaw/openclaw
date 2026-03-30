@@ -245,6 +245,41 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
 };
 
 describe("runEmbeddedPiAgent", () => {
+  it("forwards one-shot bundle MCP cleanup to each embedded attempt", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const sessionKey = nextSessionKey();
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("bundle-mcp-cleanup"),
+      enqueue: immediateEnqueue,
+      cleanupBundleMcpOnAttemptEnd: true,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+      cleanupBundleMcpOnAttemptEnd: true,
+    });
+  });
+
   it("handles prompt error paths without dropping user state", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);

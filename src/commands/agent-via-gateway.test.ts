@@ -135,7 +135,24 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
+        cleanupBundleMcpOnAttemptEnd: true,
+      });
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("does not force bundle MCP cleanup on gateway fallback", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).not.toMatchObject({
+        cleanupBundleMcpOnAttemptEnd: true,
+      });
     });
   });
 });

@@ -183,6 +183,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    cleanupBundleMcpOnAttemptEnd: opts.local === true,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

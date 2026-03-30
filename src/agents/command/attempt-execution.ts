@@ -471,6 +471,7 @@ export function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    cleanupBundleMcpOnAttemptEnd: params.opts.cleanupBundleMcpOnAttemptEnd,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,

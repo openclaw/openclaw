@@ -538,6 +538,7 @@ export async function runEmbeddedPiAgent(
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
+            cleanupBundleMcpOnAttemptEnd: params.cleanupBundleMcpOnAttemptEnd,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
