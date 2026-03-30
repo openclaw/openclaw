@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveUserPath } from "../utils.js";
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
@@ -107,7 +108,7 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("forwards --cwd to gateway workspaceDir", async () => {
+  it("normalizes --cwd before forwarding to gateway workspaceDir", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
 
@@ -116,7 +117,27 @@ describe("agentCliCommand", () => {
       const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
         params?: { workspaceDir?: string };
       };
-      expect(request.params?.workspaceDir).toBe("~/src/project");
+      expect(request.params?.workspaceDir).toBe(resolveUserPath("~/src/project"));
+    });
+  });
+
+  it("resolves relative --cwd against the invoking CLI cwd before gateway forwarding", async () => {
+    await withTempStore(async ({ dir }) => {
+      mockGatewaySuccessReply();
+      const originalCwd = process.cwd();
+      let expectedWorkspaceDir = "";
+      process.chdir(dir);
+      try {
+        expectedWorkspaceDir = resolveUserPath(".");
+        await agentCliCommand({ message: "hi", to: "+1555", cwd: "." }, runtime);
+      } finally {
+        process.chdir(originalCwd);
+      }
+
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { workspaceDir?: string };
+      };
+      expect(request.params?.workspaceDir).toBe(expectedWorkspaceDir);
     });
   });
 
@@ -152,7 +173,7 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("forwards --cwd to embedded workspaceDir when --local is set", async () => {
+  it("normalizes --cwd for embedded workspaceDir when --local is set", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();
 
@@ -167,7 +188,7 @@ describe("agentCliCommand", () => {
       );
 
       const localCall = vi.mocked(agentCommand).mock.calls[0]?.[0] as { workspaceDir?: string };
-      expect(localCall.workspaceDir).toBe("~/src/project");
+      expect(localCall.workspaceDir).toBe(resolveUserPath("~/src/project"));
     });
   });
 });

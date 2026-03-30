@@ -7,6 +7,7 @@ import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { resolveUserPath } from "../utils.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -66,6 +67,14 @@ function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout
   return raw;
 }
 
+function normalizeCliWorkspaceDir(raw?: string): string | undefined {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  return resolveUserPath(trimmed);
+}
+
 function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
@@ -121,6 +130,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
+  const workspaceDir = normalizeCliWorkspaceDir(opts.cwd);
 
   const response = await withProgress(
     {
@@ -147,7 +157,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
-          workspaceDir: opts.cwd,
+          workspaceDir,
           idempotencyKey,
         },
         expectFinal: true,
@@ -181,11 +191,12 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  const workspaceDir = normalizeCliWorkspaceDir(opts.cwd);
   const localOpts = {
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
-    workspaceDir: opts.cwd,
+    workspaceDir,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);
