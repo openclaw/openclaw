@@ -414,14 +414,10 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
-    let beforeToolCallPrompt = params.prompt;
     let beforeToolCallSystemPrompt: string | undefined;
     let beforeToolCallTools: PluginHookToolInfo[] = [];
     let beforeToolCallMessagesProvider: () => AgentMessage[] = () => [];
     const beforeToolCallContext = {
-      provider: params.provider,
-      model: params.modelId,
-      getPrompt: () => beforeToolCallPrompt,
       getSystemPrompt: () => beforeToolCallSystemPrompt,
       getMessages: () => beforeToolCallMessagesProvider(),
       getTools: () => beforeToolCallTools,
@@ -1463,7 +1459,6 @@ export async function runEmbeddedAttempt(
           }
         }
 
-        beforeToolCallPrompt = effectivePrompt;
         beforeToolCallSystemPrompt = systemPromptText;
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {

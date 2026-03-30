@@ -12,7 +12,7 @@ describe("before_tool_call hook context payload", () => {
     vi.clearAllMocks();
   });
 
-  it("forwards provider/model/prompt/systemPrompt/messages/tools when available", async () => {
+  it("forwards systemPrompt/messages/tools when available", async () => {
     const runBeforeToolCall = vi.fn().mockResolvedValue(undefined);
     mockGetGlobalHookRunner.mockReturnValue({
       hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
@@ -41,9 +41,6 @@ describe("before_tool_call hook context payload", () => {
       params: { path: "/tmp/file" },
       ctx: {
         runId: "run-1",
-        provider: "openrouter",
-        model: "openai/gpt-5",
-        getPrompt: () => "Current content to evaluate: user asks to read /tmp/file",
         getSystemPrompt: () => "You are an assistant.",
         getMessages: () => messages,
         getTools: () => tools,
@@ -56,9 +53,6 @@ describe("before_tool_call hook context payload", () => {
         toolCallId: "tool-call-1",
         params: { path: "/tmp/file" },
         runId: "run-1",
-        provider: "openrouter",
-        model: "openai/gpt-5",
-        prompt: "Current content to evaluate: user asks to read /tmp/file",
         systemPrompt: "You are an assistant.",
         messages,
         tools,

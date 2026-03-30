@@ -23,9 +23,6 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
-  provider?: string;
-  model?: string;
-  getPrompt?: () => string | undefined;
   getSystemPrompt?: () => string | undefined;
   getMessages?: () => AgentMessage[];
   getTools?: () => PluginHookToolInfo[];
@@ -208,9 +205,6 @@ export async function runBeforeToolCallHook(args: {
         params: normalizedParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
-        ...(args.ctx?.provider && { provider: args.ctx.provider }),
-        ...(args.ctx?.model && { model: args.ctx.model }),
-        ...(args.ctx?.getPrompt && { prompt: args.ctx.getPrompt() }),
         ...(args.ctx?.getSystemPrompt && { systemPrompt: args.ctx.getSystemPrompt() }),
         ...(args.ctx?.getMessages && { messages: args.ctx.getMessages() }),
         ...(args.ctx?.getTools && { tools: args.ctx.getTools() }),
