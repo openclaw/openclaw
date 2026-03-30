@@ -658,7 +658,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const second = evaluateShellAllowlist({
       command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
-      allowlist: [],
+      allowlist: persisted.map((pattern) => ({ pattern })),
       safeBins,
       cwd: dir,
       env,

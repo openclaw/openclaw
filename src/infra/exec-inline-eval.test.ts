@@ -27,6 +27,8 @@ describe("exec inline eval detection", () => {
     expect(isInterpreterLikeAllowlistPattern("**/node")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/awk")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/gawk")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("/usr/bin/mawk")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("nawk")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/rg")).toBe(false);
   });
 });
