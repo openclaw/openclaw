@@ -1775,7 +1775,9 @@ export const registerTelegramHandlers = ({
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
-    if (!isGroup && normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
+    // Bot-authored message updates can be echoed back by Telegram. Skip them here
+    // and rely on the dedicated channel_post handler for channel-originated posts.
+    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
       return;
     }
     await handleInboundMessageLike({
