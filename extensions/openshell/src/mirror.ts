@@ -2,25 +2,41 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
-const COPY_TREE_CONCURRENCY = 16;
+const COPY_TREE_FS_CONCURRENCY = 16;
 
 function createExcludeMatcher(excludeDirs?: readonly string[]) {
   const excluded = new Set((excludeDirs ?? []).map((d) => d.toLowerCase()));
   return (name: string) => excluded.has(name.toLowerCase());
 }
 
-async function lstatIfExists(targetPath: string) {
-  return await fs.lstat(targetPath).catch(() => null);
+function createConcurrencyLimiter(limit: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  const release = () => {
+    active -= 1;
+    queue.shift()?.();
+  };
+
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active >= limit) {
+      await new Promise<void>((resolve) => {
+        queue.push(resolve);
+      });
+    }
+    active += 1;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  };
 }
 
-async function mapWithConcurrency<T>(
-  items: readonly T[],
-  limit: number,
-  mapper: (item: T) => Promise<void>,
-): Promise<void> {
-  for (let index = 0; index < items.length; index += limit) {
-    await Promise.all(items.slice(index, index + limit).map(mapper));
-  }
+const runLimitedFs = createConcurrencyLimiter(COPY_TREE_FS_CONCURRENCY);
+
+async function lstatIfExists(targetPath: string) {
+  return await runLimitedFs(async () => await fs.lstat(targetPath)).catch(() => null);
 }
 
 async function copyTreeWithoutSymlinks(params: {
@@ -28,7 +44,7 @@ async function copyTreeWithoutSymlinks(params: {
   targetPath: string;
   preserveTargetSymlinks?: boolean;
 }): Promise<void> {
-  const stats = await fs.lstat(params.sourcePath);
+  const stats = await runLimitedFs(async () => await fs.lstat(params.sourcePath));
   // Mirror sync only carries regular files and directories across the
   // host/sandbox boundary. Symlinks and special files are dropped.
   if (stats.isSymbolicLink()) {
@@ -39,20 +55,24 @@ async function copyTreeWithoutSymlinks(params: {
     return;
   }
   if (stats.isDirectory()) {
-    await fs.mkdir(params.targetPath, { recursive: true });
-    const entries = await fs.readdir(params.sourcePath);
-    await mapWithConcurrency(entries, COPY_TREE_CONCURRENCY, async (entry) => {
-      await copyTreeWithoutSymlinks({
-        sourcePath: path.join(params.sourcePath, entry),
-        targetPath: path.join(params.targetPath, entry),
-        preserveTargetSymlinks: params.preserveTargetSymlinks,
-      });
-    });
+    await runLimitedFs(async () => await fs.mkdir(params.targetPath, { recursive: true }));
+    const entries = await runLimitedFs(async () => await fs.readdir(params.sourcePath));
+    await Promise.all(
+      entries.map(async (entry) => {
+        await copyTreeWithoutSymlinks({
+          sourcePath: path.join(params.sourcePath, entry),
+          targetPath: path.join(params.targetPath, entry),
+          preserveTargetSymlinks: params.preserveTargetSymlinks,
+        });
+      }),
+    );
     return;
   }
   if (stats.isFile()) {
-    await fs.mkdir(path.dirname(params.targetPath), { recursive: true });
-    await fs.copyFile(params.sourcePath, params.targetPath);
+    await runLimitedFs(
+      async () => await fs.mkdir(path.dirname(params.targetPath), { recursive: true }),
+    );
+    await runLimitedFs(async () => await fs.copyFile(params.sourcePath, params.targetPath));
   }
 }
 
@@ -74,10 +94,13 @@ export async function replaceDirectoryContents(params: {
         if (stats?.isSymbolicLink()) {
           return;
         }
-        await fs.rm(targetPath, {
-          recursive: true,
-          force: true,
-        });
+        await runLimitedFs(
+          async () =>
+            await fs.rm(targetPath, {
+              recursive: true,
+              force: true,
+            }),
+        );
       }),
   );
   const sourceEntries = await fs.readdir(params.sourceDir);
