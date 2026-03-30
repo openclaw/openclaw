@@ -13,6 +13,7 @@ export type DiffTheme = (typeof DIFF_THEMES)[number];
 export type DiffIndicators = (typeof DIFF_INDICATORS)[number];
 export type DiffImageQualityPreset = (typeof DIFF_IMAGE_QUALITY_PRESETS)[number];
 export type DiffOutputFormat = (typeof DIFF_OUTPUT_FORMATS)[number];
+export type DiffRenderTarget = "viewer" | "image" | "both";
 
 export type DiffPresentationDefaults = {
   fontFamily: string;
@@ -92,8 +93,8 @@ export type DiffViewerPayload = {
 };
 
 export type RenderedDiffDocument = {
-  html: string;
-  imageHtml: string;
+  html?: string;
+  imageHtml?: string;
   title: string;
   fileCount: number;
   inputKind: DiffInput["kind"];
