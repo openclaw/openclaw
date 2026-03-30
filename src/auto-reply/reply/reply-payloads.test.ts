@@ -237,6 +237,23 @@ describe("resolveToolDeliveryPayload", () => {
     expect(payload).toBeNull();
   });
 
+  it("trims and deduplicates media URLs from payload fields", () => {
+    const payload = resolveToolDeliveryPayload({
+      text: "No direct media",
+      mediaUrl: "  file:///tmp/screenshot.png  ",
+      mediaUrls: [
+        "file:///tmp/screenshot.png",
+        "  file:///tmp/screenshot.png  ",
+        "https://example.com/legacy.png ",
+      ],
+    });
+    expect(payload).toEqual({
+      text: undefined,
+      mediaUrl: "file:///tmp/screenshot.png",
+      mediaUrls: ["file:///tmp/screenshot.png", "https://example.com/legacy.png"],
+    });
+  });
+
   it("keeps existing media payloads and drops text", () => {
     const payload = resolveToolDeliveryPayload({
       text: "Tool result",
@@ -248,6 +265,10 @@ describe("resolveToolDeliveryPayload", () => {
       mediaUrl: "https://example.com/legacy.png",
       mediaUrls: ["https://example.com/legacy.png", "file:///tmp/screenshot.png"],
     });
+  });
+
+  it("returns null for whitespace-only media URLs", () => {
+    expect(resolveToolDeliveryPayload({ text: "", mediaUrl: "   " })).toBeNull();
   });
 
   it("respects allowText when text is allowed", () => {
