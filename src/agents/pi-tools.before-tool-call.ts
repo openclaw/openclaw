@@ -552,7 +552,10 @@ export async function runBeforeToolCallHook(args: {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies();
     if (!shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
-      return { blocked: false, params };
+      return checkTruncationGuards(toolName, params, args.toolCallId, args.ctx?.sessionKey) ?? {
+        blocked: false,
+        params,
+      };
     }
     const normalizedParams = isPlainObject(params) ? params : {};
     const deriveOptions =
@@ -633,7 +636,10 @@ export async function runBeforeToolCallHook(args: {
         ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
         : derivedToolParams;
     if (!hasBeforeToolCallHooks) {
-      return { blocked: false, params: policyAdjustedParams };
+      return checkTruncationGuards(toolName, policyAdjustedParams, args.toolCallId, args.ctx?.sessionKey) ?? {
+        blocked: false,
+        params: policyAdjustedParams,
+      };
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -684,12 +690,16 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.params) {
-      return {
+      const effectiveParams = mergeParamsWithApprovalOverrides(policyAdjustedParams, hookResult.params);
+      return checkTruncationGuards(toolName, effectiveParams, args.toolCallId, args.ctx?.sessionKey) ?? {
         blocked: false,
-        params: mergeParamsWithApprovalOverrides(policyAdjustedParams, hookResult.params),
+        params: effectiveParams,
       };
     }
-    return { blocked: false, params: policyAdjustedParams };
+    return checkTruncationGuards(toolName, policyAdjustedParams, args.toolCallId, args.ctx?.sessionKey) ?? {
+      blocked: false,
+      params: policyAdjustedParams,
+    };
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
     const cause = unwrapErrorCause(err);
@@ -702,6 +712,56 @@ export async function runBeforeToolCallHook(args: {
       params,
     };
   }
+}
+
+/**
+ * Guard against truncation-induced empty required parameters.
+ * Must be evaluated against the effective (post-hook-merge) params so that
+ * hooks which normalize params are taken into account before allowing.
+ * Returns a blocked outcome, or null if the params pass validation.
+ */
+function checkTruncationGuards(
+  toolName: string,
+  effectiveParams: unknown,
+  toolCallId: string | undefined,
+  sessionKey: string | undefined,
+): HookOutcome | null {
+  const toolNameNorm = toolName.trim().toLowerCase();
+  if (toolNameNorm === "exec" || toolNameNorm === "bash") {
+    const record = isPlainObject(effectiveParams) ? effectiveParams : {};
+    const command = record.command ?? record.cmd;
+    if (!command || typeof command !== "string" || !command.trim()) {
+      const reason =
+        `⛔ exec blocked — "command" parameter is required but was empty or missing.\n` +
+        `This usually means the tool call was truncated during generation.\n` +
+        `DO NOT retry the same empty exec call.\n` +
+        `DO NOT use exec with inline scripts or heredocs — long inline content is exactly ` +
+        `what causes truncation and empty commands.\n` +
+        `Instead: use the write tool to save the script to a file (e.g. /tmp/script.py), ` +
+        `then call exec with a short command such as: python3 /tmp/script.py\n` +
+        `Do NOT call exec again without a non-empty "command" field.`;
+      log.warn(
+        `exec blocked: empty command toolCallId=${toolCallId ?? "?"} sessionKey=${sessionKey ?? "?"}`,
+      );
+      return { blocked: true, reason };
+    }
+  }
+  if (toolNameNorm === "sessions_spawn") {
+    const record = isPlainObject(effectiveParams) ? effectiveParams : {};
+    const task = record.task;
+    if (!task || typeof task !== "string" || !task.trim()) {
+      const reason =
+        `⛔ sessions_spawn blocked — "task" parameter is required but was empty or missing.\n` +
+        `This usually means the tool call was truncated during generation.\n` +
+        `DO NOT retry sessions_spawn with empty arguments.\n` +
+        `Instead: describe the task in a concise single sentence and pass it as the "task" field.`;
+      log.warn(
+        `sessions_spawn blocked: empty task toolCallId=${toolCallId ?? "?"} sessionKey=${sessionKey ?? "?"}`,
+      );
+      return { blocked: true, reason };
+    }
+  }
+  return null;
 }
 
 export function wrapToolWithBeforeToolCallHook(

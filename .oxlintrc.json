@@ -178,6 +178,8 @@
     "vitest/warn-todo": "error"
   },
   "ignorePatterns": [
+    "agent-monitor/",
+    "assets/",
     "dist/",
     "dist-runtime/",
     "docs/_layouts/",
