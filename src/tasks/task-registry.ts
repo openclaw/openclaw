@@ -45,6 +45,7 @@ const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const tasks = new Map<string, TaskRecord>();
 const taskDeliveryStates = new Map<string, TaskDeliveryState>();
 const taskIdsByRunId = new Map<string, Set<string>>();
+const taskIdsBySessionKey = new Map<string, Set<string>>();
 const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
@@ -218,10 +219,65 @@ function addRunIdIndex(taskId: string, runId?: string) {
   ids.add(taskId);
 }
 
+function normalizeSessionIndexKey(sessionKey?: string): string | undefined {
+  const trimmed = sessionKey?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function getTaskSessionIndexKeys(
+  task: Pick<TaskRecord, "requesterSessionKey" | "childSessionKey">,
+) {
+  return [
+    ...new Set(
+      [
+        normalizeSessionIndexKey(task.requesterSessionKey),
+        normalizeSessionIndexKey(task.childSessionKey),
+      ].filter(Boolean) as string[],
+    ),
+  ];
+}
+
+function addSessionKeyIndex(
+  taskId: string,
+  task: Pick<TaskRecord, "requesterSessionKey" | "childSessionKey">,
+) {
+  for (const sessionKey of getTaskSessionIndexKeys(task)) {
+    let ids = taskIdsBySessionKey.get(sessionKey);
+    if (!ids) {
+      ids = new Set<string>();
+      taskIdsBySessionKey.set(sessionKey, ids);
+    }
+    ids.add(taskId);
+  }
+}
+
+function deleteSessionKeyIndex(
+  taskId: string,
+  task: Pick<TaskRecord, "requesterSessionKey" | "childSessionKey">,
+) {
+  for (const sessionKey of getTaskSessionIndexKeys(task)) {
+    const ids = taskIdsBySessionKey.get(sessionKey);
+    if (!ids) {
+      continue;
+    }
+    ids.delete(taskId);
+    if (ids.size === 0) {
+      taskIdsBySessionKey.delete(sessionKey);
+    }
+  }
+}
+
 function rebuildRunIdIndex() {
   taskIdsByRunId.clear();
   for (const [taskId, task] of tasks.entries()) {
     addRunIdIndex(taskId, task.runId);
+  }
+}
+
+function rebuildSessionKeyIndex() {
+  taskIdsBySessionKey.clear();
+  for (const [taskId, task] of tasks.entries()) {
+    addSessionKeyIndex(taskId, task);
   }
 }
 
@@ -379,6 +435,7 @@ function restoreTaskRegistryOnce() {
       taskDeliveryStates.set(taskId, state);
     }
     rebuildRunIdIndex();
+    rebuildSessionKeyIndex();
     emitTaskRegistryHookEvent(() => ({
       kind: "restored",
       tasks: snapshotTaskRecords(tasks),
@@ -403,9 +460,18 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
     next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
   }
+  const sessionIndexChanged =
+    normalizeSessionIndexKey(current.requesterSessionKey) !==
+      normalizeSessionIndexKey(next.requesterSessionKey) ||
+    normalizeSessionIndexKey(current.childSessionKey) !==
+      normalizeSessionIndexKey(next.childSessionKey);
   tasks.set(taskId, next);
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
+  }
+  if (sessionIndexChanged) {
+    deleteSessionKeyIndex(taskId, current);
+    addSessionKeyIndex(taskId, next);
   }
   persistTaskUpsert(next);
   emitTaskRegistryHookEvent(() => ({
@@ -900,6 +966,7 @@ export function createTaskRecord(params: {
     requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
   });
   addRunIdIndex(taskId, record.runId);
+  addSessionKeyIndex(taskId, record);
   persistTaskUpsert(record);
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
@@ -1190,13 +1257,25 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
 }
 
 export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
-  const key = sessionKey.trim();
+  const task = listTasksForSessionKey(sessionKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeSessionIndexKey(sessionKey);
   if (!key) {
-    return undefined;
+    return [];
   }
-  return listTaskRecords().find(
-    (task) => task.childSessionKey === key || task.requesterSessionKey === key,
-  );
+  const ids = taskIdsBySessionKey.get(key);
+  if (!ids || ids.size === 0) {
+    return [];
+  }
+  return [...ids]
+    .map((taskId) => tasks.get(taskId))
+    .filter((task): task is TaskRecord => Boolean(task))
+    .toSorted((left, right) => right.createdAt - left.createdAt)
+    .map((task) => cloneTaskRecord(task));
 }
 
 export function resolveTaskForLookupToken(token: string): TaskRecord | undefined {
@@ -1213,6 +1292,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
+  deleteSessionKeyIndex(taskId, current);
   tasks.delete(taskId);
   taskDeliveryStates.delete(taskId);
   rebuildRunIdIndex();
@@ -1230,6 +1310,7 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   tasks.clear();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
+  taskIdsBySessionKey.clear();
   tasksWithPendingDelivery.clear();
   restoreAttempted = false;
   resetTaskRegistryRuntimeForTests();
