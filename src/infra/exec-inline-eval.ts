@@ -15,6 +15,7 @@ type PrefixFlagSpec = {
 type InterpreterFlagSpec = {
   names: readonly string[];
   exactFlags: ReadonlySet<string>;
+  rawExactFlags?: ReadonlyMap<string, string>;
   prefixFlags?: readonly PrefixFlagSpec[];
   scanPastDoubleDash?: boolean;
 };
@@ -45,14 +46,20 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["php"], exactFlags: new Set(["-r"]) },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
-  { names: ["find"], exactFlags: new Set(["-exec", "-execdir"]), scanPastDoubleDash: true },
+  {
+    names: ["find"],
+    exactFlags: new Set(["-exec", "-execdir", "-ok", "-okdir"]),
+    scanPastDoubleDash: true,
+  },
   {
     names: ["make", "gmake"],
-    exactFlags: new Set(["-f", "--file", "--makefile"]),
+    exactFlags: new Set(["-f", "--file", "--makefile", "--eval"]),
+    rawExactFlags: new Map([["-E", "-E"]]),
     prefixFlags: [
       { label: "-f", prefix: "-f" },
       { label: "--file", prefix: "--file=" },
       { label: "--makefile", prefix: "--makefile=" },
+      { label: "--eval", prefix: "--eval=" },
     ],
   },
   { names: ["sed", "gsed"], exactFlags: new Set(["-e"]) },
@@ -191,6 +198,10 @@ export function detectInterpreterInlineEvalArgv(
           continue;
         }
         break;
+      }
+      const rawExactFlag = spec.rawExactFlags?.get(token);
+      if (rawExactFlag) {
+        return createInlineEvalHit(executable, argv, rawExactFlag);
       }
       const lower = token.toLowerCase();
       if (spec.exactFlags.has(lower)) {
