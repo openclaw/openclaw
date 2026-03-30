@@ -230,7 +230,7 @@ export class ConfigEditor extends LitElement {
       // JSON linter
       linter((view) => {
         const diagnostics: Diagnostic[] = [];
-        const docText = view.state.doc.toString().trim();
+        const docText = view.state.doc.toString();
 
         if (!docText) {
           return diagnostics;
@@ -240,7 +240,7 @@ export class ConfigEditor extends LitElement {
           JSON5.parse(docText);
         } catch (e) {
           if (e instanceof SyntaxError) {
-            const pos = this.errorOffset(view.state.doc.toString(), e.message);
+            const pos = this.errorOffset(docText, e.message);
             diagnostics.push({
               from: Math.min(pos, docText.length),
               to: Math.min(pos + 1, docText.length),
