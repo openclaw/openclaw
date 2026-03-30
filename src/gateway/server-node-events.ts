@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -472,8 +473,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
       const packageName = normalizeNonEmptyString(obj.packageName);
-      const title = compactNotificationEventText(normalizeNonEmptyString(obj.title) ?? "");
-      const text = compactNotificationEventText(normalizeNonEmptyString(obj.text) ?? "");
+      const title = compactNotificationEventText(
+        sanitizeInboundSystemTags(normalizeNonEmptyString(obj.title) ?? ""),
+      );
+      const text = compactNotificationEventText(
+        sanitizeInboundSystemTags(normalizeNonEmptyString(obj.text) ?? ""),
+      );
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -490,6 +495,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const queued = enqueueSystemEvent(summary, {
         sessionKey,
         contextKey: `notification:${key}`,
+        trusted: false,
       });
       if (queued) {
         requestHeartbeatNow({ reason: "notifications-event", sessionKey });
