@@ -26,8 +26,8 @@ import type {
   GatewayServiceRestartResult,
 } from "./service-types.js";
 
-const SCHTASKS_STATUS_TIMEOUT_MS = 4_000;
-const SCHTASKS_STATUS_NO_OUTPUT_TIMEOUT_MS = 2_000;
+const SCHTASKS_STATUS_TIMEOUT_MS = 15_000;
+const SCHTASKS_STATUS_NO_OUTPUT_TIMEOUT_MS = 5_000;
 
 export function resolveScheduledTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();

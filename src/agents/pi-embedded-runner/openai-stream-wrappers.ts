@@ -6,8 +6,9 @@ import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+type OpenAITextVerbosity = "low" | "medium" | "high";
 
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
+const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
@@ -243,6 +244,29 @@ export function resolveOpenAIServiceTier(
   return normalized;
 }
 
+function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "low" || normalized === "medium" || normalized === "high") {
+    return normalized;
+  }
+  return undefined;
+}
+
+export function resolveOpenAITextVerbosity(
+  extraParams: Record<string, unknown> | undefined,
+): OpenAITextVerbosity | undefined {
+  const raw = extraParams?.textVerbosity ?? extraParams?.text_verbosity;
+  const normalized = normalizeOpenAITextVerbosity(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid OpenAI text verbosity param: ${rawSummary}`);
+  }
+  return normalized;
+}
+
 function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
     return value;
@@ -334,7 +358,9 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
-      (model.api !== "openai-responses" && model.api !== "openai-codex-responses") ||
+      (model.api !== "openai-responses" &&
+        model.api !== "openai-codex-responses" &&
+        model.api !== "azure-openai-responses") ||
       (model.provider !== "openai" && model.provider !== "openai-codex")
     ) {
       return underlying(model, context, options);
@@ -368,6 +394,36 @@ export function createOpenAIServiceTierWrapper(
       if (payloadObj.service_tier === undefined) {
         payloadObj.service_tier = serviceTier;
       }
+    });
+  };
+}
+
+export function createOpenAITextVerbosityWrapper(
+  baseStreamFn: StreamFn | undefined,
+  verbosity: OpenAITextVerbosity,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
+      return underlying(model, context, options);
+    }
+    const shouldOverrideExistingVerbosity = model.api === "openai-codex-responses";
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const existingText =
+            payloadObj.text && typeof payloadObj.text === "object"
+              ? (payloadObj.text as Record<string, unknown>)
+              : {};
+          if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
+            payloadObj.text = { ...existingText, verbosity };
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
     });
   };
 }

@@ -133,7 +133,6 @@ describe("message action threading helpers", () => {
     ).toBeUndefined();
   });
 });
-
 describe("message action media helpers", () => {
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
     expect(

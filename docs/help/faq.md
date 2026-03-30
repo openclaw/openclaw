@@ -287,6 +287,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     See what changed:
     [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
+    For install one-liners and the difference between beta and dev, see the accordion below.
+
   </Accordion>
 
   <Accordion title="How do I install the beta version and what is the difference between beta and dev?">
@@ -950,7 +952,7 @@ for usage/billing and raise limits as needed.
     Token tip: long tasks and sub-agents both consume tokens. If cost is a concern, set a
     cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
-    Docs: [Sub-agents](/tools/subagents).
+    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks).
 
   </Accordion>
 
@@ -1307,7 +1309,7 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
-  <Accordion title="I'm in remote mode - where is the session store?">
+  <Accordion title="Remote mode: where is the session store?">
     Session state is owned by the **gateway host**. If you're in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
   </Accordion>
 </AccordionGroup>
@@ -2131,8 +2133,8 @@ for usage/billing and raise limits as needed.
   <Accordion title="Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding?">
     Yes. Set one as default and switch as needed:
 
-    - **Quick switch (per session):** `/model gpt-5.2` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
-    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.2`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
+    - **Quick switch (per session):** `/model gpt-5.4` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
+    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.4`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
@@ -2189,7 +2191,7 @@ for usage/billing and raise limits as needed.
           model: { primary: "minimax/MiniMax-M2.7" },
           models: {
             "minimax/MiniMax-M2.7": { alias: "minimax" },
-            "openai/gpt-5.2": { alias: "gpt" },
+            "openai/gpt-5.4": { alias: "gpt" },
           },
         },
       },

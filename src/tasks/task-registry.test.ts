@@ -9,19 +9,30 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-even
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createTaskRecord,
+  findLatestTaskForSessionKey,
   findTaskByRunId,
   getTaskById,
   getTaskRegistrySummary,
+  listTasksForSessionKey,
   listTaskRecords,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
+  markTaskRunningByRunId,
+  recordTaskProgressByRunId,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  setTaskProgressById,
+  setTaskTimingById,
   updateTaskNotifyPolicyById,
-  updateTaskRecordById,
-  updateTaskStateByRunId,
 } from "./task-registry.js";
-import { reconcileInspectableTasks, sweepTaskRegistry } from "./task-registry.maintenance.js";
+import {
+  getInspectableTaskAuditSummary,
+  previewTaskRegistryMaintenance,
+  reconcileInspectableTasks,
+  runTaskRegistryMaintenance,
+  sweepTaskRegistry,
+} from "./task-registry.maintenance.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -433,7 +444,8 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      updateTaskRecordById(findTaskByRunId("run-detail-leak")!.taskId, {
+      setTaskProgressById({
+        taskId: findTaskByRunId("run-detail-leak")!.taskId,
         progressSummary:
           "I am loading the local session context and checking helper command availability before writing the file.",
       });
@@ -779,6 +791,38 @@ describe("task-registry", () => {
     });
   });
 
+  it("indexes tasks by session key for latest and list lookups", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests({ persist: false });
+      const nowSpy = vi.spyOn(Date, "now");
+      nowSpy.mockReturnValue(1_700_000_000_000);
+
+      const older = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:subagent:child-1",
+        runId: "run-session-lookup-1",
+        task: "Older task",
+      });
+      const latest = createTaskRecord({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:subagent:child-2",
+        runId: "run-session-lookup-2",
+        task: "Latest task",
+      });
+      nowSpy.mockRestore();
+
+      expect(findLatestTaskForSessionKey("agent:main:main")?.taskId).toBe(latest.taskId);
+      expect(listTasksForSessionKey("agent:main:main").map((task) => task.taskId)).toEqual([
+        latest.taskId,
+        older.taskId,
+      ]);
+      expect(findLatestTaskForSessionKey("agent:main:subagent:child-1")?.taskId).toBe(older.taskId);
+    });
+  });
+
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -793,7 +837,8 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
       });
-      updateTaskRecordById(task.taskId, {
+      setTaskTimingById({
+        taskId: task.taskId,
         lastEventAt: Date.now() - 10 * 60_000,
       });
 
@@ -807,6 +852,39 @@ describe("task-registry", () => {
         status: "running",
       });
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    });
+  });
+
+  it("marks orphaned tasks lost with cleanupAfter in a single maintenance pass", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:acp:missing",
+        runId: "run-lost-maintenance",
+        task: "Missing child",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      expect(runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "lost",
+        error: "backing session missing",
+      });
+      expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
     });
   });
 
@@ -825,16 +903,113 @@ describe("task-registry", () => {
         deliveryStatus: "not_applicable",
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
       });
-      updateTaskRecordById(task.taskId, {
+      setTaskTimingById({
+        taskId: task.taskId,
         endedAt: Date.now() - 8 * 24 * 60 * 60_000,
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
 
       expect(sweepTaskRegistry()).toEqual({
         reconciled: 0,
+        cleanupStamped: 0,
         pruned: 1,
       });
       expect(listTaskRecords()).toEqual([]);
+    });
+  });
+
+  it("previews and repairs missing cleanup timestamps during maintenance", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([
+              [
+                "task-missing-cleanup",
+                {
+                  taskId: "task-missing-cleanup",
+                  runtime: "cron",
+                  requesterSessionKey: "",
+                  runId: "run-maintenance-cleanup",
+                  task: "Finished cron",
+                  status: "failed",
+                  deliveryStatus: "not_applicable",
+                  notifyPolicy: "silent",
+                  createdAt: now - 120_000,
+                  endedAt: now - 60_000,
+                  lastEventAt: now - 60_000,
+                },
+              ],
+            ]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(previewTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        cleanupStamped: 1,
+        pruned: 0,
+      });
+
+      expect(runTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        cleanupStamped: 1,
+        pruned: 0,
+      });
+      expect(getTaskById("task-missing-cleanup")?.cleanupAfter).toBeGreaterThan(now);
+    });
+  });
+
+  it("summarizes inspectable task audit findings", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([
+              [
+                "task-audit-summary",
+                {
+                  taskId: "task-audit-summary",
+                  runtime: "acp",
+                  requesterSessionKey: "agent:main:main",
+                  runId: "run-audit-summary",
+                  task: "Hung task",
+                  status: "running",
+                  deliveryStatus: "pending",
+                  notifyPolicy: "done_only",
+                  createdAt: now - 50 * 60_000,
+                  startedAt: now - 40 * 60_000,
+                  lastEventAt: now - 40 * 60_000,
+                },
+              ],
+            ]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(getInspectableTaskAuditSummary()).toEqual({
+        total: 1,
+        warnings: 0,
+        errors: 1,
+        byCode: {
+          stale_queued: 0,
+          stale_running: 1,
+          lost: 0,
+          delivery_failed: 0,
+          missing_cleanup: 0,
+          inconsistent_timestamps: 0,
+        },
+      });
     });
   });
 
@@ -862,9 +1037,8 @@ describe("task-registry", () => {
         notifyPolicy: "done_only",
       });
 
-      updateTaskStateByRunId({
+      markTaskRunningByRunId({
         runId: "run-state-change",
-        status: "running",
         eventSummary: "Started.",
       });
       await waitForAssertion(() => expect(hoisted.sendMessageMock).not.toHaveBeenCalled());
@@ -873,7 +1047,7 @@ describe("task-registry", () => {
         taskId: task.taskId,
         notifyPolicy: "state_changes",
       });
-      updateTaskStateByRunId({
+      recordTaskProgressByRunId({
         runId: "run-state-change",
         eventSummary: "No output for 60s. It may be waiting for input.",
       });
@@ -888,13 +1062,6 @@ describe("task-registry", () => {
       );
       expect(findTaskByRunId("run-state-change")).toMatchObject({
         notifyPolicy: "state_changes",
-        lastNotifiedEventAt: expect.any(Number),
-        recentEvents: expect.arrayContaining([
-          expect.objectContaining({
-            kind: "progress",
-            summary: "No output for 60s. It may be waiting for input.",
-          }),
-        ]),
       });
       await maybeDeliverTaskStateChangeUpdate(task.taskId);
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);

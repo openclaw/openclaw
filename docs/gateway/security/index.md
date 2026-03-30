@@ -13,6 +13,8 @@ OpenClaw is **not** a hostile multi-tenant security boundary for multiple advers
 If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
 </Warning>
 
+**On this page:** [Trust model](#scope-first-personal-assistant-security-model) | [Quick audit](#quick-check-openclaw-security-audit) | [Hardened baseline](#hardened-baseline-in-60-seconds) | [DM access model](#dm-access-model-pairing--allowlist--open--disabled) | [Configuration hardening](#configuration-hardening-examples) | [Incident response](#incident-response)
+
 ## Scope first: personal assistant security model
 
 OpenClaw security guidance assumes a **personal assistant** deployment: one trusted operator boundary, potentially many agents.
@@ -47,34 +49,17 @@ OpenClaw is both a product and an experiment: you’re wiring frontier-model beh
 
 Start with the smallest access that still works, then widen it as you gain confidence.
 
-## Deployment assumption (important)
+### Deployment and host trust
 
 OpenClaw assumes the host and config boundary are trusted:
 
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
-- OpenClaw can run multiple gateway instances on one machine, but recommended operations favor clean trust-boundary separation.
 - Recommended default: one user per machine/host (or VPS), one gateway for that user, and one or more agents in that gateway.
-- If multiple users want OpenClaw, use one VPS/host per user.
-
-### Practical consequence (operator trust boundary)
-
-Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
-
-- Operators with read/control-plane access can inspect gateway session metadata/history by design.
+- Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
 - Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
-- Example: expecting per-operator isolation for methods like `sessions.list`, `sessions.preview`, or `chat.history` is outside this model.
-- If you need adversarial-user isolation, run separate gateways per trust boundary.
-- Multiple gateways on one machine are technically possible, but not the recommended baseline for multi-user isolation.
-
-## Personal assistant model (not a multi-tenant bus)
-
-OpenClaw is designed as a personal assistant security model: one trusted operator boundary, potentially many agents.
-
-- If several people can message one tool-enabled agent, each of them can steer that same permission set.
-- Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
-- If users may be adversarial to each other, run separate gateways (or separate OS users/hosts) per trust boundary.
+- If several people can message one tool-enabled agent, each of them can steer that same permission set. Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
 
 ### Shared Slack workspace: real risk
 
@@ -182,7 +167,7 @@ If more than one person can DM your bot:
 - Never combine shared DMs with broad tool access.
 - This hardens cooperative/shared inboxes, but is not designed as hostile co-tenant isolation when users share host/config write access.
 
-### What the audit checks (high level)
+## What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
@@ -212,7 +197,7 @@ Use this when auditing access or deciding what to back up:
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
-## Security Audit Checklist
+## Security audit checklist
 
 When the audit prints findings, treat this as a priority order:
 

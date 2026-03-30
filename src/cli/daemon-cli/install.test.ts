@@ -61,8 +61,8 @@ vi.mock("../../config/config.js", () => ({
   loadConfig: loadConfigMock,
   readBestEffortConfig: loadConfigMock,
   readConfigFileSnapshot: readConfigFileSnapshotMock,
-  resolveGatewayPort: resolveGatewayPortMock,
   replaceConfigFile: replaceConfigFileMock,
+  resolveGatewayPort: resolveGatewayPortMock,
 }));
 
 vi.mock("../../config/paths.js", () => ({
