@@ -1,23 +1,15 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import {
-  resolveEffectiveToolFsRootExpansionAllowed,
-  resolveEffectiveToolFsWorkspaceOnly,
-} from "../agents/tool-fs-policy.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { resolveUserPath } from "../utils.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
 };
 
 let cachedPreferredTmpDir: string | undefined;
-const HTTP_URL_RE = /^https?:\/\//i;
-const DATA_URL_RE = /^data:/i;
-const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 
 function resolveCachedPreferredTmpDir(): string {
   if (!cachedPreferredTmpDir) {
@@ -63,49 +55,6 @@ export function getAgentScopedMediaLocalRoots(
   return roots;
 }
 
-function resolveLocalMediaPath(source: string): string | undefined {
-  const trimmed = source.trim();
-  if (!trimmed || HTTP_URL_RE.test(trimmed) || DATA_URL_RE.test(trimmed)) {
-    return undefined;
-  }
-  if (trimmed.startsWith("file://")) {
-    try {
-      return safeFileURLToPath(trimmed);
-    } catch {
-      return undefined;
-    }
-  }
-  if (trimmed.startsWith("~")) {
-    return resolveUserPath(trimmed);
-  }
-  if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
-    return path.resolve(trimmed);
-  }
-  return undefined;
-}
-
-export function appendLocalMediaParentRoots(
-  roots: readonly string[],
-  mediaSources?: readonly string[],
-): string[] {
-  const appended = Array.from(new Set(roots.map((root) => path.resolve(root))));
-  for (const source of mediaSources ?? []) {
-    const localPath = resolveLocalMediaPath(source);
-    if (!localPath) {
-      continue;
-    }
-    const parentDir = path.dirname(localPath);
-    if (parentDir === path.parse(parentDir).root) {
-      continue;
-    }
-    const normalizedParent = path.resolve(parentDir);
-    if (!appended.includes(normalizedParent)) {
-      appended.push(normalizedParent);
-    }
-  }
-  return appended;
-}
-
 export function getAgentScopedMediaLocalRootsForSources(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -115,8 +64,5 @@ export function getAgentScopedMediaLocalRootsForSources(params: {
   if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
     return roots;
   }
-  if (!resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })) {
-    return roots;
-  }
-  return appendLocalMediaParentRoots(roots, params.mediaSources);
+  return roots;
 }
