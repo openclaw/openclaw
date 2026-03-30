@@ -21,6 +21,7 @@ const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async () => ({ release: vi.fn(async () => {}) })),
 );
 const drainFileLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
+const drainSessionStoreLockQueuesMock = vi.hoisted(() => vi.fn(async () => undefined));
 const drainSessionWriteLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 function createDeferred<T>() {
@@ -47,10 +48,12 @@ describe("cleanupSessionStateForTest", () => {
     resetSessionWriteLockStateForTest();
     acquireSessionWriteLockMock.mockClear();
     drainFileLockStateMock.mockClear();
+    drainSessionStoreLockQueuesMock.mockClear();
     drainSessionWriteLockStateMock.mockClear();
     setSessionWriteLockAcquirerForTests(acquireSessionWriteLockMock);
     setSessionStateCleanupRuntimeForTests({
       drainFileLockStateForTest: drainFileLockStateMock,
+      drainSessionStoreLockQueuesForTest: drainSessionStoreLockQueuesMock,
       drainSessionWriteLockStateForTest: drainSessionWriteLockStateMock,
     });
   });
@@ -70,6 +73,14 @@ describe("cleanupSessionStateForTest", () => {
     const storePath = path.join(fixtureRoot, "openclaw-sessions.json");
     const started = createDeferred<void>();
     const release = createDeferred<void>();
+    const drainRequested = createDeferred<void>();
+    let finishDrain: () => void = () => undefined;
+    drainSessionStoreLockQueuesMock.mockImplementationOnce(async () => {
+      drainRequested.resolve();
+      await new Promise<void>((resolve) => {
+        finishDrain = resolve;
+      });
+    });
     let running: Promise<void> | undefined;
     try {
       running = withSessionStoreLockForTest(storePath, async () => {
@@ -85,13 +96,16 @@ describe("cleanupSessionStateForTest", () => {
         settled = true;
       });
 
+      await drainRequested.promise;
       await flushMicrotasks();
       expect(settled).toBe(false);
+      expect(drainSessionStoreLockQueuesMock).toHaveBeenCalledTimes(1);
       expect(drainFileLockStateMock).not.toHaveBeenCalled();
       expect(drainSessionWriteLockStateMock).not.toHaveBeenCalled();
 
       release.resolve();
       await running;
+      finishDrain();
       await cleanupPromise;
 
       expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
@@ -99,6 +113,7 @@ describe("cleanupSessionStateForTest", () => {
       expect(drainSessionWriteLockStateMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
+      finishDrain();
       await running?.catch(() => undefined);
       await cleanupSessionStateForTest();
       await fs.rm(fixtureRoot, { recursive: true, force: true });
