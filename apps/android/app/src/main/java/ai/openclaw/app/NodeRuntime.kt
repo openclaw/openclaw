@@ -535,10 +535,6 @@ class NodeRuntime(
   fun setGatewayBootstrapToken(value: String) = prefs.setGatewayBootstrapToken(value)
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
-  fun hasStoredNodeDeviceToken(): Boolean {
-    val deviceId = identityStore.loadOrCreate().deviceId
-    return !deviceAuthStore.loadToken(deviceId, "node").isNullOrBlank()
-  }
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
@@ -783,8 +779,9 @@ class NodeRuntime(
     val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
-    val bootstrapOnly = isBootstrapOnlyGatewayAuth(token, bootstrapToken, password)
-    if (bootstrapOnly) {
+    val connectOperator =
+      shouldConnectOperatorSession(token, bootstrapToken, password, loadStoredRoleDeviceToken("operator"))
+    if (!connectOperator) {
       operatorConnected = false
       operatorStatusText = "Offline"
       operatorSession.disconnect()
@@ -807,7 +804,7 @@ class NodeRuntime(
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    if (!bootstrapOnly) {
+    if (connectOperator) {
       operatorSession.reconnect()
     }
     nodeSession.reconnect()
@@ -835,8 +832,9 @@ class NodeRuntime(
     val token = prefs.loadGatewayToken()
     val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
-    val bootstrapOnly = isBootstrapOnlyGatewayAuth(token, bootstrapToken, password)
-    if (bootstrapOnly) {
+    val connectOperator =
+      shouldConnectOperatorSession(token, bootstrapToken, password, loadStoredRoleDeviceToken("operator"))
+    if (!connectOperator) {
       operatorConnected = false
       operatorStatusText = "Offline"
       operatorSession.disconnect()
@@ -888,6 +886,11 @@ class NodeRuntime(
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
+  }
+
+  private fun loadStoredRoleDeviceToken(role: String): String? {
+    val deviceId = identityStore.loadOrCreate().deviceId
+    return deviceAuthStore.loadToken(deviceId, role)
   }
 
   fun disconnect() {
@@ -1219,12 +1222,18 @@ class NodeRuntime(
 
 }
 
-internal fun isBootstrapOnlyGatewayAuth(
+internal fun shouldConnectOperatorSession(
   token: String?,
   bootstrapToken: String?,
   password: String?,
+  storedOperatorToken: String?,
 ): Boolean {
-  return !bootstrapToken.isNullOrBlank() && token.isNullOrBlank() && password.isNullOrBlank()
+  return (
+    !token.isNullOrBlank() ||
+      !bootstrapToken.isNullOrBlank() ||
+      !password.isNullOrBlank() ||
+      !storedOperatorToken.isNullOrBlank()
+    )
 }
 
 private enum class HomeCanvasGatewayState {
