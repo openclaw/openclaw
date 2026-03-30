@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import {
+  __setModelCatalogImportForTest,
+  findModelInCatalog,
+  loadModelCatalog,
+} from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
   mockCatalogImportFailThenRecover,
@@ -85,10 +89,10 @@ describe("loadModelCatalog", () => {
     }
   });
 
-  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
+  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.4 exists", async () => {
     mockPiDiscoveryModels([
       {
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
@@ -182,7 +186,23 @@ describe("loadModelCatalog", () => {
         input: ["text", "image"],
       },
       {
-        id: "gpt-5.3-codex",
+        id: "gpt-5-mini",
+        provider: "openai",
+        name: "GPT-5 mini",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5-nano",
+        provider: "openai",
+        name: "GPT-5 nano",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.4",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
@@ -209,9 +229,22 @@ describe("loadModelCatalog", () => {
     );
     expect(result).toContainEqual(
       expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        name: "gpt-5.4-nano",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.4",
-        name: "gpt-5.4",
       }),
     );
   });
@@ -322,5 +355,15 @@ describe("loadModelCatalog", () => {
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+
+  it("matches models across canonical provider aliases", () => {
+    expect(
+      findModelInCatalog([{ provider: "z.ai", id: "glm-5", name: "GLM-5" }], "z-ai", "glm-5"),
+    ).toEqual({
+      provider: "z.ai",
+      id: "glm-5",
+      name: "GLM-5",
+    });
   });
 });

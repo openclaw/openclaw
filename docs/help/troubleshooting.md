@@ -3,7 +3,7 @@ summary: "Symptom first troubleshooting hub for OpenClaw"
 read_when:
   - OpenClaw is not working and you need the fastest path to a fix
   - You want a triage flow before diving into deep runbooks
-title: "Troubleshooting"
+title: "General Troubleshooting"
 ---
 
 # Troubleshooting
@@ -28,7 +28,7 @@ Good output in one line:
 
 - `openclaw status` → shows configured channels and no obvious auth errors.
 - `openclaw status --all` → full report is present and shareable.
-- `openclaw gateway probe` → expected gateway target is reachable.
+- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `RPC: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
 - `openclaw gateway status` → `Runtime: running` and `RPC probe: ok`.
 - `openclaw doctor` → no blocking config/service errors.
 - `openclaw channels status --probe` → channels report `connected` or `ready`.
@@ -49,7 +49,7 @@ Fix in the plugin package:
 
 1. Add `openclaw.extensions` to `package.json`.
 2. Point entries at built runtime files (usually `./dist/index.js`).
-3. Republish the plugin and run `openclaw plugins install <npm-spec>` again.
+3. Republish the plugin and run `openclaw plugins install <package>` again.
 
 Example:
 
@@ -63,7 +63,7 @@ Example:
 }
 ```
 
-Reference: [/tools/plugin#distribution-npm](/tools/plugin#distribution-npm)
+Reference: [Plugin architecture](/plugins/architecture)
 
 ## Decision tree
 
@@ -278,21 +278,22 @@ flowchart TD
     Good output looks like:
 
     - Browser status shows `running: true` and a chosen browser/profile.
-    - `openclaw` profile starts or `chrome` relay has an attached tab.
+    - `openclaw` starts, or `user` can see local Chrome tabs.
 
     Common log signatures:
 
+    - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
-    - `Chrome extension relay is running, but no tab is connected` → extension not attached.
+    - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
     - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no live CDP target.
 
     Deep pages:
 
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
+    - [/tools/browser#missing-browser-command-or-tool](/tools/browser#missing-browser-command-or-tool)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
     - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
-    - [/tools/chrome-extension](/tools/chrome-extension)
 
   </Accordion>
 </AccordionGroup>

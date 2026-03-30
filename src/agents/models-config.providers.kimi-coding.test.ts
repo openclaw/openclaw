@@ -2,50 +2,51 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { buildKimiCodingProvider } from "./models-config.providers.js";
 
-describe("kimi-coding implicit provider (#22409)", () => {
-  it("should include kimi-coding when KIMI_API_KEY is configured", async () => {
+describe("Kimi implicit provider (#22409)", () => {
+  it("should include Kimi when KIMI_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
     process.env.KIMI_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.["kimi-coding"]).toBeDefined();
-      expect(providers?.["kimi-coding"]?.api).toBe("anthropic-messages");
-      expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/coding/");
+      expect(providers?.kimi).toBeDefined();
+      expect(providers?.kimi?.api).toBe("anthropic-messages");
+      expect(providers?.kimi?.baseUrl).toBe("https://api.kimi.com/coding/");
     } finally {
       envSnapshot.restore();
     }
   });
 
-  it("should build kimi-coding provider with anthropic-messages API", () => {
+  it("should build Kimi provider with anthropic-messages API", () => {
     const provider = buildKimiCodingProvider();
     expect(provider.api).toBe("anthropic-messages");
     expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
     expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
     expect(provider.models).toBeDefined();
     expect(provider.models.length).toBeGreaterThan(0);
-    expect(provider.models[0].id).toBe("k2p5");
+    expect(provider.models[0].id).toBe("kimi-code");
+    expect(provider.models.some((model) => model.id === "k2p5")).toBe(true);
   });
 
-  it("should not include kimi-coding when no API key is configured", async () => {
+  it("should not include Kimi when no API key is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
     delete process.env.KIMI_API_KEY;
 
     try {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.["kimi-coding"]).toBeUndefined();
+      expect(providers?.kimi).toBeUndefined();
     } finally {
       envSnapshot.restore();
     }
   });
 
-  it("uses explicit kimi-coding baseUrl when provided", async () => {
+  it("uses explicit legacy kimi-coding baseUrl when provided", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
     process.env.KIMI_API_KEY = "test-key";
@@ -61,13 +62,13 @@ describe("kimi-coding implicit provider (#22409)", () => {
           },
         },
       });
-      expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://kimi.example.test/coding/");
+      expect(providers?.kimi?.baseUrl).toBe("https://kimi.example.test/coding/");
     } finally {
       envSnapshot.restore();
     }
   });
 
-  it("merges explicit kimi-coding headers on top of the built-in user agent", async () => {
+  it("merges explicit legacy kimi-coding headers on top of the built-in user agent", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
     process.env.KIMI_API_KEY = "test-key";
@@ -87,7 +88,7 @@ describe("kimi-coding implicit provider (#22409)", () => {
           },
         },
       });
-      expect(providers?.["kimi-coding"]?.headers).toEqual({
+      expect(providers?.kimi?.headers).toEqual({
         "User-Agent": "custom-kimi-client/1.0",
         "X-Kimi-Tenant": "tenant-a",
       });

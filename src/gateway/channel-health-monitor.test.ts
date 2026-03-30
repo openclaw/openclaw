@@ -11,6 +11,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
     markChannelLoggedOut: vi.fn(),
+    isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
     ...overrides,
@@ -104,6 +105,24 @@ function createSlackSnapshotManager(
     },
     overrides,
   );
+}
+
+function createBusyDisconnectedManager(lastRunActivityAt: number): ChannelManager {
+  const now = Date.now();
+  return createSnapshotManager({
+    discord: {
+      default: {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 300_000,
+        activeRuns: 1,
+        busy: true,
+        lastRunActivityAt,
+      },
+    },
+  });
 }
 
 async function expectRestartedChannel(
@@ -208,6 +227,53 @@ describe("channel-health-monitor", () => {
     await expectNoStart(manager);
   });
 
+  it("skips channels with health monitor disabled globally for that account", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: { running: false, enabled: true, configured: true },
+        },
+      },
+      { isHealthMonitorEnabled: vi.fn(() => false) },
+    );
+    await expectNoStart(manager);
+  });
+
+  it("still restarts enabled accounts when another account on the same channel is disabled", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 300_000,
+          },
+          quiet: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 300_000,
+          },
+        },
+      },
+      {
+        isHealthMonitorEnabled: vi.fn((channelId: ChannelId, accountId: string) => {
+          return !(channelId === "discord" && accountId === "quiet");
+        }),
+      },
+    );
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet");
+    expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet");
+    monitor.stop();
+  });
+
   it("restarts a stuck channel (running but not connected)", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
@@ -250,39 +316,13 @@ describe("channel-health-monitor", () => {
 
   it("restarts busy channels when run activity is stale", async () => {
     const now = Date.now();
-    const manager = createSnapshotManager({
-      discord: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
-          lastStartAt: now - 300_000,
-          activeRuns: 1,
-          busy: true,
-          lastRunActivityAt: now - 26 * 60_000,
-        },
-      },
-    });
+    const manager = createBusyDisconnectedManager(now - 26 * 60_000);
     await expectRestartedChannel(manager, "discord");
   });
 
   it("restarts disconnected channels when busy flags are inherited from a prior lifecycle", async () => {
     const now = Date.now();
-    const manager = createSnapshotManager({
-      discord: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
-          lastStartAt: now - 300_000,
-          activeRuns: 1,
-          busy: true,
-          lastRunActivityAt: now - 301_000,
-        },
-      },
-    });
+    const manager = createBusyDisconnectedManager(now - 301_000);
     await expectRestartedChannel(manager, "discord");
   });
 

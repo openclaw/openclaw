@@ -3,21 +3,29 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.js";
+} from "../../../../src/auto-reply/thinking.shared.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
+import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../types.ts";
+import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -33,13 +41,27 @@ export type SlashCommandResult = {
     | "clear"
     | "toggle-focus"
     | "navigate-usage";
+  /** Optional session-level directive changes that the caller should mirror locally. */
+  sessionPatch?: {
+    modelOverride?: ChatModelOverride | null;
+  };
+  /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
+  trackRunId?: string;
+  /** When set, the caller should surface a visible pending item tied to the current run. */
+  pendingCurrentRun?: boolean;
 };
 
+export type SlashCommandContext = {
+  chatModelCatalog?: ModelCatalogEntry[];
+  modelCatalog?: ModelCatalogEntry[];
+  sessionsResult?: SessionsListResult | null;
+};
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
   commandName: string,
   args: string,
+  context: SlashCommandContext = {},
 ): Promise<SlashCommandResult> {
   switch (commandName) {
     case "help":
@@ -57,14 +79,14 @@ export async function executeSlashCommand(
     case "compact":
       return await executeCompact(client, sessionKey);
     case "model":
-      return await executeModel(client, sessionKey, args);
+      return await executeModel(client, sessionKey, args, context);
     case "think":
       return await executeThink(client, sessionKey, args);
     case "fast":
       return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
-    case "export":
+    case "export-session":
       return { content: "Exporting session...", action: "export" };
     case "usage":
       return await executeUsage(client, sessionKey);
@@ -72,6 +94,10 @@ export async function executeSlashCommand(
       return await executeAgents(client);
     case "kill":
       return await executeKill(client, sessionKey, args);
+    case "steer":
+      return await executeSteer(client, sessionKey, args, context);
+    case "redirect":
+      return await executeRedirect(client, sessionKey, args, context);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
   }
@@ -114,16 +140,18 @@ async function executeModel(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
+  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
-        client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
+      const available = models.map((m: ModelCatalogEntry) => m.id);
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
@@ -140,8 +168,25 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
-    return { content: `Model set to \`${args.trim()}\`.`, action: "refresh" };
+    const [patched, resolvedModelCatalog] = await Promise.all([
+      client.request<SessionsPatchResult>("sessions.patch", {
+        key: sessionKey,
+        model: args.trim(),
+      }),
+      modelCatalog
+        ? Promise.resolve(modelCatalog)
+        : loadModelCatalog(client, { allowFailure: true }),
+    ]);
+    const resolvedValue = resolvePreferredServerChatModel(
+      patched.resolved?.model ?? args.trim(),
+      patched.resolved?.modelProvider,
+      resolvedModelCatalog,
+    ).value;
+    return {
+      content: `Model set to \`${args.trim()}\`.`,
+      action: "refresh",
+      sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
+    };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
   }
@@ -524,12 +569,27 @@ function resolveCurrentSession(
 async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
   const [sessions, models] = await Promise.all([
     client.request<SessionsListResult>("sessions.list", {}),
-    client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+    loadModelCatalog(client),
   ]);
   return {
     session: resolveCurrentSession(sessions, sessionKey),
-    models: models?.models ?? [],
+    models,
   };
+}
+
+async function loadModelCatalog(
+  client: GatewayBrowserClient,
+  opts?: { allowFailure?: boolean },
+): Promise<ModelCatalogEntry[]> {
+  try {
+    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+    return result?.models ?? [];
+  } catch (err) {
+    if (opts?.allowFailure) {
+      return [];
+    }
+    throw err;
+  }
 }
 
 function resolveCurrentThinkingLevel(
@@ -552,6 +612,177 @@ function resolveCurrentThinkingLevel(
 
 function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
   return session?.fastMode === true ? "on" : "off";
+}
+
+/**
+ * Match a target name against active subagent sessions by key/label only.
+ * Unlike resolveKillTargets, this does NOT match by agent id (avoiding
+ * false positives for common words like "main") and filters to active
+ * sessions (no endedAt) so stale subagents are not targeted.
+ */
+function resolveSteerSubagent(
+  sessions: GatewaySessionRow[],
+  currentSessionKey: string,
+  target: string,
+): string[] {
+  const normalizedTarget = target.trim().toLowerCase();
+  if (!normalizedTarget) {
+    return [];
+  }
+  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
+  const currentAgentId =
+    currentParsed?.agentId ??
+    (normalizedCurrentSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
+  const sessionIndex = buildSessionIndex(sessions);
+
+  const keys = new Set<string>();
+  for (const session of sessions) {
+    const key = session?.key?.trim();
+    if (!key || !isSubagentSessionKey(key)) {
+      continue;
+    }
+    const normalizedKey = key.toLowerCase();
+    const parsed = parseAgentSessionKey(normalizedKey);
+    const belongsToCurrentSession = isWithinCurrentSessionSubtree(
+      normalizedKey,
+      normalizedCurrentSessionKey,
+      sessionIndex,
+      currentAgentId,
+      parsed?.agentId,
+    );
+    if (!belongsToCurrentSession) {
+      continue;
+    }
+    // P2: match only on subagent key suffix or label, not agent id
+    const isMatch =
+      normalizedKey === normalizedTarget ||
+      normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
+      normalizedKey === `subagent:${normalizedTarget}` ||
+      (session.label ?? "").toLowerCase() === normalizedTarget;
+    if (isMatch) {
+      keys.add(key);
+    }
+  }
+  return [...keys];
+}
+
+/**
+ * Resolve an optional subagent target from the first word of args.
+ * Returns the resolved session key and the remaining message, or
+ * falls back to the current session key with the full args as message.
+ *
+ * Ended subagents are still resolved here so explicit `/steer <id> ...`
+ * can surface the correct "No active run matched" message and `/redirect <id> ...`
+ * can restart that specific session instead of silently steering the current one.
+ */
+async function resolveSteerTarget(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<
+  | { key: string; message: string; label?: string; sessions?: SessionsListResult }
+  | { error: string }
+> {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    return { error: "empty" };
+  }
+  const spaceIdx = trimmed.indexOf(" ");
+  if (spaceIdx > 0) {
+    const maybeTarget = trimmed.slice(0, spaceIdx);
+    const rest = trimmed.slice(spaceIdx + 1).trim();
+    // Skip "all" — resolveKillTargets treats it as a wildcard, but steer/redirect
+    // target a single session, so "all good now" should not match subagents.
+    if (rest && maybeTarget.toLowerCase() !== "all") {
+      const sessions =
+        context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
+      const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
+      if (matched.length === 1) {
+        return { key: matched[0], message: rest, label: maybeTarget, sessions };
+      }
+      if (matched.length > 1) {
+        return { error: `Multiple sub-agents match \`${maybeTarget}\`. Be more specific.` };
+      }
+    }
+  }
+  return { key: sessionKey, message: trimmed };
+}
+
+function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
+  return session?.status === "running" && session.endedAt == null;
+}
+
+/** Soft inject — queues a message into the active run via chat.send (deliver: false). */
+async function executeSteer(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  try {
+    const resolved = await resolveSteerTarget(client, sessionKey, args, context);
+    if ("error" in resolved) {
+      return {
+        content: resolved.error === "empty" ? "Usage: `/steer [id] <message>`" : resolved.error,
+      };
+    }
+    const sessions =
+      resolved.sessions ?? (await client.request<SessionsListResult>("sessions.list", {}));
+    const targetSession = resolveCurrentSession(sessions, resolved.key);
+    if (!isActiveSteerSession(targetSession)) {
+      return {
+        content: resolved.label
+          ? `No active run matched \`${resolved.label}\`. Use \`/redirect\` instead.`
+          : "No active run. Use the chat input or `/redirect` instead.",
+      };
+    }
+    await client.request("chat.send", {
+      sessionKey: resolved.key,
+      message: resolved.message,
+      deliver: false,
+      idempotencyKey: generateUUID(),
+    });
+    return {
+      content: resolved.label ? `Steered \`${resolved.label}\`.` : "Steered.",
+      pendingCurrentRun: resolved.key === sessionKey,
+    };
+  } catch (err) {
+    return { content: `Failed to steer: ${String(err)}` };
+  }
+}
+
+/** Hard redirect — aborts the active run and restarts with a new message. */
+async function executeRedirect(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  try {
+    const resolved = await resolveSteerTarget(client, sessionKey, args, context);
+    if ("error" in resolved) {
+      return {
+        content: resolved.error === "empty" ? "Usage: `/redirect [id] <message>`" : resolved.error,
+      };
+    }
+    const resp = await client.request<{ runId?: string }>("sessions.steer", {
+      key: resolved.key,
+      message: resolved.message,
+    });
+    // Only track the run when redirecting the current session. Subagent
+    // redirects target a different sessionKey, so chat events for that run
+    // would never clear chatRunId on the current view.
+    const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
+    const trackRunId = resolved.key === sessionKey ? runId : undefined;
+    return {
+      content: resolved.label ? `Redirected \`${resolved.label}\`.` : "Redirected.",
+      trackRunId,
+    };
+  } catch (err) {
+    return { content: `Failed to redirect: ${String(err)}` };
+  }
 }
 
 function fmtTokens(n: number): string {

@@ -63,6 +63,7 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
+const TRAILING_CJK_TAIL_RE = /([\u4E00-\u9FFF\u3000-\u303F\uFF01-\uFF5E\s]+)$/;
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -99,6 +100,20 @@ function installHooks() {
     if (!href) {
       return;
     }
+
+    // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
+    try {
+      const url = new URL(href, window.location.href);
+      if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
+        node.removeAttribute("href");
+        return;
+      }
+    } catch {
+      // Relative URLs are fine; malformed absolute URLs with dangerous schemes
+      // will fail to parse and keep their href — but DOMPurify already strips
+      // javascript: by default. This is defense-in-depth.
+    }
+
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
     if (href.toLowerCase().includes("tail")) {
@@ -106,6 +121,50 @@ function installHooks() {
     }
   });
 }
+
+// Extension to prevent auto-linking algorithms from swallowing adjacent CJK characters.
+const cjkAutoLinkExtension = {
+  name: "url",
+  level: "inline",
+  // Indicate where an auto-link might start
+  start(src: string) {
+    const match = src.match(/https?:\/\//i);
+    return match ? match.index! : -1;
+  },
+  tokenizer(src: string) {
+    // GFM standard regex for auto-links
+    const rule = /^https?:\/\/[^\s<]+[^<.,:;"')\]\s]/i;
+    const match = rule.exec(src);
+    if (match) {
+      let urlText = match[0];
+
+      // Stop before any CJK character or typical punctuation following CJK
+      // This stops link boundaries from bleeding into mixed-language paragraphs.
+      const cjkMatch = urlText.match(TRAILING_CJK_TAIL_RE);
+      if (cjkMatch) {
+        urlText = urlText.substring(0, urlText.length - cjkMatch[1].length);
+      }
+
+      return {
+        type: "link",
+        raw: urlText,
+        text: urlText,
+        href: urlText,
+        tokens: [
+          {
+            type: "text",
+            raw: urlText,
+            text: urlText,
+          },
+        ],
+      };
+    }
+  },
+};
+
+marked.use({
+  extensions: [cjkAutoLinkExtension as unknown as import("marked").TokenizerAndRendererExtension],
+});
 
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
@@ -124,8 +183,10 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
-    const html = `<pre class="code-block">${escaped}</pre>`;
+    // Large plain-text replies should stay readable without inheriting the
+    // capped code-block chrome, while still preserving whitespace for logs
+    // and other structured text that commonly trips the parse guard.
+    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
@@ -165,7 +226,7 @@ htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null 
   if (!INLINE_DATA_IMAGE_RE.test(href)) {
     return escapeHtml(label);
   }
-  return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+  return `<img class="markdown-inline-image" src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
 };
 
 function normalizeMarkdownImageLabel(text?: string | null): string {
@@ -217,4 +278,8 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function renderEscapedPlainTextHtml(value: string): string {
+  return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
 }

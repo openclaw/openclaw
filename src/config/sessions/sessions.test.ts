@@ -3,7 +3,10 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import * as transcriptEvents from "../../sessions/transcript-events.js";
+import type { OpenClawConfig } from "../config.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -18,7 +21,7 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { resolveSessionResetPolicy } from "./reset.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -142,6 +145,35 @@ describe("resolveSessionResetPolicy", () => {
       });
 
       expect(groupPolicy.mode).toBe("daily");
+    });
+  });
+
+  it("defaults to daily resets at 4am local time", () => {
+    const policy = resolveSessionResetPolicy({
+      resetType: "direct",
+    });
+
+    expect(policy).toMatchObject({
+      mode: "daily",
+      atHour: 4,
+    });
+  });
+
+  it("treats idleMinutes=0 as never expiring by inactivity", () => {
+    const freshness = evaluateSessionFreshness({
+      updatedAt: 1_000,
+      now: 60 * 60 * 1_000,
+      policy: {
+        mode: "idle",
+        atHour: 4,
+        idleMinutes: 0,
+      },
+    });
+
+    expect(freshness).toEqual({
+      fresh: true,
+      dailyResetAt: undefined,
+      idleExpiresAt: undefined,
     });
   });
 });
@@ -279,22 +311,95 @@ describe("session store lock (Promise chain mutex)", () => {
     expect(store[key]?.modelProvider).toBeUndefined();
     expect(store[key]?.model).toBeUndefined();
   });
+
+  it("preserves ACP metadata when replacing a session entry wholesale", async () => {
+    const key = "agent:codex:acp:binding:discord:default:feedface";
+    const acp = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex-discord",
+      mode: "persistent" as const,
+      state: "idle" as const,
+      lastActivityAt: 100,
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp,
+      },
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      store[key] = {
+        sessionId: "sess-acp",
+        updatedAt: 200,
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+      };
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.acp).toEqual(acp);
+    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.model).toBe("gpt-5.4");
+  });
+
+  it("allows explicit ACP metadata removal through the ACP session helper", async () => {
+    const key = "agent:codex:acp:binding:discord:default:deadbeef";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp-clear",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        },
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+    } as OpenClawConfig;
+
+    const result = await upsertAcpSessionMeta({
+      cfg,
+      sessionKey: key,
+      mutate: () => null,
+    });
+
+    expect(result?.acp).toBeUndefined();
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.acp).toBeUndefined();
+  });
 });
 
 describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
+  const sessionId = "test-session-id";
+  const sessionKey = "test-session";
+
+  function writeTranscriptStore() {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+  }
 
   it("creates transcript file and appends message for valid session", async () => {
-    const sessionId = "test-session-id";
-    const sessionKey = "test-session";
-    const store = {
-      [sessionKey]: {
-        sessionId,
-        chatType: "direct",
-        channel: "discord",
-      },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    writeTranscriptStore();
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -325,7 +430,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
+  it("emits transcript update events for delivery mirrors", async () => {
     const sessionId = "test-session-id";
     const sessionKey = "test-session";
     const store = {
@@ -336,6 +441,33 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       },
     };
     fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      storePath: fixture.storePath(),
+    });
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    expect(emitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile,
+        sessionKey,
+        messageId: expect.any(String),
+        message: expect.objectContaining({
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Hello from delivery mirror!" }],
+        }),
+      }),
+    );
+    emitSpy.mockRestore();
+  });
+
+  it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
+    writeTranscriptStore();
 
     await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -359,17 +491,54 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
   });
 
-  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
-    const sessionId = "test-session-id";
-    const sessionKey = "test-session";
+  it("finds session entry using normalized (lowercased) key", async () => {
+    const sessionId = "test-session-normalized";
+    // Store key is lowercase (as written by updateSessionStore/normalizeStoreSessionKey)
+    const storeKey = "agent:main:bluebubbles:direct:+15551234567";
     const store = {
-      [sessionKey]: {
+      [storeKey]: {
         sessionId,
         chatType: "direct",
-        channel: "discord",
+        channel: "bluebubbles",
       },
     };
     fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    // Pass a mixed-case key — append should still find the entry via normalization
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:BlueBubbles:direct:+15551234567",
+      text: "Hello normalized!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("finds Slack session entry using normalized (lowercased) key", async () => {
+    const sessionId = "test-slack-session";
+    // Slack session keys include channel type and target ID; store key is lowercase
+    const storeKey = "agent:main:slack:direct:u12345abc";
+    const store = {
+      [storeKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "slack",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    // Pass a mixed-case key (as resolveSlackSession might produce) — normalization should match
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:slack:direct:U12345ABC",
+      text: "Hello Slack user!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
+    writeTranscriptStore();
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     fs.writeFileSync(

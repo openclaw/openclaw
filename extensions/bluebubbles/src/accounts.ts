@@ -1,5 +1,9 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import {
+  createAccountListHelpers,
+  normalizeAccountId,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
@@ -18,29 +22,19 @@ const {
 } = createAccountListHelpers("bluebubbles");
 export { listBlueBubblesAccountIds, resolveDefaultBlueBubblesAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): BlueBubblesAccountConfig | undefined {
-  const accounts = cfg.channels?.bluebubbles?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as BlueBubblesAccountConfig | undefined;
-}
-
 function mergeBlueBubblesAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): BlueBubblesAccountConfig {
-  const base = (cfg.channels?.bluebubbles ?? {}) as BlueBubblesAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const { accounts: _ignored, defaultAccount: _ignoredDefaultAccount, ...rest } = base;
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const chunkMode = account.chunkMode ?? rest.chunkMode ?? "length";
-  return { ...rest, ...account, chunkMode };
+  const merged = resolveMergedAccountConfig<BlueBubblesAccountConfig>({
+    channelConfig: cfg.channels?.bluebubbles as BlueBubblesAccountConfig | undefined,
+    accounts: cfg.channels?.bluebubbles?.accounts as
+      | Record<string, Partial<BlueBubblesAccountConfig>>
+      | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+  });
+  return { ...merged, chunkMode: merged.chunkMode ?? "length" };
 }
 
 export function resolveBlueBubblesAccount(params: {

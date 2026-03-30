@@ -169,7 +169,7 @@ Look for:
 
 Common signatures:
 
-- `Gateway start blocked: set gateway.mode=local` → local gateway mode is not enabled. Fix: set `gateway.mode="local"` in your config (or run `openclaw configure`). If you are running OpenClaw via Podman using the dedicated `openclaw` user, the config lives at `~openclaw/.openclaw/openclaw.json`.
+- `Gateway start blocked: set gateway.mode=local` → local gateway mode is not enabled. Fix: set `gateway.mode="local"` in your config (or run `openclaw configure`). If you are running OpenClaw via Podman, the default config path is `~/.openclaw/openclaw.json`.
 - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
 - `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
 
@@ -287,21 +287,23 @@ openclaw doctor
 
 Look for:
 
+- Whether `plugins.allow` is set and includes `browser`.
 - Valid browser executable path.
 - CDP profile reachability.
-- Extension relay tab attachment for `profile="chrome"`.
+- Local Chrome availability for `existing-session` / `user` profiles.
 
 Common signatures:
 
+- `unknown command "browser"` or `unknown command 'browser'` → the bundled browser plugin is excluded by `plugins.allow`.
+- browser tool missing / unavailable while `browser.enabled=true` → `plugins.allow` excludes `browser`, so the plugin never loaded.
 - `Failed to start Chrome CDP on port` → browser process failed to launch.
 - `browser.executablePath not found` → configured path is invalid.
-- `Chrome extension relay is running, but no tab is connected` → extension relay not attached.
+- `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
 - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
 Related:
 
 - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
-- [/tools/chrome-extension](/tools/chrome-extension)
 - [/tools/browser](/tools/browser)
 
 ## If you upgraded and something suddenly broke

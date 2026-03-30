@@ -5,12 +5,10 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
+import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
   handleCronCliError,
-  parseAt,
-  parseCronStaggerMs,
-  parseDurationMs,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -73,7 +71,10 @@ export function registerCronAddCommand(cron: Command) {
       .option("--session <target>", "Session target (main|isolated)")
       .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
-      .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
+      .option(
+        "--at <when>",
+        "Run once at time (ISO with offset, or +duration). Use --tz for offset-less datetimes",
+      )
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
       .option("--tz <iana>", "Timezone for cron expressions (IANA)", "")
@@ -101,45 +102,14 @@ export function registerCronAddCommand(cron: Command) {
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
-          const staggerRaw = typeof opts.stagger === "string" ? opts.stagger.trim() : "";
-          const useExact = Boolean(opts.exact);
-          if (staggerRaw && useExact) {
-            throw new Error("Choose either --stagger or --exact, not both");
-          }
-
-          const schedule = (() => {
-            const at = typeof opts.at === "string" ? opts.at : "";
-            const every = typeof opts.every === "string" ? opts.every : "";
-            const cronExpr = typeof opts.cron === "string" ? opts.cron : "";
-            const chosen = [Boolean(at), Boolean(every), Boolean(cronExpr)].filter(Boolean).length;
-            if (chosen !== 1) {
-              throw new Error("Choose exactly one schedule: --at, --every, or --cron");
-            }
-            if ((useExact || staggerRaw) && !cronExpr) {
-              throw new Error("--stagger/--exact are only valid with --cron");
-            }
-            if (at) {
-              const atIso = parseAt(at);
-              if (!atIso) {
-                throw new Error("Invalid --at; use ISO time or duration like 20m");
-              }
-              return { kind: "at" as const, at: atIso };
-            }
-            if (every) {
-              const everyMs = parseDurationMs(every);
-              if (!everyMs) {
-                throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
-              }
-              return { kind: "every" as const, everyMs };
-            }
-            const staggerMs = parseCronStaggerMs({ staggerRaw, useExact });
-            return {
-              kind: "cron" as const,
-              expr: cronExpr,
-              tz: typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined,
-              staggerMs,
-            };
-          })();
+          const schedule = resolveCronCreateSchedule({
+            at: opts.at,
+            cron: opts.cron,
+            every: opts.every,
+            exact: opts.exact,
+            stagger: opts.stagger,
+            tz: opts.tz,
+          });
 
           const wakeModeRaw = typeof opts.wake === "string" ? opts.wake : "now";
           const wakeMode = wakeModeRaw.trim() || "now";
@@ -194,8 +164,13 @@ export function registerCronAddCommand(cron: Command) {
           const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
-          if (sessionTarget !== "main" && sessionTarget !== "isolated") {
-            throw new Error("--session must be main or isolated");
+          const isCustomSessionTarget =
+            sessionTarget.toLowerCase().startsWith("session:") &&
+            sessionTarget.slice(8).trim().length > 0;
+          const isIsolatedLikeSessionTarget =
+            sessionTarget === "isolated" || sessionTarget === "current" || isCustomSessionTarget;
+          if (sessionTarget !== "main" && !isIsolatedLikeSessionTarget) {
+            throw new Error("--session must be main, isolated, current, or session:<id>");
           }
 
           if (opts.deleteAfterRun && opts.keepAfterRun) {
@@ -205,14 +180,14 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
           }
-          if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
-            throw new Error("Isolated jobs require --message (agentTurn).");
+          if (isIsolatedLikeSessionTarget && payload.kind !== "agentTurn") {
+            throw new Error("Isolated/current/custom-session jobs require --message (agentTurn).");
           }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
-            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+            (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")
           ) {
-            throw new Error("--announce/--no-deliver require --session isolated.");
+            throw new Error("--announce/--no-deliver require a non-main agentTurn session target.");
           }
 
           const accountId =
@@ -220,12 +195,12 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.account.trim()
               : undefined;
 
-          if (accountId && (sessionTarget !== "isolated" || payload.kind !== "agentTurn")) {
-            throw new Error("--account requires an isolated agentTurn job with delivery.");
+          if (accountId && (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")) {
+            throw new Error("--account requires a non-main agentTurn job with delivery.");
           }
 
           const deliveryMode =
-            sessionTarget === "isolated" && payload.kind === "agentTurn"
+            isIsolatedLikeSessionTarget && payload.kind === "agentTurn"
               ? hasAnnounce
                 ? "announce"
                 : hasNoDeliver

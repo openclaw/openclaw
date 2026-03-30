@@ -34,6 +34,7 @@ class CanvasController {
   @Volatile private var debugStatusEnabled: Boolean = false
   @Volatile private var debugStatusTitle: String? = null
   @Volatile private var debugStatusSubtitle: String? = null
+  @Volatile private var homeCanvasStateJson: String? = null
   private val _currentUrl = MutableStateFlow<String?>(null)
   val currentUrl: StateFlow<String?> = _currentUrl.asStateFlow()
 
@@ -56,6 +57,7 @@ class CanvasController {
     this.webView = webView
     reload()
     applyDebugStatus()
+    applyHomeCanvasState()
   }
 
   fun detach(webView: WebView) {
@@ -88,6 +90,12 @@ class CanvasController {
 
   fun onPageFinished() {
     applyDebugStatus()
+    applyHomeCanvasState()
+  }
+
+  fun updateHomeCanvasState(json: String?) {
+    homeCanvasStateJson = json
+    applyHomeCanvasState()
   }
 
   private inline fun withWebViewOnMain(crossinline block: (WebView) -> Unit) {
@@ -142,6 +150,22 @@ class CanvasController {
     }
   }
 
+  private fun applyHomeCanvasState() {
+    val payload = homeCanvasStateJson ?: "null"
+    withWebViewOnMain { wv ->
+      val js = """
+        (() => {
+          try {
+            const api = globalThis.__openclaw;
+            if (!api || typeof api.renderHome !== 'function') return;
+            api.renderHome($payload);
+          } catch (_) {}
+        })();
+      """.trimIndent()
+      wv.evaluateJavascript(js, null)
+    }
+  }
+
   suspend fun eval(javaScript: String): String =
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
@@ -156,27 +180,41 @@ class CanvasController {
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
       val bmp = wv.captureBitmap()
-      val scaled = bmp.scaleForMaxWidth(maxWidth)
-
-      val out = ByteArrayOutputStream()
-      scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
-      Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+      try {
+        val scaled = bmp.scaleForMaxWidth(maxWidth)
+        try {
+          val out = ByteArrayOutputStream()
+          scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
+          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally {
+          if (scaled !== bmp) scaled.recycle()
+        }
+      } finally {
+        bmp.recycle()
+      }
     }
 
   suspend fun snapshotBase64(format: SnapshotFormat, quality: Double?, maxWidth: Int?): String =
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
       val bmp = wv.captureBitmap()
-      val scaled = bmp.scaleForMaxWidth(maxWidth)
-
-      val out = ByteArrayOutputStream()
-      val (compressFormat, compressQuality) =
-        when (format) {
-          SnapshotFormat.Png -> Bitmap.CompressFormat.PNG to 100
-          SnapshotFormat.Jpeg -> Bitmap.CompressFormat.JPEG to clampJpegQuality(quality)
+      try {
+        val scaled = bmp.scaleForMaxWidth(maxWidth)
+        try {
+          val out = ByteArrayOutputStream()
+          val (compressFormat, compressQuality) =
+            when (format) {
+              SnapshotFormat.Png -> Bitmap.CompressFormat.PNG to 100
+              SnapshotFormat.Jpeg -> Bitmap.CompressFormat.JPEG to clampJpegQuality(quality)
+            }
+          scaled.compress(compressFormat, compressQuality, out)
+          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally {
+          if (scaled !== bmp) scaled.recycle()
         }
-      scaled.compress(compressFormat, compressQuality, out)
-      Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+      } finally {
+        bmp.recycle()
+      }
     }
 
   private suspend fun WebView.captureBitmap(): Bitmap =

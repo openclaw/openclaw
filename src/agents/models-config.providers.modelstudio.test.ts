@@ -1,32 +1,34 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { buildModelStudioProvider } from "./models-config.providers.js";
-
-const modelStudioApiKeyEnv = ["MODELSTUDIO_API", "KEY"].join("_");
+import { buildModelStudioProvider } from "../plugin-sdk/modelstudio.js";
+import { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
 
 describe("Model Studio implicit provider", () => {
-  it("should include modelstudio when MODELSTUDIO_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const modelStudioApiKey = "test-key"; // pragma: allowlist secret
-    await withEnvAsync({ [modelStudioApiKeyEnv]: modelStudioApiKey }, async () => {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.modelstudio).toBeDefined();
-      expect(providers?.modelstudio?.apiKey).toBe("MODELSTUDIO_API_KEY");
-      expect(providers?.modelstudio?.baseUrl).toBe("https://coding-intl.dashscope.aliyuncs.com/v1");
+  it("should opt native Model Studio baseUrls into streaming usage", () => {
+    const providers = applyNativeStreamingUsageCompat({
+      modelstudio: buildModelStudioProvider(),
     });
+    expect(providers?.modelstudio).toBeDefined();
+    expect(providers?.modelstudio?.baseUrl).toBe("https://coding-intl.dashscope.aliyuncs.com/v1");
+    expect(
+      providers?.modelstudio?.models?.every(
+        (model) => model.compat?.supportsUsageInStreaming === true,
+      ),
+    ).toBe(true);
   });
 
-  it("should build the static Model Studio provider catalog", () => {
-    const provider = buildModelStudioProvider();
-    const modelIds = provider.models.map((model) => model.id);
-    expect(provider.api).toBe("openai-completions");
-    expect(provider.baseUrl).toBe("https://coding-intl.dashscope.aliyuncs.com/v1");
-    expect(modelIds).toContain("qwen3.5-plus");
-    expect(modelIds).toContain("qwen3-coder-plus");
-    expect(modelIds).toContain("kimi-k2.5");
+  it("should keep streaming usage opt-in disabled for custom Model Studio-compatible baseUrls", () => {
+    const providers = applyNativeStreamingUsageCompat({
+      modelstudio: {
+        ...buildModelStudioProvider(),
+        baseUrl: "https://proxy.example.com/v1",
+      },
+    });
+    expect(providers?.modelstudio).toBeDefined();
+    expect(providers?.modelstudio?.baseUrl).toBe("https://proxy.example.com/v1");
+    expect(
+      providers?.modelstudio?.models?.some(
+        (model) => model.compat?.supportsUsageInStreaming === true,
+      ),
+    ).toBe(false);
   });
 });

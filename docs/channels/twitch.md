@@ -22,7 +22,7 @@ openclaw plugins install @openclaw/twitch
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/twitch
+openclaw plugins install ./path/to/local/twitch-plugin
 ```
 
 Details: [Plugins](/tools/plugin)
@@ -123,7 +123,7 @@ Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want 
 
 **Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
 
-Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (Convert your Twitch username to ID)
+Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/) (Convert your Twitch username to ID)
 
 ## Token refresh (optional)
 
@@ -255,7 +255,7 @@ openclaw doctor
 openclaw channels status --probe
 ```
 
-### Bot doesn't respond to messages
+### Bot does not respond to messages
 
 **Check access control:** Ensure your user ID is in `allowFrom`, or temporarily remove
 `allowFrom` and set `allowedRoles: ["all"]` to test.

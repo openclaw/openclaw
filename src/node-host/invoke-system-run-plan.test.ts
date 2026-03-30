@@ -40,6 +40,16 @@ type RuntimeFixture = {
   initialBody: string;
   expectedArgvIndex: number;
   binName?: string;
+  binNames?: string[];
+  skipOnWin32?: boolean;
+};
+
+type UnsafeRuntimeInvocationCase = {
+  name: string;
+  binName: string;
+  tmpPrefix: string;
+  command: string[];
+  setup?: (tmp: string) => void;
 };
 
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
@@ -67,19 +77,35 @@ function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): Scri
   };
 }
 
-function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.binName}-bin-`));
-  const binDir = path.join(tmp, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
+function writeFakeRuntimeBin(binDir: string, binName: string) {
   const runtimePath =
-    process.platform === "win32"
-      ? path.join(binDir, `${params.binName}.cmd`)
-      : path.join(binDir, params.binName);
+    process.platform === "win32" ? path.join(binDir, `${binName}.cmd`) : path.join(binDir, binName);
   const runtimeBody =
     process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
   fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
   if (process.platform !== "win32") {
     fs.chmodSync(runtimePath, 0o755);
+  }
+}
+
+function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
+  return withFakeRuntimeBins({
+    binNames: [params.binName],
+    tmpPrefix: `openclaw-${params.binName}-bin-`,
+    run: params.run,
+  });
+}
+
+function withFakeRuntimeBins<T>(params: {
+  binNames: string[];
+  tmpPrefix?: string;
+  run: () => T;
+}): T {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix ?? "openclaw-runtime-bins-"));
+  const binDir = path.join(tmp, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  for (const binName of params.binNames) {
+    writeFakeRuntimeBin(binDir, binName);
   }
   const oldPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
@@ -95,35 +121,142 @@ function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
   }
 }
 
-function withFakeRuntimeBins<T>(params: { binNames: string[]; run: () => T }): T {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-bins-"));
-  const binDir = path.join(tmp, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
-  for (const binName of params.binNames) {
-    const runtimePath =
-      process.platform === "win32"
-        ? path.join(binDir, `${binName}.cmd`)
-        : path.join(binDir, binName);
-    const runtimeBody =
-      process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
-    fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
-    if (process.platform !== "win32") {
-      fs.chmodSync(runtimePath, 0o755);
-    }
+function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
+  const prepared = buildSystemRunApprovalPlan({
+    command: fixture.command,
+    cwd,
+  });
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) {
+    throw new Error("unreachable");
   }
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  expect(prepared.plan.mutableFileOperand).toEqual({
+    argvIndex: fixture.expectedArgvIndex,
+    path: fs.realpathSync(fixture.scriptPath),
+    sha256: expect.any(String),
+  });
+}
+
+function writeScriptOperandFixture(fixture: ScriptOperandFixture) {
+  fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+  if (process.platform !== "win32") {
+    fs.chmodSync(fixture.scriptPath, 0o755);
+  }
+}
+
+function withScriptOperandPlanFixture<T>(
+  params: {
+    tmpPrefix: string;
+    fixture?: RuntimeFixture;
+    afterWrite?: (fixture: ScriptOperandFixture, tmp: string) => void;
+  },
+  run: (fixture: ScriptOperandFixture, tmp: string) => T,
+) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
+  const fixture = createScriptOperandFixture(tmp, params.fixture);
+  writeScriptOperandFixture(fixture);
+  params.afterWrite?.(fixture, tmp);
   try {
-    return params.run();
+    return run(fixture, tmp);
   } finally {
-    if (oldPath === undefined) {
-      delete process.env.PATH;
-    } else {
-      process.env.PATH = oldPath;
-    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+const DENIED_RUNTIME_APPROVAL = {
+  ok: false,
+  message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+} as const;
+
+function expectRuntimeApprovalDenied(command: string[], cwd: string) {
+  const prepared = buildSystemRunApprovalPlan({ command, cwd });
+  expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+}
+
+const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
+  {
+    name: "rejects bun package script names that do not bind a concrete file",
+    binName: "bun",
+    tmpPrefix: "openclaw-bun-package-script-",
+    command: ["bun", "run", "dev"],
+  },
+  {
+    name: "rejects deno eval invocations that do not bind a concrete file",
+    binName: "deno",
+    tmpPrefix: "openclaw-deno-eval-",
+    command: ["deno", "eval", "console.log('SAFE')"],
+  },
+  {
+    name: "rejects tsx eval invocations that do not bind a concrete file",
+    binName: "tsx",
+    tmpPrefix: "openclaw-tsx-eval-",
+    command: ["tsx", "--eval", "console.log('SAFE')"],
+  },
+  {
+    name: "rejects node inline import operands that cannot be bound to one stable file",
+    binName: "node",
+    tmpPrefix: "openclaw-node-import-inline-",
+    command: ["node", "--import=./preload.mjs", "./main.mjs"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "main.mjs"), 'console.log("SAFE")\n');
+      fs.writeFileSync(path.join(tmp, "preload.mjs"), 'console.log("SAFE")\n');
+    },
+  },
+  {
+    name: "rejects ruby require preloads that approval cannot bind completely",
+    binName: "ruby",
+    tmpPrefix: "openclaw-ruby-require-",
+    command: ["ruby", "-r", "attacker", "./safe.rb"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
+    },
+  },
+  {
+    name: "rejects ruby load-path flags that can redirect module resolution after approval",
+    binName: "ruby",
+    tmpPrefix: "openclaw-ruby-load-path-",
+    command: ["ruby", "-I.", "./safe.rb"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
+    },
+  },
+  {
+    name: "rejects perl module preloads that approval cannot bind completely",
+    binName: "perl",
+    tmpPrefix: "openclaw-perl-module-preload-",
+    command: ["perl", "-MPreload", "./safe.pl"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
+    },
+  },
+  {
+    name: "rejects perl load-path flags that can redirect module resolution after approval",
+    binName: "perl",
+    tmpPrefix: "openclaw-perl-load-path-",
+    command: ["perl", "-Ilib", "./safe.pl"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
+    },
+  },
+  {
+    name: "rejects perl combined preload and load-path flags",
+    binName: "perl",
+    tmpPrefix: "openclaw-perl-preload-load-path-",
+    command: ["perl", "-Ilib", "-MPreload", "./safe.pl"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
+    },
+  },
+  {
+    name: "rejects shell payloads that hide mutable interpreter scripts",
+    binName: "node",
+    tmpPrefix: "openclaw-inline-shell-node-",
+    command: ["sh", "-lc", "node ./run.js"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.js"), 'console.log("SAFE")\n');
+    },
+  },
+];
 
 describe("hardenApprovedExecutionPaths", () => {
   const cases: HardeningCase[] = [
@@ -181,68 +314,66 @@ describe("hardenApprovedExecutionPaths", () => {
     },
   ];
 
-  for (const testCase of cases) {
-    it.runIf(process.platform !== "win32")(testCase.name, () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-hardening-"));
-      const oldPath = process.env.PATH;
-      let pathToken: PathTokenSetup | null = null;
-      if (testCase.withPathToken) {
-        const binDir = path.join(tmp, "bin");
-        fs.mkdirSync(binDir, { recursive: true });
-        const link = path.join(binDir, "poccmd");
-        fs.symlinkSync("/bin/echo", link);
-        pathToken = { expected: fs.realpathSync(link) };
-        process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
-      }
-      try {
-        if (testCase.mode === "build-plan") {
-          const prepared = buildSystemRunApprovalPlan({
-            command: testCase.argv,
-            cwd: tmp,
-          });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-          expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
-          if (testCase.expectedCmdText) {
-            expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
-          }
-          if (testCase.checkRawCommandMatchesArgv) {
-            expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
-          }
-          if ("expectedCommandPreview" in testCase) {
-            expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
-          }
-          return;
-        }
-
-        const hardened = hardenApprovedExecutionPaths({
-          approvedByAsk: true,
-          argv: testCase.argv,
-          shellCommand: testCase.shellCommand ?? null,
+  it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-hardening-"));
+    const oldPath = process.env.PATH;
+    let pathToken: PathTokenSetup | null = null;
+    if (testCase.withPathToken) {
+      const binDir = path.join(tmp, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const link = path.join(binDir, "poccmd");
+      fs.symlinkSync("/bin/echo", link);
+      pathToken = { expected: fs.realpathSync(link) };
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+    }
+    try {
+      if (testCase.mode === "build-plan") {
+        const prepared = buildSystemRunApprovalPlan({
+          command: testCase.argv,
           cwd: tmp,
         });
-        expect(hardened.ok).toBe(true);
-        if (!hardened.ok) {
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
           throw new Error("unreachable");
         }
-        expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
-        if (typeof testCase.expectedArgvChanged === "boolean") {
-          expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
+        expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
+        if (testCase.expectedCmdText) {
+          expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
         }
-      } finally {
-        if (testCase.withPathToken) {
-          if (oldPath === undefined) {
-            delete process.env.PATH;
-          } else {
-            process.env.PATH = oldPath;
-          }
+        if (testCase.checkRawCommandMatchesArgv) {
+          expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
         }
-        fs.rmSync(tmp, { recursive: true, force: true });
+        if ("expectedCommandPreview" in testCase) {
+          expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
+        }
+        return;
       }
-    });
-  }
+
+      const hardened = hardenApprovedExecutionPaths({
+        approvedByAsk: true,
+        argv: testCase.argv,
+        shellCommand: testCase.shellCommand ?? null,
+        cwd: tmp,
+      });
+      expect(hardened.ok).toBe(true);
+      if (!hardened.ok) {
+        throw new Error("unreachable");
+      }
+      expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
+      if (typeof testCase.expectedArgvChanged === "boolean") {
+        expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
+      }
+    } finally {
+      if (testCase.withPathToken) {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 
   const mutableOperandCases: RuntimeFixture[] = [
     {
@@ -357,11 +488,26 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 3,
     },
     {
+      name: "pnpm reporter exec tsx file",
+      argv: ["pnpm", "--reporter", "silent", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "pnpm reporter-equals exec tsx file",
+      argv: ["pnpm", "--reporter=silent", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
       name: "pnpm js shim exec tsx file",
       argv: ["./pnpm.js", "exec", "tsx", "./run.ts"],
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 3,
+      skipOnWin32: true,
     },
     {
       name: "pnpm exec double-dash tsx file",
@@ -369,6 +515,22 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 4,
+    },
+    {
+      name: "pnpm node file",
+      argv: ["pnpm", "node", "./run.js"],
+      scriptName: "run.js",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+      binNames: ["pnpm", "node"],
+    },
+    {
+      name: "pnpm node double-dash file",
+      argv: ["pnpm", "node", "--", "./run.js"],
+      scriptName: "run.js",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 3,
+      binNames: ["pnpm", "node"],
     },
     {
       name: "npx tsx file",
@@ -393,223 +555,59 @@ describe("hardenApprovedExecutionPaths", () => {
     },
   ];
 
-  for (const runtimeCase of mutableOperandCases) {
-    it(`captures mutable ${runtimeCase.name} operands in approval plans`, () => {
-      const binNames = runtimeCase.binName
-        ? [runtimeCase.binName]
-        : ["bunx", "pnpm", "npm", "npx", "tsx"];
+  it.each(mutableOperandCases)(
+    "captures mutable $name operands in approval plans",
+    (runtimeCase) => {
+      if (runtimeCase.skipOnWin32 && process.platform === "win32") {
+        return;
+      }
+      const binNames =
+        runtimeCase.binNames ??
+        (runtimeCase.binName ? [runtimeCase.binName] : ["bunx", "pnpm", "npm", "npx", "tsx"]);
       withFakeRuntimeBins({
         binNames,
         run: () => {
-          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
-          const fixture = createScriptOperandFixture(tmp, runtimeCase);
-          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-          const executablePath = fixture.command[0];
-          if (executablePath?.endsWith("pnpm.js")) {
-            const shimPath = path.join(tmp, "pnpm.js");
-            fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
-            fs.chmodSync(shimPath, 0o755);
-          }
-          try {
-            const prepared = buildSystemRunApprovalPlan({
-              command: fixture.command,
-              cwd: tmp,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
-            }
-            expect(prepared.plan.mutableFileOperand).toEqual({
-              argvIndex: fixture.expectedArgvIndex,
-              path: fs.realpathSync(fixture.scriptPath),
-              sha256: expect.any(String),
-            });
-          } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
-          }
+          withScriptOperandPlanFixture(
+            {
+              tmpPrefix: "openclaw-approval-script-plan-",
+              fixture: runtimeCase,
+              afterWrite: (fixture, tmp) => {
+                const executablePath = fixture.command[0];
+                if (executablePath?.endsWith("pnpm.js")) {
+                  const shimPath = path.join(tmp, "pnpm.js");
+                  fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
+                  fs.chmodSync(shimPath, 0o755);
+                }
+              },
+            },
+            (fixture, tmp) => {
+              expectMutableFileOperandApprovalPlan(fixture, tmp);
+            },
+          );
         },
       });
-    });
-  }
+    },
+  );
 
   it("captures mutable shell script operands in approval plans", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
-    const fixture = createScriptOperandFixture(tmp);
-    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-    if (process.platform !== "win32") {
-      fs.chmodSync(fixture.scriptPath, 0o755);
-    }
-    try {
-      const prepared = buildSystemRunApprovalPlan({
-        command: fixture.command,
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
-      expect(prepared.plan.mutableFileOperand).toEqual({
-        argvIndex: fixture.expectedArgvIndex,
-        path: fs.realpathSync(fixture.scriptPath),
-        sha256: expect.any(String),
-      });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects bun package script names that do not bind a concrete file", () => {
-    withFakeRuntimeBin({
-      binName: "bun",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bun-package-script-"));
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["bun", "run", "dev"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
+    withScriptOperandPlanFixture(
+      {
+        tmpPrefix: "openclaw-approval-script-plan-",
       },
-    });
-  });
-
-  it("rejects deno eval invocations that do not bind a concrete file", () => {
-    withFakeRuntimeBin({
-      binName: "deno",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-deno-eval-"));
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["deno", "eval", "console.log('SAFE')"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
+      (fixture, tmp) => {
+        expectMutableFileOperandApprovalPlan(fixture, tmp);
       },
-    });
+    );
   });
 
-  it("rejects tsx eval invocations that do not bind a concrete file", () => {
+  it.each(unsafeRuntimeInvocationCases)("$name", (testCase) => {
     withFakeRuntimeBin({
-      binName: "tsx",
+      binName: testCase.binName,
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tsx-eval-"));
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), testCase.tmpPrefix));
         try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["tsx", "--eval", "console.log('SAFE')"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects node inline import operands that cannot be bound to one stable file", () => {
-    withFakeRuntimeBin({
-      binName: "node",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-import-inline-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "main.mjs"), 'console.log("SAFE")\n');
-          fs.writeFileSync(path.join(tmp, "preload.mjs"), 'console.log("SAFE")\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["node", "--import=./preload.mjs", "./main.mjs"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects ruby require preloads that approval cannot bind completely", () => {
-    withFakeRuntimeBin({
-      binName: "ruby",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ruby-require-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["ruby", "-r", "attacker", "./safe.rb"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects ruby load-path flags that can redirect module resolution after approval", () => {
-    withFakeRuntimeBin({
-      binName: "ruby",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ruby-load-path-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["ruby", "-I.", "./safe.rb"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects shell payloads that hide mutable interpreter scripts", () => {
-    withFakeRuntimeBin({
-      binName: "node",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-shell-node-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "run.js"), 'console.log("SAFE")\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["sh", "-lc", "node ./run.js"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
+          testCase.setup?.(tmp);
+          expectRuntimeApprovalDenied(testCase.command, tmp);
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }

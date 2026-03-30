@@ -1,5 +1,13 @@
-import type { OpenClawConfig, PluginRuntime, ReplyPayload } from "openclaw/plugin-sdk/mattermost";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/mattermost";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import {
+  getAgentScopedMediaLocalRoots,
+  type OpenClawConfig,
+  type PluginRuntime,
+  type ReplyPayload,
+} from "./runtime-api.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -7,6 +15,7 @@ type SendMattermostMessage = (
   to: string,
   text: string,
   opts: {
+    cfg?: OpenClawConfig;
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
@@ -26,46 +35,38 @@ export async function deliverMattermostReplyPayload(params: {
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
 }): Promise<void> {
-  const mediaUrls =
-    params.payload.mediaUrls ?? (params.payload.mediaUrl ? [params.payload.mediaUrl] : []);
-  const text = params.core.channel.text.convertMarkdownTables(
-    params.payload.text ?? "",
-    params.tableMode,
+  const reply = resolveSendableOutboundReplyParts(params.payload, {
+    text: params.core.channel.text.convertMarkdownTables(
+      params.payload.text ?? "",
+      params.tableMode,
+    ),
+  });
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const chunkMode = params.core.channel.text.resolveChunkMode(
+    params.cfg,
+    "mattermost",
+    params.accountId,
   );
-
-  if (mediaUrls.length === 0) {
-    const chunkMode = params.core.channel.text.resolveChunkMode(
-      params.cfg,
-      "mattermost",
-      params.accountId,
-    );
-    const chunks = params.core.channel.text.chunkMarkdownTextWithMode(
-      text,
-      params.textLimit,
-      chunkMode,
-    );
-    for (const chunk of chunks.length > 0 ? chunks : [text]) {
-      if (!chunk) {
-        continue;
-      }
+  await deliverTextOrMediaReply({
+    payload: params.payload,
+    text: reply.text,
+    chunkText: (value) =>
+      params.core.channel.text.chunkMarkdownTextWithMode(value, params.textLimit, chunkMode),
+    sendText: async (chunk) => {
       await params.sendMessage(params.to, chunk, {
+        cfg: params.cfg,
         accountId: params.accountId,
         replyToId: params.replyToId,
       });
-    }
-    return;
-  }
-
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
-  let first = true;
-  for (const mediaUrl of mediaUrls) {
-    const caption = first ? text : "";
-    first = false;
-    await params.sendMessage(params.to, caption, {
-      accountId: params.accountId,
-      mediaUrl,
-      mediaLocalRoots,
-      replyToId: params.replyToId,
-    });
-  }
+    },
+    sendMedia: async ({ mediaUrl, caption }) => {
+      await params.sendMessage(params.to, caption ?? "", {
+        cfg: params.cfg,
+        accountId: params.accountId,
+        mediaUrl,
+        mediaLocalRoots,
+        replyToId: params.replyToId,
+      });
+    },
+  });
 }
