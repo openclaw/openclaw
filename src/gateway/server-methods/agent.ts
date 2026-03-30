@@ -23,6 +23,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -348,6 +349,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+    let imageOrder: PromptImageOrderEntry[] = [];
     if (normalizedAttachments.length > 0) {
       const requestedSessionKeyRaw =
         typeof request.sessionKey === "string" && request.sessionKey.trim()
@@ -378,6 +380,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         message = parsed.message.trim();
         images = parsed.images;
+        imageOrder = parsed.imageOrder;
         // offloadedRefs are appended as text markers to `message`; the agent
         // runner will resolve them via detectAndLoadPromptImages.
       } catch (err) {
@@ -802,6 +805,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       ingressOpts: {
         message,
         images,
+        imageOrder,
         provider: providerOverride,
         model: modelOverride,
         to: resolvedTo,

@@ -799,6 +799,7 @@ describe("agent request events", () => {
     parseMessageWithAttachmentsMock.mockResolvedValue({
       message: "parsed message",
       images: [],
+      imageOrder: [],
       offloadedRefs: [],
     });
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);

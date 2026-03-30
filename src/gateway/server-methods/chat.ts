@@ -12,6 +12,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -345,6 +346,7 @@ function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"
  */
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
+  imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
@@ -354,22 +356,27 @@ async function persistChatSendImages(params: {
   }
 
   const saved: SavedMedia[] = [];
+  let inlineIndex = 0;
+  let offloadedIndex = 0;
+  for (const entry of params.imageOrder) {
+    if (entry === "offloaded") {
+      const ref = params.offloadedRefs[offloadedIndex++];
+      if (!ref) {
+        continue;
+      }
+      saved.push({
+        id: ref.id,
+        path: ref.path,
+        size: 0,
+        contentType: ref.mimeType,
+      });
+      continue;
+    }
 
-  // Offloaded images are already on disk — convert their metadata directly.
-  // Placed first so MediaPath/MediaPaths in the transcript reflect the original
-  // attachment order (large images precede any trailing inline images in the
-  // message, matching the order in which markers were appended).
-  for (const ref of params.offloadedRefs) {
-    saved.push({
-      id: ref.id,
-      path: ref.path,
-      size: 0,
-      contentType: ref.mimeType,
-    });
-  }
-
-  // Inline images must be saved to disk to obtain a stable transcript path.
-  for (const img of params.images) {
+    const img = params.images[inlineIndex++];
+    if (!img) {
+      continue;
+    }
     try {
       saved.push(await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"));
     } catch (err) {
@@ -1431,6 +1438,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
+    let parsedImageOrder: PromptImageOrderEntry[] = [];
     let parsedOffloadedRefs: OffloadedRef[] = [];
 
     const timeoutMs = resolveAgentTimeoutMs({
@@ -1507,6 +1515,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
+        parsedImageOrder = parsed.imageOrder;
         parsedOffloadedRefs = parsed.offloadedRefs;
       } catch (err) {
         // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
@@ -1549,6 +1558,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // their metadata without re-writing the files.
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
+        imageOrder: parsedImageOrder,
         offloadedRefs: parsedOffloadedRefs,
         client,
         logGateway: context.logGateway,
@@ -1709,6 +1719,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId: clientRunId,
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
+          imageOrder: parsedImageOrder.length > 0 ? parsedImageOrder : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();

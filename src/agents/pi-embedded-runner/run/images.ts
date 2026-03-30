@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -87,6 +88,54 @@ function isImageExtension(filePath: string): boolean {
 
 function normalizeRefForDedupe(raw: string): string {
   return process.platform === "win32" ? raw.toLowerCase() : raw;
+}
+
+export function mergePromptAttachmentImages(params: {
+  imageOrder?: PromptImageOrderEntry[];
+  existingImages?: ImageContent[];
+  offloadedImages?: Array<ImageContent | null>;
+  promptRefImages?: ImageContent[];
+}): ImageContent[] {
+  const promptImages: ImageContent[] = [];
+  const existingImages = params.existingImages ?? [];
+  const offloadedImages = params.offloadedImages ?? [];
+
+  if (params.imageOrder && params.imageOrder.length > 0) {
+    let inlineIndex = 0;
+    let offloadedIndex = 0;
+    for (const entry of params.imageOrder) {
+      if (entry === "inline") {
+        const image = existingImages[inlineIndex++];
+        if (image) {
+          promptImages.push(image);
+        }
+        continue;
+      }
+      const image = offloadedImages[offloadedIndex++];
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+    while (inlineIndex < existingImages.length) {
+      promptImages.push(existingImages[inlineIndex++]);
+    }
+    while (offloadedIndex < offloadedImages.length) {
+      const image = offloadedImages[offloadedIndex++];
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+  } else {
+    promptImages.push(...existingImages);
+    for (const image of offloadedImages) {
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+  }
+
+  promptImages.push(...(params.promptRefImages ?? []));
+  return promptImages;
 }
 
 async function sanitizeImagesWithLog(
@@ -265,9 +314,9 @@ export async function loadImageFromRef(
       // persisted file. It applies its own guards against path traversal,
       // symlinks, and null bytes.
       const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
-      const media = await loadWebMedia(physicalPath, { 
+      const media = await loadWebMedia(physicalPath, {
         maxBytes: options?.maxBytes,
-        localRoots: [getMediaDir()]
+        localRoots: [getMediaDir()],
       });
       if (media.kind !== "image") {
         log.debug(`Native image: media store entry is not an image: ${mediaId}`);
@@ -372,6 +421,7 @@ export async function detectAndLoadPromptImages(params: {
   workspaceDir: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
@@ -406,26 +456,53 @@ export async function detectAndLoadPromptImages(params: {
   }
 
   log.debug(`Native image: detected ${allRefs.length} image refs in prompt`);
-
-  const promptImages: ImageContent[] = [...(params.existingImages ?? [])];
+  const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
+  const attachmentRefs =
+    offloadedCount > 0 ? allRefs.slice(Math.max(0, allRefs.length - offloadedCount)) : [];
+  const promptRefs =
+    offloadedCount > 0 ? allRefs.slice(0, Math.max(0, allRefs.length - offloadedCount)) : allRefs;
+  const promptRefImages: ImageContent[] = [];
+  const offloadedImages: Array<ImageContent | null> = [];
 
   let loadedCount = 0;
   let skippedCount = 0;
 
-  for (const ref of allRefs) {
+  for (const ref of promptRefs) {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
       sandbox: params.sandbox,
     });
     if (image) {
-      promptImages.push(image);
+      promptRefImages.push(image);
       loadedCount++;
       log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     } else {
       skippedCount++;
     }
   }
+
+  for (const ref of attachmentRefs) {
+    const image = await loadImageFromRef(ref, params.workspaceDir, {
+      maxBytes: params.maxBytes,
+      workspaceOnly: params.workspaceOnly,
+      sandbox: params.sandbox,
+    });
+    offloadedImages.push(image);
+    if (image) {
+      loadedCount++;
+      log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
+    } else {
+      skippedCount++;
+    }
+  }
+
+  const promptImages = mergePromptAttachmentImages({
+    imageOrder: params.imageOrder,
+    existingImages: params.existingImages,
+    offloadedImages,
+    promptRefImages,
+  });
 
   const imageSanitization: ImageSanitizationLimits = {
     maxDimensionPx: params.maxDimensionPx,

@@ -1,4 +1,5 @@
 import { estimateBase64DecodedBytes } from "../media/base64.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 
@@ -41,6 +42,8 @@ export type ParsedMessageWithImages = {
   message: string;
   /** Small attachments (≤ OFFLOAD_THRESHOLD_BYTES) passed inline to the model */
   images: ChatImageContent[];
+  /** Original accepted attachment order after inline/offloaded split. */
+  imageOrder: PromptImageOrderEntry[];
   /**
    * Large attachments (> OFFLOAD_THRESHOLD_BYTES) that were offloaded to the
    * media store. Each entry corresponds to a `[media attached: media://inbound/<id>]`
@@ -293,7 +296,7 @@ export async function parseMessageWithAttachments(
   const log = opts?.log;
 
   if (!attachments || attachments.length === 0) {
-    return { message, images: [], offloadedRefs: [] };
+    return { message, images: [], imageOrder: [], offloadedRefs: [] };
   }
 
   // For text-only models drop all attachments cleanly. Do not save files or
@@ -305,10 +308,11 @@ export async function parseMessageWithAttachments(
         `parseMessageWithAttachments: ${attachments.length} attachment(s) dropped — model does not support images`,
       );
     }
-    return { message, images: [], offloadedRefs: [] };
+    return { message, images: [], imageOrder: [], offloadedRefs: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const imageOrder: PromptImageOrderEntry[] = [];
   const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
 
@@ -420,6 +424,7 @@ export async function parseMessageWithAttachments(
             mimeType: finalMime,
             label,
           });
+          imageOrder.push("offloaded");
 
           isOffloaded = true;
         } catch (err) {
@@ -436,6 +441,7 @@ export async function parseMessageWithAttachments(
       }
 
       images.push({ type: "image", data: b64, mimeType: finalMime });
+      imageOrder.push("inline");
     }
   } catch (err) {
     // Best-effort cleanup before rethrowing.
@@ -448,6 +454,7 @@ export async function parseMessageWithAttachments(
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
+    imageOrder,
     offloadedRefs,
   };
 }

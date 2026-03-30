@@ -13,6 +13,7 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsRegistration } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer } from "../media/store.js";
 import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -372,6 +373,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let imageOrder: PromptImageOrderEntry[] = [];
       if (!message && normalizedAttachments.length === 0) {
         return;
       }
@@ -394,6 +396,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           });
           message = parsed.message.trim();
           images = parsed.images;
+          imageOrder = parsed.imageOrder;
           if (message.length > 20_000) {
             ctx.logGateway.warn(
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
@@ -480,6 +483,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           runId: sessionId,
           message,
           images,
+          imageOrder,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,

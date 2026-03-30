@@ -8,6 +8,7 @@ import {
   detectAndLoadPromptImages,
   detectImageReferences,
   loadImageFromRef,
+  mergePromptAttachmentImages,
   modelSupportsImages,
 } from "./images.js";
 
@@ -287,6 +288,19 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expectNoPromptImages(result);
+  });
+
+  it("preserves attachment order when offloaded refs and inline images are mixed", async () => {
+    const merged = mergePromptAttachmentImages({
+      imageOrder: ["offloaded", "inline"],
+      existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],
+      offloadedImages: [{ type: "image", data: "large-a", mimeType: "image/jpeg" }],
+    });
+
+    expect(merged).toEqual([
+      { type: "image", data: "large-a", mimeType: "image/jpeg" },
+      { type: "image", data: "small-b", mimeType: "image/png" },
+    ]);
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
