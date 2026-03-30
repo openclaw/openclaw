@@ -411,8 +411,15 @@ export async function runCronIsolatedAgentTurn(params: {
   // instead of falling back to the main agent default.  Without this, isolated
   // cron sessions that use a different model (e.g. subagent default GPT-5.4
   // vs main agent Opus) immediately throw LiveSessionModelSwitchError.
-  cronSession.sessionEntry.providerOverride = provider;
-  cronSession.sessionEntry.modelOverride = model;
+  //
+  // Only persist overrides when the cron payload explicitly specified a model.
+  // Writing them unconditionally turns every resolved default into a sticky
+  // session override that prevents subsequent config changes from taking
+  // effect (P1).
+  if (resolvedModelSelection.isExplicitModel) {
+    cronSession.sessionEntry.providerOverride = provider;
+    cronSession.sessionEntry.modelOverride = model;
+  }
   cronSession.sessionEntry.systemSent = true;
   try {
     await persistSessionEntry();

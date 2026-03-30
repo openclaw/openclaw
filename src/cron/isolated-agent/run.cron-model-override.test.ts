@@ -251,20 +251,43 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
-  it("persists providerOverride/modelOverride so live-switch resolver sees cron model", async () => {
-    // When the main agent uses Opus but cron resolves to a different model
-    // (e.g. subagent default GPT-5.4), the live-session model-switch resolver
-    // reads providerOverride/modelOverride from the session entry.  If those
-    // are missing it falls back to the main agent default, sees a mismatch,
-    // and throws LiveSessionModelSwitchError.
+  it("does NOT persist providerOverride/modelOverride when model resolved from defaults", async () => {
+    // No explicit payload.model — model comes from subagent/agent defaults
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      reply: "digest complete",
+      agentMeta: { provider: "anthropic", model: "claude-opus-4-6" },
+    });
+
+    await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    // model/modelProvider should be set (for session display)
+    expect(cronSession.sessionEntry.model).toBeDefined();
+    expect(cronSession.sessionEntry.modelProvider).toBeDefined();
+    // But providerOverride/modelOverride should NOT be set when model
+    // was resolved from defaults — prevents sticky overrides (P1)
+    expect(cronSession.sessionEntry.providerOverride).toBeUndefined();
+    expect(cronSession.sessionEntry.modelOverride).toBeUndefined();
+  });
+
+  it("persists providerOverride/modelOverride when payload.model is explicitly set", async () => {
+    const jobWithExplicitModel = makeJob({
+      payload: { kind: "agentTurn", message: "run digest", model: "anthropic/claude-sonnet-4-6" },
+    });
+
     runWithModelFallbackMock.mockResolvedValueOnce({
       reply: "digest complete",
       agentMeta: { provider: "anthropic", model: "claude-sonnet-4-6" },
     });
 
-    await runCronIsolatedAgentTurn(makeParams());
+    await runCronIsolatedAgentTurn(makeParams({ job: jobWithExplicitModel }));
 
-    // providerOverride/modelOverride must match the resolved cron model
+    // Both model and overrides should be set when payload.model is explicit
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
     expect(cronSession.sessionEntry.providerOverride).toBe("anthropic");
     expect(cronSession.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
   });
