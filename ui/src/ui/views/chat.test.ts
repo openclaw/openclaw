@@ -1242,11 +1242,13 @@ describe("chat view", () => {
     expect(sessions[0]).toMatchObject({
       title: "Current task",
       preview: "Finish the implementation",
+      updatedAtMs: 200,
       active: true,
     });
     expect(sessions[1]).toMatchObject({
       title: "Older task",
       preview: "Review the changelog",
+      updatedAtMs: 100,
       active: false,
     });
   });

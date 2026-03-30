@@ -106,7 +106,19 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-brand__logo")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
     expect(app.querySelector(".sidebar-chat-section")).not.toBeNull();
+    expect(app.querySelector(".sidebar-chat-hub")).not.toBeNull();
+    expect(app.querySelector(".sidebar-chat-hub__list")).not.toBeNull();
+    expect(app.querySelector(".sidebar-chat-hub__bottom")).not.toBeNull();
     expect(app.querySelector(".sidebar-chat-new")).not.toBeNull();
+  });
+
+  it("renders the chat-first content header", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(app.querySelector(".content-header--chat-shell")).not.toBeNull();
+    expect(app.querySelector(".chat-page-heading__title")).not.toBeNull();
+    expect(app.querySelector(".chat-page-controls__model")).not.toBeNull();
   });
 
   it("starts a new dashboard chat from Cmd/Ctrl+N", async () => {

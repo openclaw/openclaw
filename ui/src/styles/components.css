@@ -2426,11 +2426,12 @@ td.data-table-key-col {
 
 /* Chat queue */
 .chat-queue {
-  margin-top: 12px;
+  width: min(100%, 920px);
+  margin: 12px auto 0;
   padding: 12px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: var(--card);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
   display: grid;
   gap: 8px;
 }

@@ -52,15 +52,20 @@
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
   flex: 1 1 0;
-  /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 6px 6px;
-  margin: 0 0 0 0;
+  padding: 8px 0 12px;
+  margin: 0;
   min-height: 0;
-  /* Allow shrinking for flex scroll behavior */
-  border-radius: var(--radius-md);
   background: transparent;
+}
+
+.chat-thread-inner {
+  width: min(100%, 920px);
+  margin: 0 auto;
+  padding: 8px 18px 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-thread-inner > :first-child {
@@ -367,20 +372,27 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  width: min(100%, 920px);
+  margin: 8px auto 18px;
   padding: 0;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 94%, var(--bg) 6%);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 24px;
   flex-shrink: 0;
   transition:
     border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+  box-shadow:
+    0 18px 48px color-mix(in srgb, black 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
 }
 
 .agent-chat__input:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 24%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border) 80%);
+  box-shadow:
+    0 24px 54px color-mix(in srgb, black 16%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 @supports (backdrop-filter: blur(1px)) {
@@ -392,16 +404,16 @@
 
 .agent-chat__input > textarea {
   width: 100%;
-  min-height: 40px;
-  max-height: 150px;
+  min-height: 52px;
+  max-height: 220px;
   resize: none;
-  padding: 12px 14px 8px;
+  padding: 16px 18px 10px;
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 0.92rem;
+  font-size: 15px;
   font-family: inherit;
-  line-height: 1.4;
+  line-height: 1.55;
   outline: none;
   box-sizing: border-box;
 }
@@ -418,15 +430,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  padding: 8px 12px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
 }
 
 .agent-chat__toolbar-left,
 .agent-chat__toolbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 .agent-chat__input-btn,
@@ -434,9 +446,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-sm);
+  min-width: 34px;
+  height: 34px;
+  border-radius: 999px;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -482,29 +494,33 @@
 }
 
 .agent-chat__token-count {
-  font-size: 0.7rem;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
   align-self: center;
+  padding: 0 6px;
 }
 
 .chat-send-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-md);
+  min-width: 38px;
+  height: 38px;
+  border-radius: 999px;
   border: none;
-  background: transparent;
-  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 88%, white 12%);
+  color: var(--accent-foreground, white);
   cursor: pointer;
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+    color var(--duration-fast) ease,
+    transform var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
   padding: 0;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
 .chat-send-btn svg {
@@ -518,22 +534,26 @@
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--bg-hover);
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--accent) 94%, white 6%);
+  box-shadow: 0 14px 28px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .chat-send-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.45;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .chat-send-btn--stop {
   background: var(--danger);
   color: var(--destructive-foreground);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--danger) 24%, transparent);
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 85%, #fff);
+  box-shadow: 0 14px 28px color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 .slash-menu {
@@ -742,6 +762,10 @@
   flex-wrap: wrap;
 }
 
+.chat-page-controls .chat-controls {
+  gap: 8px;
+}
+
 .chat-controls__session {
   min-width: 140px;
   max-width: 300px;
@@ -757,6 +781,11 @@
 .chat-controls__model {
   min-width: 170px;
   max-width: 320px;
+}
+
+.chat-page-controls__model .chat-controls__model {
+  min-width: 200px;
+  max-width: 360px;
 }
 
 .chat-controls__thinking {
@@ -867,7 +896,9 @@
 
 /* Chat loading skeleton */
 .chat-loading-skeleton {
-  padding: 4px 0;
+  width: min(100%, 840px);
+  margin: 0 auto;
+  padding: 8px 0;
   animation: fade-in 0.3s var(--ease-out);
 }
 
@@ -878,8 +909,10 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: 12px;
-  padding: 48px 24px;
+  width: min(100%, 760px);
+  margin: 0 auto;
+  gap: 14px;
+  padding: 56px 24px 72px;
   flex: 1;
   min-height: 0;
 }
@@ -889,10 +922,12 @@
 }
 
 .agent-chat__welcome h2 {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: clamp(28px, 3.8vw, 42px);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
+  font-weight: 700;
   margin: 0;
-  color: var(--foreground);
+  color: var(--text-strong);
 }
 
 .agent-chat__avatar--logo {
@@ -939,7 +974,7 @@
 }
 
 .agent-chat__hint {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   margin: 0;
 }
@@ -959,26 +994,28 @@
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
-  max-width: 480px;
-  margin-top: 8px;
+  max-width: 640px;
+  margin-top: 12px;
 }
 
 .agent-chat__suggestion {
   font-size: 13px;
-  padding: 8px 16px;
+  padding: 10px 16px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--foreground);
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  color: var(--text);
   cursor: pointer;
   transition:
     background 0.15s,
-    border-color 0.15s;
+    border-color 0.15s,
+    transform 0.15s;
 }
 
 .agent-chat__suggestion:hover {
-  background: var(--panel-strong);
+  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
   border-color: var(--accent);
+  transform: translateY(-1px);
 }
 
 /* Mobile dropdown toggle — hidden on desktop */

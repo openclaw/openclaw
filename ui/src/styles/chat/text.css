@@ -19,8 +19,8 @@
 }
 
 .chat-text {
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.65;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
@@ -58,8 +58,8 @@
 
 .chat-text :where(.markdown-inline-image) {
   display: block;
-  max-width: min(100%, 420px);
-  max-height: 320px;
+  max-width: min(100%, 520px);
+  max-height: 360px;
   width: auto;
   height: auto;
   margin-top: 0.75em;
@@ -78,9 +78,9 @@
 }
 
 .chat-text :where(pre) {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 14px;
+  padding: 12px 14px;
   overflow-x: auto;
 }
 

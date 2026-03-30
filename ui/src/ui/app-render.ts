@@ -11,8 +11,8 @@ import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   createDashboardChatSession,
   renderChatControls,
+  renderChatModelSelect,
   renderChatMobileToggle,
-  renderChatSessionSelect,
   resolveChatSidebarSessions,
   renderTab,
   renderSidebarConnectionStatus,
@@ -280,6 +280,8 @@ type AutomationSectionKey = (typeof AUTOMATION_SECTION_KEYS)[number];
 type InfrastructureSectionKey = (typeof INFRASTRUCTURE_SECTION_KEYS)[number];
 type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
 
+type ChatSidebarSessionEntry = ReturnType<typeof resolveChatSidebarSessions>[number];
+
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
   const parsed = parseAgentSessionKey(state.sessionKey);
@@ -353,6 +355,215 @@ function renderSidebarChatSection(state: AppViewState, navCollapsed: boolean) {
             </div>
           `}
     </section>
+  `;
+}
+
+function formatChatSessionBucketLabel(timestampMs: number | null | undefined): string {
+  if (!timestampMs || !Number.isFinite(timestampMs)) {
+    return "Older";
+  }
+  const now = new Date();
+  const target = new Date(timestampMs);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfTarget = new Date(
+    target.getFullYear(),
+    target.getMonth(),
+    target.getDate(),
+  ).getTime();
+  const dayDiff = Math.round((startOfToday - startOfTarget) / 86_400_000);
+  if (dayDiff <= 0) {
+    return "Today";
+  }
+  if (dayDiff === 1) {
+    return "Yesterday";
+  }
+  if (dayDiff < 7) {
+    return "Last 7 Days";
+  }
+  if (dayDiff < 30) {
+    return "Last 30 Days";
+  }
+  return "Older";
+}
+
+function groupChatSidebarSessions(sessions: ChatSidebarSessionEntry[]) {
+  const groups = new Map<string, ChatSidebarSessionEntry[]>();
+  for (const session of sessions) {
+    const label = formatChatSessionBucketLabel(session.updatedAtMs);
+    const existing = groups.get(label);
+    if (existing) {
+      existing.push(session);
+    } else {
+      groups.set(label, [session]);
+    }
+  }
+  return Array.from(groups.entries()).map(([label, entries]) => ({ label, entries }));
+}
+
+function resolveChatActiveSession(state: AppViewState) {
+  const sessions = resolveChatSidebarSessions(state, 40);
+  return sessions.find((entry) => entry.active) ?? sessions[0] ?? null;
+}
+
+function resolveChatTopbarIdentity(state: AppViewState) {
+  const currentAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const agent = state.agentsList?.agents?.find((entry) => entry.id === currentAgentId) ?? null;
+  return {
+    agentName:
+      agent?.identity?.name?.trim() || agent?.name?.trim() || currentAgentId || "Assistant",
+    session: resolveChatActiveSession(state),
+  };
+}
+
+function renderChatSidebarSectionNav(state: AppViewState, navCollapsed: boolean) {
+  return html`
+    <div class="sidebar-chat-utility" aria-label="OpenClaw sections">
+      ${renderTab(state, "overview", { collapsed: navCollapsed })}
+      ${renderTab(state, "sessions", { collapsed: navCollapsed })}
+      ${renderTab(state, "usage", { collapsed: navCollapsed })}
+      ${renderTab(state, "channels", { collapsed: navCollapsed })}
+      ${renderTab(state, "agents", { collapsed: navCollapsed })}
+    </div>
+  `;
+}
+
+function renderChatSidebar(state: AppViewState, navCollapsed: boolean) {
+  const sessions = resolveChatSidebarSessions(state, 40);
+  const creating = state.chatSending || Boolean(state.chatRunId);
+  const groups = groupChatSidebarSessions(sessions);
+
+  if (navCollapsed) {
+    return html`
+      <section class="sidebar-chat-section sidebar-chat-hub sidebar-chat-hub--collapsed">
+        <button
+          type="button"
+          class="nav-item sidebar-chat-new"
+          ?disabled=${!state.connected || creating}
+          @click=${async () => {
+            const created = await createDashboardChatSession(state);
+            if (created) {
+              state.setTab("chat");
+            }
+          }}
+          title=${t("overview.quickActions.newSession")}
+          aria-label=${t("overview.quickActions.newSession")}
+        >
+          <span class="nav-item__icon" aria-hidden="true">${icons.plus}</span>
+        </button>
+        ${renderChatSidebarSectionNav(state, navCollapsed)}
+      </section>
+    `;
+  }
+
+  return html`
+    <section class="sidebar-chat-section sidebar-chat-hub" aria-label="Chat sessions">
+      <div class="sidebar-chat-hub__top">
+        <button
+          type="button"
+          class="nav-item sidebar-chat-new"
+          ?disabled=${!state.connected || creating}
+          @click=${async () => {
+            const created = await createDashboardChatSession(state);
+            if (created) {
+              state.setTab("chat");
+            }
+          }}
+          title=${t("overview.quickActions.newSession")}
+          aria-label=${t("overview.quickActions.newSession")}
+        >
+          <span class="nav-item__icon" aria-hidden="true">${icons.plus}</span>
+          <span class="nav-item__text">${t("overview.quickActions.newSession")}</span>
+        </button>
+      </div>
+      <div class="sidebar-chat-hub__list" aria-label=${t("overview.cards.recentSessions")}>
+        ${groups.length === 0
+          ? html`<div class="sidebar-chat-list__empty">${t("usage.sessions.noRecent")}</div>`
+          : groups.map(
+              (group) => html`
+                <section class="sidebar-chat-group">
+                  <div class="sidebar-chat-group__label">${group.label}</div>
+                  <div class="sidebar-chat-list">
+                    ${group.entries.map(
+                      (session) => html`
+                        <button
+                          type="button"
+                          class="sidebar-chat-item ${session.active
+                            ? "sidebar-chat-item--active"
+                            : ""}"
+                          @click=${() => {
+                            switchChatSession(state, session.key);
+                            state.setTab("chat");
+                          }}
+                          title=${session.title}
+                          aria-current=${session.active ? "page" : "false"}
+                        >
+                          <div class="sidebar-chat-item__body">
+                            <div class="sidebar-chat-item__title">${session.title}</div>
+                            ${session.preview
+                              ? html`<div class="sidebar-chat-item__preview">
+                                  ${session.preview}
+                                </div>`
+                              : nothing}
+                          </div>
+                          ${session.updatedLabel
+                            ? html`<div class="sidebar-chat-item__meta">
+                                ${session.updatedLabel}
+                              </div>`
+                            : nothing}
+                        </button>
+                      `,
+                    )}
+                  </div>
+                </section>
+              `,
+            )}
+      </div>
+      <div class="sidebar-chat-hub__bottom">
+        <div class="sidebar-chat-hub__bottom-label">Workspace</div>
+        ${renderChatSidebarSectionNav(state, navCollapsed)}
+      </div>
+    </section>
+  `;
+}
+
+function renderChatHeader(state: AppViewState) {
+  const active = resolveChatActiveSession(state);
+  const subline = active?.preview || active?.updatedLabel || t("subtitles.chat");
+  return html`
+    <section class="content-header content-header--chat-shell">
+      <div class="chat-page-heading">
+        <div class="chat-page-heading__eyebrow">OpenClaw chat</div>
+        <div class="chat-page-heading__title-row">
+          <div class="chat-page-heading__title">${active?.title ?? t("tabs.chat")}</div>
+          ${active?.updatedLabel
+            ? html`<div class="chat-page-heading__meta">${active.updatedLabel}</div>`
+            : nothing}
+        </div>
+        <div class="chat-page-heading__sub">${subline}</div>
+      </div>
+      <div class="page-meta page-meta--chat-shell">
+        <div class="chat-page-controls">
+          <div class="chat-page-controls__model">${renderChatModelSelect(state)}</div>
+          ${renderChatControls(state)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderTopbarCenterContent(state: AppViewState) {
+  if (state.tab !== "chat") {
+    return html`<dashboard-header .tab=${state.tab}></dashboard-header>`;
+  }
+  const { agentName, session } = resolveChatTopbarIdentity(state);
+  return html`
+    <div class="chat-topbar-brand" aria-label="Chat workspace">
+      <div class="chat-topbar-brand__badge">OpenClaw</div>
+      <div class="chat-topbar-brand__copy">
+        <div class="chat-topbar-brand__title">${agentName}</div>
+        <div class="chat-topbar-brand__sub">${session?.title ?? t("tabs.chat")}</div>
+      </div>
+    </div>
   `;
 }
 
@@ -491,7 +702,7 @@ export function renderApp(state: AppViewState) {
         }}
       ></button>
       <header class="topbar">
-        <div class="topnav-shell">
+        <div class="topnav-shell ${isChat ? "topnav-shell--chat" : ""}">
           <button
             type="button"
             class="topbar-nav-toggle"
@@ -504,9 +715,7 @@ export function renderApp(state: AppViewState) {
           >
             <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
           </button>
-          <div class="topnav-shell__content">
-            <dashboard-header .tab=${state.tab}></dashboard-header>
-          </div>
+          <div class="topnav-shell__content">${renderTopbarCenterContent(state)}</div>
           <div class="topnav-shell__actions">
             <button
               class="topbar-search"
@@ -540,7 +749,9 @@ export function renderApp(state: AppViewState) {
                         alt="OpenClaw"
                       />
                       <span class="sidebar-brand__copy">
-                        <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
+                        <span class="sidebar-brand__eyebrow"
+                          >${t(isChat ? "nav.chat" : "nav.control")}</span
+                        >
                         <span class="sidebar-brand__title">OpenClaw</span>
                       </span>
                     `}
@@ -561,48 +772,56 @@ export function renderApp(state: AppViewState) {
                 >
               </button>
             </div>
-            <div class="sidebar-shell__body">
-              <div class="sidebar-nav">
-                ${renderSidebarChatSection(state, navCollapsed)}
-                <nav>
-                  ${TAB_GROUPS.map((group) => {
-                    const isGroupCollapsed =
-                      state.settings.navGroupsCollapsed[group.label] ?? false;
-                    const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
-                    const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
+            <div class="sidebar-shell__body ${isChat ? "sidebar-shell__body--chat" : ""}">
+              <div class="sidebar-nav ${isChat ? "sidebar-nav--chat" : ""}">
+                ${isChat
+                  ? renderChatSidebar(state, navCollapsed)
+                  : html`
+                      ${renderSidebarChatSection(state, navCollapsed)}
+                      <nav>
+                        ${TAB_GROUPS.map((group) => {
+                          const isGroupCollapsed =
+                            state.settings.navGroupsCollapsed[group.label] ?? false;
+                          const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+                          const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
-                    return html`
-                      <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
-                        ${!navCollapsed
-                          ? html`
-                              <button
-                                class="nav-section__label"
-                                @click=${() => {
-                                  const next = { ...state.settings.navGroupsCollapsed };
-                                  next[group.label] = !isGroupCollapsed;
-                                  state.applySettings({
-                                    ...state.settings,
-                                    navGroupsCollapsed: next,
-                                  });
-                                }}
-                                aria-expanded=${showItems}
-                              >
-                                <span class="nav-section__label-text"
-                                  >${t(`nav.${group.label}`)}</span
-                                >
-                                <span class="nav-section__chevron"> ${icons.chevronDown} </span>
-                              </button>
-                            `
-                          : nothing}
-                        <div class="nav-section__items">
-                          ${group.tabs.map((tab) =>
-                            renderTab(state, tab, { collapsed: navCollapsed }),
-                          )}
-                        </div>
-                      </section>
-                    `;
-                  })}
-                </nav>
+                          return html`
+                            <section
+                              class="nav-section ${!showItems ? "nav-section--collapsed" : ""}"
+                            >
+                              ${!navCollapsed
+                                ? html`
+                                    <button
+                                      class="nav-section__label"
+                                      @click=${() => {
+                                        const next = { ...state.settings.navGroupsCollapsed };
+                                        next[group.label] = !isGroupCollapsed;
+                                        state.applySettings({
+                                          ...state.settings,
+                                          navGroupsCollapsed: next,
+                                        });
+                                      }}
+                                      aria-expanded=${showItems}
+                                    >
+                                      <span class="nav-section__label-text"
+                                        >${t(`nav.${group.label}`)}</span
+                                      >
+                                      <span class="nav-section__chevron">
+                                        ${icons.chevronDown}
+                                      </span>
+                                    </button>
+                                  `
+                                : nothing}
+                              <div class="nav-section__items">
+                                ${group.tabs.map((tab) =>
+                                  renderTab(state, tab, { collapsed: navCollapsed }),
+                                )}
+                              </div>
+                            </section>
+                          `;
+                        })}
+                      </nav>
+                    `}
               </div>
             </div>
             <div class="sidebar-shell__footer">
@@ -674,20 +893,19 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "config"
           ? nothing
-          : html`<section class="content-header">
-              <div>
-                ${isChat
-                  ? renderChatSessionSelect(state)
-                  : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
-                ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
-              </div>
-              <div class="page-meta">
-                ${state.lastError
-                  ? html`<div class="pill danger">${state.lastError}</div>`
-                  : nothing}
-                ${isChat ? renderChatControls(state) : nothing}
-              </div>
-            </section>`}
+          : isChat
+            ? renderChatHeader(state)
+            : html`<section class="content-header">
+                <div>
+                  <div class="page-title">${titleForTab(state.tab)}</div>
+                  <div class="page-sub">${subtitleForTab(state.tab)}</div>
+                </div>
+                <div class="page-meta">
+                  ${state.lastError
+                    ? html`<div class="pill danger">${state.lastError}</div>`
+                    : nothing}
+                </div>
+              </section>`}
         ${state.tab === "overview"
           ? renderOverview({
               connected: state.connected,

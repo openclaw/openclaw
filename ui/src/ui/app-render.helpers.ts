@@ -572,11 +572,12 @@ export function resolveChatSidebarSessions(state: AppViewState, limit = 8) {
       title: row.derivedTitle?.trim() || row.label?.trim() || row.displayName?.trim() || row.key,
       preview: row.lastMessagePreview?.replace(/\s+/g, " ").trim() || "",
       updatedLabel: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
+      updatedAtMs: row.updatedAt,
       active: row.key === state.sessionKey,
     }));
 }
 
-function renderChatModelSelect(state: AppViewState) {
+export function renderChatModelSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatModelSelectState(state);
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
