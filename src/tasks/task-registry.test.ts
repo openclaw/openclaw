@@ -15,11 +15,13 @@ import {
   listTaskRecords,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
+  markTaskRunningByRunId,
+  recordTaskProgressByRunId,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  setTaskProgressById,
+  setTaskTimingById,
   updateTaskNotifyPolicyById,
-  updateTaskRecordById,
-  updateTaskStateByRunId,
 } from "./task-registry.js";
 import {
   getInspectableTaskAuditSummary,
@@ -440,7 +442,8 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      updateTaskRecordById(findTaskByRunId("run-detail-leak")!.taskId, {
+      setTaskProgressById({
+        taskId: findTaskByRunId("run-detail-leak")!.taskId,
         progressSummary:
           "I am loading the local session context and checking helper command availability before writing the file.",
       });
@@ -800,7 +803,8 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
       });
-      updateTaskRecordById(task.taskId, {
+      setTaskTimingById({
+        taskId: task.taskId,
         lastEventAt: Date.now() - 10 * 60_000,
       });
 
@@ -832,7 +836,8 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
       });
-      updateTaskRecordById(task.taskId, {
+      setTaskTimingById({
+        taskId: task.taskId,
         lastEventAt: now - 10 * 60_000,
       });
 
@@ -864,7 +869,8 @@ describe("task-registry", () => {
         deliveryStatus: "not_applicable",
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
       });
-      updateTaskRecordById(task.taskId, {
+      setTaskTimingById({
+        taskId: task.taskId,
         endedAt: Date.now() - 8 * 24 * 60 * 60_000,
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
@@ -885,8 +891,8 @@ describe("task-registry", () => {
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
-          loadSnapshot: () =>
-            new Map([
+          loadSnapshot: () => ({
+            tasks: new Map([
               [
                 "task-missing-cleanup",
                 {
@@ -904,6 +910,8 @@ describe("task-registry", () => {
                 },
               ],
             ]),
+            deliveryStates: new Map(),
+          }),
           saveSnapshot: () => {},
         },
       });
@@ -930,8 +938,8 @@ describe("task-registry", () => {
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
-          loadSnapshot: () =>
-            new Map([
+          loadSnapshot: () => ({
+            tasks: new Map([
               [
                 "task-audit-summary",
                 {
@@ -949,6 +957,8 @@ describe("task-registry", () => {
                 },
               ],
             ]),
+            deliveryStates: new Map(),
+          }),
           saveSnapshot: () => {},
         },
       });
@@ -993,9 +1003,8 @@ describe("task-registry", () => {
         notifyPolicy: "done_only",
       });
 
-      updateTaskStateByRunId({
+      markTaskRunningByRunId({
         runId: "run-state-change",
-        status: "running",
         eventSummary: "Started.",
       });
       await waitForAssertion(() => expect(hoisted.sendMessageMock).not.toHaveBeenCalled());
@@ -1004,7 +1013,7 @@ describe("task-registry", () => {
         taskId: task.taskId,
         notifyPolicy: "state_changes",
       });
-      updateTaskStateByRunId({
+      recordTaskProgressByRunId({
         runId: "run-state-change",
         eventSummary: "No output for 60s. It may be waiting for input.",
       });
@@ -1019,13 +1028,6 @@ describe("task-registry", () => {
       );
       expect(findTaskByRunId("run-state-change")).toMatchObject({
         notifyPolicy: "state_changes",
-        lastNotifiedEventAt: expect.any(Number),
-        recentEvents: expect.arrayContaining([
-          expect.objectContaining({
-            kind: "progress",
-            summary: "No output for 60s. It may be waiting for input.",
-          }),
-        ]),
       });
       await maybeDeliverTaskStateChangeUpdate(task.taskId);
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
