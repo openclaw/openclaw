@@ -361,6 +361,24 @@ describe("amazon-bedrock provider plugin", () => {
       expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-west-1" });
     });
 
+    it("prefers exact canonical key over alias when both are present", () => {
+      const modelId = "eu.anthropic.claude-sonnet-4-6";
+      const wrapped = wrapStream(modelId, {
+        models: {
+          providers: {
+            bedrock: {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            },
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.eu-west-1.amazonaws.com",
+            },
+          },
+        },
+      });
+      // Model resolution uses exact key "amazon-bedrock"; region must match.
+      expect(invokeWrapped(wrapped, modelId)).toMatchObject({ region: "eu-west-1" });
+    });
+
     it("does not inject region when neither bedrockDiscovery nor baseUrl is configured", () => {
       const result = wrapStream("anthropic.claude-sonnet-4-6");
       expect(result).toBe(passThroughFn);

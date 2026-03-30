@@ -62,13 +62,23 @@ function resolveBedrockRegion(
   return extractRegionFromBaseUrl(providerBaseUrl) ?? config?.models?.bedrockDiscovery?.region;
 }
 
-/** Find the baseUrl from the matched provider config entry, using normalized key matching. */
+/**
+ * Find the baseUrl from the matched provider config entry.
+ * Prefers the exact canonical key ("amazon-bedrock") over alias matches ("bedrock")
+ * to stay consistent with model resolution, which uses exact-key-first semantics.
+ */
 function findProviderBaseUrl(providers: Record<string, unknown> | undefined): string | undefined {
   if (!providers) {
     return undefined;
   }
+  // Exact canonical key first.
+  const exact = (providers[PROVIDER_ID] as { baseUrl?: string } | undefined)?.baseUrl;
+  if (exact) {
+    return exact;
+  }
+  // Fall back to alias matches.
   for (const [key, value] of Object.entries(providers)) {
-    if (normalizeProviderId(key) !== PROVIDER_ID) {
+    if (key === PROVIDER_ID || normalizeProviderId(key) !== PROVIDER_ID) {
       continue;
     }
     const baseUrl = (value as { baseUrl?: string }).baseUrl;
