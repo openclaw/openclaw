@@ -333,6 +333,11 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 }
 
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+
+// Strip tool_call / tool_result XML tags that may leak into user-facing text when
+// streaming is disabled (streamMode: block).  Matches both self-closing and paired forms.
+const TOOL_CALL_TAG_RE = /<\s*tool_call\b[^>]*>[\s\S]*?<\s*\/\s*tool_call\s*>/gi;
+const TOOL_RESULT_TAG_RE = /<\s*tool_result\b[^>]*>[\s\S]*?<\s*\/\s*tool_result\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -551,6 +556,13 @@ function stripFinalTagsFromText(text: string): string {
   return text.replace(FINAL_TAG_RE, "");
 }
 
+function stripToolCallTagsFromText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return text.replace(TOOL_CALL_TAG_RE, "").replace(TOOL_RESULT_TAG_RE, "");
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -760,7 +772,8 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  let stripped = stripFinalTagsFromText(text);
+  stripped = stripToolCallTagsFromText(stripped);
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
