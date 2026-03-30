@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
+import { prefersLightScheme } from "../theme.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
@@ -1108,7 +1109,7 @@ export function renderConfig(props: ConfigProps) {
                             <config-editor
                               .value=${props.raw}
                               ?readonly=${blurred}
-                              ?dark=${props.themeMode === "dark"}
+                              ?dark=${props.themeMode === "dark" || (props.themeMode === "system" && !prefersLightScheme())}
                               @change=${(e: CustomEvent) => props.onRawChange(e.detail.value)}
                             ></config-editor>
                           `}

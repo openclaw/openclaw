@@ -15,6 +15,24 @@ import {
 import { css, html, LitElement } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 
+/** CodeMirror theme extensions for dark mode */
+const DARK_THEME = EditorView.theme({
+  "&": { backgroundColor: "#1f2937", color: "#e5e7eb" },
+  ".cm-content": { caretColor: "#e5e7eb" },
+  ".cm-gutters": { backgroundColor: "#1f2937", color: "#6b7280", border: "none" },
+  ".cm-activeLineGutter": { backgroundColor: "#374151" },
+  ".cm-activeLine": { backgroundColor: "rgba(55, 65, 81, 0.5)" },
+  ".cm-cursor": { borderLeftColor: "#e5e7eb" },
+  ".cm-selectionBackground": { backgroundColor: "#374151 !important" },
+  "&.cm-focused .cm-selectionBackground": { backgroundColor: "#4b5563 !important" },
+  ".cm-matchingBracket": { backgroundColor: "#374151", outline: "1px solid #6b7280" },
+  ".cm-foldPlaceholder": { backgroundColor: "#374151", color: "#9ca3af", border: "none" },
+  ".cm-tooltip": { backgroundColor: "#1f2937", border: "1px solid #374151" },
+  ".cm-tooltip-autocomplete": { "& > ul > li[aria-selected]": { backgroundColor: "#374151" } },
+});
+
+const LIGHT_THEME = EditorView.theme({});
+
 /**
  * A JSON editor web component backed by CodeMirror 6.
  * Provides syntax highlighting, line numbers, active line highlighting,
@@ -35,6 +53,7 @@ export class ConfigEditor extends LitElement {
 
   private view?: EditorView;
   private readonlyCompartment = new Compartment();
+  private themeCompartment = new Compartment();
 
   // ---------------------------------------------------------------------------
   // Styles
@@ -165,6 +184,11 @@ export class ConfigEditor extends LitElement {
         effects: this.readonlyCompartment.reconfigure(EditorState.readOnly.of(this.readonly)),
       });
     }
+    if (changed.has("dark") && this.view) {
+      this.view.dispatch({
+        effects: this.themeCompartment.reconfigure(this.dark ? DARK_THEME : LIGHT_THEME),
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -216,10 +240,7 @@ export class ConfigEditor extends LitElement {
           JSON5.parse(docText);
         } catch (e) {
           if (e instanceof SyntaxError) {
-            // Try to extract line/col from error message
-            const match = e.message.match(/position\s+(\d+)/i);
-            const pos = match ? parseInt(match[1], 10) : 0;
-
+            const pos = this.errorOffset(view.state.doc.toString(), e.message);
             diagnostics.push({
               from: Math.min(pos, docText.length),
               to: Math.min(pos + 1, docText.length),
@@ -250,16 +271,45 @@ export class ConfigEditor extends LitElement {
 
       // Readonly (via compartment so it can be reconfigured live)
       this.readonlyCompartment.of(EditorState.readOnly.of(this.readonly)),
+
+      // Theme (via compartment so it can be toggled live)
+      this.themeCompartment.of(this.dark ? DARK_THEME : LIGHT_THEME),
     ];
 
     return base;
+  }
+
+  /**
+   * Convert a JSON5 SyntaxError message to a character offset in the document.
+   * JSON5 errors use "at line:column" format; JSON errors use "position N".
+   */
+  private errorOffset(doc: string, message: string): number {
+    // JSON5 format: "... at 3:5"
+    const lc = message.match(/at\s+(\d+):(\d+)/i);
+    if (lc) {
+      const line = parseInt(lc[1], 10);
+      const col = parseInt(lc[2], 10);
+      const lines = doc.split("\n");
+      let offset = 0;
+      for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+        offset += lines[i].length + 1; // +1 for newline
+      }
+      return offset + col - 1;
+    }
+
+    // JSON format: "... at position 42"
+    const pos = message.match(/position\s+(\d+)/i);
+    if (pos) {
+      return parseInt(pos[1], 10);
+    }
+
+    return 0;
   }
 
   // ---------------------------------------------------------------------------
   // Public methods
   // ---------------------------------------------------------------------------
   /** Format the JSON content with proper indentation */
-  // eslint-disable-next-line @typescript-eslint/no-invalid-void-type
   format = (): void => {
     if (!this.view) {
       return;
@@ -271,13 +321,13 @@ export class ConfigEditor extends LitElement {
     }
 
     try {
-      const parsed = JSON.parse(doc);
+      const parsed = JSON5.parse(doc);
       const formatted = JSON.stringify(parsed, null, 2);
       this.view.dispatch({
         changes: { from: 0, to: rawDoc.length, insert: formatted },
       });
     } catch {
-      // Not valid JSON, ignore format
+      // Not valid JSON/JSON5, ignore format
     }
   };
 
