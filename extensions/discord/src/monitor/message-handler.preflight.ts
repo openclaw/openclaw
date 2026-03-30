@@ -424,7 +424,8 @@ export async function preflightDiscordMessage(
     earlyThreadParentType = parentInfo.type;
   }
 
-  // Fresh config for bindings lookup; other routing inputs are payload-derived.
+  // Use the active runtime snapshot for bindings lookup; routing inputs are
+  // still payload-derived, but this path should not reparse config from disk.
   const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
     ? params.data.rawMember.roles.map((roleId: string) => String(roleId))
     : [];
@@ -490,7 +491,7 @@ export async function preflightDiscordMessage(
   });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
-  const bypassMentionRequirement = isBoundThreadSession || Boolean(configuredBinding);
+  const bypassMentionRequirement = isBoundThreadSession;
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,

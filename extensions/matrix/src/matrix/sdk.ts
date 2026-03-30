@@ -11,6 +11,7 @@ import {
 } from "matrix-js-sdk/lib/matrix.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
@@ -221,9 +222,15 @@ export class MatrixClient {
       cryptoDatabasePrefix?: string;
       autoBootstrapCrypto?: boolean;
       ssrfPolicy?: SsrFPolicy;
+      dispatcherPolicy?: PinnedDispatcherPolicy;
     } = {},
   ) {
-    this.httpClient = new MatrixAuthedHttpClient(homeserver, accessToken, opts.ssrfPolicy);
+    this.httpClient = new MatrixAuthedHttpClient({
+      homeserver,
+      accessToken,
+      ssrfPolicy: opts.ssrfPolicy,
+      dispatcherPolicy: opts.dispatcherPolicy,
+    });
     this.localTimeoutMs = Math.max(1, opts.localTimeoutMs ?? 60_000);
     this.initialSyncLimit = opts.initialSyncLimit;
     this.encryptionEnabled = opts.encryption === true;
@@ -244,7 +251,10 @@ export class MatrixClient {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-      fetchFn: createMatrixGuardedFetch({ ssrfPolicy: opts.ssrfPolicy }),
+      fetchFn: createMatrixGuardedFetch({
+        ssrfPolicy: opts.ssrfPolicy,
+        dispatcherPolicy: opts.dispatcherPolicy,
+      }),
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [

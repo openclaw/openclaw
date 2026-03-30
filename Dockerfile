@@ -5,15 +5,16 @@
 #
 # Multi-stage build produces a minimal runtime image without build tools,
 # source code, or Bun. Works with Docker, Buildx, and Podman.
-# The ext-deps stage extracts only the package.json files we need from
-# extensions/, so the main build layer is not invalidated by unrelated
-# extension source changes.
+# The ext-deps stage extracts only the package.json files we need from the
+# bundled plugin workspace tree, so the main build layer is not invalidated by
+# unrelated plugin source changes.
 #
 # Two runtime variants:
 #   Default (bookworm):      docker build .
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_APT_UPGRADE=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
@@ -27,18 +28,20 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f3411
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
 ARG OPENCLAW_EXTENSIONS
-COPY extensions /tmp/extensions
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 # Copy package.json for opted-in extensions so pnpm resolves their deps.
 RUN mkdir -p /out && \
     for ext in $OPENCLAW_EXTENSIONS; do \
-      if [ -f "/tmp/extensions/$ext/package.json" ]; then \
+      if [ -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
         mkdir -p "/out/$ext" && \
-        cp "/tmp/extensions/$ext/package.json" "/out/$ext/package.json"; \
+        cp "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" "/out/$ext/package.json"; \
       fi; \
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
 # Install Bun (required for build scripts). Retry the whole bootstrap flow to
 # tolerate transient 5xx failures from bun.sh/GitHub during CI image builds.
@@ -61,8 +64,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs ./scripts/postinstall-bundled-plugins.mjs
 
-COPY --from=ext-deps /out/ ./extensions/
+COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
@@ -73,7 +77,7 @@ COPY . .
 
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
-RUN for dir in /app/extensions /app/.agent /app/.agents; do \
+RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \
       if [ -d "$dir" ]; then \
         find "$dir" -type d -exec chmod 755 {} +; \
         find "$dir" -type f -exec chmod 644 {} +; \
@@ -114,6 +118,7 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-sli
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 ARG OPENCLAW_DOCKER_APT_UPGRADE
 
 # OCI base-image metadata for downstream image consumers.
@@ -148,13 +153,13 @@ COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
 COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
+COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 
 # In npm-installed Docker images, prefer the copied source extension tree for
 # bundled discovery so package metadata that points at source entries stays valid.
-ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/extensions
+ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a

@@ -74,7 +74,7 @@ export type PluginManifestRecord = {
     id: string;
     label?: string;
     blurb?: string;
-    preferOver?: string[];
+    preferOver?: readonly string[];
   };
 };
 
@@ -193,6 +193,10 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
     return true;
   }
   if (normalizedHint === manifestId) {
+    return true;
+  }
+  // Generated idHint for multi-extension plugins takes the form "id/entryBase".
+  if (normalizedHint.startsWith(`${manifestId}/`)) {
     return true;
   }
   return (
