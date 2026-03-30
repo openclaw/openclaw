@@ -578,19 +578,15 @@ export function createTelegramThreadBindingManager(
         const rawParent = input.conversation.parentConversationId?.trim() ?? "";
         const cfg = loadConfig();
         let chatId = rawParent || rawConversationId;
-        if (chatId && !chatId.startsWith("-")) {
-          // chatId is a bare topic ID (e.g. "77") with no group context — cannot
-          // unambiguously resolve the target group. Returning null surfaces a
-          // clean error to the orchestrator instead of silently picking the wrong
-          // group in multi-group setups.
+        if (!chatId) {
           logVerbose(
-            `telegram: child bind failed: conversationId "${chatId}" looks like a bare topic ID, not a group chat ID (expected to start with "-"). Provide a full chatId:topic:topicId conversationId or set parentConversationId to the group chat ID.`,
+            `telegram: child bind failed: could not resolve group chat ID from conversationId=${rawConversationId}`,
           );
           return null;
         }
-        if (!chatId || !chatId.startsWith("-")) {
+        if (!chatId.startsWith("-")) {
           logVerbose(
-            `telegram: child bind failed: could not resolve group chat ID from conversationId=${rawConversationId}`,
+            `telegram: child bind failed: conversationId "${chatId}" looks like a bare topic ID, not a group chat ID (expected to start with "-"). Provide a full chatId:topic:topicId conversationId or set parentConversationId to the group chat ID.`,
           );
           return null;
         }
