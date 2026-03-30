@@ -818,6 +818,9 @@ describe("matrix monitor handler pairing account scope", () => {
               matchedBy: "binding.account",
             }),
           },
+          mentions: {
+            buildMentionRegexes: () => [],
+          },
           session: {
             resolveStorePath: () => "/tmp/session-store",
             readSessionUpdatedAt: () => undefined,
@@ -881,7 +884,6 @@ describe("matrix monitor handler pairing account scope", () => {
       } as never,
       logVerboseMessage: () => {},
       allowFrom: [],
-      mentionRegexes: [],
       groupPolicy: "open",
       replyToMode: "off",
       threadReplies: "inbound",
