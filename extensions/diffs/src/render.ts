@@ -1,6 +1,7 @@
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { normalizeSupportedLanguageHint } from "./language-hints.js";
 import { ensurePierreThemesRegistered } from "./pierre-themes.js";
 import type {
   DiffInput,
@@ -43,12 +44,16 @@ function buildDiffTitle(input: DiffInput): string {
   return "Patch diff";
 }
 
-function resolveBeforeAfterFileName(input: Extract<DiffInput, { kind: "before_after" }>): string {
+function resolveBeforeAfterFileName(params: {
+  input: Extract<DiffInput, { kind: "before_after" }>;
+  lang?: SupportedLanguages;
+}): string {
+  const { input, lang } = params;
   if (input.path?.trim()) {
     return input.path.trim();
   }
-  if (input.lang?.trim()) {
-    return `diff.${input.lang.trim().replace(/^\.+/, "")}`;
+  if (lang && lang !== "text") {
+    return `diff.${lang.replace(/^\.+/, "")}`;
   }
   return DEFAULT_FILE_NAME;
 }
@@ -172,11 +177,6 @@ function buildRenderVariants(params: { options: DiffRenderOptions; target: DiffR
       ? { imageOptions: buildDiffOptions(buildImageRenderOptions(params.options)) }
       : {}),
   };
-}
-
-function normalizeSupportedLanguage(value?: string): SupportedLanguages | undefined {
-  const normalized = value?.trim();
-  return normalized ? (normalized as SupportedLanguages) : undefined;
 }
 
 function buildPayloadLanguages(payload: {
@@ -348,8 +348,8 @@ async function renderBeforeAfterDiff(
 ): Promise<{ viewerBodyHtml?: string; imageBodyHtml?: string; fileCount: number }> {
   ensurePierreThemesRegistered();
 
-  const fileName = resolveBeforeAfterFileName(input);
-  const lang = normalizeSupportedLanguage(input.lang);
+  const lang = await normalizeSupportedLanguageHint(input.lang);
+  const fileName = resolveBeforeAfterFileName({ input, lang });
   const oldFile: FileContents = {
     name: fileName,
     contents: input.before,
