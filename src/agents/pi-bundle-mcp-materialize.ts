@@ -62,6 +62,7 @@ function toAgentToolResult(params: {
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
+  disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   params.runtime.markUsed();
   const catalog = await params.runtime.getCatalog();
@@ -102,7 +103,9 @@ export async function materializeBundleMcpToolsForRun(params: {
 
   return {
     tools,
-    dispose: async () => {},
+    dispose: async () => {
+      await params.disposeRuntime?.();
+    },
   };
 }
 
@@ -119,11 +122,9 @@ export async function createBundleMcpToolRuntime(params: {
   const materialized = await materializeBundleMcpToolsForRun({
     runtime,
     reservedToolNames: params.reservedToolNames,
-  });
-  return {
-    tools: materialized.tools,
-    dispose: async () => {
+    disposeRuntime: async () => {
       await runtime.dispose();
     },
-  };
+  });
+  return materialized;
 }
