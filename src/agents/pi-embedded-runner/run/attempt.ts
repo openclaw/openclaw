@@ -1544,16 +1544,19 @@ export async function runEmbeddedAttempt(
                 throw new Error(`LLM call blocked by plugin: ${reason}`);
               }
 
-              if (llmInputResult?.prompt) {
+              if (llmInputResult?.prompt !== undefined) {
                 effectivePrompt = llmInputResult.prompt;
               }
               if (llmInputResult?.systemPrompt !== undefined) {
                 systemPromptText = llmInputResult.systemPrompt;
+                // Apply the override to the live session so that
+                // activeSession.prompt() picks up the new system prompt.
+                applySystemPromptOverrideToSession(activeSession, systemPromptText);
               }
 
               // Re-detect images when the hook rewrote the prompt, so the
               // model receives attachments matching the updated text.
-              if (llmInputResult?.prompt) {
+              if (llmInputResult?.prompt !== undefined) {
                 imageResult = await detectAndLoadPromptImages({
                   prompt: effectivePrompt,
                   workspaceDir: effectiveWorkspace,
@@ -1832,7 +1835,7 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
-      const lastAssistant = messagesSnapshot
+      let lastAssistant = messagesSnapshot
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
@@ -1870,8 +1873,15 @@ export async function runEmbeddedAttempt(
             },
           );
 
-          if (llmOutputResult?.assistantTexts) {
+          if (llmOutputResult?.assistantTexts !== undefined) {
             finalAssistantTexts = llmOutputResult.assistantTexts;
+            // When a plugin fully redacts the response (empty array), also
+            // clear lastAssistant so downstream payload construction does
+            // not fall back to extractAssistantText(lastAssistant) and
+            // leak the original model output.
+            if (finalAssistantTexts.length === 0) {
+              lastAssistant = undefined;
+            }
           }
         } catch (err) {
           log.warn(`llm_output hook failed: ${String(err)}`);
