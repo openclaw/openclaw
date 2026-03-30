@@ -122,6 +122,7 @@ export function resolveSandboxDockerConfig(params: {
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
     ...resolveDangerousSandboxDockerBooleans(agentDocker, globalDocker),
+    gpus: agentDocker?.gpus ?? globalDocker?.gpus,
   };
 }
 

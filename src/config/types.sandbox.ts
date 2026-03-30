@@ -59,6 +59,8 @@ export type SandboxDockerSettings = {
    * Default behavior blocks container namespace joins to preserve sandbox isolation.
    */
   dangerouslyAllowContainerNamespaceJoin?: boolean;
+  /** GPU access for the container (e.g. "all", "1", "device=GPU-xyz"). Maps to Docker's --gpus flag. */
+  gpus?: string;
 };
 
 export type SandboxBrowserSettings = {

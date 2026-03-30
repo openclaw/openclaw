@@ -418,6 +418,9 @@ export function buildSandboxCreateArgs(params: {
       args.push("--ulimit", formatted);
     }
   }
+  if (params.cfg.gpus) {
+    args.push("--gpus", params.cfg.gpus);
+  }
   if (params.includeBinds !== false && params.cfg.binds?.length) {
     for (const bind of params.cfg.binds) {
       args.push("-v", bind);
