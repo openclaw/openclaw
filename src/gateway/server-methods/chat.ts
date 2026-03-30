@@ -369,7 +369,7 @@ async function persistChatSendNonImageAttachments(params: {
     if (!att.content || typeof att.content !== "string") {
       continue;
     }
-    const mime = att.mimeType ?? "application/octet-stream";
+    const mime = att.mimeType || "application/octet-stream";
     // Skip images — they are already persisted by persistChatSendImages
     if (mime.startsWith("image/")) {
       continue;
@@ -1630,13 +1630,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!transcriptPath) {
             return;
           }
-          const persistedImages = allPersistedMedia;
+          const persistedMedia = allPersistedMedia;
           emitSessionTranscriptUpdate({
             sessionFile: transcriptPath,
             sessionKey,
             message: buildChatSendTranscriptMessage({
               message: parsedMessage,
-              savedImages: persistedImages,
+              savedImages: persistedMedia,
               timestamp: now,
             }),
           });
