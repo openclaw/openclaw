@@ -1,0 +1,9 @@
+{
+  "name": "openclaw-save-load",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Save and load conversation context for OpenClaw",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
