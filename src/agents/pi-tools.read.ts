@@ -478,12 +478,19 @@ function extractApplyPatchTouchedPaths(root: string, params: unknown): string[] 
   }
 
   const touched = new Set<string>();
+  let currentFile: string | null = null;
   for (const line of input.split(/\r?\n/)) {
-    const match = line.match(/^\*\*\* (?:Update|Add|Delete) File:\s+(.+)$/);
-    if (!match?.[1]) {
+    const fileMatch = line.match(/^\*\*\* (?:Update|Add|Delete) File:\s+(.+)$/);
+    if (fileMatch?.[1]) {
+      currentFile = fileMatch[1].trim();
+      touched.add(path.resolve(root, currentFile));
       continue;
     }
-    touched.add(path.resolve(root, match[1].trim()));
+
+    const moveMatch = line.match(/^\*\*\* Move to:\s+(.+)$/);
+    if (moveMatch?.[1] && currentFile) {
+      touched.add(path.resolve(root, moveMatch[1].trim()));
+    }
   }
   return [...touched].toSorted();
 }

@@ -743,4 +743,79 @@ describe("wrapApplyPatchMutationLock", () => {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("locks apply_patch move destinations against already-running writes", async () => {
+    const { wrapApplyPatchMutationLock } = await import("./pi-tools.read.js");
+    const tempRoot = path.join(os.tmpdir(), `oc-apply-patch-move-lock-test-${Date.now()}`);
+    await fs.mkdir(tempRoot, { recursive: true });
+
+    const writeGate = deferred();
+    const events: string[] = [];
+    const destination = path.join(tempRoot, "dest.txt");
+
+    const writeBase: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_toolCallId, params) => {
+        const record = params as Record<string, unknown>;
+        const filePath = typeof record.path === "string" ? record.path : "";
+        events.push(`write-start:${filePath}`);
+        await writeGate.promise;
+        events.push(`write-end:${filePath}`);
+        return textResult(filePath);
+      },
+    };
+
+    const applyPatchBase: AnyAgentTool = {
+      name: "apply_patch",
+      label: "apply_patch",
+      description: "test apply_patch",
+      parameters: {},
+      execute: async () => {
+        events.push("patch-start");
+        events.push("patch-end");
+        return textResult("patched");
+      },
+    };
+
+    const lockedWrite = wrapToolMutationLock(writeBase, tempRoot);
+    const lockedPatch = wrapApplyPatchMutationLock(applyPatchBase, tempRoot);
+
+    try {
+      const writePromise = lockedWrite.execute("write-1", { path: destination, content: "busy" });
+      await waitUntil(() => {
+        expect(events).toEqual([`write-start:${destination}`]);
+      });
+
+      const patchPromise = lockedPatch.execute("patch-1", {
+        input: [
+          "*** Begin Patch",
+          "*** Update File: src.txt",
+          "*** Move to: dest.txt",
+          "@@",
+          "-before",
+          "+after",
+          "*** End Patch",
+        ].join("\n"),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(events).toEqual([`write-start:${destination}`]);
+
+      writeGate.resolve();
+      await writePromise;
+      await patchPromise;
+
+      expect(events).toEqual([
+        `write-start:${destination}`,
+        `write-end:${destination}`,
+        "patch-start",
+        "patch-end",
+      ]);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
