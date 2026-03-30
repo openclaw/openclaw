@@ -6,6 +6,7 @@ import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
+import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -38,7 +39,7 @@ function formatTaskStatusCell(status: string, rich: boolean) {
   if (!rich) {
     return padded;
   }
-  if (status === "done") {
+  if (status === "succeeded") {
     return theme.success(padded);
   }
   if (status === "failed" || status === "lost" || status === "timed_out") {
@@ -53,7 +54,7 @@ function formatTaskStatusCell(status: string, rich: boolean) {
 function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const header = [
     "Task".padEnd(ID_PAD),
-    "Runtime".padEnd(RUNTIME_PAD),
+    "Kind".padEnd(RUNTIME_PAD),
     "Status".padEnd(STATUS_PAD),
     "Delivery".padEnd(DELIVERY_PAD),
     "Run".padEnd(RUN_PAD),
@@ -81,6 +82,11 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
     lines.push(line.trimEnd());
   }
   return lines;
+}
+
+function formatTaskListSummary(tasks: TaskRecord[]) {
+  const summary = summarizeTaskRecords(tasks);
+  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
 }
 
 export async function tasksListCommand(
@@ -116,6 +122,7 @@ export async function tasksListCommand(
   }
 
   runtime.log(info(`Background tasks: ${tasks.length}`));
+  runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }
@@ -151,21 +158,24 @@ export async function tasksShowCommand(
   const lines = [
     "Background task:",
     `taskId: ${task.taskId}`,
-    `runtime: ${task.runtime}`,
+    `kind: ${task.runtime}`,
+    `sourceId: ${task.sourceId ?? "n/a"}`,
     `status: ${task.status}`,
+    `result: ${task.terminalOutcome ?? "n/a"}`,
     `delivery: ${task.deliveryStatus}`,
     `notify: ${task.notifyPolicy}`,
-    `source: ${task.source}`,
     `requesterSessionKey: ${task.requesterSessionKey}`,
     `childSessionKey: ${task.childSessionKey ?? "n/a"}`,
+    `parentTaskId: ${task.parentTaskId ?? "n/a"}`,
+    `agentId: ${task.agentId ?? "n/a"}`,
     `runId: ${task.runId ?? "n/a"}`,
-    `bindingTargetKind: ${task.bindingTargetKind ?? "n/a"}`,
     `label: ${task.label ?? "n/a"}`,
     `task: ${task.task}`,
     `createdAt: ${new Date(task.createdAt).toISOString()}`,
     `startedAt: ${task.startedAt ? new Date(task.startedAt).toISOString() : "n/a"}`,
     `endedAt: ${task.endedAt ? new Date(task.endedAt).toISOString() : "n/a"}`,
     `lastEventAt: ${task.lastEventAt ? new Date(task.lastEventAt).toISOString() : "n/a"}`,
+    `cleanupAfter: ${task.cleanupAfter ? new Date(task.cleanupAfter).toISOString() : "n/a"}`,
     ...(task.error ? [`error: ${task.error}`] : []),
     ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
@@ -177,10 +187,6 @@ export async function tasksShowCommand(
             }`,
         )
       : []),
-    ...(task.streamLogPath ? [`streamLogPath: ${task.streamLogPath}`] : []),
-    ...(task.transcriptPath ? [`transcriptPath: ${task.transcriptPath}`] : []),
-    ...(task.agentSessionId ? [`agentSessionId: ${task.agentSessionId}`] : []),
-    ...(task.backendSessionId ? [`backendSessionId: ${task.backendSessionId}`] : []),
   ];
   for (const line of lines) {
     runtime.log(line);

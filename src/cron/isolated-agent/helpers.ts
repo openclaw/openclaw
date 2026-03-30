@@ -77,9 +77,7 @@ function isDeliverablePayload(payload: DeliveryPayload | null | undefined): bool
   }
   const hasInteractive = (payload.interactive?.blocks?.length ?? 0) > 0;
   const hasChannelData = Object.keys(payload.channelData ?? {}).length > 0;
-  return (
-    hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData
-  );
+  return hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData;
 }
 
 export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {

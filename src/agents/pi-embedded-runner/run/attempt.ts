@@ -21,11 +21,6 @@ import {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama.js";
-import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramReactionLevel,
-} from "../../../plugin-sdk/telegram-runtime.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -48,7 +43,9 @@ import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstra
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
+  resolveChannelMessageToolCapabilities,
   resolveChannelMessageToolHints,
+  resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
@@ -100,7 +97,6 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
-import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "../../xai-auth-trace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -532,43 +528,35 @@ export async function runEmbeddedAttempt(
           accountId: params.agentAccountId,
         }) ?? [])
       : undefined;
-    if (runtimeChannel === "telegram" && params.config) {
-      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
-        cfg: params.config,
-        accountId: params.agentAccountId ?? undefined,
-      });
-      if (inlineButtonsScope !== "off") {
-        if (!runtimeCapabilities) {
-          runtimeCapabilities = [];
+    const promptCapabilities =
+      runtimeChannel && params.config
+        ? resolveChannelMessageToolCapabilities({
+            cfg: params.config,
+            channel: runtimeChannel,
+            accountId: params.agentAccountId,
+          })
+        : [];
+    if (promptCapabilities.length > 0) {
+      runtimeCapabilities ??= [];
+      const seenCapabilities = new Set(
+        runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()),
+      );
+      for (const capability of promptCapabilities) {
+        const normalizedCapability = capability.trim().toLowerCase();
+        if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
+          continue;
         }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
-          runtimeCapabilities.push("inlineButtons");
-        }
+        seenCapabilities.add(normalizedCapability);
+        runtimeCapabilities.push(capability);
       }
     }
     const reactionGuidance =
       runtimeChannel && params.config
-        ? (() => {
-            if (runtimeChannel === "telegram") {
-              const resolved = resolveTelegramReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Telegram" } : undefined;
-            }
-            if (runtimeChannel === "signal") {
-              const resolved = resolveSignalReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Signal" } : undefined;
-            }
-            return undefined;
-          })()
+        ? resolveChannelReactionGuidance({
+            cfg: params.config,
+            channel: runtimeChannel,
+            accountId: params.agentAccountId,
+          })
         : undefined;
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
@@ -894,12 +882,6 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      if (shouldTraceProviderAuth(params.provider)) {
-        const runtimeApiKey = await params.authStorage.getApiKey(params.provider).catch(() => "");
-        log.info(
-          `[xai-auth] pre-stream setup: modelApi=${params.model.api} baseUrl=${params.model.baseUrl ?? "default"} runtimeAuthKey=${summarizeProviderAuthKey(runtimeApiKey)} headersAuth=${params.model.headers?.Authorization ? "present" : "absent"} responsesAuthPath=apiKey-argument`,
-        );
-      }
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider: params.provider,
         modelApi: params.model.api,

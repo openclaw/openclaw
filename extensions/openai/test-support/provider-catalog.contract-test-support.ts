@@ -3,9 +3,10 @@ import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
   expectCodexMissingAuthHint,
-} from "../../../src/plugins/provider-runtime.test-support.js";
-import type { ProviderPlugin } from "../../../src/plugins/types.js";
-import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+  importProviderRuntimeCatalogModule,
+  loadBundledPluginPublicSurfaceSync,
+} from "../../../test/helpers/plugins/provider-catalog.js";
+import type { ProviderPlugin } from "../../../test/helpers/plugins/provider-catalog.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -13,12 +14,9 @@ import {
 
 const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
 
-type ResolvePluginProviders =
-  typeof import("../../../src/plugins/providers.runtime.js").resolvePluginProviders;
-type ResolveOwningPluginIdsForProvider =
-  typeof import("../../../src/plugins/providers.js").resolveOwningPluginIdsForProvider;
-type ResolveCatalogHookProviderPluginIds =
-  typeof import("../../../src/plugins/providers.js").resolveCatalogHookProviderPluginIds;
+type ResolvePluginProviders = (params?: { onlyPluginIds?: string[] }) => ProviderPlugin[];
+type ResolveOwningPluginIdsForProvider = (params: { provider: string }) => string[] | undefined;
+type ResolveCatalogHookProviderPluginIds = (params: unknown) => string[];
 
 const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
 const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
@@ -40,9 +38,15 @@ vi.mock("../../../src/plugins/providers.runtime.js", () => ({
 }));
 
 export function describeOpenAIProviderCatalogContract() {
-  let augmentModelCatalogWithProviderPlugins: typeof import("../../../src/plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
-  let resetProviderRuntimeHookCacheForTest: typeof import("../../../src/plugins/provider-runtime.js").resetProviderRuntimeHookCacheForTest;
-  let resolveProviderBuiltInModelSuppression: typeof import("../../../src/plugins/provider-runtime.js").resolveProviderBuiltInModelSuppression;
+  let augmentModelCatalogWithProviderPlugins: Awaited<
+    ReturnType<typeof importProviderRuntimeCatalogModule>
+  >["augmentModelCatalogWithProviderPlugins"];
+  let resetProviderRuntimeHookCacheForTest: Awaited<
+    ReturnType<typeof importProviderRuntimeCatalogModule>
+  >["resetProviderRuntimeHookCacheForTest"];
+  let resolveProviderBuiltInModelSuppression: Awaited<
+    ReturnType<typeof importProviderRuntimeCatalogModule>
+  >["resolveProviderBuiltInModelSuppression"];
   let openaiProviders: ProviderPlugin[];
   let openaiProvider: ProviderPlugin;
 
@@ -68,7 +72,7 @@ export function describeOpenAIProviderCatalogContract() {
           augmentModelCatalogWithProviderPlugins,
           resetProviderRuntimeHookCacheForTest,
           resolveProviderBuiltInModelSuppression,
-        } = await import("../../../src/plugins/provider-runtime.js"));
+        } = await importProviderRuntimeCatalogModule());
       });
 
       beforeEach(() => {

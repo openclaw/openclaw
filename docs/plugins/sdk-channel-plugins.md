@@ -34,6 +34,19 @@ shared `message` tool in core. Your plugin owns:
 Core owns the shared message tool, prompt wiring, session bookkeeping, and
 dispatch.
 
+## Approvals and channel capabilities
+
+Most channel plugins do not need approval-specific code.
+
+- Core owns same-chat `/approve`, shared approval button payloads, and generic fallback delivery.
+- Use `auth.authorizeActorAction` or `auth.getActionAvailabilityState` only when approval auth differs from normal chat auth.
+- Use `outbound.shouldSuppressLocalPayloadPrompt` or `outbound.beforeDeliverPayload` for channel-specific payload lifecycle behavior such as hiding duplicate local approval prompts or sending typing indicators before delivery.
+- Use `approvals.delivery` only for native approval routing or fallback suppression.
+- Use `approvals.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
+- If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
+
+For Slack, Matrix, Microsoft Teams, and similar chat channels, the default path is usually enough: core handles approvals and the plugin just exposes normal outbound and auth capabilities.
+
 ## Walkthrough
 
 <Steps>

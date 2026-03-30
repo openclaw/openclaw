@@ -3,11 +3,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
+import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntimeDeps } from "./stage-bundled-plugin-runtime-deps.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mjs";
 import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
 
 /**
  * Copy static (non-transpiled) runtime assets that are referenced by their
@@ -44,6 +46,30 @@ export function copyStaticExtensionAssets(params = {}) {
   }
 }
 
+export function writeStableRootRuntimeAliases(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const distDir = path.join(rootDir, "dist");
+  const fsImpl = params.fs ?? fs;
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const match = entry.name.match(ROOT_RUNTIME_ALIAS_PATTERN);
+    if (!match?.groups?.base) {
+      continue;
+    }
+    const aliasPath = path.join(distDir, `${match.groups.base}.js`);
+    writeTextFileIfChanged(aliasPath, `export * from "./${entry.name}";\n`);
+  }
+}
+
 export function runRuntimeMetadataPostBuild(params = {}) {
   copyPluginSdkRootAlias(params);
   copyBundledPluginMetadata(params);
@@ -54,6 +80,7 @@ export function runRuntimePostBuild(params = {}) {
   runRuntimeMetadataPostBuild(params);
   stageBundledPluginRuntimeDeps(params);
   stageBundledPluginRuntime(params);
+  writeStableRootRuntimeAliases(params);
   copyStaticExtensionAssets(params);
 }
 
