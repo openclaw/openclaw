@@ -128,14 +128,12 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
   return [...new Set(citations)];
 }
 
-function buildKimiToolResultContent(data: KimiSearchResponse): string {
-  return JSON.stringify({
-    search_results: (data.search_results ?? []).map((entry) => ({
-      title: entry.title ?? "",
-      url: entry.url ?? "",
-      content: entry.content ?? "",
-    })),
-  });
+function extractKimiToolResultContent(toolCall: KimiToolCall): string | undefined {
+  const rawArguments = toolCall.function?.arguments;
+  if (typeof rawArguments !== "string" || rawArguments.trim().length === 0) {
+    return undefined;
+  }
+  return rawArguments;
 }
 
 async function runKimiSearch(params: {
@@ -162,6 +160,7 @@ async function runKimiSearch(params: {
           },
           body: JSON.stringify({
             model: params.model,
+            thinking: { type: "disabled" },
             messages,
             tools: [KIMI_WEB_SEARCH_TOOL],
           }),
@@ -195,15 +194,21 @@ async function runKimiSearch(params: {
           tool_calls: toolCalls,
         });
 
-        const toolContent = buildKimiToolResultContent(data);
         let pushed = false;
         for (const toolCall of toolCalls) {
           const toolCallId = toolCall.id?.trim();
-          if (!toolCallId) {
+          const toolCallName = toolCall.function?.name?.trim();
+          const toolContent = extractKimiToolResultContent(toolCall);
+          if (!toolCallId || !toolCallName || !toolContent) {
             continue;
           }
           pushed = true;
-          messages.push({ role: "tool", tool_call_id: toolCallId, content: toolContent });
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            name: toolCallName,
+            content: toolContent,
+          });
         }
         if (!pushed) {
           return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
@@ -351,4 +356,5 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  extractKimiToolResultContent,
 } as const;
