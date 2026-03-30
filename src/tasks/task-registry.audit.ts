@@ -35,7 +35,7 @@ export type TaskAuditOptions = {
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
 
-function createEmptyTaskAuditSummary(): TaskAuditSummary {
+export function createEmptyTaskAuditSummary(): TaskAuditSummary {
   return {
     total: 0,
     warnings: 0,

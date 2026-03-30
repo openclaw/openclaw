@@ -5,6 +5,10 @@ const reconcileInspectableTasksMock = vi.fn();
 const reconcileTaskLookupTokenMock = vi.fn();
 const listTaskAuditFindingsMock = vi.fn();
 const summarizeTaskAuditFindingsMock = vi.fn();
+const previewTaskRegistryMaintenanceMock = vi.fn();
+const runTaskRegistryMaintenanceMock = vi.fn();
+const getInspectableTaskRegistrySummaryMock = vi.fn();
+const getInspectableTaskAuditSummaryMock = vi.fn();
 const updateTaskNotifyPolicyByIdMock = vi.fn();
 const cancelTaskByIdMock = vi.fn();
 const getTaskByIdMock = vi.fn();
@@ -18,6 +22,16 @@ vi.mock("../tasks/task-registry.reconcile.js", () => ({
 vi.mock("../tasks/task-registry.audit.js", () => ({
   listTaskAuditFindings: (...args: unknown[]) => listTaskAuditFindingsMock(...args),
   summarizeTaskAuditFindings: (...args: unknown[]) => summarizeTaskAuditFindingsMock(...args),
+}));
+
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  previewTaskRegistryMaintenance: (...args: unknown[]) =>
+    previewTaskRegistryMaintenanceMock(...args),
+  runTaskRegistryMaintenance: (...args: unknown[]) => runTaskRegistryMaintenanceMock(...args),
+  getInspectableTaskRegistrySummary: (...args: unknown[]) =>
+    getInspectableTaskRegistrySummaryMock(...args),
+  getInspectableTaskAuditSummary: (...args: unknown[]) =>
+    getInspectableTaskAuditSummaryMock(...args),
 }));
 
 vi.mock("../tasks/task-registry.js", () => ({
@@ -42,6 +56,7 @@ let tasksShowCommand: typeof import("./tasks.js").tasksShowCommand;
 let tasksNotifyCommand: typeof import("./tasks.js").tasksNotifyCommand;
 let tasksCancelCommand: typeof import("./tasks.js").tasksCancelCommand;
 let tasksAuditCommand: typeof import("./tasks.js").tasksAuditCommand;
+let tasksMaintenanceCommand: typeof import("./tasks.js").tasksMaintenanceCommand;
 
 const taskFixture = {
   taskId: "task-12345678",
@@ -73,6 +88,7 @@ beforeAll(async () => {
     tasksNotifyCommand,
     tasksCancelCommand,
     tasksAuditCommand,
+    tasksMaintenanceCommand,
   } = await import("./tasks.js"));
 });
 
@@ -84,6 +100,50 @@ describe("tasks commands", () => {
     reconcileTaskLookupTokenMock.mockReturnValue(undefined);
     listTaskAuditFindingsMock.mockReturnValue([]);
     summarizeTaskAuditFindingsMock.mockReturnValue({
+      total: 0,
+      warnings: 0,
+      errors: 0,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+    previewTaskRegistryMaintenanceMock.mockReturnValue({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    runTaskRegistryMaintenanceMock.mockReturnValue({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    getInspectableTaskRegistrySummaryMock.mockReturnValue({
+      total: 0,
+      active: 0,
+      terminal: 0,
+      failures: 0,
+      byStatus: {
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: 0,
+        acp: 0,
+        cli: 0,
+        cron: 0,
+      },
+    });
+    getInspectableTaskAuditSummaryMock.mockReturnValue({
       total: 0,
       warnings: 0,
       errors: 0,
@@ -209,5 +269,59 @@ describe("tasks commands", () => {
     expect(runtimeLogs.join("\n")).toContain("stale_running");
     expect(runtimeLogs.join("\n")).toContain("running task appears stuck");
     expect(runtimeLogs.join("\n")).not.toContain("delivery_failed");
+  });
+
+  it("previews task maintenance without applying changes", async () => {
+    previewTaskRegistryMaintenanceMock.mockReturnValue({
+      reconciled: 2,
+      cleanupStamped: 1,
+      pruned: 3,
+    });
+    getInspectableTaskRegistrySummaryMock.mockReturnValue({
+      total: 5,
+      active: 2,
+      terminal: 3,
+      failures: 1,
+      byStatus: {
+        queued: 1,
+        running: 1,
+        succeeded: 1,
+        failed: 1,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 1,
+      },
+      byRuntime: {
+        subagent: 1,
+        acp: 1,
+        cli: 1,
+        cron: 2,
+      },
+    });
+    getInspectableTaskAuditSummaryMock.mockReturnValue({
+      total: 2,
+      warnings: 1,
+      errors: 1,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 1,
+        lost: 1,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+
+    await tasksMaintenanceCommand({}, runtime);
+
+    expect(previewTaskRegistryMaintenanceMock).toHaveBeenCalled();
+    expect(runTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
+    expect(runtimeLogs[0]).toContain(
+      "Task maintenance (preview): 2 reconcile · 1 cleanup stamp · 3 prune",
+    );
+    expect(runtimeLogs[1]).toContain(
+      "Task health: 1 queued · 1 running · 1 audit errors · 1 audit warnings",
+    );
+    expect(runtimeLogs[2]).toContain("Dry run only.");
   });
 });

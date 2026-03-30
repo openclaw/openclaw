@@ -394,6 +394,11 @@ export async function statusCommand(
           summary.tasks.failures > 0
             ? warn(`${summary.tasks.failures} issue${summary.tasks.failures === 1 ? "" : "s"}`)
             : muted("no issues"),
+          summary.taskAudit.total > 0
+            ? warn(
+                `audit ${summary.taskAudit.errors} error${summary.taskAudit.errors === 1 ? "" : "s"} · ${summary.taskAudit.warnings} warn`,
+              )
+            : muted("audit clean"),
           `${summary.tasks.total} tracked`,
         ].join(" · ")
       : muted("none");

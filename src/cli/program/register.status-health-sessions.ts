@@ -7,6 +7,7 @@ import {
   tasksAuditCommand,
   tasksCancelCommand,
   tasksListCommand,
+  tasksMaintenanceCommand,
   tasksNotifyCommand,
   tasksShowCommand,
 } from "../../commands/tasks.js";
@@ -299,6 +300,24 @@ export function registerStatusHealthSessionsCommands(program: Command) {
               | "inconsistent_timestamps"
               | undefined,
             limit: parsePositiveIntOrUndefined(opts.limit),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("maintenance")
+    .description("Preview or apply task ledger maintenance")
+    .option("--json", "Output as JSON", false)
+    .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMaintenanceCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            apply: Boolean(opts.apply),
           },
           defaultRuntime,
         );

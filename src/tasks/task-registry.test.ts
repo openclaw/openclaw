@@ -21,7 +21,14 @@ import {
   updateTaskRecordById,
   updateTaskStateByRunId,
 } from "./task-registry.js";
-import { reconcileInspectableTasks, sweepTaskRegistry } from "./task-registry.maintenance.js";
+import {
+  getInspectableTaskAuditSummary,
+  previewTaskRegistryMaintenance,
+  reconcileInspectableTasks,
+  runTaskRegistryMaintenance,
+  sweepTaskRegistry,
+} from "./task-registry.maintenance.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -832,9 +839,101 @@ describe("task-registry", () => {
 
       expect(sweepTaskRegistry()).toEqual({
         reconciled: 0,
+        cleanupStamped: 0,
         pruned: 1,
       });
       expect(listTaskRecords()).toEqual([]);
+    });
+  });
+
+  it("previews and repairs missing cleanup timestamps during maintenance", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () =>
+            new Map([
+              [
+                "task-missing-cleanup",
+                {
+                  taskId: "task-missing-cleanup",
+                  runtime: "cron",
+                  requesterSessionKey: "",
+                  runId: "run-maintenance-cleanup",
+                  task: "Finished cron",
+                  status: "failed",
+                  deliveryStatus: "not_applicable",
+                  notifyPolicy: "silent",
+                  createdAt: now - 120_000,
+                  endedAt: now - 60_000,
+                  lastEventAt: now - 60_000,
+                },
+              ],
+            ]),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(previewTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        cleanupStamped: 1,
+        pruned: 0,
+      });
+
+      expect(runTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        cleanupStamped: 1,
+        pruned: 0,
+      });
+      expect(getTaskById("task-missing-cleanup")?.cleanupAfter).toBeGreaterThan(200);
+    });
+  });
+
+  it("summarizes inspectable task audit findings", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () =>
+            new Map([
+              [
+                "task-audit-summary",
+                {
+                  taskId: "task-audit-summary",
+                  runtime: "acp",
+                  requesterSessionKey: "agent:main:main",
+                  runId: "run-audit-summary",
+                  task: "Hung task",
+                  status: "running",
+                  deliveryStatus: "pending",
+                  notifyPolicy: "done_only",
+                  createdAt: now - 50 * 60_000,
+                  startedAt: now - 40 * 60_000,
+                  lastEventAt: now - 40 * 60_000,
+                },
+              ],
+            ]),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(getInspectableTaskAuditSummary()).toEqual({
+        total: 1,
+        warnings: 0,
+        errors: 1,
+        byCode: {
+          stale_queued: 0,
+          stale_running: 1,
+          lost: 0,
+          delivery_failed: 0,
+          missing_cleanup: 0,
+          inconsistent_timestamps: 0,
+        },
+      });
     });
   });
 

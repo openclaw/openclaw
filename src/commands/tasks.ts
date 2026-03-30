@@ -10,6 +10,12 @@ import {
 } from "../tasks/task-registry.audit.js";
 import { cancelTaskById, getTaskById, updateTaskNotifyPolicyById } from "../tasks/task-registry.js";
 import {
+  getInspectableTaskAuditSummary,
+  getInspectableTaskRegistrySummary,
+  previewTaskRegistryMaintenance,
+  runTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
+import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
@@ -374,5 +380,44 @@ export async function tasksAuditCommand(
   const rich = isRich();
   for (const line of formatAuditRows(displayed, rich)) {
     runtime.log(line);
+  }
+}
+
+export async function tasksMaintenanceCommand(
+  opts: { json?: boolean; apply?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const maintenance = opts.apply ? runTaskRegistryMaintenance() : previewTaskRegistryMaintenance();
+  const summary = getInspectableTaskRegistrySummary();
+  const audit = getInspectableTaskAuditSummary();
+
+  if (opts.json) {
+    runtime.log(
+      JSON.stringify(
+        {
+          mode: opts.apply ? "apply" : "preview",
+          maintenance,
+          tasks: summary,
+          audit,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  runtime.log(
+    info(
+      `Task maintenance (${opts.apply ? "applied" : "preview"}): ${maintenance.reconciled} reconcile · ${maintenance.cleanupStamped} cleanup stamp · ${maintenance.pruned} prune`,
+    ),
+  );
+  runtime.log(
+    info(
+      `Task health: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${audit.errors} audit errors · ${audit.warnings} audit warnings`,
+    ),
+  );
+  if (!opts.apply) {
+    runtime.log("Dry run only. Re-run with `openclaw tasks maintenance --apply` to write changes.");
   }
 }
