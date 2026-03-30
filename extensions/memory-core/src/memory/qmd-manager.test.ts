@@ -1982,6 +1982,56 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses an explicit mcporter search tool override across multiple collections", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          searchTool: "hybrid_search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: path.join(workspaceDir, "notes-a"), pattern: "**/*.md", name: "workspace-a" },
+            { path: path.join(workspaceDir, "notes-b"), pattern: "**/*.md", name: "workspace-b" },
+          ],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const selectors: string[] = [];
+    const collections: string[] = [];
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        selectors.push(args[1] ?? "");
+        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        collections.push(String(callArgs.collection ?? ""));
+        expect(callArgs).toMatchObject({
+          query: "hello",
+          limit: 6,
+          minScore: 0,
+        });
+        expect(callArgs).not.toHaveProperty("searches");
+        expect(callArgs).not.toHaveProperty("collections");
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    expect(selectors).toEqual(["qmd.hybrid_search", "qmd.hybrid_search"]);
+    expect(collections).toEqual(["workspace-a-main", "workspace-b-main"]);
+
+    await manager.close();
+  });
+
   it("does not pin v1 fallback when only the serialized query text contains tool-not-found words", async () => {
     cfg = {
       ...cfg,

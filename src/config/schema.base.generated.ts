@@ -10876,6 +10876,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               searchTool: {
                 type: "string",
+                minLength: 1,
               },
               includeDefaultMemory: {
                 type: "boolean",

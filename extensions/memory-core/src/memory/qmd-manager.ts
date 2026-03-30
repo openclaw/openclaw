@@ -158,6 +158,49 @@ type ManagedCollection = {
 
 type QmdManagerMode = "full" | "status";
 type QmdCollectionPatternFlag = "--glob" | "--mask";
+type BuiltinQmdMcpTool = "query" | "search" | "vector_search" | "deep_search";
+type QmdMcporterSearchParams =
+  | {
+      mcporter: ResolvedQmdMcporterConfig;
+      tool: string;
+      searchCommand?: string;
+      explicitToolOverride: true;
+      query: string;
+      limit: number;
+      minScore: number;
+      collection?: string;
+      timeoutMs: number;
+    }
+  | {
+      mcporter: ResolvedQmdMcporterConfig;
+      tool: BuiltinQmdMcpTool;
+      searchCommand?: string;
+      explicitToolOverride: false;
+      query: string;
+      limit: number;
+      minScore: number;
+      collection?: string;
+      timeoutMs: number;
+    };
+type QmdMcporterAcrossCollectionsParams =
+  | {
+      tool: string;
+      searchCommand?: string;
+      explicitToolOverride: true;
+      query: string;
+      limit: number;
+      minScore: number;
+      collectionNames: string[];
+    }
+  | {
+      tool: BuiltinQmdMcpTool;
+      searchCommand?: string;
+      explicitToolOverride: false;
+      query: string;
+      limit: number;
+      minScore: number;
+      collectionNames: string[];
+    };
 
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
@@ -823,13 +866,37 @@ export class QmdMemoryManager implements MemorySearchManager {
     ): Promise<QmdQueryResult[]> => {
       try {
         if (mcporterEnabled) {
-          const tool = explicitSearchTool ?? this.resolveQmdMcpTool(qmdSearchCommand);
           const minScore = opts?.minScore ?? 0;
+          if (explicitSearchTool) {
+            if (collectionNames.length > 1) {
+              return await this.runMcporterAcrossCollections({
+                tool: explicitSearchTool,
+                searchCommand: qmdSearchCommand,
+                explicitToolOverride: true,
+                query: trimmed,
+                limit,
+                minScore,
+                collectionNames,
+              });
+            }
+            return await this.runQmdSearchViaMcporter({
+              mcporter: this.qmd.mcporter,
+              tool: explicitSearchTool,
+              searchCommand: qmdSearchCommand,
+              explicitToolOverride: true,
+              query: trimmed,
+              limit,
+              minScore,
+              collection: collectionNames[0],
+              timeoutMs: this.qmd.limits.timeoutMs,
+            });
+          }
+          const tool = this.resolveQmdMcpTool(qmdSearchCommand);
           if (collectionNames.length > 1) {
             return await this.runMcporterAcrossCollections({
               tool,
               searchCommand: qmdSearchCommand,
-              explicitToolOverride: Boolean(explicitSearchTool),
+              explicitToolOverride: false,
               query: trimmed,
               limit,
               minScore,
@@ -840,7 +907,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             mcporter: this.qmd.mcporter,
             tool,
             searchCommand: qmdSearchCommand,
-            explicitToolOverride: Boolean(explicitSearchTool),
+            explicitToolOverride: false,
             query: trimmed,
             limit,
             minScore,
@@ -1381,9 +1448,7 @@ export class QmdMemoryManager implements MemorySearchManager {
    */
   private qmdMcpToolVersion: "v2" | "v1" | null = null;
 
-  private resolveQmdMcpTool(
-    searchCommand: string,
-  ): "query" | "search" | "vector_search" | "deep_search" {
+  private resolveQmdMcpTool(searchCommand: string): BuiltinQmdMcpTool {
     if (this.qmdMcpToolVersion === "v2") {
       return "query";
     }
@@ -1501,17 +1566,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private async runQmdSearchViaMcporter(params: {
-    mcporter: ResolvedQmdMcporterConfig;
-    tool: string;
-    searchCommand?: string;
-    explicitToolOverride: boolean;
-    query: string;
-    limit: number;
-    minScore: number;
-    collection?: string;
-    timeoutMs: number;
-  }): Promise<QmdQueryResult[]> {
+  private async runQmdSearchViaMcporter(
+    params: QmdMcporterSearchParams,
+  ): Promise<QmdQueryResult[]> {
     await this.ensureMcporterDaemonStarted(params.mcporter);
 
     // If the version is already known as v1 but we received a stale "query" tool name
@@ -1580,8 +1637,15 @@ export class QmdMemoryManager implements MemorySearchManager {
         this.markQmdV1Fallback();
         const v1Tool = this.resolveQmdMcpTool(params.searchCommand ?? "query");
         return this.runQmdSearchViaMcporter({
-          ...params,
+          mcporter: params.mcporter,
           tool: v1Tool,
+          searchCommand: params.searchCommand,
+          explicitToolOverride: false,
+          query: params.query,
+          limit: params.limit,
+          minScore: params.minScore,
+          collection: params.collection,
+          timeoutMs: params.timeoutMs,
         });
       }
       throw err;
@@ -2383,28 +2447,34 @@ export class QmdMemoryManager implements MemorySearchManager {
     return `file:${hints.preferredCollection}:${collectionRelativePath}`;
   }
 
-  private async runMcporterAcrossCollections(params: {
-    tool: string;
-    searchCommand?: string;
-    explicitToolOverride: boolean;
-    query: string;
-    limit: number;
-    minScore: number;
-    collectionNames: string[];
-  }): Promise<QmdQueryResult[]> {
+  private async runMcporterAcrossCollections(
+    params: QmdMcporterAcrossCollectionsParams,
+  ): Promise<QmdQueryResult[]> {
     const bestByDocId = new Map<string, QmdQueryResult>();
     for (const collectionName of params.collectionNames) {
-      const parsed = await this.runQmdSearchViaMcporter({
-        mcporter: this.qmd.mcporter,
-        tool: params.tool,
-        searchCommand: params.searchCommand,
-        explicitToolOverride: params.explicitToolOverride,
-        query: params.query,
-        limit: params.limit,
-        minScore: params.minScore,
-        collection: collectionName,
-        timeoutMs: this.qmd.limits.timeoutMs,
-      });
+      const parsed = params.explicitToolOverride
+        ? await this.runQmdSearchViaMcporter({
+            mcporter: this.qmd.mcporter,
+            tool: params.tool,
+            searchCommand: params.searchCommand,
+            explicitToolOverride: true,
+            query: params.query,
+            limit: params.limit,
+            minScore: params.minScore,
+            collection: collectionName,
+            timeoutMs: this.qmd.limits.timeoutMs,
+          })
+        : await this.runQmdSearchViaMcporter({
+            mcporter: this.qmd.mcporter,
+            tool: params.tool,
+            searchCommand: params.searchCommand,
+            explicitToolOverride: false,
+            query: params.query,
+            limit: params.limit,
+            minScore: params.minScore,
+            collection: collectionName,
+            timeoutMs: this.qmd.limits.timeoutMs,
+          });
       for (const entry of parsed) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {
           continue;
