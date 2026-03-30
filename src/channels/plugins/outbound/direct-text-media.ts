@@ -1,3 +1,10 @@
+import {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceAndFinalize,
+  sendPayloadMediaSequenceOrFallback,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
@@ -5,6 +12,7 @@ import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
 type DirectSendOptions = {
+  cfg: OpenClawConfig;
   accountId?: string | null;
   replyToId?: string | null;
   mediaUrl?: string;
@@ -19,6 +27,13 @@ type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectS
   text: string,
   opts: TOpts,
 ) => Promise<TResult>;
+export {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceAndFinalize,
+  sendPayloadMediaSequenceOrFallback,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 
 export function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
@@ -76,6 +91,7 @@ export function createDirectTextMediaOutbound<
       sendParams.to,
       sendParams.text,
       sendParams.buildOptions({
+        cfg: sendParams.cfg,
         mediaUrl: sendParams.mediaUrl,
         mediaLocalRoots: sendParams.mediaLocalRoots,
         accountId: sendParams.accountId,
@@ -91,39 +107,8 @@ export function createDirectTextMediaOutbound<
     chunker: chunkText,
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sendPayload: async (ctx) => {
-      const text = ctx.payload.text ?? "";
-      const urls = ctx.payload.mediaUrls?.length
-        ? ctx.payload.mediaUrls
-        : ctx.payload.mediaUrl
-          ? [ctx.payload.mediaUrl]
-          : [];
-      if (!text && urls.length === 0) {
-        return { channel: params.channel, messageId: "" };
-      }
-      if (urls.length > 0) {
-        let lastResult = await outbound.sendMedia!({
-          ...ctx,
-          text,
-          mediaUrl: urls[0],
-        });
-        for (let i = 1; i < urls.length; i++) {
-          lastResult = await outbound.sendMedia!({
-            ...ctx,
-            text: "",
-            mediaUrl: urls[i],
-          });
-        }
-        return lastResult;
-      }
-      const limit = outbound.textChunkLimit;
-      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
-      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
-      for (const chunk of chunks) {
-        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
-      }
-      return lastResult!;
-    },
+    sendPayload: async (ctx) =>
+      await sendTextMediaPayload({ channel: params.channel, ctx, adapter: outbound }),
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       return await sendDirect({
         cfg,

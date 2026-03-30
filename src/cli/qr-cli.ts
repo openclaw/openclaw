@@ -1,11 +1,16 @@
 import type { Command } from "commander";
 import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../gateway/credentials.js";
+import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
 
 type QrCliOptions = {
   json?: boolean;
@@ -35,6 +40,61 @@ function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function shouldResolveLocalGatewayPasswordSecret(
+  cfg: ReturnType<typeof loadConfig>,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (readGatewayPasswordEnv(env)) {
+    return false;
+  }
+  const authMode = cfg.gateway?.auth?.mode;
+  if (authMode === "password") {
+    return true;
+  }
+  if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
+    return false;
+  }
+  const envToken = readGatewayTokenEnv(env);
+  const configTokenConfigured = hasConfiguredSecretInput(
+    cfg.gateway?.auth?.token,
+    cfg.secrets?.defaults,
+  );
+  return !envToken && !configTokenConfigured;
+}
+
+async function resolveLocalGatewayPasswordSecretIfNeeded(
+  cfg: ReturnType<typeof loadConfig>,
+): Promise<void> {
+  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
+    config: cfg,
+    env: process.env,
+    value: cfg.gateway?.auth?.password,
+    path: "gateway.auth.password",
+  });
+  if (!resolvedPassword) {
+    return;
+  }
+  if (!cfg.gateway?.auth) {
+    return;
+  }
+  cfg.gateway.auth.password = resolvedPassword;
+}
+
+function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
+  if (diagnostics.length === 0) {
+    return;
+  }
+  const toStderr = opts.json === true || opts.setupCodeOnly === true;
+  for (const entry of diagnostics) {
+    const message = theme.warn(`[secrets] ${entry}`);
+    if (toStderr) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  }
+}
+
 export function registerQrCli(program: Command) {
   program
     .command("qr")
@@ -61,7 +121,33 @@ export function registerQrCli(program: Command) {
           throw new Error("Use either --token or --password, not both.");
         }
 
-        const loaded = loadConfig();
+        const token = typeof opts.token === "string" ? opts.token.trim() : "";
+        const password = typeof opts.password === "string" ? opts.password.trim() : "";
+        const wantsRemote = opts.remote === true;
+
+        const loadedRaw = loadConfig();
+        if (wantsRemote && !opts.url && !opts.publicUrl) {
+          const tailscaleMode = loadedRaw.gateway?.tailscale?.mode ?? "off";
+          const remoteUrl = loadedRaw.gateway?.remote?.url;
+          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
+          const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
+          if (!hasRemoteUrl && !hasTailscaleServe) {
+            throw new Error(
+              "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
+            );
+          }
+        }
+        let loaded = loadedRaw;
+        let remoteDiagnostics: string[] = [];
+        if (wantsRemote && !token && !password) {
+          const resolvedRemote = await resolveCommandSecretRefsViaGateway({
+            config: loadedRaw,
+            commandName: "qr --remote",
+            targetIds: getQrRemoteCommandSecretTargetIds(),
+          });
+          loaded = resolvedRemote.resolvedConfig;
+          remoteDiagnostics = resolvedRemote.diagnostics;
+        }
         const cfg = {
           ...loaded,
           gateway: {
@@ -71,17 +157,17 @@ export function registerQrCli(program: Command) {
             },
           },
         };
+        emitQrSecretResolveDiagnostics(remoteDiagnostics, opts);
 
-        const token = typeof opts.token === "string" ? opts.token.trim() : "";
-        const password = typeof opts.password === "string" ? opts.password.trim() : "";
-        const wantsRemote = opts.remote === true;
         if (token) {
           cfg.gateway.auth.mode = "token";
           cfg.gateway.auth.token = token;
+          cfg.gateway.auth.password = undefined;
         }
         if (password) {
           cfg.gateway.auth.mode = "password";
           cfg.gateway.auth.password = password;
+          cfg.gateway.auth.token = undefined;
         }
         if (wantsRemote && !token && !password) {
           const remoteToken =
@@ -100,16 +186,13 @@ export function registerQrCli(program: Command) {
             cfg.gateway.auth.token = undefined;
           }
         }
-        if (wantsRemote && !opts.url && !opts.publicUrl) {
-          const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-          const remoteUrl = cfg.gateway?.remote?.url;
-          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
-          const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
-          if (!hasRemoteUrl && !hasTailscaleServe) {
-            throw new Error(
-              "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
-            );
-          }
+        if (
+          !wantsRemote &&
+          !password &&
+          !token &&
+          shouldResolveLocalGatewayPasswordSecret(cfg, process.env)
+        ) {
+          await resolveLocalGatewayPasswordSecretIfNeeded(cfg);
         }
 
         const explicitUrl =
@@ -142,18 +225,12 @@ export function registerQrCli(program: Command) {
         }
 
         if (opts.json) {
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                setupCode,
-                gatewayUrl: resolved.payload.url,
-                auth: resolved.authLabel,
-                urlSource: resolved.urlSource,
-              },
-              null,
-              2,
-            ),
-          );
+          defaultRuntime.writeJson({
+            setupCode,
+            gatewayUrl: resolved.payload.url,
+            auth: resolved.authLabel,
+            urlSource: resolved.urlSource,
+          });
           return;
         }
 

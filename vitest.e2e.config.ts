@@ -1,5 +1,6 @@
 import os from "node:os";
 import { defineConfig } from "vitest/config";
+import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./scripts/lib/bundled-plugin-paths.mjs";
 import baseConfig from "./vitest.config.ts";
 
 const base = baseConfig as unknown as Record<string, unknown>;
@@ -21,10 +22,11 @@ export default defineConfig({
   ...base,
   test: {
     ...baseTest,
-    pool: "vmForks",
+    // Keep e2e in process forks for deterministic cross-file isolation.
+    pool: "forks",
     maxWorkers: e2eWorkers,
     silent: !verboseE2E,
-    include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts"],
+    include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts", BUNDLED_PLUGIN_E2E_TEST_GLOB],
     exclude,
   },
 });

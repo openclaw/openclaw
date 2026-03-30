@@ -6,7 +6,7 @@ import {
   createSignedDevice,
   expectHelloOkServerVersion,
   getFreePort,
-  getHandshakeTimeoutMs,
+  getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   NODE_CLIENT,
@@ -37,13 +37,51 @@ export function registerDefaultAuthTokenSuite(): void {
       await server.close();
     });
 
+    async function expectNonceValidationError(params: {
+      connectId: string;
+      mutateNonce: (nonce: string) => string;
+      expectedMessage: string;
+      expectedCode: string;
+      expectedReason: string;
+    }) {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: params.connectId,
+        token,
+        device: { ...device, nonce: params.mutateNonce(nonce) },
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain(params.expectedMessage);
+      expect(connectRes.error?.details?.code).toBe(params.expectedCode);
+      expect(connectRes.error?.details?.reason).toBe(params.expectedReason);
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    }
+
+    async function expectStatusMissingScopeButHealthAvailable(ws: WebSocket): Promise<void> {
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(false);
+      expect(status.error?.message).toContain("missing scope");
+      const health = await rpcReq(ws, "health");
+      expect(health.ok).toBe(true);
+    }
+
     test("closes silent handshakes after timeout", async () => {
       vi.useRealTimers();
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
         const ws = await openWs(port);
-        const handshakeTimeoutMs = getHandshakeTimeoutMs();
+        const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
         const closed = await waitForWsClose(ws, handshakeTimeoutMs + 500);
         expect(closed).toBe(true);
       } finally {
@@ -55,8 +93,31 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
+    test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string", () => {
+      const prevHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
+      process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
+      try {
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
+        process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
+      } finally {
+        if (prevHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+        }
+        if (prevTestHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTestHandshakeTimeout;
+        }
+      }
+    });
+
     test("connect (req) handshake returns hello-ok payload", async () => {
-      const { CONFIG_PATH, STATE_DIR } = await import("../config/config.js");
+      const { STATE_DIR, createConfigIO } = await import("../config/config.js");
       const ws = await openWs(port);
 
       const res = await connectReq(ws);
@@ -68,13 +129,14 @@ export function registerDefaultAuthTokenSuite(): void {
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
-      expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH);
+      expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 
       ws.close();
     });
 
-    test("connect (req) handshake resolves server version from env precedence", async () => {
+    test("connect (req) handshake resolves server version from runtime precedence", async () => {
+      const { VERSION } = await import("../version.js");
       for (const testCase of [
         {
           env: {
@@ -82,7 +144,7 @@ export function registerDefaultAuthTokenSuite(): void {
             OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
-          expectedVersion: "2.4.6-service",
+          expectedVersion: VERSION,
         },
         {
           env: {
@@ -98,7 +160,7 @@ export function registerDefaultAuthTokenSuite(): void {
             OPENCLAW_SERVICE_VERSION: "\t",
             npm_package_version: "1.0.0-package",
           },
-          expectedVersion: "1.0.0-package",
+          expectedVersion: VERSION,
         },
       ]) {
         await withRuntimeVersionEnv(testCase.env, async () =>
@@ -118,10 +180,11 @@ export function registerDefaultAuthTokenSuite(): void {
         expectStatusError?: string;
       }> = [
         {
-          name: "operator + valid shared token => connected with preserved scopes",
+          name: "operator + valid shared token => connected with cleared scopes",
           opts: { role: "operator", token, device: null },
           expectConnectOk: true,
-          expectStatusOk: true,
+          expectStatusOk: false,
+          expectStatusError: "missing scope",
         },
         {
           name: "node + valid shared token => rejected without device",
@@ -168,11 +231,7 @@ export function registerDefaultAuthTokenSuite(): void {
       try {
         const res = await connectReq(ws, { scopes: [] });
         expect(res.ok).toBe(true);
-        const status = await rpcReq(ws, "status");
-        expect(status.ok).toBe(false);
-        expect(status.error?.message).toContain("missing scope");
-        const health = await rpcReq(ws, "health");
-        expect(health.ok).toBe(true);
+        await expectStatusMissingScopeButHealthAvailable(ws);
       } finally {
         ws.close();
       }
@@ -217,11 +276,7 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(presenceScopes).toEqual([]);
       expect(presenceScopes).not.toContain("operator.admin");
 
-      const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(false);
-      expect(status.error?.message).toContain("missing scope");
-      const health = await rpcReq(ws, "health");
-      expect(health.ok).toBe(true);
+      await expectStatusMissingScopeButHealthAvailable(ws);
 
       ws.close();
     });
@@ -316,55 +371,23 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("returns nonce-required detail code when nonce is blank", async () => {
-      const ws = await openWs(port);
-      const token = resolveGatewayTokenOrEnv();
-      const nonce = await readConnectChallengeNonce(ws);
-      const { device } = await createSignedDevice({
-        token,
-        scopes: ["operator.admin"],
-        clientId: TEST_OPERATOR_CLIENT.id,
-        clientMode: TEST_OPERATOR_CLIENT.mode,
-        nonce,
+      await expectNonceValidationError({
+        connectId: "c-blank-nonce",
+        mutateNonce: () => "   ",
+        expectedMessage: "device nonce required",
+        expectedCode: ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
+        expectedReason: "device-nonce-missing",
       });
-
-      const connectRes = await sendRawConnectReq(ws, {
-        id: "c-blank-nonce",
-        token,
-        device: { ...device, nonce: "   " },
-      });
-      expect(connectRes.ok).toBe(false);
-      expect(connectRes.error?.message ?? "").toContain("device nonce required");
-      expect(connectRes.error?.details?.code).toBe(
-        ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
-      );
-      expect(connectRes.error?.details?.reason).toBe("device-nonce-missing");
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
     test("returns nonce-mismatch detail code when nonce does not match challenge", async () => {
-      const ws = await openWs(port);
-      const token = resolveGatewayTokenOrEnv();
-      const nonce = await readConnectChallengeNonce(ws);
-      const { device } = await createSignedDevice({
-        token,
-        scopes: ["operator.admin"],
-        clientId: TEST_OPERATOR_CLIENT.id,
-        clientMode: TEST_OPERATOR_CLIENT.mode,
-        nonce,
+      await expectNonceValidationError({
+        connectId: "c-wrong-nonce",
+        mutateNonce: (nonce) => `${nonce}-stale`,
+        expectedMessage: "device nonce mismatch",
+        expectedCode: ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH,
+        expectedReason: "device-nonce-mismatch",
       });
-
-      const connectRes = await sendRawConnectReq(ws, {
-        id: "c-wrong-nonce",
-        token,
-        device: { ...device, nonce: `${nonce}-stale` },
-      });
-      expect(connectRes.ok).toBe(false);
-      expect(connectRes.error?.message ?? "").toContain("device nonce mismatch");
-      expect(connectRes.error?.details?.code).toBe(
-        ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH,
-      );
-      expect(connectRes.error?.details?.reason).toBe("device-nonce-mismatch");
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
     test("invalid connect params surface in response and close reason", async () => {

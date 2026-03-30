@@ -6,16 +6,17 @@ import {
   resolveStorePath,
 } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
+import { resolveWhatsAppAccount } from "../../plugin-sdk/whatsapp.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -148,20 +149,6 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  if (!toCandidate) {
-    return {
-      ok: false,
-      channel,
-      to: undefined,
-      accountId,
-      threadId,
-      mode,
-      error:
-        channelResolutionError ??
-        new Error(`No delivery target resolved for channel "${channel}". Set delivery.to.`),
-    };
-  }
-
   let allowFromOverride: string[] | undefined;
   if (channel === "whatsapp") {
     const resolvedAccountId = normalizeAccountId(accountId);
@@ -177,7 +164,7 @@ export async function resolveDeliveryTarget(
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
 
-    if (mode === "implicit" && allowFromOverride.length > 0) {
+    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
       if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
         toCandidate = allowFromOverride[0];
@@ -204,10 +191,16 @@ export async function resolveDeliveryTarget(
       error: docked.error,
     };
   }
+  const idLikeTarget = await maybeResolveIdLikeTarget({
+    cfg,
+    channel,
+    input: docked.to,
+    accountId,
+  });
   return {
     ok: true,
     channel,
-    to: docked.to,
+    to: idLikeTarget?.to ?? docked.to,
     accountId,
     threadId,
     mode,

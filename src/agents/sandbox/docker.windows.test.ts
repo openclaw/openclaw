@@ -1,25 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { resolveDockerSpawnInvocation } from "./docker.js";
 
-const tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "openclaw-docker-spawn-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTrackedTempDirs();
+const createTempDir = () => tempDirs.make("openclaw-docker-spawn-test-");
 
 afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      continue;
-    }
-    await rm(dir, { recursive: true, force: true });
-  }
+  await tempDirs.cleanup();
 });
 
 describe("resolveDockerSpawnInvocation", () => {
@@ -58,22 +47,20 @@ describe("resolveDockerSpawnInvocation", () => {
     });
   });
 
-  it("falls back to shell mode when only unresolved docker.cmd wrapper exists", async () => {
+  it("rejects unresolved docker.cmd wrappers instead of shelling out", async () => {
     const dir = await createTempDir();
     const cmdPath = path.join(dir, "docker.cmd");
     await mkdir(path.dirname(cmdPath), { recursive: true });
     await writeFile(cmdPath, "@ECHO off\r\necho docker\r\n", "utf8");
 
-    const resolved = resolveDockerSpawnInvocation(["ps"], {
-      platform: "win32",
-      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-      execPath: "C:\\node\\node.exe",
-    });
-    expect(path.normalize(resolved.command).toLowerCase()).toBe(
-      path.normalize(cmdPath).toLowerCase(),
+    expect(() =>
+      resolveDockerSpawnInvocation(["ps"], {
+        platform: "win32",
+        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+        execPath: "C:\\node\\node.exe",
+      }),
+    ).toThrow(
+      /wrapper resolved, but no executable\/Node entrypoint could be resolved without shell execution\./i,
     );
-    expect(resolved.args).toEqual(["ps"]);
-    expect(resolved.shell).toBe(true);
-    expect(resolved.windowsHide).toBeUndefined();
   });
 });

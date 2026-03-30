@@ -773,5 +773,4 @@ actor VoiceWakeRuntime {
     }
 
     #endif
-
 }

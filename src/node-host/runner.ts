@@ -1,6 +1,6 @@
-import { resolveBrowserConfig } from "../browser/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
+import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
@@ -11,14 +11,15 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import {
   coerceNodeInvokePayload,
-  handleInvoke,
   type SkillBinsProvider,
   buildNodeInvokeResultParams,
+  handleInvoke,
 } from "./invoke.js";
 
 export { buildNodeInvokeResultParams };
@@ -33,6 +34,10 @@ type NodeHostRunOptions = {
 };
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -108,6 +113,37 @@ function ensureNodePathEnv(): string {
   return DEFAULT_NODE_PATH;
 }
 
+export async function resolveNodeHostGatewayCredentials(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string }> {
+  const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
+  const configForResolution =
+    mode === "local" ? buildNodeHostLocalAuthConfig(params.config) : params.config;
+  return await resolveGatewayConnectionAuth({
+    config: configForResolution,
+    env: params.env,
+    localTokenPrecedence: "env-first",
+    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    remoteTokenPrecedence: "env-first",
+    remotePasswordPrecedence: "env-first", // pragma: allowlist secret
+  });
+}
+
+function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
+  if (!config.gateway?.remote?.token && !config.gateway?.remote?.password) {
+    return config;
+  }
+  const nextConfig = structuredClone(config);
+  if (nextConfig.gateway?.remote) {
+    // Local node-host must not inherit gateway.remote.* auth material, which can
+    // suppress GatewayClient device-token fallback and cause local token mismatches.
+    nextConfig.gateway.remote.token = undefined;
+    nextConfig.gateway.remote.password = undefined;
+  }
+  return nextConfig;
+}
+
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const config = await ensureNodeHostConfig();
   const nodeId = opts.nodeId?.trim() || config.nodeId;
@@ -131,26 +167,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const token =
-    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
-  const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
+  const { token, password } = await resolveNodeHostGatewayCredentials({
+    config: cfg,
+    env: process.env,
+  });
 
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
-  // eslint-disable-next-line no-console
-  console.log(`node host PATH: ${pathEnv}`);
 
   const client = new GatewayClient({
     url,
-    token: token?.trim() || undefined,
-    password: password?.trim() || undefined,
+    token: token || undefined,
+    password: password || undefined,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
@@ -181,12 +212,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway connect failed: ${err.message}`);
+      writeStderrLine(`node host gateway connect failed: ${err.message}`);
     },
     onClose: (code, reason) => {
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway closed (${code}): ${reason}`);
+      writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
 

@@ -1,10 +1,6 @@
-import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
-import { shortenHomePath } from "../../utils.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
-import { formatCliCommand } from "../command-format.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
@@ -28,10 +24,6 @@ function resetConfigGuardStateForTests() {
   configSnapshotPromise = null;
 }
 
-function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
-  return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
-}
-
 async function getConfigSnapshot() {
   // Tests often mutate config fixtures; caching can make those flaky.
   if (process.env.VITEST === "true") {
@@ -45,24 +37,28 @@ export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
   suppressDoctorStdout?: boolean;
+  allowInvalid?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
+  let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    const runDoctorConfigFlow = async () =>
-      loadAndMaybeMigrateDoctorConfig({
-        options: { nonInteractive: true },
-        confirm: async () => false,
+    const runDoctorConfigPreflight = async () =>
+      (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({
+        // Keep ordinary CLI startup on the lightweight validation path.
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
       });
     if (!params.suppressDoctorStdout) {
-      await runDoctorConfigFlow();
+      preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
     } else {
       const originalStdoutWrite = process.stdout.write.bind(process.stdout);
       const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
       process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
       process.env.OPENCLAW_SUPPRESS_NOTES = "1";
       try {
-        await runDoctorConfigFlow();
+        preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
       } finally {
         process.stdout.write = originalStdoutWrite;
         if (originalSuppressNotes === undefined) {
@@ -74,26 +70,35 @@ export async function ensureConfigReady(params: {
     }
   }
 
-  const snapshot = await getConfigSnapshot();
+  const snapshot = preflightSnapshot ?? (await getConfigSnapshot());
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const allowInvalid = commandName
-    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+    ? params.allowInvalid === true ||
+      ALLOWED_INVALID_COMMANDS.has(commandName) ||
       (commandName === "gateway" &&
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const issues = snapshot.exists && !snapshot.valid ? formatConfigIssues(snapshot.issues) : [];
-  const legacyIssues =
-    snapshot.legacyIssues.length > 0
-      ? snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`)
+  const { formatConfigIssueLines } = await import("../../config/issue-format.js");
+  const issues =
+    snapshot.exists && !snapshot.valid
+      ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
       : [];
+  const legacyIssues =
+    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     return;
   }
 
+  const [{ colorize, isRich, theme }, { shortenHomePath }, { formatCliCommand }] =
+    await Promise.all([
+      import("../../terminal/theme.js"),
+      import("../../utils.js"),
+      import("../command-format.js"),
+    ]);
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);

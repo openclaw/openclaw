@@ -8,23 +8,43 @@
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { cleanBlocksForDescendant } from "./docx-table-ops.js";
+import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
 
 export const BATCH_SIZE = 1000; // Feishu API limit per request
 
 type Logger = { info?: (msg: string) => void };
 
+type DocxDescendantCreatePayload = NonNullable<
+  Parameters<Lark.Client["docx"]["documentBlockDescendant"]["create"]>[0]
+>;
+type DocxDescendantCreateBlock = NonNullable<
+  NonNullable<DocxDescendantCreatePayload["data"]>["descendants"]
+>[number];
+
+function normalizeChildIds(children: string[] | string | undefined): string[] | undefined {
+  if (Array.isArray(children)) {
+    return children;
+  }
+  return typeof children === "string" ? [children] : undefined;
+}
+
+function toDescendantBlock(block: FeishuDocxBlock): DocxDescendantCreateBlock {
+  const children = normalizeChildIds(block.children);
+  return {
+    ...block,
+    ...(children ? { children } : {}),
+  } as DocxDescendantCreateBlock;
+}
+
 /**
- * Collect all descendant blocks for a given set of first-level block IDs.
+ * Collect all descendant blocks for a given first-level block ID.
  * Recursively traverses the block tree to gather all children.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
-function collectDescendants(blocks: any[], firstLevelIds: string[]): any[] {
-  const blockMap = new Map<string, any>();
-  for (const block of blocks) {
-    blockMap.set(block.block_id, block);
-  }
-
-  const result: any[] = [];
+function collectDescendants(
+  blockMap: Map<string, FeishuDocxBlock>,
+  rootId: string,
+): FeishuDocxBlock[] {
+  const result: FeishuDocxBlock[] = [];
   const visited = new Set<string>();
 
   function collect(blockId: string) {
@@ -47,9 +67,7 @@ function collectDescendants(blocks: any[], firstLevelIds: string[]): any[] {
     }
   }
 
-  for (const id of firstLevelIds) {
-    collect(id);
-  }
+  collect(rootId);
 
   return result;
 }
@@ -60,15 +78,14 @@ function collectDescendants(blocks: any[], firstLevelIds: string[]): any[] {
  * @param parentBlockId - Parent block to insert into (defaults to docToken)
  * @param index - Position within parent's children (-1 = end)
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
 async function insertBatch(
   client: Lark.Client,
   docToken: string,
-  blocks: any[],
+  blocks: FeishuDocxBlock[],
   firstLevelBlockIds: string[],
   parentBlockId: string = docToken,
   index: number = -1,
-): Promise<any[]> {
+): Promise<FeishuDocxBlockChild[]> {
   const descendants = cleanBlocksForDescendant(blocks);
 
   if (descendants.length === 0) {
@@ -79,7 +96,7 @@ async function insertBatch(
     path: { document_id: docToken, block_id: parentBlockId },
     data: {
       children_id: firstLevelBlockIds,
-      descendants,
+      descendants: descendants.map(toDescendantBlock),
       index,
     },
   });
@@ -107,26 +124,34 @@ async function insertBatch(
  *   each batch advances this by the number of first-level IDs inserted so far.
  * @returns Inserted children blocks and any skipped block IDs
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
 export async function insertBlocksInBatches(
   client: Lark.Client,
   docToken: string,
-  blocks: any[],
+  blocks: FeishuDocxBlock[],
   firstLevelBlockIds: string[],
   logger?: Logger,
   parentBlockId: string = docToken,
   startIndex: number = -1,
-): Promise<{ children: any[]; skipped: string[] }> {
-  const allChildren: any[] = [];
+): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
+  const allChildren: FeishuDocxBlockChild[] = [];
 
   // Build batches ensuring each batch has ≤1000 total descendants
-  const batches: { firstLevelIds: string[]; blocks: any[] }[] = [];
-  let currentBatch: { firstLevelIds: string[]; blocks: any[] } = { firstLevelIds: [], blocks: [] };
+  const batches: Array<{ firstLevelIds: string[]; blocks: FeishuDocxBlock[] }> = [];
+  let currentBatch: { firstLevelIds: string[]; blocks: FeishuDocxBlock[] } = {
+    firstLevelIds: [],
+    blocks: [],
+  };
   const usedBlockIds = new Set<string>();
+  const blockMap = new Map<string, FeishuDocxBlock>();
+  for (const block of blocks) {
+    if (block.block_id) {
+      blockMap.set(block.block_id, block);
+    }
+  }
 
   for (const firstLevelId of firstLevelBlockIds) {
-    const descendants = collectDescendants(blocks, [firstLevelId]);
-    const newBlocks = descendants.filter((b) => !usedBlockIds.has(b.block_id));
+    const descendants = collectDescendants(blockMap, firstLevelId);
+    const newBlocks = descendants.filter((b) => b.block_id && !usedBlockIds.has(b.block_id));
 
     // A single block whose subtree exceeds the API limit cannot be split
     // (a table or other compound block must be inserted atomically).
@@ -151,7 +176,9 @@ export async function insertBlocksInBatches(
     currentBatch.firstLevelIds.push(firstLevelId);
     for (const block of newBlocks) {
       currentBatch.blocks.push(block);
-      usedBlockIds.add(block.block_id);
+      if (block.block_id) {
+        usedBlockIds.add(block.block_id);
+      }
     }
   }
 

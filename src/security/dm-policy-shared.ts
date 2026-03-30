@@ -1,8 +1,32 @@
+import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../channels/allow-from.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { GroupPolicy } from "../config/types.base.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+
+export function resolvePinnedMainDmOwnerFromAllowlist(params: {
+  dmScope?: string | null;
+  allowFrom?: Array<string | number> | null;
+  normalizeEntry: (entry: string) => string | undefined;
+}): string | null {
+  if ((params.dmScope ?? "main") !== "main") {
+    return null;
+  }
+  const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+  if (rawAllowFrom.some((entry) => String(entry).trim() === "*")) {
+    return null;
+  }
+  const normalizedOwners = Array.from(
+    new Set(
+      rawAllowFrom
+        .map((entry) => params.normalizeEntry(String(entry)))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  );
+  return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
+}
 
 export function resolveEffectiveAllowFromLists(params: {
   allowFrom?: Array<string | number> | null;
@@ -91,27 +115,36 @@ export function resolveDmGroupAccessDecision(params: {
   reason: string;
 } {
   const dmPolicy = params.dmPolicy ?? "pairing";
-  const groupPolicy = params.groupPolicy ?? "allowlist";
+  const groupPolicy: GroupPolicy =
+    params.groupPolicy === "open" || params.groupPolicy === "disabled"
+      ? params.groupPolicy
+      : "allowlist";
   const effectiveAllowFrom = normalizeStringEntries(params.effectiveAllowFrom);
   const effectiveGroupAllowFrom = normalizeStringEntries(params.effectiveGroupAllowFrom);
 
   if (params.isGroup) {
-    if (groupPolicy === "disabled") {
-      return {
-        decision: "block",
-        reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
-        reason: "groupPolicy=disabled",
-      };
-    }
-    if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
+    const groupAccess = evaluateMatchedGroupAccessForPolicy({
+      groupPolicy,
+      allowlistConfigured: effectiveGroupAllowFrom.length > 0,
+      allowlistMatched: params.isSenderAllowed(effectiveGroupAllowFrom),
+    });
+
+    if (!groupAccess.allowed) {
+      if (groupAccess.reason === "disabled") {
+        return {
+          decision: "block",
+          reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
+          reason: "groupPolicy=disabled",
+        };
+      }
+      if (groupAccess.reason === "empty_allowlist") {
         return {
           decision: "block",
           reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
           reason: "groupPolicy=allowlist (empty allowlist)",
         };
       }
-      if (!params.isSenderAllowed(effectiveGroupAllowFrom)) {
+      if (groupAccess.reason === "not_allowlisted") {
         return {
           decision: "block",
           reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
@@ -119,6 +152,7 @@ export function resolveDmGroupAccessDecision(params: {
         };
       }
     }
+
     return {
       decision: "allow",
       reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,

@@ -165,6 +165,9 @@ async function releaseHeldLock(
     return true;
   } finally {
     held.releasePromise = undefined;
+    if (HELD_LOCKS.size === 0) {
+      stopWatchdogTimer();
+    }
   }
 }
 
@@ -174,19 +177,16 @@ async function releaseHeldLock(
  */
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
-    try {
-      if (typeof held.handle.close === "function") {
-        void held.handle.close().catch(() => {});
-      }
-    } catch {
-      // Ignore errors during cleanup - best effort
-    }
+    void held.handle.close().catch(() => undefined);
     try {
       fsSync.rmSync(held.lockPath, { force: true });
     } catch {
       // Ignore errors during cleanup - best effort
     }
     HELD_LOCKS.delete(sessionFile);
+  }
+  if (HELD_LOCKS.size === 0) {
+    stopWatchdogTimer();
   }
 }
 
@@ -198,9 +198,8 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       continue;
     }
 
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
+    process.stderr.write(
+      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}\n`,
     );
 
     const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
@@ -209,6 +208,15 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
     }
   }
   return released;
+}
+
+function stopWatchdogTimer(): void {
+  const watchdogState = resolveWatchdogState();
+  if (watchdogState.timer) {
+    clearInterval(watchdogState.timer);
+    watchdogState.timer = undefined;
+  }
+  watchdogState.started = false;
 }
 
 function ensureWatchdogStarted(intervalMs: number): void {
@@ -269,6 +277,15 @@ function registerCleanupHandlers(): void {
       // Ignore unsupported signals on this platform.
     }
   }
+}
+
+function unregisterCleanupHandlers(): void {
+  const cleanupState = resolveCleanupState();
+  for (const [signal, handler] of cleanupState.cleanupHandlers) {
+    process.off(signal, handler);
+  }
+  cleanupState.cleanupHandlers.clear();
+  cleanupState.registered = false;
 }
 
 async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
@@ -367,6 +384,21 @@ async function shouldReclaimContendedLockFile(
     const code = (error as { code?: string } | null)?.code;
     return code !== "ENOENT";
   }
+}
+
+function shouldTreatAsOrphanSelfLock(params: {
+  payload: LockFilePayload | null;
+  normalizedSessionFile: string;
+}): boolean {
+  const pid = isValidLockNumber(params.payload?.pid) ? params.payload.pid : null;
+  if (pid !== process.pid) {
+    return false;
+  }
+  const hasValidStarttime = isValidLockNumber(params.payload?.starttime);
+  if (hasValidStarttime) {
+    return false;
+  }
+  return !HELD_LOCKS.has(params.normalizedSessionFile);
 }
 
 export async function cleanStaleLockFiles(params: {
@@ -509,7 +541,20 @@ export async function acquireSessionWriteLock(params: {
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
       const inspected = inspectLockPayload(payload, staleMs, nowMs);
-      if (await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs)) {
+      const orphanSelfLock = shouldTreatAsOrphanSelfLock({
+        payload,
+        normalizedSessionFile,
+      });
+      const reclaimDetails = orphanSelfLock
+        ? {
+            ...inspected,
+            stale: true,
+            staleReasons: inspected.staleReasons.includes("orphan-self-pid")
+              ? inspected.staleReasons
+              : [...inspected.staleReasons, "orphan-self-pid"],
+          }
+        : inspected;
+      if (await shouldReclaimContendedLockFile(lockPath, reclaimDetails, staleMs, nowMs)) {
         await fs.rm(lockPath, { force: true });
         continue;
       }
@@ -530,3 +575,17 @@ export const __testing = {
   releaseAllLocksSync,
   runLockWatchdogCheck,
 };
+
+export async function drainSessionWriteLockStateForTest(): Promise<void> {
+  for (const [sessionFile, held] of Array.from(HELD_LOCKS.entries())) {
+    await releaseHeldLock(sessionFile, held, { force: true }).catch(() => undefined);
+  }
+  stopWatchdogTimer();
+  unregisterCleanupHandlers();
+}
+
+export function resetSessionWriteLockStateForTest(): void {
+  releaseAllLocksSync();
+  stopWatchdogTimer();
+  unregisterCleanupHandlers();
+}

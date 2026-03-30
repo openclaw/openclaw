@@ -28,6 +28,16 @@ describe("Agent-specific tool filtering", () => {
     stat: async () => null,
   };
 
+  function expectReadOnlyToolSet(toolNames: string[], extraDenied: string[] = []) {
+    expect(toolNames).toContain("read");
+    expect(toolNames).not.toContain("exec");
+    expect(toolNames).not.toContain("write");
+    expect(toolNames).not.toContain("apply_patch");
+    for (const toolName of extraDenied) {
+      expect(toolNames).not.toContain(toolName);
+    }
+  }
+
   async function withApplyPatchEscapeCase(
     opts: { workspaceOnly?: boolean },
     run: (params: {
@@ -46,12 +56,9 @@ describe("Agent-specific tool filtering", () => {
     try {
       const cfg: OpenClawConfig = {
         tools: {
-          allow: ["read", "exec"],
+          allow: ["read", "write", "exec"],
           exec: {
-            applyPatch: {
-              enabled: true,
-              ...(opts.workspaceOnly === false ? { workspaceOnly: false } : {}),
-            },
+            applyPatch: opts.workspaceOnly === false ? { workspaceOnly: false } : {},
           },
         },
       };
@@ -114,12 +121,12 @@ describe("Agent-specific tool filtering", () => {
   }
 
   function createExecHostDefaultsConfig(
-    agents: Array<{ id: string; execHost?: "gateway" | "sandbox" }>,
+    agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
   ): OpenClawConfig {
     return {
       tools: {
         exec: {
-          host: "sandbox",
+          host: "auto",
           security: "full",
           ask: "off",
         },
@@ -178,13 +185,10 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("apply_patch");
   });
 
-  it("should allow apply_patch when exec is allow-listed and applyPatch is enabled", () => {
+  it("should allow apply_patch for OpenAI models when write is allow-listed", () => {
     const cfg: OpenClawConfig = {
       tools: {
-        allow: ["read", "exec"],
-        exec: {
-          applyPatch: { enabled: true },
-        },
+        allow: ["read", "write", "exec"],
       },
     };
 
@@ -201,6 +205,30 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("exec");
     expect(toolNames).toContain("apply_patch");
+  });
+
+  it("should allow disabling apply_patch explicitly", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read", "write", "exec"],
+        exec: {
+          applyPatch: { enabled: false },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test",
+      agentDir: "/tmp/agent",
+      modelProvider: "openai",
+      modelId: "gpt-5.2",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("exec");
+    expect(toolNames).not.toContain("apply_patch");
   });
 
   it("defaults apply_patch to workspace-only (blocks traversal)", async () => {
@@ -250,12 +278,10 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-restricted",
     });
 
-    const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
-    expect(toolNames).not.toContain("edit");
+    expectReadOnlyToolSet(
+      tools.map((t) => t.name),
+      ["edit"],
+    );
   });
 
   it("should apply provider-specific tool policy", () => {
@@ -279,11 +305,7 @@ describe("Agent-specific tool filtering", () => {
       modelId: "claude-opus-4-6-thinking",
     });
 
-    const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
+    expectReadOnlyToolSet(tools.map((t) => t.name));
   });
 
   it("should apply provider-specific tool profile overrides", () => {
@@ -570,10 +592,13 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-restricted",
       sandbox: {
         enabled: true,
+        backendId: "docker",
         sessionKey: "agent:restricted:main",
         workspaceDir: "/tmp/sandbox",
         agentWorkspaceDir: "/tmp/test-restricted",
         workspaceAccess: "none",
+        runtimeId: "test-container",
+        runtimeLabel: "test-container",
         containerName: "test-container",
         containerWorkdir: "/workspace",
         docker: {
@@ -608,6 +633,7 @@ describe("Agent-specific tool filtering", () => {
       tools: {
         deny: ["process"],
         exec: {
+          host: "gateway",
           security: "full",
           ask: "off",
         },
@@ -632,28 +658,28 @@ describe("Agent-specific tool filtering", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
-  it("keeps sandbox as the implicit exec host default without forcing gateway approvals", async () => {
+  it("routes implicit auto exec to gateway without a sandbox runtime", async () => {
     const tools = createOpenClawCodingTools({
-      config: {},
+      config: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+      },
       sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-implicit-sandbox",
-      agentDir: "/tmp/agent-main-implicit-sandbox",
+      workspaceDir: "/tmp/test-main-implicit-gateway",
+      agentDir: "/tmp/agent-main-implicit-gateway",
     });
     const execTool = tools.find((tool) => tool.name === "exec");
     expect(execTool).toBeDefined();
 
-    const result = await execTool!.execute("call-implicit-sandbox-default", {
+    const result = await execTool!.execute("call-implicit-auto-default", {
       command: "echo done",
     });
-    const details = result?.details as { status?: string } | undefined;
-    expect(details?.status).toBe("completed");
-
-    await expect(
-      execTool!.execute("call-implicit-sandbox-gateway", {
-        command: "echo done",
-        host: "gateway",
-      }),
-    ).rejects.toThrow("exec host not allowed");
+    const resultDetails = result?.details as { status?: string } | undefined;
+    expect(resultDetails?.status).toBe("completed");
   });
 
   it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
@@ -670,7 +696,7 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow("exec host=sandbox is configured");
+    ).rejects.toThrow("requires a sandbox runtime");
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -708,19 +734,19 @@ describe("Agent-specific tool filtering", () => {
     });
     const helperExecTool = helperTools.find((tool) => tool.name === "exec");
     expect(helperExecTool).toBeDefined();
-    await expect(
-      helperExecTool!.execute("call-helper-default", {
-        command: "echo done",
-        yieldMs: 1000,
-      }),
-    ).rejects.toThrow("exec host=sandbox is configured");
+    const helperResult = await helperExecTool!.execute("call-helper-default", {
+      command: "echo done",
+      yieldMs: 1000,
+    });
+    const helperDetails = helperResult?.details as { status?: string } | undefined;
+    expect(helperDetails?.status).toBe("completed");
     await expect(
       helperExecTool!.execute("call-helper", {
         command: "echo done",
         host: "sandbox",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow("exec host=sandbox is configured");
+    ).rejects.toThrow("requires a sandbox runtime");
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {

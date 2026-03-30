@@ -1,5 +1,7 @@
+import type { SecretInput } from "./types.secrets.js";
+
 /** Error types that can trigger retries for one-shot jobs. */
-export type CronRetryOn = "rate_limit" | "network" | "timeout" | "server_error";
+export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";
 
 export type CronRetryConfig = {
   /** Max retries for transient errors before permanent disable (default: 3). */
@@ -37,7 +39,7 @@ export type CronConfig = {
    */
   webhook?: string;
   /** Bearer token for cron webhook POST delivery. */
-  webhookToken?: string;
+  webhookToken?: SecretInput;
   /**
    * How long to retain completed cron run sessions before automatic pruning.
    * Accepts a duration string (e.g. "24h", "7d", "1h30m") or `false` to disable pruning.

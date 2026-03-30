@@ -8,6 +8,7 @@ import {
   openWs,
   originForPort,
   rpcReq,
+  restoreGatewayToken,
   startGatewayServer,
   testState,
   testTailscaleWhois,
@@ -19,7 +20,7 @@ export function registerAuthModesSuite(): void {
     let port: number;
 
     beforeAll(async () => {
-      testState.gatewayAuth = { mode: "password", password: "secret" };
+      testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
@@ -30,14 +31,14 @@ export function registerAuthModesSuite(): void {
 
     test("accepts password auth when configured", async () => {
       const ws = await openWs(port);
-      const res = await connectReq(ws, { password: "secret" });
+      const res = await connectReq(ws, { password: "secret" }); // pragma: allowlist secret
       expect(res.ok).toBe(true);
       ws.close();
     });
 
     test("rejects invalid password", async () => {
       const ws = await openWs(port);
-      const res = await connectReq(ws, { password: "wrong" });
+      const res = await connectReq(ws, { password: "wrong" }); // pragma: allowlist secret
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("unauthorized");
       ws.close();
@@ -58,11 +59,7 @@ export function registerAuthModesSuite(): void {
 
     afterAll(async () => {
       await server.close();
-      if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      }
+      restoreGatewayToken(prevToken);
     });
 
     test("rejects invalid token", async () => {
@@ -119,11 +116,7 @@ export function registerAuthModesSuite(): void {
 
     afterAll(async () => {
       await server.close();
-      if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      }
+      restoreGatewayToken(prevToken);
     });
 
     test("allows loopback connect without shared secret when mode is none", async () => {
@@ -158,18 +151,19 @@ export function registerAuthModesSuite(): void {
 
     test("requires device identity when only tailscale auth is available", async () => {
       const ws = await openTailscaleWs(port);
-      const res = await connectReq(ws, { token: "dummy", device: null });
+      const res = await connectReq(ws, { skipDefaultAuth: true, device: null });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
       ws.close();
     });
 
-    test("allows shared token to skip device when tailscale auth is enabled", async () => {
+    test("connects with shared token but clears scopes when tailscale auth skips device", async () => {
       const ws = await openTailscaleWs(port);
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
       const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(true);
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(true);
       ws.close();

@@ -1,97 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
-import {
-  CLI_FRESH_WATCHDOG_DEFAULTS,
-  CLI_RESUME_WATCHDOG_DEFAULTS,
-} from "./cli-watchdog-defaults.js";
+import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
   id: string;
   config: CliBackendConfig;
-};
-
-const CLAUDE_MODEL_ALIASES: Record<string, string> = {
-  opus: "opus",
-  "opus-4.6": "opus",
-  "opus-4.5": "opus",
-  "opus-4": "opus",
-  "claude-opus-4-6": "opus",
-  "claude-opus-4-5": "opus",
-  "claude-opus-4": "opus",
-  sonnet: "sonnet",
-  "sonnet-4.6": "sonnet",
-  "sonnet-4.5": "sonnet",
-  "sonnet-4.1": "sonnet",
-  "sonnet-4.0": "sonnet",
-  "claude-sonnet-4-6": "sonnet",
-  "claude-sonnet-4-5": "sonnet",
-  "claude-sonnet-4-1": "sonnet",
-  "claude-sonnet-4-0": "sonnet",
-  haiku: "haiku",
-  "haiku-3.5": "haiku",
-  "claude-haiku-3-5": "haiku",
-};
-
-const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
-  command: "claude",
-  args: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
-  resumeArgs: [
-    "-p",
-    "--output-format",
-    "json",
-    "--dangerously-skip-permissions",
-    "--resume",
-    "{sessionId}",
-  ],
-  output: "json",
-  input: "arg",
-  modelArg: "--model",
-  modelAliases: CLAUDE_MODEL_ALIASES,
-  sessionArg: "--session-id",
-  sessionMode: "always",
-  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
-  systemPromptArg: "--append-system-prompt",
-  systemPromptMode: "append",
-  systemPromptWhen: "first",
-  clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
-  reliability: {
-    watchdog: {
-      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-    },
-  },
-  serialize: true,
-};
-
-const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
-  command: "codex",
-  args: ["exec", "--json", "--color", "never", "--sandbox", "read-only", "--skip-git-repo-check"],
-  resumeArgs: [
-    "exec",
-    "resume",
-    "{sessionId}",
-    "--color",
-    "never",
-    "--sandbox",
-    "read-only",
-    "--skip-git-repo-check",
-  ],
-  output: "jsonl",
-  resumeOutput: "text",
-  input: "arg",
-  modelArg: "--model",
-  sessionIdFields: ["thread_id"],
-  sessionMode: "existing",
-  imageArg: "--image",
-  imageMode: "repeat",
-  reliability: {
-    watchdog: {
-      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-    },
-  },
-  serialize: true,
+  bundleMcp: boolean;
+  pluginId?: string;
 };
 
 function normalizeBackendKey(key: string): string {
@@ -102,12 +18,21 @@ function pickBackendConfig(
   config: Record<string, CliBackendConfig>,
   normalizedId: string,
 ): CliBackendConfig | undefined {
+  const directKey = Object.keys(config).find((key) => key.trim().toLowerCase() === normalizedId);
+  if (directKey) {
+    return config[directKey];
+  }
   for (const [key, entry] of Object.entries(config)) {
     if (normalizeBackendKey(key) === normalizedId) {
       return entry;
     }
   }
   return undefined;
+}
+
+function resolveRegisteredBackend(provider: string) {
+  const normalized = normalizeBackendKey(provider);
+  return resolveRuntimeCliBackends().find((entry) => normalizeBackendKey(entry.id) === normalized);
 }
 
 function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
@@ -148,10 +73,10 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
 }
 
 export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
-  const ids = new Set<string>([
-    normalizeBackendKey("claude-cli"),
-    normalizeBackendKey("codex-cli"),
-  ]);
+  const ids = new Set<string>();
+  for (const backend of resolveRuntimeCliBackends()) {
+    ids.add(normalizeBackendKey(backend.id));
+  }
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
     ids.add(normalizeBackendKey(key));
@@ -166,22 +91,20 @@ export function resolveCliBackendConfig(
   const normalized = normalizeBackendKey(provider);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
-
-  if (normalized === "claude-cli") {
-    const merged = mergeBackendConfig(DEFAULT_CLAUDE_BACKEND, override);
-    const command = merged.command?.trim();
+  const registered = resolveRegisteredBackend(normalized);
+  if (registered) {
+    const merged = mergeBackendConfig(registered.config, override);
+    const config = registered.normalizeConfig ? registered.normalizeConfig(merged) : merged;
+    const command = config.command?.trim();
     if (!command) {
       return null;
     }
-    return { id: normalized, config: { ...merged, command } };
-  }
-  if (normalized === "codex-cli") {
-    const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
-    const command = merged.command?.trim();
-    if (!command) {
-      return null;
-    }
-    return { id: normalized, config: { ...merged, command } };
+    return {
+      id: normalized,
+      config: { ...config, command },
+      bundleMcp: registered.bundleMcp === true,
+      pluginId: registered.pluginId,
+    };
   }
 
   if (!override) {
@@ -191,5 +114,5 @@ export function resolveCliBackendConfig(
   if (!command) {
     return null;
   }
-  return { id: normalized, config: { ...override, command } };
+  return { id: normalized, config: { ...override, command }, bundleMcp: false };
 }

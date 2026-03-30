@@ -209,12 +209,8 @@ describe("temp path guard", () => {
       "const p = path.join(os.tmpdir());",
     ];
 
-    for (const fixture of dynamicFixtures) {
-      expect(hasDynamicTmpdirJoin(fixture)).toBe(true);
-    }
-    for (const fixture of staticFixtures) {
-      expect(hasDynamicTmpdirJoin(fixture)).toBe(false);
-    }
+    expect(dynamicFixtures.every((fixture) => hasDynamicTmpdirJoin(fixture))).toBe(true);
+    expect(staticFixtures.every((fixture) => !hasDynamicTmpdirJoin(fixture))).toBe(true);
   });
 
   it("enforces runtime guardrails for tmpdir joins and weak randomness", async () => {
@@ -224,14 +220,21 @@ describe("temp path guard", () => {
 
     for (const file of files) {
       const relativePath = file.relativePath;
-      if (hasDynamicTmpdirJoin(file.source)) {
+      const source = file.source;
+      const mightContainTmpdirJoin =
+        source.includes("tmpdir") &&
+        source.includes("path") &&
+        source.includes("join") &&
+        source.includes("`");
+      const mightContainWeakRandom = source.includes("Date.now") && source.includes("Math.random");
+
+      if (!mightContainTmpdirJoin && !mightContainWeakRandom) {
+        continue;
+      }
+      if (mightContainTmpdirJoin && hasDynamicTmpdirJoin(source)) {
         offenders.push(relativePath);
       }
-      if (
-        file.source.includes("Date.now") &&
-        file.source.includes("Math.random") &&
-        WEAK_RANDOM_SAME_LINE_PATTERN.test(file.source)
-      ) {
+      if (mightContainWeakRandom && WEAK_RANDOM_SAME_LINE_PATTERN.test(source)) {
         weakRandomMatches.push(relativePath);
       }
     }

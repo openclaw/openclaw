@@ -2,7 +2,7 @@ import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { ConfigFileSnapshot } from "../config/config.js";
+import type { ConfigFileSnapshot, ConfigWriteNotification } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -123,6 +123,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
+  it("restarts the gateway for browser plugin config changes", () => {
+    const plan = buildGatewayReloadPlan(["browser.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("browser.enabled");
+    expect(plan.hotReasons).toEqual([]);
+  });
+
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
     const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
     expect(plan.restartGateway).toBe(false);
@@ -159,6 +166,21 @@ describe("buildGatewayReloadPlan", () => {
     );
   });
 
+  it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toContain("agents.defaults.models");
+    expect(plan.noopPaths).toEqual([]);
+  });
+
+  it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
+    const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHealthMonitor).toBe(true);
+    expect(plan.hotReasons).toContain("gateway.channelHealthCheckMinutes");
+  });
+
   it("treats gateway.remote as no-op", () => {
     const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
     expect(plan.restartGateway).toBe(false);
@@ -180,6 +202,58 @@ describe("buildGatewayReloadPlan", () => {
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
+  });
+
+  it.each([
+    {
+      path: "browser.enabled",
+      expectRestartGateway: true,
+      expectRestartReason: "browser.enabled",
+    },
+    {
+      path: "gateway.channelHealthCheckMinutes",
+      expectRestartGateway: false,
+      expectHotPath: "gateway.channelHealthCheckMinutes",
+      expectRestartHealthMonitor: true,
+    },
+    {
+      path: "hooks.gmail.account",
+      expectRestartGateway: false,
+      expectHotPath: "hooks.gmail.account",
+      expectRestartGmailWatcher: true,
+      expectReloadHooks: true,
+    },
+    {
+      path: "gateway.remote.url",
+      expectRestartGateway: false,
+      expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "unknownField",
+      expectRestartGateway: true,
+      expectRestartReason: "unknownField",
+    },
+  ])("classifies reload path: $path", (testCase) => {
+    const plan = buildGatewayReloadPlan([testCase.path]);
+    expect(plan.restartGateway).toBe(testCase.expectRestartGateway);
+    if (testCase.expectHotPath) {
+      expect(plan.hotReasons).toContain(testCase.expectHotPath);
+    }
+    if (testCase.expectNoopPath) {
+      expect(plan.noopPaths).toContain(testCase.expectNoopPath);
+    }
+    if (testCase.expectRestartReason) {
+      expect(plan.restartReasons).toContain(testCase.expectRestartReason);
+    }
+    if (testCase.expectRestartHealthMonitor) {
+      expect(plan.restartHealthMonitor).toBe(true);
+    }
+    if (testCase.expectRestartGmailWatcher) {
+      expect(plan.restartGmailWatcher).toBe(true);
+    }
+    if (testCase.expectReloadHooks) {
+      expect(plan.reloadHooks).toBe(true);
+    }
   });
 });
 
@@ -218,8 +292,10 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
     exists: true,
     raw: "{}",
     parsed: {},
+    sourceConfig: {},
     resolved: {},
     valid: true,
+    runtimeConfig: {},
     config: {},
     issues: [],
     warnings: [],
@@ -233,6 +309,15 @@ function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) 
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
   const onHotReload = vi.fn(async () => {});
   const onRestart = vi.fn();
+  let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
+  const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
+    writeListener = listener;
+    return () => {
+      if (writeListener === listener) {
+        writeListener = null;
+      }
+    };
+  });
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -241,12 +326,22 @@ function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) 
   const reloader = startGatewayConfigReloader({
     initialConfig: { gateway: { reload: { debounceMs: 0 } } },
     readSnapshot,
+    subscribeToWrites,
     onHotReload,
     onRestart,
     log,
     watchPath: "/tmp/openclaw.json",
   });
-  return { watcher, onHotReload, onRestart, log, reloader };
+  return {
+    watcher,
+    onHotReload,
+    onRestart,
+    log,
+    reloader,
+    emitWrite(event: ConfigWriteNotification) {
+      writeListener?.(event);
+    },
+  };
 }
 
 describe("startGatewayConfigReloader", () => {
@@ -352,5 +447,72 @@ describe("startGatewayConfigReloader", () => {
       process.off("unhandledRejection", onUnhandled);
       await reloader.stop();
     }
+  });
+
+  it("reuses in-process write notifications and dedupes watcher rereads by persisted hash", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          sourceConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+          },
+          runtimeConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          hash: "internal-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          sourceConfig: {
+            gateway: { reload: { debounceMs: 0 }, port: 19001 },
+          },
+          runtimeConfig: {
+            gateway: { reload: { debounceMs: 0 }, port: 19001 },
+          },
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 19001 },
+          },
+          hash: "external-1",
+        }),
+      );
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: { gateway: { reload: { debounceMs: 0 } } },
+      runtimeConfig: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      persistedHash: "internal-1",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    harness.watcher.emit("change");
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
   });
 });

@@ -379,6 +379,41 @@ function isLoopbackAddress(address?: string): boolean {
   return false;
 }
 
+function stripPortFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.port) {
+      return url;
+    }
+    parsed.port = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function setPortOnUrl(url: string, port: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.port = port;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function extractPortFromHostHeader(hostHeader?: string): string | undefined {
+  if (!hostHeader) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(`https://${hostHeader}`);
+    return parsed.port || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Result of Twilio webhook verification with detailed info.
  */
@@ -609,6 +644,45 @@ export function verifyTwilioWebhook(
     return { ok: true, verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }
 
+  // Twilio webhook signatures can differ in whether port is included.
+  // Retry a small, deterministic set of URL variants before failing closed.
+  const variants = new Set<string>();
+  variants.add(verificationUrl);
+  variants.add(stripPortFromUrl(verificationUrl));
+
+  if (options?.publicUrl) {
+    try {
+      const publicPort = new URL(options.publicUrl).port;
+      if (publicPort) {
+        variants.add(setPortOnUrl(verificationUrl, publicPort));
+      }
+    } catch {
+      // ignore invalid publicUrl; primary verification already used best effort
+    }
+  }
+
+  const hostHeaderPort = extractPortFromHostHeader(getHeader(ctx.headers, "host"));
+  if (hostHeaderPort) {
+    variants.add(setPortOnUrl(verificationUrl, hostHeaderPort));
+  }
+
+  for (const candidateUrl of variants) {
+    if (candidateUrl === verificationUrl) {
+      continue;
+    }
+    const isValidCandidate = validateTwilioSignature(authToken, signature, candidateUrl, params);
+    if (!isValidCandidate) {
+      continue;
+    }
+    const replayKey = createTwilioReplayKey({
+      verificationUrl: candidateUrl,
+      signature,
+      requestParams: params,
+    });
+    const isReplay = markReplay(twilioReplayCache, replayKey);
+    return { ok: true, verificationUrl: candidateUrl, isReplay, verifiedRequestKey: replayKey };
+  }
+
   // Check if this is ngrok free tier - the URL might have different format
   const isNgrokFreeTier =
     verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
@@ -648,6 +722,24 @@ function normalizeSignatureBase64(input: string): string {
 function getBaseUrlNoQuery(url: string): string {
   const u = new URL(url);
   return `${u.protocol}//${u.host}${u.pathname}`;
+}
+
+function createPlivoV2ReplayKey(url: string, nonce: string): string {
+  return `plivo:v2:${sha256Hex(`${getBaseUrlNoQuery(url)}\n${nonce}`)}`;
+}
+
+function createPlivoV3ReplayKey(params: {
+  method: "GET" | "POST";
+  url: string;
+  postParams: PlivoParamMap;
+  nonce: string;
+}): string {
+  const baseUrl = constructPlivoV3BaseUrl({
+    method: params.method,
+    url: params.url,
+    postParams: params.postParams,
+  });
+  return `plivo:v3:${sha256Hex(`${baseUrl}\n${params.nonce}`)}`;
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {
@@ -873,7 +965,12 @@ export function verifyPlivoWebhook(
         reason: "Invalid Plivo V3 signature",
       };
     }
-    const replayKey = `plivo:v3:${sha256Hex(`${verificationUrl}\n${nonceV3}`)}`;
+    const replayKey = createPlivoV3ReplayKey({
+      method,
+      url: verificationUrl,
+      postParams,
+      nonce: nonceV3,
+    });
     const isReplay = markReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v3", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }
@@ -893,7 +990,7 @@ export function verifyPlivoWebhook(
         reason: "Invalid Plivo V2 signature",
       };
     }
-    const replayKey = `plivo:v2:${sha256Hex(`${verificationUrl}\n${nonceV2}`)}`;
+    const replayKey = createPlivoV2ReplayKey(verificationUrl, nonceV2);
     const isReplay = markReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v2", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }

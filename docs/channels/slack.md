@@ -169,15 +169,15 @@ For actions/directory reads, user token can be preferred when configured. For wr
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels`.
+    Channel allowlist lives under `channels.slack.channels` and should use stable channel IDs.
 
     Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     Name/ID resolution:
 
     - channel allowlist entries and DM allowlist entries are resolved at startup when token access allows
-    - unresolved entries are kept as configured
-    - inbound authorization matching is ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
+    - unresolved channel-name entries are kept as configured but ignored for routing by default
+    - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
   </Tab>
 
@@ -190,7 +190,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior
 
-    Per-channel controls (`channels.slack.channels.<id|name>`):
+    Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
     - `users` (allowlist)
@@ -217,6 +217,55 @@ For actions/directory reads, user token can be preferred when configured. For wr
   - more than 100 options: external select with async option filtering when interactivity options handlers are available
   - if encoded option values exceed Slack limits, the flow falls back to buttons
 - For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
+
+## Interactive replies
+
+Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
+
+Enable it globally:
+
+```json5
+{
+  channels: {
+    slack: {
+      capabilities: {
+        interactiveReplies: true,
+      },
+    },
+  },
+}
+```
+
+Or enable it for one Slack account only:
+
+```json5
+{
+  channels: {
+    slack: {
+      accounts: {
+        ops: {
+          capabilities: {
+            interactiveReplies: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+When enabled, agents can emit Slack-only reply directives:
+
+- `[[slack_buttons: Approve:approve, Reject:reject]]`
+- `[[slack_select: Choose a target | Canary:canary, Production:production]]`
+
+These directives compile into Slack Block Kit and route clicks or selections back through the existing Slack interaction event path.
+
+Notes:
+
+- This is Slack-specific UI. Other channels do not translate Slack Block Kit directives into their own button systems.
+- The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
+- If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
 
 Default slash command settings:
 
@@ -295,6 +344,8 @@ Available action groups in current Slack tooling:
 | memberInfo | enabled |
 | emojiList  | enabled |
 
+Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`.
+
 ## Events and operational behavior
 
 - Message edits/deletes/thread broadcasts are mapped into system events.
@@ -321,7 +372,21 @@ Resolution order:
 Notes:
 
 - Slack expects shortcodes (for example `"eyes"`).
-- Use `""` to disable the reaction for a channel or account.
+- Use `""` to disable the reaction for the Slack account or globally.
+
+## Typing reaction fallback
+
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is a useful fallback when Slack native assistant typing is unavailable, especially in DMs.
+
+Resolution order:
+
+- `channels.slack.accounts.<accountId>.typingReaction`
+- `channels.slack.typingReaction`
+
+Notes:
+
+- Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
+- The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
 ## Manifest and scope checklist
 
@@ -534,6 +599,8 @@ Primary reference:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Troubleshooting](/channels/troubleshooting)
 - [Configuration](/gateway/configuration)

@@ -51,6 +51,15 @@ export type MarkdownIR = {
   links: MarkdownLinkSpan[];
 };
 
+export type MarkdownTableData = {
+  headers: string[];
+  rows: string[][];
+};
+
+export type MarkdownTableMeta = MarkdownTableData & {
+  placeholderOffset: number;
+};
+
 type OpenStyle = {
   style: MarkdownStyle;
   start: number;
@@ -86,6 +95,7 @@ type RenderState = RenderTarget & {
   tableMode: MarkdownTableMode;
   table: TableState | null;
   hasTables: boolean;
+  collectedTables: MarkdownTableMeta[];
 };
 
 export type MarkdownParseOptions = {
@@ -94,7 +104,7 @@ export type MarkdownParseOptions = {
   headingStyle?: "none" | "bold";
   blockquotePrefix?: string;
   autolink?: boolean;
-  /** How to render tables (off|bullets|code). Default: off. */
+  /** How to render tables (off|bullets|code|block). Default: off. */
   tableMode?: MarkdownTableMode;
 };
 
@@ -400,6 +410,41 @@ function appendCellTextOnly(state: RenderState, cell: TableCell) {
   // Do not append styles - this is used for code blocks where inner styles would overlap
 }
 
+function collectTableBlock(state: RenderState) {
+  if (!state.table) {
+    return;
+  }
+  state.collectedTables.push({
+    headers: state.table.headers.map((cell) => trimCell(cell).text),
+    rows: state.table.rows.map((row) => row.map((cell) => trimCell(cell).text)),
+    placeholderOffset: state.text.length,
+  });
+}
+
+function appendTableBulletValue(
+  state: RenderState,
+  params: {
+    header?: TableCell;
+    value?: TableCell;
+    columnIndex: number;
+    includeColumnFallback: boolean;
+  },
+) {
+  const { header, value, columnIndex, includeColumnFallback } = params;
+  if (!value?.text) {
+    return;
+  }
+  state.text += "• ";
+  if (header?.text) {
+    appendCell(state, header);
+    state.text += ": ";
+  } else if (includeColumnFallback) {
+    state.text += `Column ${columnIndex}: `;
+  }
+  appendCell(state, value);
+  state.text += "\n";
+}
+
 function renderTableAsBullets(state: RenderState) {
   if (!state.table) {
     return;
@@ -436,20 +481,12 @@ function renderTableAsBullets(state: RenderState) {
 
       // Add each column as a bullet point
       for (let i = 1; i < row.length; i++) {
-        const header = headers[i];
-        const value = row[i];
-        if (!value?.text) {
-          continue;
-        }
-        state.text += "• ";
-        if (header?.text) {
-          appendCell(state, header);
-          state.text += ": ";
-        } else {
-          state.text += `Column ${i}: `;
-        }
-        appendCell(state, value);
-        state.text += "\n";
+        appendTableBulletValue(state, {
+          header: headers[i],
+          value: row[i],
+          columnIndex: i,
+          includeColumnFallback: true,
+        });
       }
       state.text += "\n";
     }
@@ -457,18 +494,12 @@ function renderTableAsBullets(state: RenderState) {
     // Simple table: just list headers and values
     for (const row of rows) {
       for (let i = 0; i < row.length; i++) {
-        const header = headers[i];
-        const value = row[i];
-        if (!value?.text) {
-          continue;
-        }
-        state.text += "• ";
-        if (header?.text) {
-          appendCell(state, header);
-          state.text += ": ";
-        }
-        appendCell(state, value);
-        state.text += "\n";
+        appendTableBulletValue(state, {
+          header: headers[i],
+          value: row[i],
+          columnIndex: i,
+          includeColumnFallback: false,
+        });
       }
       state.text += "\n";
     }
@@ -686,6 +717,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
             renderTableAsBullets(state);
           } else if (state.tableMode === "code") {
             renderTableAsCode(state);
+          } else if (state.tableMode === "block") {
+            collectTableBlock(state);
           }
         }
         state.table = null;
@@ -813,6 +846,19 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
   return merged;
 }
 
+function resolveSliceBounds(
+  span: { start: number; end: number },
+  start: number,
+  end: number,
+): { start: number; end: number } | null {
+  const sliceStart = Math.max(span.start, start);
+  const sliceEnd = Math.min(span.end, end);
+  if (sliceEnd <= sliceStart) {
+    return null;
+  }
+  return { start: sliceStart, end: sliceEnd };
+}
+
 function sliceStyleSpans(
   spans: MarkdownStyleSpan[],
   start: number,
@@ -823,15 +869,15 @@ function sliceStyleSpans(
   }
   const sliced: MarkdownStyleSpan[] = [];
   for (const span of spans) {
-    const sliceStart = Math.max(span.start, start);
-    const sliceEnd = Math.min(span.end, end);
-    if (sliceEnd > sliceStart) {
-      sliced.push({
-        start: sliceStart - start,
-        end: sliceEnd - start,
-        style: span.style,
-      });
+    const bounds = resolveSliceBounds(span, start, end);
+    if (!bounds) {
+      continue;
     }
+    sliced.push({
+      start: bounds.start - start,
+      end: bounds.end - start,
+      style: span.style,
+    });
   }
   return mergeStyleSpans(sliced);
 }
@@ -842,17 +888,25 @@ function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): 
   }
   const sliced: MarkdownLinkSpan[] = [];
   for (const span of spans) {
-    const sliceStart = Math.max(span.start, start);
-    const sliceEnd = Math.min(span.end, end);
-    if (sliceEnd > sliceStart) {
-      sliced.push({
-        start: sliceStart - start,
-        end: sliceEnd - start,
-        href: span.href,
-      });
+    const bounds = resolveSliceBounds(span, start, end);
+    if (!bounds) {
+      continue;
     }
+    sliced.push({
+      start: bounds.start - start,
+      end: bounds.end - start,
+      href: span.href,
+    });
   }
   return sliced;
+}
+
+export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
+  return {
+    text: ir.text.slice(start, end),
+    styles: sliceStyleSpans(ir.styles, start, end),
+    links: sliceLinkSpans(ir.links, start, end),
+  };
 }
 
 export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
@@ -862,7 +916,7 @@ export function markdownToIR(markdown: string, options: MarkdownParseOptions = {
 export function markdownToIRWithMeta(
   markdown: string,
   options: MarkdownParseOptions = {},
-): { ir: MarkdownIR; hasTables: boolean } {
+): { ir: MarkdownIR; hasTables: boolean; tables: MarkdownTableMeta[] } {
   const env: RenderEnv = { listStack: [] };
   const md = createMarkdownIt(options);
   const tokens = md.parse(markdown ?? "", env as unknown as object);
@@ -885,6 +939,7 @@ export function markdownToIRWithMeta(
     tableMode,
     table: null,
     hasTables: false,
+    collectedTables: [],
   };
 
   renderTokens(tokens as MarkdownToken[], state);
@@ -912,6 +967,10 @@ export function markdownToIRWithMeta(
       links: clampLinkSpans(state.links, finalLength),
     },
     hasTables: state.hasTables,
+    tables: state.collectedTables.map((table) => ({
+      ...table,
+      placeholderOffset: Math.min(table.placeholderOffset, finalLength),
+    })),
   };
 }
 

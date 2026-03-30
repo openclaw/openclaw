@@ -37,8 +37,9 @@ Restart the Gateway afterwards.
 ### Option B: install from a local folder (dev)
 
 ```bash
-openclaw plugins install ./extensions/zalouser
-cd ./extensions/zalouser && pnpm install
+PLUGIN_SRC=./path/to/local/zalouser-plugin
+openclaw plugins install "$PLUGIN_SRC"
+cd "$PLUGIN_SRC" && pnpm install
 ```
 
 Restart the Gateway afterwards.
@@ -73,3 +74,5 @@ openclaw directory peers list --channel zalouser --query "name"
 Tool name: `zalouser`
 
 Actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
+
+Channel message actions also support `react` for message reactions.

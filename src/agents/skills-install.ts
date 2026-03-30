@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createBeforeInstallHookPayload } from "../plugins/install-policy-context.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
@@ -15,6 +17,7 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import { resolveSkillSource } from "./skills/source.js";
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -55,13 +58,44 @@ function formatScanFindingDetail(
   return `${finding.message} (${filePath}:${finding.line})`;
 }
 
-async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<string[]> {
+type SkillScanFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  file: string;
+  line: number;
+  message: string;
+};
+
+type SkillBuiltinScan = {
+  status: "ok" | "error";
+  scannedFiles: number;
+  critical: number;
+  warn: number;
+  info: number;
+  findings: SkillScanFinding[];
+  error?: string;
+};
+
+type SkillScanResult = {
+  warnings: string[];
+  builtinScan: SkillBuiltinScan;
+};
+
+async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<SkillScanResult> {
   const warnings: string[] = [];
   const skillName = entry.skill.name;
   const skillDir = path.resolve(entry.skill.baseDir);
 
   try {
     const summary = await scanDirectoryWithSummary(skillDir);
+    const builtinScan: SkillBuiltinScan = {
+      status: "ok",
+      scannedFiles: summary.scannedFiles,
+      critical: summary.critical,
+      warn: summary.warn,
+      info: summary.info,
+      findings: summary.findings,
+    };
     if (summary.critical > 0) {
       const criticalDetails = summary.findings
         .filter((finding) => finding.severity === "critical")
@@ -75,13 +109,24 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<strin
         `Skill "${skillName}" has ${summary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
       );
     }
+    return { warnings, builtinScan };
   } catch (err) {
     warnings.push(
       `Skill "${skillName}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
     );
+    return {
+      warnings,
+      builtinScan: {
+        status: "error",
+        scannedFiles: 0,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+        error: String(err),
+      },
+    };
   }
-
-  return warnings;
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -98,6 +143,24 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
   return undefined;
 }
 
+function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpec {
+  return {
+    ...(spec.id ? { id: spec.id } : {}),
+    kind: spec.kind,
+    ...(spec.label ? { label: spec.label } : {}),
+    ...(spec.bins ? { bins: spec.bins.slice() } : {}),
+    ...(spec.os ? { os: spec.os.slice() } : {}),
+    ...(spec.formula ? { formula: spec.formula } : {}),
+    ...(spec.package ? { package: spec.package } : {}),
+    ...(spec.module ? { module: spec.module } : {}),
+    ...(spec.url ? { url: spec.url } : {}),
+    ...(spec.archive ? { archive: spec.archive } : {}),
+    ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
+    ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
+    ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
+  };
+}
+
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
@@ -109,6 +172,24 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
     default:
       return ["npm", "install", "-g", "--ignore-scripts", packageName];
   }
+}
+
+// Strict allowlist patterns to prevent option injection and malicious package names.
+const SAFE_BREW_FORMULA = /^[a-z0-9][a-z0-9+._@-]*(\/[a-z0-9][a-z0-9+._@-]*){0,2}$/;
+const SAFE_NODE_PACKAGE = /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+(@[a-z0-9^~>=<.*|-]+)?$/;
+const SAFE_GO_MODULE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*@[a-z0-9v._-]+$/;
+const SAFE_UV_PACKAGE =
+  /^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?(([><=!~]=?|===?)[a-z0-9.*_-]+)?$/i;
+
+function assertSafeInstallerValue(value: string, kind: string, pattern: RegExp): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("-")) {
+    return `${kind} value is empty or starts with a dash`;
+  }
+  if (!pattern.test(trimmed)) {
+    return `${kind} value contains invalid characters: ${trimmed}`;
+  }
+  return null;
 }
 
 function buildInstallCommand(
@@ -123,27 +204,43 @@ function buildInstallCommand(
       if (!spec.formula) {
         return { argv: null, error: "missing brew formula" };
       }
-      return { argv: ["brew", "install", spec.formula] };
+      const err = assertSafeInstallerValue(spec.formula, "brew formula", SAFE_BREW_FORMULA);
+      if (err) {
+        return { argv: null, error: err };
+      }
+      return { argv: ["brew", "install", spec.formula.trim()] };
     }
     case "node": {
       if (!spec.package) {
         return { argv: null, error: "missing node package" };
       }
+      const err = assertSafeInstallerValue(spec.package, "node package", SAFE_NODE_PACKAGE);
+      if (err) {
+        return { argv: null, error: err };
+      }
       return {
-        argv: buildNodeInstallCommand(spec.package, prefs),
+        argv: buildNodeInstallCommand(spec.package.trim(), prefs),
       };
     }
     case "go": {
       if (!spec.module) {
         return { argv: null, error: "missing go module" };
       }
-      return { argv: ["go", "install", spec.module] };
+      const err = assertSafeInstallerValue(spec.module, "go module", SAFE_GO_MODULE);
+      if (err) {
+        return { argv: null, error: err };
+      }
+      return { argv: ["go", "install", spec.module.trim()] };
     }
     case "uv": {
       if (!spec.package) {
         return { argv: null, error: "missing uv package" };
       }
-      return { argv: ["uv", "tool", "install", spec.package] };
+      const err = assertSafeInstallerValue(spec.package, "uv package", SAFE_UV_PACKAGE);
+      if (err) {
+        return { argv: null, error: err };
+      }
+      return { argv: ["uv", "tool", "install", spec.package.trim()] };
     }
     case "download": {
       return { argv: null, error: "download install handled separately" };
@@ -405,7 +502,64 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const spec = findInstallSpec(entry, params.installId);
-  const warnings = await collectSkillInstallScanWarnings(entry);
+  const scanResult = await collectSkillInstallScanWarnings(entry);
+  const warnings = scanResult.warnings;
+  const skillSource = resolveSkillSource(entry.skill);
+
+  // Run before_install so external scanners can augment findings or block installs.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_install")) {
+    try {
+      const { event, ctx } = createBeforeInstallHookPayload({
+        targetName: params.skillName,
+        targetType: "skill",
+        origin: skillSource,
+        sourcePath: path.resolve(entry.skill.baseDir),
+        sourcePathKind: "directory",
+        request: {
+          kind: "skill-install",
+          mode: "install",
+        },
+        builtinScan: scanResult.builtinScan,
+        skill: {
+          installId: params.installId,
+          ...(spec ? { installSpec: normalizeSkillInstallSpec(spec) } : {}),
+        },
+      });
+      const hookResult = await hookRunner.runBeforeInstall(event, ctx);
+      if (hookResult?.block) {
+        return {
+          ok: false,
+          message: hookResult.blockReason || "Installation blocked by plugin hook",
+          stdout: "",
+          stderr: "",
+          code: null,
+          warnings: warnings.length > 0 ? warnings.slice() : undefined,
+        };
+      }
+      if (hookResult?.findings) {
+        for (const finding of hookResult.findings) {
+          if (finding.severity === "critical") {
+            warnings.push(
+              `WARNING: Plugin scanner: ${finding.message} (${finding.file}:${finding.line})`,
+            );
+          } else if (finding.severity === "warn") {
+            warnings.push(`Plugin scanner: ${finding.message} (${finding.file}:${finding.line})`);
+          }
+        }
+      }
+    } catch {
+      // Hook errors are non-fatal — built-in scanner results still apply.
+    }
+  }
+  // Warn when install is triggered from a non-bundled source.
+  // Workspace/project/personal agent skills can contain attacker-controlled metadata.
+  const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);
+  if (!trustedInstallSources.has(skillSource)) {
+    warnings.push(
+      `WARNING: Skill "${params.skillName}" install triggered from non-bundled source "${skillSource}". Verify the install recipe is trusted.`,
+    );
+  }
   if (!spec) {
     return withWarnings(
       {

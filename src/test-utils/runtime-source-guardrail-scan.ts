@@ -13,16 +13,19 @@ const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
   /\.test-helpers\.tsx?$/,
   /\.test-utils\.tsx?$/,
   /\.test-harness\.tsx?$/,
+  /\.test-support\.tsx?$/,
   /\.suite\.tsx?$/,
   /\.e2e\.tsx?$/,
   /\.d\.ts$/,
-  /[\\/](?:__tests__|tests|test-utils)[\\/]/,
+  /[\\/](?:__tests__|tests|test-utils|test-support)[\\/]/,
   /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
   /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
   /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-support(?:\.[^\\/]+)?\.ts$/,
 ];
 
 const runtimeSourceGuardrailCache = new Map<string, Promise<RuntimeSourceGuardrailFile[]>>();
+const trackedRuntimeSourceListCache = new Map<string, string[]>();
 const FILE_READ_CONCURRENCY = 24;
 
 export function shouldSkipGuardrailRuntimeSource(relativePath: string): boolean {
@@ -49,7 +52,13 @@ async function readRuntimeSourceFiles(
       if (!absolutePath) {
         continue;
       }
-      const source = await fs.readFile(absolutePath, "utf8");
+      let source: string;
+      try {
+        source = await fs.readFile(absolutePath, "utf8");
+      } catch {
+        // File tracked by git but deleted on disk (e.g. pending deletion).
+        continue;
+      }
       output[index] = {
         relativePath: path.relative(repoRoot, absolutePath),
         source,
@@ -66,17 +75,24 @@ async function readRuntimeSourceFiles(
 }
 
 function tryListTrackedRuntimeSourceFiles(repoRoot: string): string[] | null {
+  const cached = trackedRuntimeSourceListCache.get(repoRoot);
+  if (cached) {
+    return cached.slice();
+  }
+
   try {
     const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", "src", "extensions"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return stdout
+    const files = stdout
       .split(/\r?\n/u)
       .filter(Boolean)
       .filter((relativePath) => relativePath.endsWith(".ts") || relativePath.endsWith(".tsx"))
       .filter((relativePath) => !shouldSkipGuardrailRuntimeSource(relativePath))
       .map((relativePath) => path.join(repoRoot, relativePath));
+    trackedRuntimeSourceListCache.set(repoRoot, files);
+    return files.slice();
   } catch {
     return null;
   }

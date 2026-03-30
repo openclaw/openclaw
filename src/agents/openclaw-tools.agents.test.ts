@@ -1,10 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
+  session: createPerSenderSessionConfig(),
 };
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -17,17 +15,15 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
 
   function setConfigWithAgentList(agentList: AgentConfig[]) {
     configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
+      session: createPerSenderSessionConfig(),
       agents: {
         list: agentList,
       },
@@ -49,13 +45,13 @@ describe("agents_list", () => {
       .details?.agents;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
+      session: createPerSenderSessionConfig(),
     };
+    await import("./test-helpers/fast-core-tools.js");
+    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
   });
 
   it("defaults to the requester agent only", async () => {

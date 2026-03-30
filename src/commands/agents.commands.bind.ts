@@ -1,9 +1,10 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { writeConfigFile } from "../config/config.js";
+import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
+import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { AgentBinding } from "../config/types.js";
+import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   applyAgentBindings,
@@ -11,7 +12,7 @@ import {
   parseBindingSpecs,
   removeAgentBindings,
 } from "./agents.bindings.js";
-import { requireValidConfig } from "./agents.command-shared.js";
+import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { buildAgentSummaries } from "./agents.config.js";
 
 type AgentsBindingsListOptions = {
@@ -56,7 +57,7 @@ function hasAgent(cfg: Awaited<ReturnType<typeof requireValidConfig>>, agentId: 
   return buildAgentSummaries(cfg).some((summary) => summary.id === agentId);
 }
 
-function formatBindingOwnerLine(binding: AgentBinding): string {
+function formatBindingOwnerLine(binding: AgentRouteBinding): string {
   return `${normalizeAgentId(binding.agentId)} <- ${describeBinding(binding)}`;
 }
 
@@ -82,7 +83,7 @@ function resolveTargetAgentIdOrExit(params: {
 }
 
 function formatBindingConflicts(
-  conflicts: Array<{ binding: AgentBinding; existingAgentId: string }>,
+  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>,
 ): string[] {
   return conflicts.map(
     (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
@@ -121,11 +122,35 @@ function emitJsonPayload(params: {
   if (!params.json) {
     return false;
   }
-  params.runtime.log(JSON.stringify(params.payload, null, 2));
+  writeRuntimeJson(params.runtime, params.payload);
   if ((params.conflictCount ?? 0) > 0) {
     params.runtime.exit(1);
   }
   return true;
+}
+
+async function resolveConfigAndTargetAgentIdOrExit(params: {
+  runtime: RuntimeEnv;
+  agentInput: string | undefined;
+}): Promise<{
+  cfg: NonNullable<Awaited<ReturnType<typeof requireValidConfig>>>;
+  agentId: string;
+  baseHash?: string;
+} | null> {
+  const configSnapshot = await requireValidConfigFileSnapshot(params.runtime);
+  if (!configSnapshot) {
+    return null;
+  }
+  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
+  const agentId = resolveTargetAgentIdOrExit({
+    cfg,
+    runtime: params.runtime,
+    agentInput: params.agentInput,
+  });
+  if (!agentId) {
+    return null;
+  }
+  return { cfg, agentId, baseHash: configSnapshot.hash };
 }
 
 export async function agentsBindingsCommand(
@@ -149,20 +174,17 @@ export async function agentsBindingsCommand(
     return;
   }
 
-  const filtered = (cfg.bindings ?? []).filter(
+  const filtered = listRouteBindings(cfg).filter(
     (binding) => !filterAgentId || normalizeAgentId(binding.agentId) === filterAgentId,
   );
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        filtered.map((binding) => ({
-          agentId: normalizeAgentId(binding.agentId),
-          match: binding.match,
-          description: describeBinding(binding),
-        })),
-        null,
-        2,
-      ),
+    writeRuntimeJson(
+      runtime,
+      filtered.map((binding) => ({
+        agentId: normalizeAgentId(binding.agentId),
+        match: binding.match,
+        description: describeBinding(binding),
+      })),
     );
     return;
   }
@@ -186,15 +208,14 @@ export async function agentsBindCommand(
   opts: AgentsBindOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const resolved = await resolveConfigAndTargetAgentIdOrExit({
+    runtime,
+    agentInput: opts.agent,
+  });
+  if (!resolved) {
     return;
   }
-
-  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
-  if (!agentId) {
-    return;
-  }
+  const { cfg, agentId, baseHash } = resolved;
 
   const parsed = resolveParsedBindingsOrExit({
     runtime,
@@ -209,7 +230,10 @@ export async function agentsBindCommand(
 
   const result = applyAgentBindings(cfg, parsed.bindings);
   if (result.added.length > 0 || result.updated.length > 0) {
-    await writeConfigFile(result.config);
+    await replaceConfigFile({
+      nextConfig: result.config,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
@@ -264,15 +288,14 @@ export async function agentsUnbindCommand(
   opts: AgentsUnbindOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const resolved = await resolveConfigAndTargetAgentIdOrExit({
+    runtime,
+    agentInput: opts.agent,
+  });
+  if (!resolved) {
     return;
   }
-
-  const agentId = resolveTargetAgentIdOrExit({ cfg, runtime, agentInput: opts.agent });
-  if (!agentId) {
-    return;
-  }
+  const { cfg, agentId, baseHash } = resolved;
   if (opts.all && (opts.bind?.length ?? 0) > 0) {
     runtime.error("Use either --all or --bind, not both.");
     runtime.exit(1);
@@ -280,18 +303,23 @@ export async function agentsUnbindCommand(
   }
 
   if (opts.all) {
-    const existing = cfg.bindings ?? [];
+    const existing = listRouteBindings(cfg);
     const removed = existing.filter((binding) => normalizeAgentId(binding.agentId) === agentId);
-    const kept = existing.filter((binding) => normalizeAgentId(binding.agentId) !== agentId);
+    const keptRoutes = existing.filter((binding) => normalizeAgentId(binding.agentId) !== agentId);
+    const nonRoutes = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
     if (removed.length === 0) {
       runtime.log(`No bindings to remove for agent "${agentId}".`);
       return;
     }
     const next = {
       ...cfg,
-      bindings: kept.length > 0 ? kept : undefined,
+      bindings:
+        [...keptRoutes, ...nonRoutes].length > 0 ? [...keptRoutes, ...nonRoutes] : undefined,
     };
-    await writeConfigFile(next);
+    await replaceConfigFile({
+      nextConfig: next,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
@@ -321,7 +349,10 @@ export async function agentsUnbindCommand(
 
   const result = removeAgentBindings(cfg, parsed.bindings);
   if (result.removed.length > 0) {
-    await writeConfigFile(result.config);
+    await replaceConfigFile({
+      nextConfig: result.config,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
     if (!opts.json) {
       logConfigUpdated(runtime);
     }

@@ -275,9 +275,21 @@ private struct ManualEntryStep: View {
 
         if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            self.manualToken = ""
         }
         if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            self.manualPassword = ""
+        }
+
+        let trimmedInstanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedInstanceId.isEmpty {
+            let trimmedBootstrapToken =
+                payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
 
         self.setupStatusText = "Setup code applied."
@@ -302,6 +314,7 @@ private struct ManualEntryStep: View {
     // (GatewaySetupCode) decode raw setup codes.
 }
 
+@MainActor
 private func gatewayConnectionStatusLines(
     appModel: NodeAppModel,
     gatewayController: GatewayConnectionController) -> [String]
@@ -309,6 +322,7 @@ private func gatewayConnectionStatusLines(
     ConnectionStatusBox.defaultLines(appModel: appModel, gatewayController: gatewayController)
 }
 
+@MainActor
 private func resetGatewayConnectionState(
     appModel: NodeAppModel,
     connectStatusText: inout String?,
@@ -319,6 +333,7 @@ private func resetGatewayConnectionState(
     connectingGatewayID = nil
 }
 
+@MainActor
 @ViewBuilder
 private func gatewayConnectionStatusSection(
     appModel: NodeAppModel,

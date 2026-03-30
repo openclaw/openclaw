@@ -3,7 +3,8 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
-} from "openclaw/plugin-sdk";
+  SecretInput,
+} from "../runtime-api.js";
 
 export type { DmPolicy, GroupPolicy };
 
@@ -29,13 +30,13 @@ export type NextcloudTalkAccountConfig = {
   /** Base URL of the Nextcloud instance (e.g., "https://cloud.example.com"). */
   baseUrl?: string;
   /** Bot shared secret from occ talk:bot:install output. */
-  botSecret?: string;
+  botSecret?: SecretInput;
   /** Path to file containing bot secret (for secret managers). */
   botSecretFile?: string;
   /** Optional API user for room lookups (DM detection). */
   apiUser?: string;
   /** Optional API password/app password for room lookups. */
-  apiPassword?: string;
+  apiPassword?: SecretInput;
   /** Path to file containing API password/app password. */
   apiPasswordFile?: string;
   /** Direct message policy (default: pairing). */
@@ -74,6 +75,8 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
+  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Nextcloud on LAN/VPN. */
+  allowPrivateNetwork?: boolean;
 };
 
 export type NextcloudTalkConfig = {

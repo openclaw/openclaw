@@ -48,8 +48,14 @@ export function checkTwitchAccessControl(params: {
     }
   }
 
-  if (account.allowFrom && account.allowFrom.length > 0) {
+  if (account.allowFrom !== undefined) {
     const allowFrom = account.allowFrom;
+    if (allowFrom.length === 0) {
+      return {
+        allowed: false,
+        reason: "sender is not in allowFrom allowlist",
+      };
+    }
     const senderId = message.userId;
 
     if (!senderId) {

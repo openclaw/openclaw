@@ -15,6 +15,10 @@ The tool can return:
 - `details.viewerUrl`: a gateway URL that can be opened in the canvas
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)
+- `details.artifactId` and `details.expiresAt`: artifact identity and TTL metadata
+- `details.context`: available routing metadata such as `agentId`, `sessionId`, `messageChannel`, and `agentAccountId`
+
+When the plugin is enabled, it also ships a companion skill from `skills/` and prepends stable tool-usage guidance into system-prompt space via `before_prompt_build`. The hook uses `prependSystemContext`, so the guidance stays out of user-prompt space while still being available every turn.
 
 This means an agent can:
 
@@ -47,6 +51,7 @@ Patch:
 Useful options:
 
 - `mode`: `view`, `file`, or `both`
+  Deprecated alias: `image` behaves like `file` and is still accepted for backward compatibility.
 - `layout`: `unified` or `split`
 - `theme`: `light` or `dark` (default: `dark`)
 - `fileFormat`: `png` or `pdf` (default: `png`)

@@ -3,6 +3,7 @@ import Foundation
 enum ExecSystemRunCommandValidator {
     struct ResolvedCommand {
         let displayCommand: String
+        let evaluationRawCommand: String?
     }
 
     enum ValidationResult {
@@ -52,18 +53,47 @@ enum ExecSystemRunCommandValidator {
         let envManipulationBeforeShellWrapper = self.hasEnvManipulationBeforeShellWrapper(command)
         let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
         let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
-
-        let inferred: String = if let shellCommand, !mustBindDisplayToFullArgv {
+        let canonicalDisplay = ExecCommandFormatter.displayString(for: command)
+        let legacyShellDisplay: String? = if let shellCommand, !mustBindDisplayToFullArgv {
             shellCommand
         } else {
-            ExecCommandFormatter.displayString(for: command)
+            nil
         }
 
-        if let raw = normalizedRaw, raw != inferred {
-            return .invalid(message: "INVALID_REQUEST: rawCommand does not match command")
+        if let raw = normalizedRaw {
+            let matchesCanonical = raw == canonicalDisplay
+            let matchesLegacyShellText = legacyShellDisplay == raw
+            if !matchesCanonical, !matchesLegacyShellText {
+                return .invalid(message: "INVALID_REQUEST: rawCommand does not match command")
+            }
         }
 
-        return .ok(ResolvedCommand(displayCommand: normalizedRaw ?? inferred))
+        return .ok(ResolvedCommand(
+            displayCommand: canonicalDisplay,
+            evaluationRawCommand: self.allowlistEvaluationRawCommand(
+                normalizedRaw: normalizedRaw,
+                shellIsWrapper: shell.isWrapper,
+                previewCommand: legacyShellDisplay)))
+    }
+
+    static func allowlistEvaluationRawCommand(command: [String], rawCommand: String?) -> String? {
+        let normalizedRaw = self.normalizeRaw(rawCommand)
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
+        let shellCommand = shell.isWrapper ? self.trimmedNonEmpty(shell.command) : nil
+
+        let envManipulationBeforeShellWrapper = self.hasEnvManipulationBeforeShellWrapper(command)
+        let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
+        let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
+        let previewCommand: String? = if let shellCommand, !mustBindDisplayToFullArgv {
+            shellCommand
+        } else {
+            nil
+        }
+
+        return self.allowlistEvaluationRawCommand(
+            normalizedRaw: normalizedRaw,
+            shellIsWrapper: shell.isWrapper,
+            previewCommand: previewCommand)
     }
 
     private static func normalizeRaw(_ rawCommand: String?) -> String? {
@@ -74,6 +104,20 @@ enum ExecSystemRunCommandValidator {
     private static func trimmedNonEmpty(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func allowlistEvaluationRawCommand(
+        normalizedRaw: String?,
+        shellIsWrapper: Bool,
+        previewCommand: String?) -> String?
+    {
+        guard shellIsWrapper else {
+            return normalizedRaw
+        }
+        guard let normalizedRaw else {
+            return nil
+        }
+        return normalizedRaw == previewCommand ? normalizedRaw : nil
     }
 
     private static func normalizeExecutableToken(_ token: String) -> String {
@@ -109,7 +153,12 @@ enum ExecSystemRunCommandValidator {
                 idx += 1
                 continue
             }
-            if token == "--" || token == "-" {
+            if token == "--" {
+                idx += 1
+                break
+            }
+            if token == "-" {
+                usesModifiers = true
                 idx += 1
                 break
             }
@@ -124,12 +173,12 @@ enum ExecSystemRunCommandValidator {
 
             let lower = token.lowercased()
             let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
-                if ExecEnvOptions.flagOnly.contains(flag) {
+            if ExecEnvOptions.flagOnly.contains(flag) {
                 usesModifiers = true
                 idx += 1
                 continue
             }
-                if ExecEnvOptions.withValue.contains(flag) {
+            if ExecEnvOptions.withValue.contains(flag) {
                 usesModifiers = true
                 if !lower.contains("=") {
                     expectsOptionValue = true
@@ -181,7 +230,7 @@ enum ExecSystemRunCommandValidator {
         return Array(argv[appletIndex...])
     }
 
-    private static func hasEnvManipulationBeforeShellWrapper(
+    static func hasEnvManipulationBeforeShellWrapper(
         _ argv: [String],
         depth: Int = 0,
         envManipulationSeen: Bool = false) -> Bool

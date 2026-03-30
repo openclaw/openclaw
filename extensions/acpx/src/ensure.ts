@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { PluginLogger } from "openclaw/plugin-sdk";
+import type { PluginLogger } from "../runtime-api.js";
 import { ACPX_PINNED_VERSION, ACPX_PLUGIN_ROOT, buildAcpxLocalInstallCommand } from "./config.js";
 import {
   resolveSpawnFailure,
@@ -76,10 +76,33 @@ function resolveVersionFromPackage(command: string, cwd: string): string | null 
   }
 }
 
+function resolveVersionCheckResult(params: {
+  expectedVersion?: string;
+  installedVersion: string;
+  installCommand: string;
+}): AcpxVersionCheckResult {
+  if (params.expectedVersion && params.installedVersion !== params.expectedVersion) {
+    return {
+      ok: false,
+      reason: "version-mismatch",
+      message: `acpx version mismatch: found ${params.installedVersion}, expected ${params.expectedVersion}`,
+      expectedVersion: params.expectedVersion,
+      installCommand: params.installCommand,
+      installedVersion: params.installedVersion,
+    };
+  }
+  return {
+    ok: true,
+    version: params.installedVersion,
+    expectedVersion: params.expectedVersion,
+  };
+}
+
 export async function checkAcpxVersion(params: {
   command: string;
   cwd?: string;
   expectedVersion?: string;
+  stripProviderAuthEnvVars?: boolean;
   spawnOptions?: SpawnCommandOptions;
 }): Promise<AcpxVersionCheckResult> {
   const expectedVersion = params.expectedVersion?.trim() || undefined;
@@ -91,6 +114,7 @@ export async function checkAcpxVersion(params: {
     command: params.command,
     args: probeArgs,
     cwd,
+    stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
   };
   let result: Awaited<ReturnType<typeof spawnAndCollect>>;
   try {
@@ -131,21 +155,7 @@ export async function checkAcpxVersion(params: {
     if (hasExpectedVersion && isUnsupportedVersionProbe(result.stdout, result.stderr)) {
       const installedVersion = resolveVersionFromPackage(params.command, cwd);
       if (installedVersion) {
-        if (expectedVersion && installedVersion !== expectedVersion) {
-          return {
-            ok: false,
-            reason: "version-mismatch",
-            message: `acpx version mismatch: found ${installedVersion}, expected ${expectedVersion}`,
-            expectedVersion,
-            installCommand,
-            installedVersion,
-          };
-        }
-        return {
-          ok: true,
-          version: installedVersion,
-          expectedVersion,
-        };
+        return resolveVersionCheckResult({ expectedVersion, installedVersion, installCommand });
       }
     }
     const stderr = result.stderr.trim();
@@ -179,22 +189,7 @@ export async function checkAcpxVersion(params: {
     };
   }
 
-  if (expectedVersion && installedVersion !== expectedVersion) {
-    return {
-      ok: false,
-      reason: "version-mismatch",
-      message: `acpx version mismatch: found ${installedVersion}, expected ${expectedVersion}`,
-      expectedVersion,
-      installCommand,
-      installedVersion,
-    };
-  }
-
-  return {
-    ok: true,
-    version: installedVersion,
-    expectedVersion,
-  };
+  return resolveVersionCheckResult({ expectedVersion, installedVersion, installCommand });
 }
 
 let pendingEnsure: Promise<void> | null = null;
@@ -205,6 +200,7 @@ export async function ensureAcpx(params: {
   pluginRoot?: string;
   expectedVersion?: string;
   allowInstall?: boolean;
+  stripProviderAuthEnvVars?: boolean;
   spawnOptions?: SpawnCommandOptions;
 }): Promise<void> {
   if (pendingEnsure) {
@@ -221,6 +217,7 @@ export async function ensureAcpx(params: {
       command: params.command,
       cwd: pluginRoot,
       expectedVersion,
+      stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
       spawnOptions: params.spawnOptions,
     });
     if (precheck.ok) {
@@ -236,8 +233,15 @@ export async function ensureAcpx(params: {
 
     const install = await spawnAndCollect({
       command: "npm",
-      args: ["install", "--omit=dev", "--no-save", `acpx@${installVersion}`],
+      args: [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        `acpx@${installVersion}`,
+      ],
       cwd: pluginRoot,
+      stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
     });
 
     if (install.error) {
@@ -259,6 +263,7 @@ export async function ensureAcpx(params: {
       command: params.command,
       cwd: pluginRoot,
       expectedVersion,
+      stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
       spawnOptions: params.spawnOptions,
     });
 

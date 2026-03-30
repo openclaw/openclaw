@@ -1,21 +1,19 @@
 import crypto from "node:crypto";
-import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
-import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
+import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
 import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-} from "../../browser/constants.js";
-import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+  resolveProfile,
+  startBrowserBridgeServer,
+  stopBrowserBridgeServer,
+  type ResolvedBrowserConfig,
+} from "../../plugin-sdk/browser-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
-import {
-  DEFAULT_SANDBOX_BROWSER_IMAGE,
-  SANDBOX_AGENT_WORKSPACE_MOUNT,
-  SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
-} from "./constants.js";
+import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "./constants.js";
 import {
   buildSandboxCreateArgs,
   dockerContainerState,
@@ -37,6 +35,7 @@ import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
+import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
@@ -237,18 +236,13 @@ export async function ensureSandboxBrowser(params: {
       includeBinds: false,
       bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
     });
-    const mainMountSuffix =
-      params.cfg.workspaceAccess === "ro" && params.workspaceDir === params.agentWorkspaceDir
-        ? ":ro"
-        : "";
-    args.push("-v", `${params.workspaceDir}:${params.cfg.docker.workdir}${mainMountSuffix}`);
-    if (params.cfg.workspaceAccess !== "none" && params.workspaceDir !== params.agentWorkspaceDir) {
-      const agentMountSuffix = params.cfg.workspaceAccess === "ro" ? ":ro" : "";
-      args.push(
-        "-v",
-        `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
-      );
-    }
+    appendWorkspaceMountArgs({
+      args,
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      workdir: params.cfg.docker.workdir,
+      workspaceAccess: params.cfg.workspaceAccess,
+    });
     if (browserDockerCfg.binds?.length) {
       for (const bind of browserDockerCfg.binds) {
         args.push("-v", bind);

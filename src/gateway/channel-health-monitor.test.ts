@@ -11,6 +11,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
     markChannelLoggedOut: vi.fn(),
+    isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
     ...overrides,
@@ -65,7 +66,7 @@ async function startAndRunCheck(
   overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
-  const startupGraceMs = overrides.startupGraceMs ?? 0;
+  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? overrides.startupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
   await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
@@ -78,6 +79,74 @@ function managedStoppedAccount(lastError: string): Partial<ChannelAccountSnapsho
     configured: true,
     lastError,
   };
+}
+
+function runningConnectedSlackAccount(
+  overrides: Partial<ChannelAccountSnapshot>,
+): Partial<ChannelAccountSnapshot> {
+  return {
+    running: true,
+    connected: true,
+    enabled: true,
+    configured: true,
+    ...overrides,
+  };
+}
+
+function createSlackSnapshotManager(
+  account: Partial<ChannelAccountSnapshot>,
+  overrides?: Partial<ChannelManager>,
+): ChannelManager {
+  return createSnapshotManager(
+    {
+      slack: {
+        default: account,
+      },
+    },
+    overrides,
+  );
+}
+
+function createBusyDisconnectedManager(lastRunActivityAt: number): ChannelManager {
+  const now = Date.now();
+  return createSnapshotManager({
+    discord: {
+      default: {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 300_000,
+        activeRuns: 1,
+        busy: true,
+        lastRunActivityAt,
+      },
+    },
+  });
+}
+
+async function expectRestartedChannel(
+  manager: ChannelManager,
+  channel: ChannelId,
+  accountId = "default",
+) {
+  const monitor = await startAndRunCheck(manager);
+  expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId);
+  expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId);
+  monitor.stop();
+}
+
+async function expectNoRestart(manager: ChannelManager) {
+  const monitor = await startAndRunCheck(manager);
+  expect(manager.stopChannel).not.toHaveBeenCalled();
+  expect(manager.startChannel).not.toHaveBeenCalled();
+  monitor.stop();
+}
+
+async function expectNoStart(manager: ChannelManager) {
+  const monitor = await startAndRunCheck(manager);
+  expect(manager.startChannel).not.toHaveBeenCalled();
+  monitor.stop();
 }
 
 describe("channel-health-monitor", () => {
@@ -100,6 +169,14 @@ describe("channel-health-monitor", () => {
     const manager = createMockChannelManager();
     const monitor = await startAndRunCheck(manager, { startupGraceMs: 1_000 });
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("accepts timing.monitorStartupGraceMs", async () => {
+    const manager = createMockChannelManager();
+    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });
 
@@ -126,9 +203,7 @@ describe("channel-health-monitor", () => {
         },
       },
     });
-    const monitor = await startAndRunCheck(manager);
-    expect(manager.startChannel).not.toHaveBeenCalled();
-    monitor.stop();
+    await expectNoStart(manager);
   });
 
   it("skips unconfigured channels", async () => {
@@ -137,9 +212,7 @@ describe("channel-health-monitor", () => {
         default: { running: false, enabled: true, configured: false },
       },
     });
-    const monitor = await startAndRunCheck(manager);
-    expect(manager.startChannel).not.toHaveBeenCalled();
-    monitor.stop();
+    await expectNoStart(manager);
   });
 
   it("skips manually stopped channels", async () => {
@@ -151,12 +224,58 @@ describe("channel-health-monitor", () => {
       },
       { isManuallyStopped: vi.fn(() => true) },
     );
+    await expectNoStart(manager);
+  });
+
+  it("skips channels with health monitor disabled globally for that account", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: { running: false, enabled: true, configured: true },
+        },
+      },
+      { isHealthMonitorEnabled: vi.fn(() => false) },
+    );
+    await expectNoStart(manager);
+  });
+
+  it("still restarts enabled accounts when another account on the same channel is disabled", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 300_000,
+          },
+          quiet: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 300_000,
+          },
+        },
+      },
+      {
+        isHealthMonitorEnabled: vi.fn((channelId: ChannelId, accountId: string) => {
+          return !(channelId === "discord" && accountId === "quiet");
+        }),
+      },
+    );
     const monitor = await startAndRunCheck(manager);
-    expect(manager.startChannel).not.toHaveBeenCalled();
+    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet");
+    expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet");
     monitor.stop();
   });
 
   it("restarts a stuck channel (running but not connected)", async () => {
+    const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
         default: {
@@ -165,6 +284,7 @@ describe("channel-health-monitor", () => {
           enabled: true,
           configured: true,
           linked: true,
+          lastStartAt: now - 300_000,
         },
       },
     });
@@ -172,6 +292,72 @@ describe("channel-health-monitor", () => {
     expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    monitor.stop();
+  });
+
+  it("skips restart when channel is busy with active runs", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          activeRuns: 2,
+          busy: true,
+          lastRunActivityAt: now - 30_000,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("restarts busy channels when run activity is stale", async () => {
+    const now = Date.now();
+    const manager = createBusyDisconnectedManager(now - 26 * 60_000);
+    await expectRestartedChannel(manager, "discord");
+  });
+
+  it("restarts disconnected channels when busy flags are inherited from a prior lifecycle", async () => {
+    const now = Date.now();
+    const manager = createBusyDisconnectedManager(now - 301_000);
+    await expectRestartedChannel(manager, "discord");
+  });
+
+  it("skips recently-started channels while they are still connecting", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 5_000,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("respects custom per-channel startup grace", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 30_000,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager, { channelStartupGraceMs: 60_000 });
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
   });
 
@@ -312,98 +498,74 @@ describe("channel-health-monitor", () => {
 
     it("restarts a channel with no events past the stale threshold", async () => {
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - STALE_THRESHOLD - 60_000,
-            lastEventAt: now - STALE_THRESHOLD - 30_000,
-          },
-        },
-      });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
-      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
-      monitor.stop();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - STALE_THRESHOLD - 30_000,
+        }),
+      );
+      await expectRestartedChannel(manager, "slack");
     });
 
     it("skips channels with recent events", async () => {
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - STALE_THRESHOLD - 60_000,
-            lastEventAt: now - 5_000,
-          },
-        },
-      });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).not.toHaveBeenCalled();
-      expect(manager.startChannel).not.toHaveBeenCalled();
-      monitor.stop();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - 5_000,
+        }),
+      );
+      await expectNoRestart(manager);
     });
 
     it("skips channels still within the startup grace window for stale detection", async () => {
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - 5_000,
-            lastEventAt: null,
-          },
-        },
-      });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).not.toHaveBeenCalled();
-      expect(manager.startChannel).not.toHaveBeenCalled();
-      monitor.stop();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - 5_000,
+          lastEventAt: null,
+        }),
+      );
+      await expectNoRestart(manager);
     });
 
-    it("restarts a channel that never received any event past the stale threshold", async () => {
+    it("restarts a channel that has seen no events since connect past the stale threshold", async () => {
+      const now = Date.now();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - STALE_THRESHOLD - 60_000,
+        }),
+      );
+      await expectRestartedChannel(manager, "slack");
+    });
+
+    it("skips connected channels that do not report event liveness", async () => {
       const now = Date.now();
       const manager = createSnapshotManager({
-        slack: {
+        telegram: {
           default: {
             running: true,
             connected: true,
             enabled: true,
             configured: true,
             lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: null,
           },
         },
       });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
-      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
-      monitor.stop();
+      await expectNoRestart(manager);
     });
 
     it("respects custom staleEventThresholdMs", async () => {
       const customThreshold = 10 * 60_000;
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - customThreshold - 60_000,
-            lastEventAt: now - customThreshold - 30_000,
-          },
-        },
-      });
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - customThreshold - 60_000,
+          lastEventAt: now - customThreshold - 30_000,
+        }),
+      );
       const monitor = await startAndRunCheck(manager, {
         staleEventThresholdMs: customThreshold,
       });

@@ -5,6 +5,25 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MenuSessionsInjectorTests {
+    @Test func anchorsDynamicRowsBelowControlsAndActions() throws {
+        let injector = MenuSessionsInjector()
+
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Header", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Send Heartbeats", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Browser Control", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Open Dashboard", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Open Chat", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ""))
+
+        let footerSeparatorIndex = try #require(menu.items.lastIndex(where: { $0.isSeparatorItem }))
+        #expect(injector.testingFindInsertIndex(in: menu) == footerSeparatorIndex)
+        #expect(injector.testingFindNodesInsertIndex(in: menu) == footerSeparatorIndex)
+    }
+
     @Test func injectsDisconnectedMessage() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(false)
@@ -19,7 +38,7 @@ struct MenuSessionsInjectorTests {
         #expect(menu.items.contains { $0.tag == 9_415_557 })
     }
 
-    @Test func injectsSessionRows() {
+    @Test func injectsSessionRows() throws {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
 
@@ -88,13 +107,25 @@ struct MenuSessionsInjectorTests {
         menu.addItem(NSMenuItem(title: "Header", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Send Heartbeats", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Browser Control", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Open Dashboard", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ""))
 
         injector.injectForTesting(into: menu)
         #expect(menu.items.contains { $0.tag == 9_415_557 })
         #expect(menu.items.contains { $0.tag == 9_415_557 && $0.isSeparatorItem })
+        let sendHeartbeatsIndex = try #require(menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }))
+        let openDashboardIndex = try #require(menu.items.firstIndex(where: { $0.title == "Open Dashboard" }))
+        let firstInjectedIndex = try #require(menu.items.firstIndex(where: { $0.tag == 9_415_557 }))
+        let settingsIndex = try #require(menu.items.firstIndex(where: { $0.title == "Settings…" }))
+        #expect(sendHeartbeatsIndex < firstInjectedIndex)
+        #expect(openDashboardIndex < firstInjectedIndex)
+        #expect(firstInjectedIndex < settingsIndex)
     }
 
-    @Test func costUsageSubmenuDoesNotUseInjectorDelegate() {
+    @Test func `cost usage submenu does not use injector delegate`() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
 

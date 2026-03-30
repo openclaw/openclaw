@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "../api.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
 

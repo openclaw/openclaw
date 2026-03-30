@@ -6,6 +6,7 @@ import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
+  SecretInputSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -33,6 +34,7 @@ export const HeartbeatSchema = z
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
     lightContext: z.boolean().optional(),
+    isolatedSession: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -261,22 +263,31 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    provider: z
-      .union([
-        z.literal("brave"),
-        z.literal("perplexity"),
-        z.literal("grok"),
-        z.literal("gemini"),
-        z.literal("kimi"),
-      ])
-      .optional(),
-    apiKey: z.string().optional().register(sensitive),
+    provider: z.string().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
-    perplexity: z
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    brave: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+        mode: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    firecrawl: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    gemini: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -284,22 +295,24 @@ export const ToolsWebSearchSchema = z
       .optional(),
     grok: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
       })
       .strict()
       .optional(),
-    gemini: z
+    kimi: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
       .strict()
       .optional(),
-    kimi: z
+    perplexity: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -314,10 +327,36 @@ export const ToolsWebFetchSchema = z
     enabled: z.boolean().optional(),
     maxChars: z.number().int().positive().optional(),
     maxCharsCap: z.number().int().positive().optional(),
+    maxResponseBytes: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    readability: z.boolean().optional(),
+    firecrawl: z
+      .object({
+        enabled: z.boolean().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        onlyMainContent: z.boolean().optional(),
+        maxAgeMs: z.number().int().nonnegative().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
+export const ToolsWebXSearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    model: z.string().optional(),
+    inlineCitations: z.boolean().optional(),
+    maxTurns: z.number().int().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    cacheTtlMinutes: z.number().nonnegative().optional(),
   })
   .strict()
   .optional();
@@ -326,6 +365,7 @@ export const ToolsWebSchema = z
   .object({
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
+    x_search: ToolsWebXSearchSchema,
   })
   .strict()
   .optional();
@@ -392,12 +432,13 @@ const ToolExecSafeBinProfileSchema = z
   .strict();
 
 const ToolExecBaseShape = {
-  host: z.enum(["sandbox", "gateway", "node"]).optional(),
+  host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   node: z.string().optional(),
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
+  strictInlineEval: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   backgroundMs: z.number().int().positive().optional(),
@@ -471,15 +512,34 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+export const SandboxSshSchema = z
+  .object({
+    target: z.string().min(1).optional(),
+    command: z.string().min(1).optional(),
+    workspaceRoot: z.string().min(1).optional(),
+    strictHostKeyChecking: z.boolean().optional(),
+    updateHostKeys: z.boolean().optional(),
+    identityFile: z.string().min(1).optional(),
+    certificateFile: z.string().min(1).optional(),
+    knownHostsFile: z.string().min(1).optional(),
+    identityData: SecretInputSchema.optional().register(sensitive),
+    certificateData: SecretInputSchema.optional().register(sensitive),
+    knownHostsData: SecretInputSchema.optional().register(sensitive),
+  })
+  .strict()
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+    backend: z.string().min(1).optional(),
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
+    ssh: SandboxSshSchema,
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })
@@ -544,25 +604,27 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
+    multimodal: z
+      .object({
+        enabled: z.boolean().optional(),
+        modalities: z
+          .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
+          .optional(),
+        maxFileBytes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),
       })
       .strict()
       .optional(),
-    provider: z
-      .union([
-        z.literal("openai"),
-        z.literal("local"),
-        z.literal("gemini"),
-        z.literal("voyage"),
-        z.literal("mistral"),
-      ])
-      .optional(),
+    provider: z.string().optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
@@ -577,17 +639,9 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    fallback: z
-      .union([
-        z.literal("openai"),
-        z.literal("gemini"),
-        z.literal("local"),
-        z.literal("voyage"),
-        z.literal("mistral"),
-        z.literal("none"),
-      ])
-      .optional(),
+    fallback: z.string().optional(),
     model: z.string().optional(),
+    outputDimensionality: z.number().int().positive().optional(),
     local: z
       .object({
         modelPath: z.string().optional(),
@@ -599,6 +653,12 @@ export const MemorySearchSchema = z
       .object({
         driver: z.literal("sqlite").optional(),
         path: z.string().optional(),
+        fts: z
+          .object({
+            tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),
+          })
+          .strict()
+          .optional(),
         vector: z
           .object({
             enabled: z.boolean().optional(),
@@ -627,6 +687,7 @@ export const MemorySearchSchema = z
           .object({
             deltaBytes: z.number().int().nonnegative().optional(),
             deltaMessages: z.number().int().nonnegative().optional(),
+            postCompactionForce: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -674,6 +735,33 @@ export const MemorySearchSchema = z
   .strict()
   .optional();
 export { AgentModelSchema };
+
+const AgentRuntimeAcpSchema = z
+  .object({
+    agent: z.string().optional(),
+    backend: z.string().optional(),
+    mode: z.enum(["persistent", "oneshot"]).optional(),
+    cwd: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const AgentRuntimeSchema = z
+  .union([
+    z
+      .object({
+        type: z.literal("embedded"),
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("acp"),
+        acp: AgentRuntimeAcpSchema,
+      })
+      .strict(),
+  ])
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -682,6 +770,11 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    thinkingDefault: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
+      .optional(),
+    reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
+    fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
@@ -707,7 +800,9 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
+    runtime: AgentRuntimeSchema,
   })
   .strict();
 

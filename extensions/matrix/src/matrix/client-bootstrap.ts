@@ -1,46 +1,144 @@
-import { LogService } from "@vector-im/matrix-bot-sdk";
-import { createMatrixClient } from "./client/create-client.js";
-import { startMatrixClientWithGrace } from "./client/startup.js";
+import { getMatrixRuntime } from "../runtime.js";
+import type { CoreConfig } from "../types.js";
+import { getActiveMatrixClient } from "./active-client.js";
+import { acquireSharedMatrixClient, isBunRuntime, resolveMatrixAuthContext } from "./client.js";
+import { releaseSharedClientInstance } from "./client/shared.js";
+import type { MatrixClient } from "./sdk.js";
 
-type MatrixClientBootstrapAuth = {
-  homeserver: string;
-  userId: string;
-  accessToken: string;
-  encryption?: boolean;
+type ResolvedRuntimeMatrixClient = {
+  client: MatrixClient;
+  stopOnDone: boolean;
+  cleanup?: (mode: ResolvedRuntimeMatrixClientStopMode) => Promise<void>;
 };
 
-type MatrixCryptoPrepare = {
-  prepare: (rooms?: string[]) => Promise<void>;
-};
+type MatrixRuntimeClientReadiness = "none" | "prepared" | "started";
+type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist";
 
-type MatrixBootstrapClient = Awaited<ReturnType<typeof createMatrixClient>>;
+type MatrixResolvedClientHook = (
+  client: MatrixClient,
+  context: { preparedByDefault: boolean },
+) => Promise<void> | void;
 
-export async function createPreparedMatrixClient(opts: {
-  auth: MatrixClientBootstrapAuth;
+async function ensureResolvedClientReadiness(params: {
+  client: MatrixClient;
+  readiness?: MatrixRuntimeClientReadiness;
+  preparedByDefault: boolean;
+}): Promise<void> {
+  if (params.readiness === "started") {
+    await params.client.start();
+    return;
+  }
+  if (params.readiness === "prepared" || (!params.readiness && params.preparedByDefault)) {
+    await params.client.prepareForOneOff();
+  }
+}
+
+function ensureMatrixNodeRuntime() {
+  if (isBunRuntime()) {
+    throw new Error("Matrix support requires Node (bun runtime not supported)");
+  }
+}
+
+async function resolveRuntimeMatrixClient(opts: {
+  client?: MatrixClient;
+  cfg?: CoreConfig;
   timeoutMs?: number;
-  accountId?: string;
-}): Promise<MatrixBootstrapClient> {
-  const client = await createMatrixClient({
-    homeserver: opts.auth.homeserver,
-    userId: opts.auth.userId,
-    accessToken: opts.auth.accessToken,
-    encryption: opts.auth.encryption,
-    localTimeoutMs: opts.timeoutMs,
+  accountId?: string | null;
+  onResolved?: MatrixResolvedClientHook;
+}): Promise<ResolvedRuntimeMatrixClient> {
+  ensureMatrixNodeRuntime();
+  if (opts.client) {
+    await opts.onResolved?.(opts.client, { preparedByDefault: false });
+    return { client: opts.client, stopOnDone: false };
+  }
+
+  const cfg = opts.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
+  const authContext = resolveMatrixAuthContext({
+    cfg,
     accountId: opts.accountId,
   });
-  if (opts.auth.encryption && client.crypto) {
-    try {
-      const joinedRooms = await client.getJoinedRooms();
-      await (client.crypto as MatrixCryptoPrepare).prepare(joinedRooms);
-    } catch {
-      // Ignore crypto prep failures for one-off requests.
-    }
+  const active = getActiveMatrixClient(authContext.accountId);
+  if (active) {
+    await opts.onResolved?.(active, { preparedByDefault: false });
+    return { client: active, stopOnDone: false };
   }
-  await startMatrixClientWithGrace({
+
+  const client = await acquireSharedMatrixClient({
+    cfg,
+    timeoutMs: opts.timeoutMs,
+    accountId: authContext.accountId,
+    startClient: false,
+  });
+  try {
+    await opts.onResolved?.(client, { preparedByDefault: true });
+  } catch (err) {
+    await releaseSharedClientInstance(client, "stop");
+    throw err;
+  }
+  return {
     client,
-    onError: (err: unknown) => {
-      LogService.error("MatrixClientBootstrap", "client.start() error:", err);
+    stopOnDone: true,
+    cleanup: async (mode) => {
+      await releaseSharedClientInstance(client, mode);
+    },
+  };
+}
+
+export async function resolveRuntimeMatrixClientWithReadiness(opts: {
+  client?: MatrixClient;
+  cfg?: CoreConfig;
+  timeoutMs?: number;
+  accountId?: string | null;
+  readiness?: MatrixRuntimeClientReadiness;
+}): Promise<ResolvedRuntimeMatrixClient> {
+  return await resolveRuntimeMatrixClient({
+    client: opts.client,
+    cfg: opts.cfg,
+    timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
+    onResolved: async (client, context) => {
+      await ensureResolvedClientReadiness({
+        client,
+        readiness: opts.readiness,
+        preparedByDefault: context.preparedByDefault,
+      });
     },
   });
-  return client;
+}
+
+export async function stopResolvedRuntimeMatrixClient(
+  resolved: ResolvedRuntimeMatrixClient,
+  mode: ResolvedRuntimeMatrixClientStopMode = "stop",
+): Promise<void> {
+  if (!resolved.stopOnDone) {
+    return;
+  }
+  if (resolved.cleanup) {
+    await resolved.cleanup(mode);
+    return;
+  }
+  if (mode === "persist") {
+    await resolved.client.stopAndPersist();
+    return;
+  }
+  resolved.client.stop();
+}
+
+export async function withResolvedRuntimeMatrixClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+    readiness?: MatrixRuntimeClientReadiness;
+  },
+  run: (client: MatrixClient) => Promise<T>,
+  stopMode: ResolvedRuntimeMatrixClientStopMode = "stop",
+): Promise<T> {
+  const resolved = await resolveRuntimeMatrixClientWithReadiness(opts);
+  try {
+    return await run(resolved.client);
+  } finally {
+    await stopResolvedRuntimeMatrixClient(resolved, stopMode);
+  }
 }

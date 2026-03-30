@@ -1,19 +1,27 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config/sessions.js";
 import {
+  DEFAULT_TEST_MODEL_CATALOG,
   installDirectiveBehaviorE2EHooks,
+  installFreshDirectiveBehaviorReplyMocks,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   replyText,
   replyTexts,
-  runEmbeddedPiAgent,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
-import { getReplyFromConfig } from "./reply.js";
+import {
+  loadModelCatalogMock,
+  runEmbeddedPiAgentMock,
+} from "./reply.directive.directive-behavior.e2e-mocks.js";
+
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+let actualRunPreparedReply: typeof import("./reply/get-reply-run.js").runPreparedReply;
+const runPreparedReplyMock = vi.hoisted(() => vi.fn());
 
 async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
   const { workspaceDir, name, description } = params;
@@ -50,10 +58,6 @@ async function runThinkDirectiveAndGetText(home: string): Promise<string | undef
     }),
   );
   return replyText(res);
-}
-
-function mockEmbeddedResponse(text: string) {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
 }
 
 async function runInlineReasoningMessage(params: {
@@ -112,7 +116,7 @@ async function runInFlightVerboseToggleCase(params: {
     "main",
   );
 
-  vi.mocked(runEmbeddedPiAgent).mockImplementation(async (agentParams) => {
+  runEmbeddedPiAgentMock.mockImplementation(async (agentParams) => {
     const shouldEmit = agentParams.shouldEmitToolResult;
     expect(shouldEmit?.()).toBe(params.shouldEmitBefore);
     const store = loadSessionStore(storePath);
@@ -145,9 +149,26 @@ async function runInFlightVerboseToggleCase(params: {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
+  beforeEach(async () => {
+    vi.resetModules();
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+    installFreshDirectiveBehaviorReplyMocks({
+      onActualRunPreparedReply: (runPreparedReply) => {
+        actualRunPreparedReply = runPreparedReply;
+      },
+      runPreparedReply: (...args) => runPreparedReplyMock(...args),
+    });
+    ({ getReplyFromConfig } = await import("./reply.js"));
+    runPreparedReplyMock.mockReset();
+    runPreparedReplyMock.mockImplementation((...args: Parameters<typeof actualRunPreparedReply>) =>
+      actualRunPreparedReply(...args),
+    );
+  });
+
   it("keeps reasoning acks out of mixed messages, including rapid repeats", async () => {
     await withTempHome(async (home) => {
-      mockEmbeddedResponse("done");
+      runPreparedReplyMock.mockResolvedValue({ text: "done" });
 
       const blockReplies: string[] = [];
       const storePath = sessionStorePath(home);
@@ -167,7 +188,7 @@ describe("directive behavior", () => {
         blockReplies,
       });
 
-      expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+      expect(runPreparedReplyMock).toHaveBeenCalledTimes(2);
       expect(blockReplies.length).toBe(0);
     });
   });
@@ -199,7 +220,7 @@ describe("directive behavior", () => {
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];
       expect(entry?.verboseLevel).toBe("off");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("updates tool verbose during in-flight runs for toggle on/off", async () => {
@@ -215,14 +236,14 @@ describe("directive behavior", () => {
           seedVerboseOn: true,
         },
       ]) {
-        vi.mocked(runEmbeddedPiAgent).mockClear();
+        runEmbeddedPiAgentMock.mockClear();
         const { res } = await runInFlightVerboseToggleCase({
           home,
           ...testCase,
         });
         const texts = replyTexts(res);
         expect(texts).toContain("done");
-        expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+        expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
       }
     });
   });
@@ -232,16 +253,20 @@ describe("directive behavior", () => {
       expect(text).toContain("Current thinking level: high");
       expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 
-      for (const model of ["openai-codex/gpt-5.2-codex", "openai/gpt-5.2"]) {
+      for (const model of [
+        "openai-codex/gpt-5.2-codex",
+        "openai/gpt-5.2",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.4-nano",
+      ]) {
         const texts = await runThinkingDirective(home, model);
         expect(texts).toContain("Thinking level set to xhigh.");
       }
 
       const unsupportedModelTexts = await runThinkingDirective(home, "openai/gpt-4.1-mini");
-      expect(unsupportedModelTexts).toContain(
-        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex or github-copilot/gpt-5.2.',
-      );
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(unsupportedModelTexts[0]).toContain('Thinking level "xhigh" is only supported for');
+      expect(unsupportedModelTexts[0]).toContain("provider models that advertise xhigh reasoning");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("keeps reserved command aliases from matching after trimming", async () => {
@@ -268,7 +293,7 @@ describe("directive behavior", () => {
 
       const text = replyText(res);
       expect(text).toContain("Help");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("treats skill commands as reserved for model aliases", async () => {
@@ -301,8 +326,8 @@ describe("directive behavior", () => {
         ),
       );
 
-      expect(runEmbeddedPiAgent).toHaveBeenCalled();
-      const prompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
+      const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).toContain('Use the "demo-skill" skill');
     });
   });
@@ -363,7 +388,7 @@ describe("directive behavior", () => {
       expect(text).toContain(
         "Options: modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
       );
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,3 +1,5 @@
+import type { Style } from "./zca-constants.js";
+
 export type ZcaFriend = {
   userId: string;
   displayName: string;
@@ -16,6 +18,18 @@ export type ZaloGroupMember = {
   avatar?: string;
 };
 
+export type ZaloEventMessage = {
+  msgId: string;
+  cliMsgId: string;
+  uidFrom: string;
+  idTo: string;
+  msgType: string;
+  st: number;
+  at: number;
+  cmd: number;
+  ts: string | number;
+};
+
 export type ZaloInboundMessage = {
   threadId: string;
   isGroup: boolean;
@@ -23,9 +37,15 @@ export type ZaloInboundMessage = {
   senderName?: string;
   groupName?: string;
   content: string;
+  commandContent?: string;
   timestampMs: number;
   msgId?: string;
   cliMsgId?: string;
+  hasAnyMention?: boolean;
+  wasExplicitlyMentioned?: boolean;
+  canResolveExplicitMention?: boolean;
+  implicitMention?: boolean;
+  eventMessage?: ZaloEventMessage;
   raw: unknown;
 };
 
@@ -41,6 +61,10 @@ export type ZaloSendOptions = {
   caption?: string;
   isGroup?: boolean;
   mediaLocalRoots?: readonly string[];
+  textMode?: "markdown" | "plain";
+  textChunkMode?: "length" | "newline";
+  textChunkLimit?: number;
+  textStyles?: Style[];
 };
 
 export type ZaloSendResult = {
@@ -49,16 +73,23 @@ export type ZaloSendResult = {
   error?: string;
 };
 
+export type ZaloGroupContext = {
+  groupId: string;
+  name?: string;
+  members?: string[];
+};
+
 export type ZaloAuthStatus = {
   connected: boolean;
   message: string;
 };
 
-type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
+export type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
 
-type ZalouserGroupConfig = {
+export type ZalouserGroupConfig = {
   allow?: boolean;
   enabled?: boolean;
+  requireMention?: boolean;
   tools?: ZalouserToolConfig;
 };
 
@@ -66,8 +97,11 @@ type ZalouserSharedConfig = {
   enabled?: boolean;
   name?: string;
   profile?: string;
+  dangerouslyAllowNameMatching?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
+  historyLimit?: number;
+  groupAllowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groups?: Record<string, ZalouserGroupConfig>;
   messagePrefix?: string;

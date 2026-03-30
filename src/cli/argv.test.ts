@@ -3,6 +3,8 @@ import {
   buildParseArgv,
   getFlagValue,
   getCommandPath,
+  getCommandPositionalsWithRootOptions,
+  getCommandPathWithRootOptions,
   getPrimaryCommand,
   getPositiveIntFlagValue,
   getVerboseFlag,
@@ -123,7 +125,7 @@ describe("argv helpers", () => {
     },
     {
       name: "help after -- terminator",
-      argv: ["node", "openclaw", "nodes", "run", "--", "git", "--help"],
+      argv: ["node", "openclaw", "nodes", "invoke", "--", "device.status", "--help"],
       expected: false,
     },
     {
@@ -160,6 +162,60 @@ describe("argv helpers", () => {
     expect(getCommandPath(argv, 2)).toEqual(expected);
   });
 
+  it("extracts command path while skipping known root option values", () => {
+    expect(
+      getCommandPathWithRootOptions(
+        [
+          "node",
+          "openclaw",
+          "--profile",
+          "work",
+          "--container",
+          "demo",
+          "--no-color",
+          "config",
+          "validate",
+        ],
+        2,
+      ),
+    ).toEqual(["config", "validate"]);
+  });
+
+  it("extracts routed config get positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--log-level", "debug", "update.channel", "--json"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("extracts routed config unset positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "unset", "--profile", "work", "update.channel"],
+        {
+          commandPath: ["config", "unset"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("returns null when routed command sees unknown options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--mystery", "value", "update.channel"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toBeNull();
+  });
+
   it.each([
     {
       name: "returns first command token",
@@ -170,6 +226,11 @@ describe("argv helpers", () => {
       name: "returns null when no command exists",
       argv: ["node", "openclaw"],
       expected: null,
+    },
+    {
+      name: "skips known root option values",
+      argv: ["node", "openclaw", "--log-level", "debug", "status"],
+      expected: "status",
     },
   ])("returns primary command: $name", ({ argv, expected }) => {
     expect(getPrimaryCommand(argv)).toBe(expected);
@@ -255,69 +316,78 @@ describe("argv helpers", () => {
     expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);
   });
 
-  it("builds parse argv from raw args", () => {
-    const cases = [
-      {
-        rawArgs: ["node", "openclaw", "status"],
-        expected: ["node", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["node-22", "openclaw", "status"],
-        expected: ["node-22", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["node-22.2.0.exe", "openclaw", "status"],
-        expected: ["node-22.2.0.exe", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["node-22.2", "openclaw", "status"],
-        expected: ["node-22.2", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["node-22.2.exe", "openclaw", "status"],
-        expected: ["node-22.2.exe", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["/usr/bin/node-22.2.0", "openclaw", "status"],
-        expected: ["/usr/bin/node-22.2.0", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["node24", "openclaw", "status"],
-        expected: ["node24", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["/usr/bin/node24", "openclaw", "status"],
-        expected: ["/usr/bin/node24", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["node24.exe", "openclaw", "status"],
-        expected: ["node24.exe", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["nodejs", "openclaw", "status"],
-        expected: ["nodejs", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["node-dev", "openclaw", "status"],
-        expected: ["node", "openclaw", "node-dev", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["openclaw", "status"],
-        expected: ["node", "openclaw", "status"],
-      },
-      {
-        rawArgs: ["bun", "src/entry.ts", "status"],
-        expected: ["bun", "src/entry.ts", "status"],
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const parsed = buildParseArgv({
-        programName: "openclaw",
-        rawArgs: [...testCase.rawArgs],
-      });
-      expect(parsed).toEqual([...testCase.expected]);
-    }
+  it.each([
+    {
+      name: "keeps plain node argv",
+      rawArgs: ["node", "openclaw", "status"],
+      expected: ["node", "openclaw", "status"],
+    },
+    {
+      name: "keeps version-suffixed node binary",
+      rawArgs: ["node-22", "openclaw", "status"],
+      expected: ["node-22", "openclaw", "status"],
+    },
+    {
+      name: "keeps windows versioned node exe",
+      rawArgs: ["node-22.2.0.exe", "openclaw", "status"],
+      expected: ["node-22.2.0.exe", "openclaw", "status"],
+    },
+    {
+      name: "keeps dotted node binary",
+      rawArgs: ["node-22.2", "openclaw", "status"],
+      expected: ["node-22.2", "openclaw", "status"],
+    },
+    {
+      name: "keeps dotted node exe",
+      rawArgs: ["node-22.2.exe", "openclaw", "status"],
+      expected: ["node-22.2.exe", "openclaw", "status"],
+    },
+    {
+      name: "keeps absolute versioned node path",
+      rawArgs: ["/usr/bin/node-22.2.0", "openclaw", "status"],
+      expected: ["/usr/bin/node-22.2.0", "openclaw", "status"],
+    },
+    {
+      name: "keeps node24 shorthand",
+      rawArgs: ["node24", "openclaw", "status"],
+      expected: ["node24", "openclaw", "status"],
+    },
+    {
+      name: "keeps absolute node24 shorthand",
+      rawArgs: ["/usr/bin/node24", "openclaw", "status"],
+      expected: ["/usr/bin/node24", "openclaw", "status"],
+    },
+    {
+      name: "keeps windows node24 exe",
+      rawArgs: ["node24.exe", "openclaw", "status"],
+      expected: ["node24.exe", "openclaw", "status"],
+    },
+    {
+      name: "keeps nodejs binary",
+      rawArgs: ["nodejs", "openclaw", "status"],
+      expected: ["nodejs", "openclaw", "status"],
+    },
+    {
+      name: "prefixes fallback when first arg is not a node launcher",
+      rawArgs: ["node-dev", "openclaw", "status"],
+      expected: ["node", "openclaw", "node-dev", "openclaw", "status"],
+    },
+    {
+      name: "prefixes fallback when raw args start at program name",
+      rawArgs: ["openclaw", "status"],
+      expected: ["node", "openclaw", "status"],
+    },
+    {
+      name: "keeps bun execution argv",
+      rawArgs: ["bun", "src/entry.ts", "status"],
+      expected: ["bun", "src/entry.ts", "status"],
+    },
+  ] as const)("builds parse argv from raw args: $name", ({ rawArgs, expected }) => {
+    const parsed = buildParseArgv({
+      programName: "openclaw",
+      rawArgs: [...rawArgs],
+    });
+    expect(parsed).toEqual([...expected]);
   });
 
   it("builds parse argv from fallback args", () => {
@@ -328,33 +398,25 @@ describe("argv helpers", () => {
     expect(fallbackArgv).toEqual(["node", "openclaw", "status"]);
   });
 
-  it("decides when to migrate state", () => {
-    const nonMutatingArgv = [
-      ["node", "openclaw", "status"],
-      ["node", "openclaw", "health"],
-      ["node", "openclaw", "sessions"],
-      ["node", "openclaw", "config", "get", "update"],
-      ["node", "openclaw", "config", "unset", "update"],
-      ["node", "openclaw", "models", "list"],
-      ["node", "openclaw", "models", "status"],
-      ["node", "openclaw", "memory", "status"],
-      ["node", "openclaw", "agent", "--message", "hi"],
-    ] as const;
-    const mutatingArgv = [
-      ["node", "openclaw", "agents", "list"],
-      ["node", "openclaw", "message", "send"],
-    ] as const;
-
-    for (const argv of nonMutatingArgv) {
-      expect(shouldMigrateState([...argv])).toBe(false);
-    }
-    for (const argv of mutatingArgv) {
-      expect(shouldMigrateState([...argv])).toBe(true);
-    }
+  it.each([
+    { argv: ["node", "openclaw", "status"], expected: false },
+    { argv: ["node", "openclaw", "health"], expected: false },
+    { argv: ["node", "openclaw", "sessions"], expected: false },
+    { argv: ["node", "openclaw", "config", "get", "update"], expected: false },
+    { argv: ["node", "openclaw", "config", "unset", "update"], expected: false },
+    { argv: ["node", "openclaw", "models", "list"], expected: false },
+    { argv: ["node", "openclaw", "models", "status"], expected: false },
+    { argv: ["node", "openclaw", "update", "status", "--json"], expected: false },
+    { argv: ["node", "openclaw", "agent", "--message", "hi"], expected: false },
+    { argv: ["node", "openclaw", "agents", "list"], expected: true },
+    { argv: ["node", "openclaw", "message", "send"], expected: true },
+  ] as const)("decides when to migrate state: $argv", ({ argv, expected }) => {
+    expect(shouldMigrateState([...argv])).toBe(expected);
   });
 
   it.each([
     { path: ["status"], expected: false },
+    { path: ["update", "status"], expected: false },
     { path: ["config", "get"], expected: false },
     { path: ["models", "status"], expected: false },
     { path: ["agents", "list"], expected: true },

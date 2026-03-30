@@ -46,14 +46,14 @@ describe("updateSessionStoreAfterAgentRun", () => {
       storePath,
       sessionStore: staleInMemory,
       defaultProvider: "openai",
-      defaultModel: "gpt-5.3-codex",
+      defaultModel: "gpt-5.4",
       result: {
         payloads: [],
         meta: {
           aborted: false,
           agentMeta: {
             provider: "openai",
-            model: "gpt-5.3-codex",
+            model: "gpt-5.4",
           },
         },
       } as never,
@@ -62,5 +62,66 @@ describe("updateSessionStoreAfterAgentRun", () => {
     const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
     expect(persisted?.acp).toBeDefined();
     expect(staleInMemory[sessionKey]?.acp).toBeDefined();
+  });
+
+  it("persists latest systemPromptReport for downstream warning dedupe", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:codex:report:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+    const report = {
+      source: "run" as const,
+      generatedAt: Date.now(),
+      bootstrapTruncation: {
+        warningMode: "once" as const,
+        warningSignaturesSeen: ["sig-a", "sig-b"],
+      },
+      systemPrompt: {
+        chars: 1,
+        projectContextChars: 1,
+        nonProjectContextChars: 0,
+      },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          systemPromptReport: report,
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.systemPromptReport?.bootstrapTruncation?.warningSignaturesSeen).toEqual([
+      "sig-a",
+      "sig-b",
+    ]);
+    expect(sessionStore[sessionKey]?.systemPromptReport?.bootstrapTruncation?.warningMode).toBe(
+      "once",
+    );
   });
 });
