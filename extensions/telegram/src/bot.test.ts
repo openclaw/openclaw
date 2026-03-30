@@ -13,6 +13,7 @@ const {
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
+  getApprovalGatewayRequestSpy,
   getFileSpy,
   getChatSpy,
   getLoadConfigMock,
@@ -557,6 +558,65 @@ describe("createTelegramBot", () => {
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve-blocked");
+  });
+
+  it("treats the shortened always callback as an approval action", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    const approvalGatewayRequestSpy = getApprovalGatewayRequestSpy();
+
+    loadConfig.mockReturnValue({
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "9" }],
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          capabilities: ["vision"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-plugin-approve-always",
+        data: "/approve plugin:138e9b8c always",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+          text: "Plugin approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve-always");
+    expect(approvalGatewayRequestSpy).toHaveBeenCalledWith("plugin.approval.resolve", {
+      decision: "allow-always",
+      id: "plugin:138e9b8c",
+      resolvedBy: "telegram:9",
+    });
   });
 
   it("edits commands list for pagination callbacks", async () => {

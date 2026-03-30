@@ -31,6 +31,10 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createOperatorApprovalsGatewayClient,
+  GatewayClient,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
@@ -100,10 +104,6 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
-import {
-  createOperatorApprovalsGatewayClient,
-  GatewayClient,
-} from "openclaw/plugin-sdk/gateway-runtime";
 import { buildInlineKeyboard } from "./send.js";
 
 function parseApprovalCallbackId(data: string): string | null {
@@ -129,9 +129,9 @@ function parseApprovalCallbackDecision(
   const id = tokens[1];
   const rawDecision = tokens[2]?.toLowerCase();
   const decision =
-    rawDecision === "allow-once" || rawDecision === "always"
+    rawDecision === "allow-once"
       ? "allow-once"
-      : rawDecision === "allow-always"
+      : rawDecision === "always" || rawDecision === "allow-always"
         ? "allow-always"
         : rawDecision === "deny"
           ? "deny"
@@ -1402,8 +1402,7 @@ export const registerTelegramHandlers = ({
         const parsed = parseApprovalCallbackDecision(data);
         if (parsed) {
           const ok = await resolveApprovalDirect(runtimeCfg, parsed.id, parsed.decision, senderId);
-          const label =
-            parsed.decision === "deny" ? "denied" : `allowed (${parsed.decision})`;
+          const label = parsed.decision === "deny" ? "denied" : `allowed (${parsed.decision})`;
           await replyToCallbackChat(
             ok
               ? `✅ Approval ${label}. ID: ${parsed.id}`

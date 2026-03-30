@@ -125,7 +125,7 @@ function resolveRequestSessionTarget(params: {
 }): { to: string; accountId?: string; threadId?: number; channel?: string } | null {
   return resolveExecApprovalSessionTarget({
     cfg: params.cfg,
-    request: params.request as ExecApprovalRequest,
+    request: params.request,
     turnSourceChannel: params.request.request.turnSourceChannel ?? undefined,
     turnSourceTo: params.request.request.turnSourceTo ?? undefined,
     turnSourceAccountId: params.request.request.turnSourceAccountId ?? undefined,

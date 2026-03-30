@@ -17,6 +17,25 @@ const baseRequest = {
   expiresAtMs: 61_000,
 };
 
+const pluginRequest = {
+  id: "plugin:7f6c6d61-6d55-4413-bc4f-ef4fe8079b61",
+  request: {
+    title: "Sensitive plugin action",
+    description: "This plugin wants to modify production data.",
+    severity: "warning" as const,
+    pluginId: "clawclip",
+    toolName: "deploy-prod",
+    agentId: "main",
+    sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+    turnSourceChannel: "telegram",
+    turnSourceTo: "-1003841603622",
+    turnSourceThreadId: "928",
+    turnSourceAccountId: "default",
+  },
+  createdAtMs: 1000,
+  expiresAtMs: 61_000,
+};
+
 function createHandler(cfg: OpenClawConfig) {
   const sendTyping = vi.fn().mockResolvedValue({ ok: true });
   const sendMessage = vi
@@ -144,6 +163,90 @@ describe("TelegramExecApprovalHandler", () => {
     });
 
     expect(editReplyMarkup).toHaveBeenCalled();
+    expect(editReplyMarkup).toHaveBeenCalledWith(
+      "-1003841603622",
+      "m1",
+      [],
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("sends plugin approval prompts to the originating telegram topic", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendTyping, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested(pluginRequest);
+
+    expect(sendTyping).toHaveBeenCalledWith(
+      "-1003841603622",
+      expect.objectContaining({
+        accountId: "default",
+        messageThreadId: 928,
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "-1003841603622",
+      expect.stringContaining("Plugin approval required"),
+      expect.objectContaining({
+        accountId: "default",
+        messageThreadId: 928,
+        buttons: [
+          [
+            {
+              text: "Allow Once",
+              callback_data: "/approve plugin:7f6c6d61-6d55-4413-bc4f-ef4fe8079b61 allow-once",
+            },
+            {
+              text: "Allow Always",
+              callback_data: "/approve plugin:7f6c6d61-6d55-4413-bc4f-ef4fe8079b61 always",
+            },
+          ],
+          [
+            {
+              text: "Deny",
+              callback_data: "/approve plugin:7f6c6d61-6d55-4413-bc4f-ef4fe8079b61 deny",
+            },
+          ],
+        ],
+      }),
+    );
+  });
+
+  it("clears tracked plugin approval buttons when resolved", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, editReplyMarkup } = createHandler(cfg);
+
+    await handler.handleRequested(pluginRequest);
+    await handler.handleResolved({
+      id: pluginRequest.id,
+      decision: "allow-once",
+      resolvedBy: "telegram:8460800771",
+      ts: 2000,
+      request: pluginRequest.request,
+    });
+
     expect(editReplyMarkup).toHaveBeenCalledWith(
       "-1003841603622",
       "m1",

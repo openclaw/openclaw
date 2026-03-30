@@ -1,8 +1,14 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
+
+type ApprovalRequestWithSessionTarget = {
+  request: {
+    sessionKey?: string | null;
+    agentId?: string | null;
+  };
+};
 
 export type ExecApprovalSessionTarget = {
   channel?: string;
@@ -29,7 +35,7 @@ function normalizeOptionalThreadId(value?: string | number | null): number | und
 
 export function resolveExecApprovalSessionTarget(params: {
   cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
+  request: ApprovalRequestWithSessionTarget;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;

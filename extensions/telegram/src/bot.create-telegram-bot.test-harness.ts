@@ -36,6 +36,30 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
 }));
 
+const gatewayRuntimeHoisted = vi.hoisted(() => {
+  const requestSpy = vi.fn(async () => ({ ok: true }));
+  const connectSpy = vi.fn(async () => {});
+  const startSpy = vi.fn();
+  const stopSpy = vi.fn(async () => {});
+  const createOperatorApprovalsGatewayClient = vi.fn(async () => ({
+    connect: connectSpy,
+    request: requestSpy,
+    start: startSpy,
+    stop: stopSpy,
+  }));
+  return {
+    connectSpy,
+    createOperatorApprovalsGatewayClient,
+    requestSpy,
+    startSpy,
+    stopSpy,
+  };
+});
+
+export function getApprovalGatewayRequestSpy(): AnyAsyncMock {
+  return gatewayRuntimeHoisted.requestSpy;
+}
+
 export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
 }
@@ -46,6 +70,22 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
   loadWebMedia,
 }));
+vi.doMock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>();
+  return {
+    ...actual,
+    createOperatorApprovalsGatewayClient:
+      gatewayRuntimeHoisted.createOperatorApprovalsGatewayClient,
+  };
+});
+vi.doMock("openclaw/plugin-sdk/gateway-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>();
+  return {
+    ...actual,
+    createOperatorApprovalsGatewayClient:
+      gatewayRuntimeHoisted.createOperatorApprovalsGatewayClient,
+  };
+});
 
 const { loadConfig, resolveStorePathMock } = vi.hoisted(
   (): {
@@ -490,6 +530,19 @@ export function makeForumGroupMessageCtx(params?: {
 
 beforeEach(() => {
   resetInboundDedupe();
+  gatewayRuntimeHoisted.createOperatorApprovalsGatewayClient.mockReset();
+  gatewayRuntimeHoisted.createOperatorApprovalsGatewayClient.mockResolvedValue({
+    connect: gatewayRuntimeHoisted.connectSpy,
+    request: gatewayRuntimeHoisted.requestSpy,
+    start: gatewayRuntimeHoisted.startSpy,
+    stop: gatewayRuntimeHoisted.stopSpy,
+  });
+  gatewayRuntimeHoisted.connectSpy.mockReset();
+  gatewayRuntimeHoisted.connectSpy.mockResolvedValue(undefined);
+  gatewayRuntimeHoisted.requestSpy.mockReset();
+  gatewayRuntimeHoisted.requestSpy.mockResolvedValue({ ok: true });
+  gatewayRuntimeHoisted.startSpy.mockReset();
+  gatewayRuntimeHoisted.stopSpy.mockReset();
   loadConfig.mockReset();
   loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   resolveStorePathMock.mockReset();
