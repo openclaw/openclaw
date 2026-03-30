@@ -197,6 +197,10 @@ export async function ensureOpenClawModelsJson(
   }
 }
 
+export function clearModelsJsonReadyCache(): void {
+  MODELS_JSON_READY_CACHE.clear();
+}
+
 export function resetModelsJsonReadyCacheForTest(): void {
   MODELS_JSON_READY_CACHE.clear();
 }

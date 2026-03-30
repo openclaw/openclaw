@@ -595,3 +595,69 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
     runtimeAuthStoreSnapshots.set(runtimeKey, cloneAuthProfileStore(payload));
   }
 }
+
+/**
+ * Reconcile provider API keys from a resolved config snapshot into per-agent
+ * auth-profiles.json files on disk.
+ *
+ * When `openclaw.json` `models.providers.<name>.apiKey` changes, the per-agent
+ * `auth-profiles.json` files retain the old key. This function compares each
+ * config provider's resolved apiKey against the matching `<provider>:default`
+ * profile and updates the on-disk store when they diverge.
+ *
+ * Only plain-text `api_key` profiles without a `keyRef` are eligible — profiles
+ * backed by secret refs are resolved at runtime and don't need reconciliation.
+ *
+ * Returns `true` if any auth-profiles.json file was updated.
+ */
+export function reconcileConfigProviderKeys(params: {
+  configProviders: Record<string, { apiKey?: unknown }>;
+  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
+}): boolean {
+  const { configProviders, authStores } = params;
+  const providerEntries = Object.entries(configProviders);
+  if (providerEntries.length === 0 || authStores.length === 0) {
+    return false;
+  }
+
+  let anyUpdated = false;
+  for (const { agentDir, store } of authStores) {
+    let storeMutated = false;
+    for (const [providerKey, providerConfig] of providerEntries) {
+      // Only reconcile plain-text apiKey values. Secret refs (objects) are
+      // resolved at runtime and don't need disk reconciliation.
+      if (typeof providerConfig.apiKey !== "string") {
+        continue;
+      }
+      const configApiKey = providerConfig.apiKey.trim();
+      if (!configApiKey) {
+        continue;
+      }
+      const profileId = `${providerKey}:default`;
+      const profile = store.profiles[profileId];
+      if (!profile || profile.type !== "api_key") {
+        continue;
+      }
+      const apiKeyProfile = profile;
+      // Skip profiles backed by secret refs — resolved at runtime.
+      if (apiKeyProfile.keyRef) {
+        continue;
+      }
+      if (apiKeyProfile.key === configApiKey) {
+        continue;
+      }
+      log.info("reconciled stale provider key from config", {
+        provider: providerKey,
+        profileId,
+        agentDir,
+      });
+      apiKeyProfile.key = configApiKey;
+      storeMutated = true;
+    }
+    if (storeMutated) {
+      saveAuthProfileStore(store, agentDir);
+      anyUpdated = true;
+    }
+  }
+  return anyUpdated;
+}

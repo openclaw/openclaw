@@ -9,8 +9,10 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
+  reconcileConfigProviderKeys,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles.js";
+import { clearModelsJsonReadyCache } from "../agents/models-config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -250,6 +252,20 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
     } satisfies SecretsRuntimeRefreshContext);
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
+
+  // Reconcile provider API keys from config into per-agent auth-profiles on
+  // disk so that restarted gateways and new sessions pick up the current key.
+  const configProviders = next.config.models?.providers;
+  if (configProviders) {
+    const reconciled = reconcileConfigProviderKeys({
+      configProviders,
+      authStores: next.authStores,
+    });
+    if (reconciled) {
+      clearModelsJsonReadyCache();
+    }
+  }
+
   activeSnapshot = next;
   activeRefreshContext = cloneRefreshContext(refreshContext);
   setRuntimeConfigSnapshotRefreshHandler({
