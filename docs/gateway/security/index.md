@@ -7,10 +7,13 @@ title: "Security"
 
 # Security
 
-> [!WARNING]
-> **Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
-> OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
-> If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+<Warning>
+**Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
+OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
+If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+</Warning>
+
+**On this page:** [Trust model](#scope-first-personal-assistant-security-model) | [Quick audit](#quick-check-openclaw-security-audit) | [Hardened baseline](#hardened-baseline-in-60-seconds) | [DM access model](#dm-access-model-pairing--allowlist--open--disabled) | [Configuration hardening](#configuration-hardening-examples) | [Incident response](#incident-response)
 
 ## Scope first: personal assistant security model
 
@@ -46,34 +49,17 @@ OpenClaw is both a product and an experiment: you’re wiring frontier-model beh
 
 Start with the smallest access that still works, then widen it as you gain confidence.
 
-## Deployment assumption (important)
+### Deployment and host trust
 
 OpenClaw assumes the host and config boundary are trusted:
 
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
-- OpenClaw can run multiple gateway instances on one machine, but recommended operations favor clean trust-boundary separation.
 - Recommended default: one user per machine/host (or VPS), one gateway for that user, and one or more agents in that gateway.
-- If multiple users want OpenClaw, use one VPS/host per user.
-
-### Practical consequence (operator trust boundary)
-
-Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
-
-- Operators with read/control-plane access can inspect gateway session metadata/history by design.
+- Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
 - Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
-- Example: expecting per-operator isolation for methods like `sessions.list`, `sessions.preview`, or `chat.history` is outside this model.
-- If you need adversarial-user isolation, run separate gateways per trust boundary.
-- Multiple gateways on one machine are technically possible, but not the recommended baseline for multi-user isolation.
-
-## Personal assistant model (not a multi-tenant bus)
-
-OpenClaw is designed as a personal assistant security model: one trusted operator boundary, potentially many agents.
-
-- If several people can message one tool-enabled agent, each of them can steer that same permission set.
-- Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
-- If users may be adversarial to each other, run separate gateways (or separate OS users/hosts) per trust boundary.
+- If several people can message one tool-enabled agent, each of them can steer that same permission set. Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
 
 ### Shared Slack workspace: real risk
 
@@ -181,7 +167,7 @@ If more than one person can DM your bot:
 - Never combine shared DMs with broad tool access.
 - This hardens cooperative/shared inboxes, but is not designed as hostile co-tenant isolation when users share host/config write access.
 
-### What the audit checks (high level)
+## What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
@@ -211,7 +197,7 @@ Use this when auditing access or deciding what to back up:
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
-## Security Audit Checklist
+## Security audit checklist
 
 When the audit prints findings, treat this as a priority order:
 
@@ -504,6 +490,7 @@ Treat the snippet above as **secure DM mode**:
 - Default: `session.dmScope: "main"` (all DMs share one session for continuity).
 - Local CLI onboarding default: writes `session.dmScope: "per-channel-peer"` when unset (keeps existing explicit values).
 - Secure DM mode: `session.dmScope: "per-channel-peer"` (each channel+sender pair gets an isolated DM context).
+- Cross-channel peer isolation: `session.dmScope: "per-peer"` (each sender gets one session across all channels of the same type).
 
 If you run multiple accounts on the same channel, use `per-account-channel-peer` instead. If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
 
@@ -918,21 +905,19 @@ Details: [Logging](/gateway/logging)
 
 In group chats, only respond when explicitly mentioned.
 
-### 3. Separate Numbers
+### 3) Separate numbers (WhatsApp, Signal, Telegram)
 
-Consider running your AI on a separate phone number from your personal one:
+For phone-number-based channels, consider running your AI on a separate phone number from your personal one:
 
 - Personal number: Your conversations stay private
 - Bot number: AI handles these, with appropriate boundaries
 
-### 4. Read-Only Mode (Today, via sandbox + tools)
+### 4) Read-only mode (via sandbox + tools)
 
-You can already build a read-only profile by combining:
+You can build a read-only profile by combining:
 
 - `agents.defaults.sandbox.workspaceAccess: "ro"` (or `"none"` for no workspace access)
 - tool allow/deny lists that block `write`, `edit`, `apply_patch`, `exec`, `process`, etc.
-
-We may add a single `readOnlyMode` flag later to simplify this configuration.
 
 Additional hardening options:
 

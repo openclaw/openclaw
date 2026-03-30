@@ -228,16 +228,59 @@ describe("gateway-cli coverage", () => {
   });
 
   it("prints stop hints on GatewayLockError when service is loaded", async () => {
+    await withEnvOverride(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+        OPENCLAW_SYSTEMD_UNIT: undefined,
+        INVOCATION_ID: undefined,
+        SYSTEMD_EXEC_PID: undefined,
+        JOURNAL_STREAM: undefined,
+        OPENCLAW_WINDOWS_TASK_NAME: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+      },
+      async () => {
+        resetRuntimeCapture();
+        serviceIsLoaded.mockResolvedValue(true);
+        startGatewayServer.mockRejectedValueOnce(
+          new GatewayLockError("another gateway instance is already listening"),
+        );
+        await expect(
+          runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
+        ).rejects.toThrow("__exit__:0");
+
+        expect(startGatewayServer).toHaveBeenCalled();
+        expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
+        expect(runtimeErrors.join("\n")).toContain("gateway stop");
+      },
+    );
+  });
+
+  it("keeps exit 1 for gateway bind failures wrapped as GatewayLockError", async () => {
     resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValue(true);
     startGatewayServer.mockRejectedValueOnce(
-      new GatewayLockError("another gateway instance is already listening"),
+      new GatewayLockError("failed to bind gateway socket on ws://127.0.0.1:18789: Error: boom"),
     );
+
     await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 
-    expect(startGatewayServer).toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
-    expect(runtimeErrors.join("\n")).toContain("gateway stop");
+    expect(runtimeErrors.join("\n")).toContain("failed to bind gateway socket");
+  });
+
+  it("keeps exit 1 for gateway lock acquisition failures", async () => {
+    resetRuntimeCapture();
+    serviceIsLoaded.mockResolvedValue(true);
+    startGatewayServer.mockRejectedValueOnce(
+      new GatewayLockError("failed to acquire gateway lock at /tmp/openclaw/gateway.lock"),
+    );
+
+    await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
+
+    expect(runtimeErrors.join("\n")).toContain("failed to acquire gateway lock");
   });
 
   it("uses env/config port when --port is omitted", async () => {

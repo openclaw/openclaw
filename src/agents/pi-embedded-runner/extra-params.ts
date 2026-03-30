@@ -12,8 +12,10 @@ import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
   resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
@@ -34,8 +36,10 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
 } from "./openai-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -97,6 +101,16 @@ export function resolveExtraParams(params: {
   if (resolvedParallelToolCalls !== undefined) {
     merged.parallel_tool_calls = resolvedParallelToolCalls;
     delete merged.parallelToolCalls;
+  }
+
+  const resolvedTextVerbosity = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "text_verbosity",
+    "textVerbosity",
+  );
+  if (resolvedTextVerbosity !== undefined) {
+    merged.text_verbosity = resolvedTextVerbosity;
+    delete merged.textVerbosity;
   }
 
   return merged;
@@ -364,6 +378,19 @@ function applyPostPluginStreamWrappers(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
+  if (ctx.provider === "anthropic") {
+    const anthropicServiceTier = resolveAnthropicServiceTier(ctx.effectiveExtraParams);
+    if (anthropicServiceTier) {
+      log.debug(
+        `applying Anthropic service_tier=${anthropicServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createAnthropicServiceTierWrapper(
+        ctx.agent.streamFn,
+        anthropicServiceTier,
+      );
+    }
+  }
+
   const anthropicFastMode = resolveAnthropicFastMode(ctx.effectiveExtraParams);
   if (anthropicFastMode !== undefined) {
     log.debug(
@@ -388,12 +415,33 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createOpenAIFastModeWrapper(ctx.agent.streamFn);
   }
 
-  const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
-  if (openAIServiceTier) {
-    log.debug(
-      `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+  if (ctx.provider === "openai" || ctx.provider === "openai-codex") {
+    const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
+    if (openAIServiceTier) {
+      log.debug(
+        `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    }
+
+    const rawTextVerbosity = resolveAliasedParamValue(
+      [ctx.resolvedExtraParams, ctx.override],
+      "text_verbosity",
+      "textVerbosity",
     );
-    ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    if (rawTextVerbosity === null) {
+      log.debug("text verbosity suppressed by null override, skipping injection");
+    } else if (rawTextVerbosity !== undefined) {
+      const openAITextVerbosity = resolveOpenAITextVerbosity({
+        text_verbosity: rawTextVerbosity,
+      });
+      if (openAITextVerbosity) {
+        log.debug(
+          `applying OpenAI text verbosity=${openAITextVerbosity} for ${ctx.provider}/${ctx.modelId}`,
+        );
+        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(ctx.agent.streamFn, openAITextVerbosity);
+      }
+    }
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
