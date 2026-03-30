@@ -34,7 +34,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async (args) => {
       const conversations = await bridge.listConversations(args);
       return {
-        ...summarizeResult("conversations", conversations.length),
+        ...summarizeResult("conversations", conversations.length, conversations),
         structuredContent: { conversations },
       };
     },
@@ -53,7 +53,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
         };
       }
       return {
-        content: [{ type: "text", text: `conversation ${conversation.sessionKey}` }],
+        content: [{ type: "text", text: JSON.stringify({ conversation }) }],
         structuredContent: { conversation },
       };
     },
@@ -69,7 +69,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async ({ session_key, limit }) => {
       const messages = await bridge.readMessages(session_key, limit ?? 20);
       return {
-        ...summarizeResult("messages", messages.length),
+        ...summarizeResult("messages", messages.length, messages),
         structuredContent: { messages },
       };
     },
@@ -94,7 +94,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
       }
       const attachments = extractAttachmentsFromMessage(message);
       return {
-        ...summarizeResult("attachments", attachments.length),
+        ...summarizeResult("attachments", attachments.length, attachments),
         structuredContent: { attachments, message },
       };
     },
@@ -114,7 +114,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
         limit ?? 20,
       );
       return {
-        ...summarizeResult("events", events.length),
+        ...summarizeResult("events", events.length, events),
         structuredContent: { events, next_cursor: nextCursor },
       };
     },
@@ -134,7 +134,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
         timeout_ms ?? 30_000,
       );
       return {
-        content: [{ type: "text", text: event ? `event ${event.cursor}` : "timeout" }],
+        content: [{ type: "text", text: event ? JSON.stringify({ event }) : "timeout" }],
         structuredContent: { event },
       };
     },
@@ -150,7 +150,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async ({ session_key, text }) => {
       const result = await bridge.sendMessage({ sessionKey: session_key, text });
       return {
-        content: [{ type: "text", text: "sent" }],
+        content: [{ type: "text", text: JSON.stringify({ result }) }],
         structuredContent: { result },
       };
     },
@@ -163,7 +163,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async () => {
       const approvals = bridge.listPendingApprovals();
       return {
-        ...summarizeResult("approvals", approvals.length),
+        ...summarizeResult("approvals", approvals.length, approvals),
         structuredContent: { approvals },
       };
     },
@@ -180,7 +180,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async ({ kind, id, decision }) => {
       const result = await bridge.respondToApproval({ kind, id, decision });
       return {
-        content: [{ type: "text", text: "approval resolved" }],
+        content: [{ type: "text", text: JSON.stringify({ result }) }],
         structuredContent: { result },
       };
     },
