@@ -38,12 +38,25 @@ export function hasKind(
   return Array.isArray(kind) ? kind.includes(target) : kind === target;
 }
 
-export function slotKeyForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey | null {
+/**
+ * Returns the slot key for a single-kind plugin.
+ * For multi-kind plugins use `slotKeysForPluginKind` instead.
+ */
+export function slotKeyForPluginKind(kind?: PluginKind): PluginSlotKey | null {
   if (!kind) {
     return null;
   }
-  const first = normalizeKinds(kind)[0];
-  return first ? (SLOT_BY_KIND[first] ?? null) : null;
+  return SLOT_BY_KIND[kind] ?? null;
+}
+
+/** Order-insensitive equality check for two kind values (string or array). */
+export function kindsEqual(
+  a: PluginKind | PluginKind[] | undefined,
+  b: PluginKind | PluginKind[] | undefined,
+): boolean {
+  const aN = normalizeKinds(a).sort();
+  const bN = normalizeKinds(b).sort();
+  return aN.length === bN.length && aN.every((k, i) => k === bN[i]);
 }
 
 /** Return all slot keys that a plugin's kind field maps to. */

@@ -67,7 +67,7 @@ import type {
   PluginFormat,
   PluginLogger,
 } from "./types.js";
-import { hasKind, normalizeKinds } from "./slots.js";
+import { hasKind, kindsEqual } from "./slots.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -1167,7 +1167,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     ) {
       const earlyMemoryDecision = resolveMemorySlotDecision({
         id: record.id,
-        kind: "memory",
+        kind: manifestRecord.kind,
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
       });
@@ -1268,8 +1268,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (
       manifestKind &&
       exportKind &&
-      JSON.stringify([...normalizeKinds(manifestKind)].sort()) !==
-        JSON.stringify([...normalizeKinds(exportKind)].sort())
+      !kindsEqual(manifestKind, exportKind)
     ) {
       registry.diagnostics.push({
         level: "warn",
@@ -1637,8 +1636,7 @@ export async function loadOpenClawPluginCliRegistry(
     if (
       manifestKind &&
       exportKind &&
-      JSON.stringify([...normalizeKinds(manifestKind)].sort()) !==
-        JSON.stringify([...normalizeKinds(exportKind)].sort())
+      !kindsEqual(manifestKind, exportKind)
     ) {
       registry.diagnostics.push({
         level: "warn",

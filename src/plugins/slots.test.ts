@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
   hasKind,
+  kindsEqual,
   normalizeKinds,
   slotKeysForPluginKind,
 } from "./slots.js";
@@ -287,5 +288,31 @@ describe("slotKeysForPluginKind", () => {
       "memory",
       "contextEngine",
     ]);
+  });
+});
+
+describe("kindsEqual", () => {
+  it("treats undefined as equal to undefined", () => {
+    expect(kindsEqual(undefined, undefined)).toBe(true);
+  });
+
+  it("matches identical strings", () => {
+    expect(kindsEqual("memory", "memory")).toBe(true);
+  });
+
+  it("rejects different strings", () => {
+    expect(kindsEqual("memory", "context-engine")).toBe(false);
+  });
+
+  it("matches arrays in different order", () => {
+    expect(kindsEqual(["memory", "context-engine"], ["context-engine", "memory"])).toBe(true);
+  });
+
+  it("matches string against single-element array", () => {
+    expect(kindsEqual("memory", ["memory"])).toBe(true);
+  });
+
+  it("rejects mismatched lengths", () => {
+    expect(kindsEqual("memory", ["memory", "context-engine"])).toBe(false);
   });
 });

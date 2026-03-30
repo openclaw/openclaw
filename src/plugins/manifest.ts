@@ -237,7 +237,7 @@ function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
   if (typeof raw === "string") {
     return raw as PluginKind;
   }
-  if (Array.isArray(raw) && raw.every((k) => typeof k === "string")) {
+  if (Array.isArray(raw) && raw.length > 0 && raw.every((k) => typeof k === "string")) {
     return raw.length === 1 ? (raw[0] as PluginKind) : (raw as PluginKind[]);
   }
   return undefined;
