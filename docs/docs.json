@@ -1366,11 +1366,7 @@
                   },
                   {
                     "group": "Node features",
-                    "pages": [
-                      "nodes/talk",
-                      "nodes/voicewake",
-                      "nodes/location-command"
-                    ]
+                    "pages": ["nodes/talk", "nodes/voicewake", "nodes/location-command"]
                   }
                 ]
               },
