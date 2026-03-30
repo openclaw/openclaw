@@ -17,6 +17,7 @@ describe("delivery-queue policy", () => {
       "chat_id is empty",
       "Outbound not configured for channel: demo-channel",
       "MatrixError: [403] User @bot:matrix.example.com not in room !mixedCase:matrix.example.com",
+      "Call to 'sendMessage' failed! (400: Bad Request: message is too long)",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });

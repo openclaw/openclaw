@@ -51,6 +51,7 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
   /User .* not in room/i,
+  /message is too long/i,
 ];
 
 function createEmptyRecoverySummary(): RecoverySummary {

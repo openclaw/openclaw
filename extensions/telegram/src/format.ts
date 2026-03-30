@@ -441,15 +441,26 @@ function renderTelegramChunksWithinHtmlLimit(
   ir: MarkdownIR,
   limit: number,
 ): TelegramFormattedChunk[] {
-  return renderMarkdownIRChunksWithinLimit({
+  const chunks = renderMarkdownIRChunksWithinLimit({
     ir,
     limit,
     renderChunk: renderTelegramChunkHtml,
     measureRendered: (html) => html.length,
-  }).map(({ source, rendered }) => ({
-    html: rendered,
-    text: source.text,
-  }));
+  });
+  const result: TelegramFormattedChunk[] = [];
+  for (const { source, rendered } of chunks) {
+    if (rendered.length <= limit) {
+      result.push({ html: rendered, text: source.text });
+    } else {
+      // IR-level splitting couldn't reduce below the limit (e.g. heavy markdown
+      // expanding significantly in HTML). Fall back to raw HTML splitting which
+      // can break mid-text to guarantee every chunk fits.
+      for (const htmlChunk of splitTelegramHtmlChunks(rendered, limit)) {
+        result.push({ html: htmlChunk, text: htmlChunk });
+      }
+    }
+  }
+  return result;
 }
 
 export function markdownToTelegramChunks(

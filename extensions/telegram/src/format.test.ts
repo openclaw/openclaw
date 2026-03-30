@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
+import {
+  markdownToTelegramHtml,
+  markdownToTelegramHtmlChunks,
+  splitTelegramHtmlChunks,
+} from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -133,5 +137,20 @@ describe("markdownToTelegramHtml", () => {
 
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  });
+
+  it("splits markdown whose HTML expansion exceeds the limit", () => {
+    // Build markdown with heavy formatting that expands significantly in HTML.
+    // Each **bold** becomes <b>bold</b> (7 extra chars), tables and code blocks
+    // add further overhead. This simulates the real-world case where IR-level
+    // chunking fits within the text limit but the rendered HTML overflows.
+    const rows = Array.from({ length: 80 }, (_, i) => `| **item${i}** | ${"x".repeat(40)} |`);
+    const markdown = `| Col A | Col B |\n|-------|-------|\n${rows.join("\n")}`;
+    const limit = 4000;
+    const chunks = markdownToTelegramHtmlChunks(markdown, limit);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(limit);
+    }
   });
 });
