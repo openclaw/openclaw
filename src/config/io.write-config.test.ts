@@ -371,28 +371,27 @@ describe("config io write", () => {
   });
 
   it("does not leak channel plugin AJV defaults into persisted config (issue #56772)", async () => {
-    // Regression test for #56772.  Register a fake channel plugin whose AJV
-    // schema carries `enrichGroupParticipants: { type: "boolean", default: true }`.
-    // This mirrors the real BlueBubbles `enrichGroupParticipantsFromContacts`
-    // default that caused the original crash loop.
+    // Regression test for #56772. Mock the BlueBubbles channel metadata so
+    // read-time AJV validation injects the same default that triggered the
+    // write-back leak.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
         {
-          id: "fakebubbles",
+          id: "bluebubbles",
           origin: "bundled",
-          channels: ["fakebubbles"],
+          channels: ["bluebubbles"],
           channelCatalogMeta: {
-            id: "fakebubbles",
-            label: "FakeBubbles",
-            blurb: "Fake channel for testing AJV default injection",
+            id: "bluebubbles",
+            label: "BlueBubbles",
+            blurb: "BlueBubbles channel",
           },
           channelConfigs: {
-            fakebubbles: {
+            bluebubbles: {
               schema: {
                 type: "object",
                 properties: {
-                  enrichGroupParticipants: {
+                  enrichGroupParticipantsFromContacts: {
                     type: "boolean",
                     default: true,
                   },
@@ -415,7 +414,7 @@ describe("config io write", () => {
         initialConfig: {
           gateway: { port: 18789 },
           channels: {
-            fakebubbles: {
+            bluebubbles: {
               serverUrl: "http://localhost:1234",
             },
           },
@@ -445,12 +444,12 @@ describe("config io write", () => {
         auth: { mode: "token" },
       });
 
-      // The critical assertion: enrichGroupParticipants (an AJV-injected default)
-      // must NOT appear in the persisted config.
+      // The critical assertion: the AJV-injected BlueBubbles default must not
+      // appear in the persisted config.
       const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-      expect(channels?.fakebubbles).toBeDefined();
-      expect(channels?.fakebubbles).not.toHaveProperty("enrichGroupParticipants");
-      expect(channels?.fakebubbles?.serverUrl).toBe("http://localhost:1234");
+      expect(channels?.bluebubbles).toBeDefined();
+      expect(channels?.bluebubbles).not.toHaveProperty("enrichGroupParticipantsFromContacts");
+      expect(channels?.bluebubbles?.serverUrl).toBe("http://localhost:1234");
     });
 
     // Restore the default empty-plugins mock for subsequent tests.
