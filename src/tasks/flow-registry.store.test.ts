@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createFlowRecord, getFlowById, resetFlowRegistryForTests } from "./flow-registry.js";
 import { resolveFlowRegistryDir, resolveFlowRegistrySqlitePath } from "./flow-registry.paths.js";
@@ -33,7 +33,12 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
 }
 
 describe("flow-registry store runtime", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
     resetFlowRegistryForTests();
   });
