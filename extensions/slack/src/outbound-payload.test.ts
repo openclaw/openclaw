@@ -116,6 +116,44 @@ describe("slackOutbound sendPayload", () => {
     expect(result).toMatchObject({ channel: "slack", messageId: "sl-controls" });
   });
 
+  it("redacts exec approval command details from Slack text when buttons are present", async () => {
+    const { run, sendMock, to } = createHarness({
+      payload: {
+        text: "Approval required.\n\nPending command:\n```sh\nfind . -path '*save_draft.py'\n```",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Allow", value: "/approve 123 allow-once" }],
+            },
+          ],
+        },
+        channelData: {
+          execApproval: {
+            approvalId: "123",
+            approvalSlug: "123",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      },
+    });
+
+    await run();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      to,
+      "Approval required. Use the buttons below.",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({
+            type: "actions",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("fails when merged Slack blocks exceed the platform limit", async () => {
     const { run, sendMock } = createHarness({
       payload: {
