@@ -32,5 +32,13 @@ export {
   VLLM_DEFAULT_MAX_TOKENS,
   promptAndConfigureVllm,
 } from "../plugins/provider-vllm-setup.js";
-export { buildVllmProvider } from "./vllm.js";
-export { buildSglangProvider } from "./sglang.js";
+// Lazy re-exports to break circular facade cycle:
+// provider-setup → vllm.ts (facade) → extensions/vllm/api.ts → provider-setup
+export const buildVllmProvider: typeof import("./vllm.js").buildVllmProvider = ((...args: Parameters<typeof import("./vllm.js").buildVllmProvider>) => {
+  const { buildVllmProvider: fn } = require("./vllm.js") as typeof import("./vllm.js");
+  return fn(...args);
+}) as typeof import("./vllm.js").buildVllmProvider;
+export const buildSglangProvider: typeof import("./sglang.js").buildSglangProvider = ((...args: Parameters<typeof import("./sglang.js").buildSglangProvider>) => {
+  const { buildSglangProvider: fn } = require("./sglang.js") as typeof import("./sglang.js");
+  return fn(...args);
+}) as typeof import("./sglang.js").buildSglangProvider;

@@ -200,7 +200,16 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   }
   fs.closeSync(opened.fd);
 
-  const loaded = getJiti(location.modulePath)(location.modulePath) as T;
+  // For built dist .js files, use native require() to preserve ESM binding
+  // semantics. Jiti's CJS wrapper breaks lazy ESM getters, causing
+  // "Cannot read properties of undefined" on chunk cross-references.
+  let loaded: T;
+  if (location.modulePath.endsWith(".js") && location.modulePath.includes(`${path.sep}dist${path.sep}`)) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    loaded = require(location.modulePath) as T;
+  } else {
+    loaded = getJiti(location.modulePath)(location.modulePath) as T;
+  }
   loadedFacadeModules.set(location.modulePath, loaded);
   return loaded;
 }

@@ -18,6 +18,11 @@ function resolveBundledDirFromPackageRoot(
 ): string | undefined {
   const sourceExtensionsDir = path.join(packageRoot, "extensions");
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
+  // Always prefer built dist/extensions/ when it exists to avoid jiti
+  // circular resolution through source .ts facade modules.
+  if (fs.existsSync(builtExtensionsDir)) {
+    return builtExtensionsDir;
+  }
   if (
     (preferSourceCheckout || isSourceCheckoutRoot(packageRoot)) &&
     fs.existsSync(sourceExtensionsDir)

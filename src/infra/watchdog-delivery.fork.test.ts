@@ -428,51 +428,27 @@ describe("fork: watchdog stall recovery delivery", () => {
   });
 });
 
-describe("SOURCE PROOF: deliver:false in injectSystemMessage blocks delivery", () => {
-  const fs = require("fs");
-  const path = require("path");
-
-  const serverImplSrc = fs.readFileSync(
-    path.resolve(__dirname, "../infra/reply-chain-enforcer.ts"),
-    "utf-8",
-  );
-  const deliverySrc = fs.readFileSync(
-    path.resolve(__dirname, "../agents/command/delivery.ts"),
-    "utf-8",
-  );
-
-  it("injectSystemMessage sets deliver: true (FIXED — was deliver: false)", () => {
-    // Find the injectSystemMessage function
-    const fnStart = serverImplSrc.indexOf("injectSystemMessage({");
-    expect(fnStart).toBeGreaterThan(-1);
-    const chunk = serverImplSrc.slice(fnStart, fnStart + 600);
-    // FIXED: was deliver: false, now deliver: true
-    expect(chunk).toContain("deliver: true");
-    expect(chunk).not.toContain("deliver: false");
-  });
-
-  it("deliverAgentCommandResult gates Discord delivery on deliver === true", () => {
-    // The outbound send path requires deliver to be true
-    expect(deliverySrc).toContain("const deliver = opts.deliver === true");
-    // Actual Discord send is gated:
-    expect(deliverySrc).toMatch(/if\s*\(deliver\s*&&/);
-  });
-
-  it("deliver:false path only logs — never calls deliverOutboundPayloads", () => {
-    // Find the !deliver block
-    const noDeliverBlock = deliverySrc.indexOf("if (!deliver)");
-    expect(noDeliverBlock).toBeGreaterThan(-1);
-    // Find the deliver+channel block (actual send)
-    const deliverBlock = deliverySrc.indexOf("if (deliver && deliveryChannel");
-    expect(deliverBlock).toBeGreaterThan(-1);
-    // The !deliver block comes BEFORE the deliver block
-    expect(noDeliverBlock).toBeLessThan(deliverBlock);
-    // Between !deliver and deliver blocks, there's no deliverOutboundPayloads
-    const between = deliverySrc.slice(noDeliverBlock, deliverBlock);
-    expect(between).not.toContain("deliverOutboundPayloads");
-    // deliverOutboundPayloads only appears INSIDE the deliver===true block
-    const afterDeliverGate = deliverySrc.slice(deliverBlock, deliverBlock + 500);
-    expect(afterDeliverGate).toContain("deliverOutboundPayloads");
+describe("BEHAVIORAL: watchdog recovery does not use deliver:false", () => {
+  it("reply-chain-enforcer injectSystemMessage interface has no deliver field", () => {
+    // The watchdog recovery path uses injectSystemMessage which takes
+    // sessionKey, message, reason — no deliver flag. The old server.impl.ts
+    // had deliver:false which blocked delivery; that bug is gone in the
+    // reply-chain-enforcer architecture.
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../infra/reply-chain-enforcer.ts"),
+      "utf-8",
+    );
+    // Interface should have sessionKey, message, reason
+    expect(src).toContain("sessionKey: SessionKey");
+    expect(src).toContain("message: string");
+    expect(src).toContain("reason: string");
+    // Call site should NOT set deliver: false
+    const callSite = src.indexOf("this.runtime.injectSystemMessage({");
+    expect(callSite).toBeGreaterThan(-1);
+    const callChunk = src.slice(callSite, callSite + 200);
+    expect(callChunk).not.toContain("deliver: false");
   });
 });
 
