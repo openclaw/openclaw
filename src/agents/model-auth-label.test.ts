@@ -1,64 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./auth-profiles.js", () => ({
+const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(),
-}));
-
-vi.mock("./model-auth.js", () => ({
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
   resolveEnvApiKey: vi.fn(() => null),
 }));
 
-type AuthProfilesModule = typeof import("./auth-profiles.js");
-type ModelAuthModule = typeof import("./model-auth.js");
-type ModelAuthLabelModule = typeof import("./model-auth-label.js");
+vi.mock("./auth-profiles.js", () => ({
+  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
+  resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
+}));
 
-let ensureAuthProfileStoreMock: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["ensureAuthProfileStore"]>
->;
-let resolveAuthProfileOrderMock: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["resolveAuthProfileOrder"]>
->;
-let resolveAuthProfileDisplayLabelMock: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["resolveAuthProfileDisplayLabel"]>
->;
-let resolveUsableCustomProviderApiKeyMock: ReturnType<
-  typeof vi.mocked<ModelAuthModule["resolveUsableCustomProviderApiKey"]>
->;
-let resolveEnvApiKeyMock: ReturnType<typeof vi.mocked<ModelAuthModule["resolveEnvApiKey"]>>;
-let resolveModelAuthLabel: ModelAuthLabelModule["resolveModelAuthLabel"];
+vi.mock("./model-auth.js", () => ({
+  resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
+  resolveEnvApiKey: mocks.resolveEnvApiKey,
+}));
 
-async function loadModelAuthLabelModule() {
-  vi.resetModules();
-  const authProfilesModule = await import("./auth-profiles.js");
-  const modelAuthModule = await import("./model-auth.js");
-  const modelAuthLabelModule = await import("./model-auth-label.js");
-  ensureAuthProfileStoreMock = vi.mocked(authProfilesModule.ensureAuthProfileStore);
-  resolveAuthProfileOrderMock = vi.mocked(authProfilesModule.resolveAuthProfileOrder);
-  resolveAuthProfileDisplayLabelMock = vi.mocked(authProfilesModule.resolveAuthProfileDisplayLabel);
-  resolveUsableCustomProviderApiKeyMock = vi.mocked(
-    modelAuthModule.resolveUsableCustomProviderApiKey,
-  );
-  resolveEnvApiKeyMock = vi.mocked(modelAuthModule.resolveEnvApiKey);
-  resolveModelAuthLabel = modelAuthLabelModule.resolveModelAuthLabel;
-}
+let resolveModelAuthLabel: typeof import("./model-auth-label.js").resolveModelAuthLabel;
 
 describe("resolveModelAuthLabel", () => {
   beforeEach(async () => {
-    await loadModelAuthLabelModule();
-    ensureAuthProfileStoreMock.mockReset();
-    resolveAuthProfileOrderMock.mockReset();
-    resolveAuthProfileDisplayLabelMock.mockReset();
-    resolveUsableCustomProviderApiKeyMock.mockReset();
-    resolveUsableCustomProviderApiKeyMock.mockReturnValue(null);
-    resolveEnvApiKeyMock.mockReset();
-    resolveEnvApiKeyMock.mockReturnValue(null);
+    if (!resolveModelAuthLabel) {
+      ({ resolveModelAuthLabel } = await import("./model-auth-label.js"));
+    }
+    mocks.ensureAuthProfileStore.mockReset();
+    mocks.resolveAuthProfileOrder.mockReset();
+    mocks.resolveAuthProfileDisplayLabel.mockReset();
+    mocks.resolveUsableCustomProviderApiKey.mockReset();
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
+    mocks.resolveEnvApiKey.mockReset();
+    mocks.resolveEnvApiKey.mockReturnValue(null);
   });
 
   it("does not include token value in label for token profiles", () => {
-    ensureAuthProfileStoreMock.mockReturnValue({
+    mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
         "github-copilot:default": {
@@ -69,8 +47,8 @@ describe("resolveModelAuthLabel", () => {
         },
       },
     } as never);
-    resolveAuthProfileOrderMock.mockReturnValue(["github-copilot:default"]);
-    resolveAuthProfileDisplayLabelMock.mockReturnValue("github-copilot:default");
+    mocks.resolveAuthProfileOrder.mockReturnValue(["github-copilot:default"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("github-copilot:default");
 
     const label = resolveModelAuthLabel({
       provider: "github-copilot",
@@ -85,7 +63,7 @@ describe("resolveModelAuthLabel", () => {
 
   it("does not include api-key value in label for api-key profiles", () => {
     const shortSecret = "abc123"; // pragma: allowlist secret
-    ensureAuthProfileStoreMock.mockReturnValue({
+    mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
         "openai:default": {
@@ -95,8 +73,8 @@ describe("resolveModelAuthLabel", () => {
         },
       },
     } as never);
-    resolveAuthProfileOrderMock.mockReturnValue(["openai:default"]);
-    resolveAuthProfileDisplayLabelMock.mockReturnValue("openai:default");
+    mocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai:default");
 
     const label = resolveModelAuthLabel({
       provider: "openai",
@@ -110,7 +88,7 @@ describe("resolveModelAuthLabel", () => {
   });
 
   it("shows oauth type with profile label", () => {
-    ensureAuthProfileStoreMock.mockReturnValue({
+    mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
         "anthropic:oauth": {
@@ -119,8 +97,8 @@ describe("resolveModelAuthLabel", () => {
         },
       },
     } as never);
-    resolveAuthProfileOrderMock.mockReturnValue(["anthropic:oauth"]);
-    resolveAuthProfileDisplayLabelMock.mockReturnValue("anthropic:oauth");
+    mocks.resolveAuthProfileOrder.mockReturnValue(["anthropic:oauth"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("anthropic:oauth");
 
     const label = resolveModelAuthLabel({
       provider: "anthropic",

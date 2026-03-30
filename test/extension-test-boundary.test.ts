@@ -6,7 +6,6 @@ import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
 const allowedNonExtensionTests = new Set<string>([
-  "src/agents/bedrock-discovery.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
 ]);
 

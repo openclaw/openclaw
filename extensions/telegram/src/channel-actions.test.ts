@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
 
 const handleTelegramActionMock = vi.hoisted(() => vi.fn());

@@ -13,7 +13,13 @@ vi.mock("../../utils.js", async (importOriginal) => {
   };
 });
 
-const { enforceManagedScanPolicy, listManagedSkills } = await import("./managed.js");
+vi.mock("../skills-clawhub.js", () => ({
+  installSkillFromClawHub: vi.fn(),
+}));
+
+const { enforceManagedScanPolicy, listManagedSkills, updateManagedSkills } =
+  await import("./managed.js");
+const { installSkillFromClawHub } = await import("../skills-clawhub.js");
 
 beforeAll(async () => {
   await fs.mkdir(path.join(tempRoot, "skills"), { recursive: true });
@@ -70,5 +76,48 @@ describe("managed hub policy", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.name).toBe("calendar");
     expect(rows[0]?.exists).toBe(true);
+  });
+
+  it("restores prior skill tree when ClawHub update returns ok: false", async () => {
+    vi.mocked(installSkillFromClawHub).mockResolvedValue({
+      ok: false,
+      error: "simulated update failure",
+    });
+    const lockPath = path.join(tempRoot, "skills", "hub.lock.json");
+    const skillName = "restore-test-skill";
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify(
+        {
+          lockfileVersion: 1,
+          skills: [
+            {
+              name: skillName,
+              source: "clawhub",
+              url: "https://clawhub.ai/skills/restore-test-skill",
+              ref: "1.0.0",
+              contentHash: "hash",
+              scan: { critical: 0, warn: 0, info: 0, verdict: "safe" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const skillDir = path.join(tempRoot, "skills", skillName);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "original content", "utf-8");
+
+    const results = await updateManagedSkills({});
+    expect(results).toEqual([
+      {
+        name: skillName,
+        ok: false,
+        message: "simulated update failure",
+      },
+    ]);
+    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8")).toBe("original content");
   });
 });

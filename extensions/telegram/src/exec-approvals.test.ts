@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalAuthorizedSender,
@@ -218,6 +218,11 @@ describe("telegram exec approvals", () => {
   describe("isTelegramExecApprovalAuthorizedSender", () => {
     it("accepts explicit approvers", () => {
       const cfg = buildConfig({ enabled: true, approvers: ["123"] });
+      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
+    });
+
+    it("accepts explicit approvers even when the richer client is disabled", () => {
+      const cfg = buildConfig({ enabled: false, approvers: ["123"] });
       expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
     });
 

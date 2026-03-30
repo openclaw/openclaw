@@ -400,6 +400,41 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it("assigns single include-file CI batches to one shard instead of over-sharding them", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_TEST_SHARDS: "4",
+      OPENCLAW_TEST_SHARD_INDEX: "1",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        mode: "ci",
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const singleFileBatch = plan.parallelUnits.find(
+      (unit) =>
+        unit.id.startsWith("unit-fast-") &&
+        unit.fixedShardIndex === undefined &&
+        Array.isArray(unit.includeFiles) &&
+        unit.includeFiles.length === 1,
+    );
+
+    expect(singleFileBatch).toBeTruthy();
+    expect(plan.topLevelSingleShardAssignments.get(singleFileBatch)).toBeTypeOf("number");
+
+    artifacts.cleanupTempArtifacts();
+  });
+
   it("removes planner temp artifacts when cleanup runs after planning", () => {
     const artifacts = createExecutionArtifacts({});
     buildExecutionPlan(

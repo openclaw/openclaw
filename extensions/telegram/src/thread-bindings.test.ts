@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "../../../src/config/paths.js";
-import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+import { loadBundledPluginTestApiSync } from "../../../test/helpers/plugins/bundled-plugin-public-surface.js";
 import {
   __testing,
   createTelegramThreadBindingManager,
@@ -170,6 +171,14 @@ describe("telegram thread bindings", () => {
     expect(manager.listBySessionKey("agent:main:subagent:child-1")[0]?.maxAgeMs).toBe(
       6 * 60 * 60 * 1000,
     );
+  });
+
+  it("exposes the reset helper through the bundled test api", async () => {
+    const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
+      resetTelegramThreadBindingsForTests: () => Promise<void>;
+    }>("telegram");
+
+    await expect(resetTelegramThreadBindingsForTests()).resolves.toBeUndefined();
   });
 
   it("does not persist lifecycle updates when manager persistence is disabled", async () => {

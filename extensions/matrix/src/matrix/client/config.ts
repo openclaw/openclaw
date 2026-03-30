@@ -2,6 +2,7 @@ import {
   coerceSecretRef,
   resolveConfiguredSecretInputString,
 } from "openclaw/plugin-sdk/config-runtime";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -290,15 +291,22 @@ function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
 const MATRIX_HTTP_HOMESERVER_ERROR =
   "Matrix homeserver must use https:// unless it targets a private or loopback host";
 
-function buildMatrixNetworkFields(
-  allowPrivateNetwork: boolean | undefined,
-): Pick<MatrixResolvedConfig, "allowPrivateNetwork" | "ssrfPolicy"> {
-  if (!allowPrivateNetwork) {
+function buildMatrixNetworkFields(params: {
+  allowPrivateNetwork: boolean | undefined;
+  proxy?: string;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): Pick<MatrixResolvedConfig, "allowPrivateNetwork" | "ssrfPolicy" | "dispatcherPolicy"> {
+  const dispatcherPolicy: PinnedDispatcherPolicy | undefined =
+    params.dispatcherPolicy ??
+    (params.proxy ? { mode: "explicit-proxy", proxyUrl: params.proxy } : undefined);
+  if (!params.allowPrivateNetwork && !dispatcherPolicy) {
     return {};
   }
   return {
-    allowPrivateNetwork: true,
-    ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(true),
+    ...(params.allowPrivateNetwork
+      ? { allowPrivateNetwork: true, ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(true) }
+      : {}),
+    ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
   };
 }
 
@@ -492,7 +500,7 @@ export function resolveMatrixConfig(
     deviceName: resolvedStrings.deviceName || undefined,
     initialSyncLimit,
     encryption,
-    ...buildMatrixNetworkFields(allowPrivateNetwork),
+    ...buildMatrixNetworkFields({ allowPrivateNetwork, proxy: matrix.proxy }),
   };
 }
 
@@ -562,7 +570,10 @@ export function resolveMatrixConfigForAccount(
     deviceName: resolvedStrings.deviceName || undefined,
     initialSyncLimit,
     encryption,
-    ...buildMatrixNetworkFields(allowPrivateNetwork),
+    ...buildMatrixNetworkFields({
+      allowPrivateNetwork,
+      proxy: account.proxy ?? matrix.proxy,
+    }),
   };
 }
 
@@ -660,8 +671,9 @@ export async function resolveMatrixAuth(params?: {
     if (!userId || !knownDeviceId) {
       // Fetch whoami when we need to resolve userId and/or deviceId from token auth.
       ensureMatrixSdkLoggingConfigured();
-      const tempClient = new MatrixClient(homeserver, accessToken, undefined, undefined, {
+      const tempClient = new MatrixClient(homeserver, accessToken, {
         ssrfPolicy: resolved.ssrfPolicy,
+        dispatcherPolicy: resolved.dispatcherPolicy,
       });
       const whoami = (await tempClient.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
         user_id?: string;
@@ -710,7 +722,10 @@ export async function resolveMatrixAuth(params?: {
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
-      ...buildMatrixNetworkFields(resolved.allowPrivateNetwork),
+      ...buildMatrixNetworkFields({
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        dispatcherPolicy: resolved.dispatcherPolicy,
+      }),
     };
   }
 
@@ -727,7 +742,10 @@ export async function resolveMatrixAuth(params?: {
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
-      ...buildMatrixNetworkFields(resolved.allowPrivateNetwork),
+      ...buildMatrixNetworkFields({
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        dispatcherPolicy: resolved.dispatcherPolicy,
+      }),
     };
   }
 
@@ -750,8 +768,9 @@ export async function resolveMatrixAuth(params?: {
 
   // Login with password using the same hardened request path as other Matrix HTTP calls.
   ensureMatrixSdkLoggingConfigured();
-  const loginClient = new MatrixClient(homeserver, "", undefined, undefined, {
+  const loginClient = new MatrixClient(homeserver, "", {
     ssrfPolicy: resolved.ssrfPolicy,
+    dispatcherPolicy: resolved.dispatcherPolicy,
   });
   const login = (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
     type: "m.login.password",
@@ -780,7 +799,10 @@ export async function resolveMatrixAuth(params?: {
     deviceName: resolved.deviceName,
     initialSyncLimit: resolved.initialSyncLimit,
     encryption: resolved.encryption,
-    ...buildMatrixNetworkFields(resolved.allowPrivateNetwork),
+    ...buildMatrixNetworkFields({
+      allowPrivateNetwork: resolved.allowPrivateNetwork,
+      dispatcherPolicy: resolved.dispatcherPolicy,
+    }),
   };
 
   const { saveMatrixCredentials } = await loadCredentialsWriter();
