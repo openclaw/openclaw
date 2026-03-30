@@ -155,13 +155,15 @@ async function runCli(params: {
   text: string;
   outputDir: string;
   filePrefix: string;
+  outputFormat?: OutputFormat;
 }): Promise<{ buffer: Buffer; actualFormat: "mp3" | "opus" | "wav"; audioPath?: string }> {
   const cleanText = stripEmojis(params.text);
   if (!cleanText) throw new Error("CLI TTS: text is empty after removing emojis");
 
+  const outputExt = getFileExt(params.outputFormat ?? "wav");
   const ctx: Record<string, string | undefined> = {
     Text: cleanText,
-    OutputPath: path.join(params.outputDir, `${params.filePrefix}.wav`),
+    OutputPath: path.join(params.outputDir, `${params.filePrefix}${outputExt}`),
     OutputDir: params.outputDir,
     OutputBase: params.filePrefix,
   };
@@ -245,9 +247,10 @@ async function convertAudio(
   return readFileSync(outputPath);
 }
 
-async function convertToRawPcm(inputPath: string): Promise<Buffer> {
+async function convertToRawPcm(inputPath: string, outputDir: string): Promise<Buffer> {
   // Output raw 16kHz mono 16-bit little-endian PCM (no WAV headers)
-  const args = [
+  const outputPath = path.join(outputDir, "telephony.pcm");
+  await runFfmpeg([
     "-y",
     "-i",
     inputPath,
@@ -259,24 +262,9 @@ async function convertToRawPcm(inputPath: string): Promise<Buffer> {
     "1",
     "-f",
     "s16le",
-    "pipe:1",
-  ];
-  return runFfmpegToBuffer(args);
-}
-
-async function runFfmpegToBuffer(args: string[]): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  return new Promise((resolve, reject) => {
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
-    proc.stdout.on("data", (c) => chunks.push(c));
-    proc.on("error", (e) => reject(new Error(`ffmpeg failed: ${e.message}`)));
-    proc.on("close", (code) => {
-      if (code !== 0) {
-        return reject(new Error(`ffmpeg exit ${code}`));
-      }
-      resolve(Buffer.concat(chunks));
-    });
-  });
+    outputPath,
+  ]);
+  return readFileSync(outputPath);
 }
 
 export function buildCliSpeechProvider(): SpeechProviderPlugin {
@@ -312,6 +300,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           text: req.text,
           outputDir: tempDir,
           filePrefix: "speech",
+          outputFormat: config.outputFormat,
         });
 
         log.debug(`synthesize: format=${result.actualFormat}, size=${result.buffer.length}`);
@@ -376,6 +365,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           text: req.text,
           outputDir: tempDir,
           filePrefix: "telephony",
+          outputFormat: config.outputFormat,
         });
 
         const inputFile =
@@ -383,7 +373,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         if (!result.audioPath) writeFileSync(inputFile, result.buffer);
 
         // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
-        const pcmBuffer = await convertToRawPcm(inputFile);
+        const pcmBuffer = await convertToRawPcm(inputFile, tempDir);
 
         return {
           audioBuffer: pcmBuffer,
