@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -55,14 +54,14 @@ export function getAgentScopedMediaLocalRoots(
   return roots;
 }
 
-export function getAgentScopedMediaLocalRootsForSources(params: {
+export function getAgentScopedMediaLocalRootsForSources({
+  cfg,
+  agentId,
+  mediaSources: _mediaSources,
+}: {
   cfg: OpenClawConfig;
   agentId?: string;
   mediaSources?: readonly string[];
 }): readonly string[] {
-  const roots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
-  if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
-    return roots;
-  }
-  return roots;
+  return getAgentScopedMediaLocalRoots(cfg, agentId);
 }
