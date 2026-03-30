@@ -316,10 +316,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
   val smsPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
-      val sendOk = perms[Manifest.permission.SEND_SMS] == true
-      val readOk = perms[Manifest.permission.READ_SMS] == true
-      smsPermissionGranted = sendOk && readOk
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+      smsPermissionGranted =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
+          PackageManager.PERMISSION_GRANTED &&
+          ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
+          PackageManager.PERMISSION_GRANTED
       viewModel.refreshGatewayConnection()
     }
 
@@ -609,7 +611,11 @@ fun SettingsSheet(viewModel: MainViewModel) {
                   shape = RoundedCornerShape(14.dp),
                 ) {
                   Text(
-                    if (smsPermissionGranted) "Manage" else "Grant",
+                    if (smsPermissionGranted) {
+                      "Manage"
+                    } else {
+                      "Grant"
+                    },
                     style = mobileCallout.copy(fontWeight = FontWeight.Bold),
                   )
                 }
@@ -1284,5 +1290,5 @@ private fun isNotificationListenerEnabled(context: Context): Boolean {
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
-          sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
+    sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }
