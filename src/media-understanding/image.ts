@@ -50,7 +50,41 @@ async function resolveImageRuntime(params: {
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  // Fallback to inline (user-configured) model when not in built-in registry.
+  // This supports custom/third-party providers that are not part of the pi-ai
+  // model catalog but are configured in openclaw.json.
   if (!model) {
+    const providerConfig = (params.cfg as Record<string, unknown> | undefined)?.models as
+      | Record<string, unknown>
+      | undefined;
+    const providers = providerConfig?.providers as Record<string, Record<string, unknown>> | undefined;
+    const providerEntry = providers?.[resolvedRef.provider];
+    const inlineModels = Array.isArray(providerEntry?.models)
+      ? (providerEntry!.models as Array<Record<string, unknown>>)
+      : [];
+    const inlineModel = inlineModels.find((m) => m.id === resolvedRef.model);
+    if (
+      inlineModel &&
+      Array.isArray(inlineModel.input) &&
+      (inlineModel.input as string[]).includes("image")
+    ) {
+      const builtModel = {
+        ...inlineModel,
+        provider: resolvedRef.provider,
+        baseUrl: providerEntry?.baseUrl,
+        api: inlineModel.api ?? providerEntry?.api,
+      } as Model<Api>;
+      const apiKeyInfo = await getApiKeyForModel({
+        model: builtModel,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        profileId: params.profile,
+        preferredProfile: params.preferredProfile,
+      });
+      const apiKey = requireApiKey(apiKeyInfo, builtModel.provider);
+      authStorage.setRuntimeApiKey(builtModel.provider, apiKey);
+      return { apiKey, model: builtModel };
+    }
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   if (!model.input?.includes("image")) {
