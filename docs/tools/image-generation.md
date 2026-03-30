@@ -36,12 +36,12 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 ## Supported providers
 
-| Provider | Default model | Edit support | API key |
-|---|---|---|---|
-| OpenAI | `gpt-image-1` | No | `OPENAI_API_KEY` |
-| Google | `gemini-3.1-flash-image-preview` | Yes | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
-| fal | `fal-ai/flux/dev` | Yes | `FAL_KEY` |
-| MiniMax | `image-01` | Yes (subject reference) | `MINIMAX_API_KEY` |
+| Provider | Default model                    | Edit support            | API key                              |
+| -------- | -------------------------------- | ----------------------- | ------------------------------------ |
+| OpenAI   | `gpt-image-1`                    | No                      | `OPENAI_API_KEY`                     |
+| Google   | `gemini-3.1-flash-image-preview` | Yes                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| fal      | `fal-ai/flux/dev`                | Yes                     | `FAL_KEY`                            |
+| MiniMax  | `image-01`                       | Yes (subject reference) | `MINIMAX_API_KEY`                    |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -51,18 +51,18 @@ Use `action: "list"` to inspect available providers and models at runtime:
 
 ## Tool parameters
 
-| Parameter | Type | Description |
-|---|---|---|
-| `prompt` | string | Image generation prompt (required for `action: "generate"`) |
-| `action` | string | `"generate"` (default) or `"list"` to inspect providers |
-| `model` | string | Provider/model override, e.g. `openai/gpt-image-1` |
-| `image` | string | Single reference image path or URL for edit mode |
-| `images` | string[] | Multiple reference images for edit mode (up to 5) |
-| `size` | string | Size hint: `1024x1024`, `1536x1024`, `1024x1536`, `1024x1792`, `1792x1024` |
-| `aspectRatio` | string | Aspect ratio: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9` |
-| `resolution` | string | Resolution hint: `1K`, `2K`, or `4K` |
-| `count` | number | Number of images to generate (1–4) |
-| `filename` | string | Output filename hint |
+| Parameter     | Type     | Description                                                                           |
+| ------------- | -------- | ------------------------------------------------------------------------------------- |
+| `prompt`      | string   | Image generation prompt (required for `action: "generate"`)                           |
+| `action`      | string   | `"generate"` (default) or `"list"` to inspect providers                               |
+| `model`       | string   | Provider/model override, e.g. `openai/gpt-image-1`                                    |
+| `image`       | string   | Single reference image path or URL for edit mode                                      |
+| `images`      | string[] | Multiple reference images for edit mode (up to 5)                                     |
+| `size`        | string   | Size hint: `1024x1024`, `1536x1024`, `1024x1536`, `1024x1792`, `1792x1024`            |
+| `aspectRatio` | string   | Aspect ratio: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9` |
+| `resolution`  | string   | Resolution hint: `1K`, `2K`, or `4K`                                                  |
+| `count`       | number   | Number of images to generate (1–4)                                                    |
+| `filename`    | string   | Output filename hint                                                                  |
 
 Not all providers support all parameters. The tool passes what each provider supports and ignores the rest.
 
@@ -110,13 +110,13 @@ Google supports up to 5 reference images via the `images` parameter. fal and Min
 
 ## Provider capabilities
 
-| Capability | OpenAI | Google | fal | MiniMax |
-|---|---|---|---|---|
-| Generate | Yes (up to 4) | Yes (up to 4) | Yes (up to 4) | Yes (up to 9) |
-| Edit/reference | No | Yes (up to 5 images) | Yes (1 image) | Yes (1 image, subject ref) |
-| Size control | Yes | Yes | Yes | No |
-| Aspect ratio | No | Yes | Yes (generate only) | Yes |
-| Resolution (1K/2K/4K) | No | Yes | Yes | No |
+| Capability            | OpenAI        | Google               | fal                 | MiniMax                    |
+| --------------------- | ------------- | -------------------- | ------------------- | -------------------------- |
+| Generate              | Yes (up to 4) | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              |
+| Edit/reference        | No            | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) |
+| Size control          | Yes           | Yes                  | Yes                 | No                         |
+| Aspect ratio          | No            | Yes                  | Yes (generate only) | Yes                        |
+| Resolution (1K/2K/4K) | No            | Yes                  | Yes                 | No                         |
 
 ## Related
 
