@@ -489,6 +489,8 @@ describe("exec tool backgrounding", () => {
 });
 
 describe("exec /approve guard", () => {
+  // === MUST BLOCK: direct /approve invocations ===
+
   it("rejects /approve commands to prevent infinite approval loop", async () => {
     await expect(executeExecCommand(execTool, "/approve abc123 allow-always")).rejects.toThrow(
       "/approve is a chat slash command, not a shell command",
@@ -496,59 +498,15 @@ describe("exec /approve guard", () => {
   });
 
   it("rejects /approve with leading whitespace", async () => {
-    await expect(executeExecCommand(execTool, "  /approve xyz allow-once")).rejects.toThrow(
+    await expect(executeExecCommand(execTool, "  /approve abc123 allow-once")).rejects.toThrow(
       "/approve is a chat slash command, not a shell command",
     );
   });
 
-  it("does not reject commands that merely contain /approve in the middle", async () => {
-    // A legitimate command like `echo /approve` should not be blocked
-    const result = await executeExecCommand(execTool, shellEcho("/approve test"));
-    expect(readTextContent(result.content)).toBeDefined();
-  });
-
-  it("does not reject /approve inside heredoc data", async () => {
-    const result = await executeExecCommand(
-      execTool,
-      "cat <<'EOF'\n/approve abc123 allow-always\nEOF",
+  it("rejects bare /approve with no arguments", async () => {
+    await expect(executeExecCommand(execTool, "/approve")).rejects.toThrow(
+      "/approve is a chat slash command, not a shell command",
     );
-    expect(readTextContent(result.content)).toBeDefined();
-  });
-
-  it("rejects /approve as the first line even in a multiline command", async () => {
-    await expect(
-      executeExecCommand(execTool, "/approve abc123 allow-always\necho done"),
-    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
-  });
-
-  it("rejects /approve on a later executable line after a comment", async () => {
-    await expect(
-      executeExecCommand(execTool, "# note\n/approve abc123 allow-always"),
-    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
-  });
-
-  it("rejects /approve on a later executable line after true", async () => {
-    await expect(
-      executeExecCommand(execTool, "true\n/approve abc123 allow-always"),
-    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
-  });
-
-  it("rejects /approve after && shell separator on same line", async () => {
-    await expect(
-      executeExecCommand(execTool, "true && /approve abc123 allow-once"),
-    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
-  });
-
-  it("rejects /approve after ; shell separator on same line", async () => {
-    await expect(
-      executeExecCommand(execTool, "echo ok; /approve abc123 allow-always"),
-    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
-  });
-
-  it("rejects /approve after || shell separator on same line", async () => {
-    await expect(
-      executeExecCommand(execTool, "false || /approve abc123 allow-always"),
-    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
   it("rejects case-insensitive variants like /APPROVE", async () => {
@@ -563,40 +521,65 @@ describe("exec /approve guard", () => {
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
+  // === MUST BLOCK: /approve on different lines ===
+
+  it("rejects /approve as the first line in a multiline command", async () => {
+    await expect(
+      executeExecCommand(execTool, "/approve abc123 allow-always\necho done"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
   it("rejects /approve preceded by leading blank lines", async () => {
     await expect(
       executeExecCommand(execTool, "\n\n/approve abc123 allow-always"),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
-  it("does not reject /approve inside heredoc even with executable lines around it", async () => {
-    const result = await executeExecCommand(
-      execTool,
-      "echo start\ncat <<'DELIM'\n/approve abc123 allow-always\nDELIM\necho end",
-    );
-    expect(readTextContent(result.content)).toBeDefined();
+  it("rejects /approve after a comment line", async () => {
+    await expect(
+      executeExecCommand(execTool, "# note\n/approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
-  it("does not reject /approve inside heredoc with hyphenated delimiter", async () => {
-    const result = await executeExecCommand(
-      execTool,
-      "cat <<'END-DATA'\n/approve abc123 allow-always\nEND-DATA",
-    );
-    expect(readTextContent(result.content)).toBeDefined();
+  it("rejects /approve after an executable line", async () => {
+    await expect(
+      executeExecCommand(execTool, "true\n/approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
-  it("rejects /approve after & background operator on same line", async () => {
+  // === MUST BLOCK: /approve after shell operators ===
+
+  it("rejects /approve after && separator", async () => {
+    await expect(
+      executeExecCommand(execTool, "true && /approve abc123 allow-once"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after ; separator", async () => {
+    await expect(
+      executeExecCommand(execTool, "echo ok; /approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after || separator", async () => {
+    await expect(
+      executeExecCommand(execTool, "false || /approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after | pipe", async () => {
+    await expect(
+      executeExecCommand(execTool, "echo x | /approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after & background operator", async () => {
     await expect(
       executeExecCommand(execTool, "true & /approve abc123 allow-once"),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
-  it("does not false-trigger heredoc on quoted <<EOF inside echo", async () => {
-    // echo " <<EOF" should NOT start a heredoc; the next line /approve must be caught.
-    await expect(
-      executeExecCommand(execTool, 'echo " <<EOF"\n/approve abc123 allow-always'),
-    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
-  });
+  // === MUST BLOCK: /approve with shell prefixes ===
 
   it("rejects /approve inside subshell parens", async () => {
     await expect(
@@ -616,11 +599,89 @@ describe("exec /approve guard", () => {
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
-  it("does not false-trigger heredoc on commented # <<EOF line", async () => {
-    // # <<EOF is a comment, not a heredoc; the next line /approve must be caught.
+  it("rejects /approve with quoted env-var prefix containing spaces", async () => {
+    await expect(
+      executeExecCommand(execTool, 'FOO="a b" /approve abc123 allow-once'),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  // === MUST BLOCK: /approve via indirect execution ===
+
+  it("rejects /approve inside eval", async () => {
+    await expect(
+      executeExecCommand(execTool, 'eval "/approve abc123 allow-always"'),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve inside bash -c", async () => {
+    await expect(
+      executeExecCommand(execTool, 'bash -c "/approve abc123 allow-always"'),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  // === MUST BLOCK: heredoc/comment edge cases ===
+
+  it("rejects /approve after inline comment with # <<EOF", async () => {
+    // `echo ok # <<EOF` is NOT a heredoc; the next line /approve must be caught.
+    await expect(
+      executeExecCommand(execTool, "echo ok # <<EOF\n/approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after whole-line comment with # <<EOF", async () => {
     await expect(
       executeExecCommand(execTool, "# <<EOF\n/approve abc123 allow-always"),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after quoted <<EOF that is not a real heredoc", async () => {
+    await expect(
+      executeExecCommand(execTool, 'echo " <<EOF"\n/approve abc123 allow-always'),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  // === MUST ALLOW: legitimate commands ===
+
+  it("does not reject echo /approve (argument, not command)", async () => {
+    const result = await executeExecCommand(execTool, shellEcho("/approve test"));
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+
+  it("does not reject /approve inside heredoc data", async () => {
+    const result = await executeExecCommand(
+      execTool,
+      "cat <<'EOF'\n/approve abc123 allow-always\nEOF",
+    );
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+
+  it("does not reject /approve inside heredoc with surrounding commands", async () => {
+    const result = await executeExecCommand(
+      execTool,
+      "echo start\ncat <<'DELIM'\n/approve abc123 allow-always\nDELIM\necho end",
+    );
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+
+  it("does not reject /approve inside heredoc with double-quoted delimiter", async () => {
+    const result = await executeExecCommand(
+      execTool,
+      'cat <<"EOF"\n/approve abc123 allow-always\nEOF',
+    );
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+
+  it("does not reject /approve inside heredoc with hyphenated delimiter", async () => {
+    const result = await executeExecCommand(
+      execTool,
+      "cat <<'END-DATA'\n/approve abc123 allow-always\nEND-DATA",
+    );
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+
+  it("does not reject normal commands", async () => {
+    const result = await executeExecCommand(execTool, "ls -la");
+    expect(readTextContent(result.content)).toBeDefined();
   });
 });
 

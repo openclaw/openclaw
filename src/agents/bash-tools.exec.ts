@@ -53,60 +53,56 @@ export type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 /**
- * The regex used to detect /approve slash commands.
+ * Matches the `/approve <hash> <mode>` pattern used by the approval system.
  * Case-insensitive, supports optional @mention suffix.
- * Anchored to the start of a *segment* (after splitting on shell separators
- * and stripping shell prefixes).
  */
-const APPROVE_COMMAND_RE = /^\s*\/approve(?:@[^\s]*)?(?:\s|$)/i;
+const APPROVE_FULL_RE =
+  /\/approve(?:@[^\s]*)?\s+[a-f0-9]+\s+allow-(?:once|always)/i;
 
 /**
- * Strip known shell prefixes from a command segment so that constructs
- * like `( /approve ...)`, `FOO=1 /approve ...`, or `then /approve ...`
- * are normalised before the regex test.
+ * Matches a bare `/approve` at end-of-line or end-of-string (no args),
+ * which would also trigger the approval loop.
  */
-function stripShellPrefixes(segment: string): string {
-  let s = segment;
-  // Remove leading subshell parens: ( or ((
-  s = s.replace(/^\s*\(+\s*/, "");
-  // Remove env-var assignments: FOO=bar FOO="bar" etc.
-  s = s.replace(/^(\s*\w+=\S*\s*)+/, "");
-  // Remove shell keywords: then, do, else, elif, {, !
-  s = s.replace(/^\s*(?:then|do|else|elif|!|\{)\s+/, "");
-  return s;
-}
+const APPROVE_BARE_RE = /\/approve(?:@[^\s]*)?\s*$/im;
 
 /**
- * Split a single shell line into command segments separated by
- * `&&`, `||`, `;`, `|`, or `&` (background operator). This is a best-effort
- * heuristic — it does not handle quoted strings containing these operators,
- * but that is acceptable for a safety guard (false positives are safe,
- * false negatives are the risk).
+ * Strip inline comments from a shell line, respecting single and double
+ * quotes. `echo ok # <<EOF` → `echo ok ` (the `# <<EOF` is a comment).
  */
-function splitShellSegments(line: string): string[] {
-  return line.split(/\s*(?:&&|\|\||[;&|])\s*/);
+function stripInlineComment(line: string): string {
+  let result = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (ch === "#" && !inSingle && !inDouble) {
+      return result;
+    }
+    result += ch;
+  }
+  return result;
 }
 
 /**
  * Detect a heredoc opening on a line. Returns the delimiter word or null.
- * Supports: <<EOF  <<'EOF'  <<"EOF"  <<-EOF  <<-'EOF-1'  <<"EOF_2"
- * Uses [\w-]+ to cover delimiters with hyphens (e.g. END-OF-DATA).
+ * Supports: `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, `<<-'EOF-1'`.
  *
- * To avoid false positives on quoted text like `echo " <<EOF"`, we verify
- * that `<<` is not inside a quoted string by counting unmatched quotes
- * before the match position. Comment lines (`# <<EOF`) are skipped entirely.
+ * To avoid false positives:
+ * - Inline comments are stripped first (`echo ok # <<EOF` → no heredoc).
+ * - `<<` inside quoted strings is ignored (`echo " <<EOF"` → no heredoc).
  */
 function detectHeredocDelimiter(line: string): string | null {
-  // Skip comment lines — `# <<EOF` is not a real heredoc opener.
-  if (/^\s*#/.test(line)) {
-    return null;
-  }
-  // Match the heredoc pattern, then verify `<<` is not inside a quoted string
-  // by counting unmatched quotes before the match position.
-  const m = line.match(/(?:^|\s)(<<-?\s*['"]?([\w-]+)['"]?)/);
+  // Strip inline comments so `echo ok # <<EOF` is not a heredoc.
+  const commentFree = stripInlineComment(line);
+  const m = commentFree.match(/(?:^|\s)(<<-?\s*['"]?([\w-]+)['"]?)/);
   if (!m) return null;
+  // Verify `<<` is not inside a quoted string.
   const matchIndex = (m.index ?? 0) + (/^\s/.test(m[0]) ? 1 : 0);
-  const before = line.substring(0, matchIndex);
+  const before = commentFree.substring(0, matchIndex);
   let inSingle = false;
   let inDouble = false;
   for (const ch of before) {
@@ -118,42 +114,53 @@ function detectHeredocDelimiter(line: string): string | null {
 }
 
 /**
- * Check whether any *executable* segment in a shell command contains /approve.
+ * Check whether a shell command contains an `/approve` invocation.
  *
  * This is a **best-effort defence layer** (layer 3 of 3). The primary fixes
  * are in the system prompt (layer 1) and the approval-pending tool output
- * (layer 2). A perfect check would require a full shell parser, which is
- * out of scope; this guard catches the realistic attack vectors produced
- * by LLM-generated commands.
+ * (layer 2).
  *
- * - Lines inside heredoc bodies are skipped (no false positives on data).
- * - Each executable line is split on shell separators (`&&`, `||`, `;`, `|`, `&`)
- *   so that `/approve` after a separator is detected.
+ * **Design rationale**: instead of trying to parse shell syntax (which is
+ * impossible to do perfectly with regex), this function:
+ *
+ * 1. Strips heredoc bodies — they are data, not executable commands.
+ * 2. Strips inline comments — they are not executed.
+ * 3. Matches the specific `/approve <hash> allow-once|allow-always` pattern
+ *    (or bare `/approve`) anywhere in the remaining text.
+ *
+ * This catches every realistic attack vector (direct call, after `&&`/`;`/`|`,
+ * inside subshells, after env assignments, inside `eval`/`bash -c`, etc.)
+ * without needing to split on shell operators or strip shell prefixes.
+ *
+ * The only false-positive risk is `/approve <hash> allow-once` appearing as
+ * a literal argument (e.g. `echo "/approve abc allow-always"`), but the
+ * approval hash is a random hex string that will never appear in normal
+ * echo/grep arguments.
  */
 export function containsApproveCommand(command: string): boolean {
   const lines = command.split("\n");
+  const executableLines: string[] = [];
   let heredocDelimiter: string | null = null;
+
   for (const line of lines) {
-    // If we are inside a heredoc body, check for the closing delimiter.
+    // If inside a heredoc body, skip until the closing delimiter.
     if (heredocDelimiter !== null) {
       if (line.trim() === heredocDelimiter) {
         heredocDelimiter = null;
       }
-      continue; // skip data lines
+      continue;
     }
     // Detect heredoc start on this line.
     const delim = detectHeredocDelimiter(line);
     if (delim) {
       heredocDelimiter = delim;
     }
-    // Test every segment of the line (split on shell operators).
-    for (const segment of splitShellSegments(line)) {
-      if (APPROVE_COMMAND_RE.test(stripShellPrefixes(segment))) {
-        return true;
-      }
-    }
+    // Strip inline comments and collect the executable portion.
+    executableLines.push(stripInlineComment(line));
   }
-  return false;
+
+  const executableText = executableLines.join("\n");
+  return APPROVE_FULL_RE.test(executableText) || APPROVE_BARE_RE.test(executableText);
 }
 
 function buildExecForegroundResult(params: {
