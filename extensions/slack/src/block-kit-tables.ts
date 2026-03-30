@@ -84,10 +84,9 @@ export function buildSlackTableAttachment(table: MarkdownTableData): { blocks: S
 export function renderSlackTableFallbackText(table: MarkdownTableData): string {
   const hasHeaders = hasVisibleHeaders(table.headers);
   const cappedRows = table.rows.slice(0, SLACK_MAX_TABLE_ROWS);
-  const rows = [
-    ...(hasHeaders ? [table.headers] : []),
-    ...cappedRows,
-  ].filter((row) => row.length > 0);
+  const rows = [...(hasHeaders ? [table.headers] : []), ...cappedRows].filter(
+    (row) => row.length > 0,
+  );
   if (rows.length === 0) {
     return "Table";
   }
@@ -132,4 +131,29 @@ export function renderSlackTableFallbackText(table: MarkdownTableData): string {
   }
 
   return lines.length > 0 ? lines.join("\n") : "Table";
+}
+
+/**
+ * Build Slack message attachments for one or more tables.
+ * Slack allows at most one table block per message, so when multiple tables
+ * are present this returns `undefined` (caller should fall back to code blocks).
+ */
+export function buildSlackTableAttachments(
+  tables: MarkdownTableData[],
+): Record<string, unknown>[] | undefined {
+  if (tables.length !== 1 || !tables[0]) {
+    return undefined;
+  }
+  return [buildSlackTableAttachment(tables[0])];
+}
+
+/**
+ * Render all tables as aligned pipe-text (code-block friendly).
+ * Used when Block Kit attachments aren't viable (multiple tables, fallback).
+ */
+export function renderSlackTablesFallbackText(tables: MarkdownTableData[]): string {
+  if (tables.length === 0) {
+    return "Table";
+  }
+  return tables.map((t) => renderSlackTableFallbackText(t)).join("\n\n");
 }

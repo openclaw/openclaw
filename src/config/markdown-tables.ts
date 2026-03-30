@@ -15,6 +15,7 @@ type MarkdownConfigSection = MarkdownConfigEntry & {
 };
 
 export const DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>([
+  ["slack", "block"],
   ["signal", "bullets"],
   ["whatsapp", "bullets"],
   ["mattermost", "off"],
@@ -58,8 +59,5 @@ export function resolveMarkdownTableMode(params: {
     (params.cfg as Record<string, unknown> | undefined)?.[channel]) as
     | MarkdownConfigSection
     | undefined;
-  const resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
-  // "block" stays schema-valid for the shared markdown seam, but this PR
-  // keeps runtime delivery on safe text rendering until Slack send support lands.
-  return resolved === "block" ? "code" : resolved;
+  return resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
 }
