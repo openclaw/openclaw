@@ -16,6 +16,7 @@ type InterpreterFlagSpec = {
   names: readonly string[];
   exactFlags: ReadonlySet<string>;
   prefixFlags?: readonly PrefixFlagSpec[];
+  scanPastDoubleDash?: boolean;
 };
 
 type PositionalInterpreterSpec = {
@@ -23,6 +24,7 @@ type PositionalInterpreterSpec = {
   fileFlags?: ReadonlySet<string>;
   fileFlagPrefixes?: readonly string[];
   exactValueFlags?: ReadonlySet<string>;
+  exactOptionalValueFlags?: ReadonlySet<string>;
   prefixValueFlags?: readonly string[];
   flag: "<command>" | "<program>";
 };
@@ -43,7 +45,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["php"], exactFlags: new Set(["-r"]) },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
-  { names: ["find"], exactFlags: new Set(["-exec", "-execdir"]) },
+  { names: ["find"], exactFlags: new Set(["-exec", "-execdir"]), scanPastDoubleDash: true },
   {
     names: ["make", "gmake"],
     exactFlags: new Set(["-f", "--file", "--makefile"]),
@@ -85,9 +87,7 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "-d",
       "--delimiter",
       "-E",
-      "--eof",
       "-I",
-      "--replace",
       "-L",
       "--max-lines",
       "-n",
@@ -97,6 +97,7 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "-s",
       "--max-chars",
     ]),
+    exactOptionalValueFlags: new Set(["--eof", "--replace"]),
     prefixValueFlags: [
       "-a",
       "--arg-file=",
@@ -186,6 +187,9 @@ export function detectInterpreterInlineEvalArgv(
         continue;
       }
       if (token === "--") {
+        if (spec.scanPastDoubleDash) {
+          continue;
+        }
         break;
       }
       const lower = token.toLowerCase();
@@ -231,6 +235,9 @@ export function detectInterpreterInlineEvalArgv(
     }
     if (positionalSpec.exactValueFlags?.has(token)) {
       idx += 1;
+      continue;
+    }
+    if (positionalSpec.exactOptionalValueFlags?.has(token)) {
       continue;
     }
     if (
