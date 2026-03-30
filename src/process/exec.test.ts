@@ -53,21 +53,25 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.npm_config_fund).toBe("false");
   });
 
-  it("kills command when no output timeout elapses", { timeout: 15_000 }, async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-      {
-        timeoutMs: 2_000,
-        noOutputTimeoutMs: 200,
-      },
-    );
+  it.runIf(process.platform !== "win32")(
+    "kills command when no output timeout elapses",
+    { timeout: 15_000 },
+    async () => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
+        {
+          timeoutMs: 2_000,
+          noOutputTimeoutMs: 200,
+        },
+      );
 
-    expect(result.termination).toBe("no-output-timeout");
-    expect(result.noOutputTimedOut).toBe(true);
-    expect(result.code).not.toBe(0);
-  });
+      expect(result.termination).toBe("no-output-timeout");
+      expect(result.noOutputTimedOut).toBe(true);
+      expect(result.code).not.toBe(0);
+    },
+  );
 
-  it(
+  it.runIf(process.platform !== "win32")(
     "reports global timeout termination when overall timeout elapses",
     { timeout: 15_000 },
     async () => {
