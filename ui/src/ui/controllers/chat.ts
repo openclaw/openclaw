@@ -45,6 +45,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatHistoryRequestId?: number;
   lastError: string | null;
 };
 
@@ -72,25 +73,41 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+
+  const requestId = (state.chatHistoryRequestId ?? 0) + 1;
+  state.chatHistoryRequestId = requestId;
+
+  const sessionKeyAtRequest = state.sessionKey;
+
   state.chatLoading = true;
   state.lastError = null;
+
   try {
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey: sessionKeyAtRequest,
         limit: 200,
       },
     );
+
+    if (state.chatHistoryRequestId !== requestId || state.sessionKey !== sessionKeyAtRequest) {
+      return;
+    }
+
     const messages = Array.isArray(res.messages) ? res.messages : [];
+
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
+
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
+    if (state.chatHistoryRequestId !== requestId || state.sessionKey !== sessionKeyAtRequest) {
+      return;
+    }
+
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
@@ -99,7 +116,9 @@ export async function loadChatHistory(state: ChatState) {
       state.lastError = String(err);
     }
   } finally {
-    state.chatLoading = false;
+    if (state.chatHistoryRequestId === requestId && state.sessionKey === sessionKeyAtRequest) {
+      state.chatLoading = false;
+    }
   }
 }
 
@@ -191,6 +210,8 @@ export async function sendChatMessage(
     }
   }
 
+  const sessionKeyAtSend = state.sessionKey;
+
   state.chatMessages = [
     ...state.chatMessages,
     {
@@ -226,12 +247,17 @@ export async function sendChatMessage(
 
   try {
     await state.client.request("chat.send", {
-      sessionKey: state.sessionKey,
+      sessionKey: sessionKeyAtSend,
       message: msg,
       deliver: false,
       idempotencyKey: runId,
       attachments: apiAttachments,
     });
+
+    if (state.sessionKey !== sessionKeyAtSend) {
+      return null;
+    }
+
     return runId;
   } catch (err) {
     const error = formatConnectError(err);
@@ -294,7 +320,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
-    if (typeof next === "string" && !isSilentReplyStream(next)) {
+    if (typeof next === "string") {
+      if (isSilentReplyStream(next)) {
+        return null;
+      }
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
         state.chatStream = next;
