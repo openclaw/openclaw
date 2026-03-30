@@ -6,7 +6,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHUTES_BASE_URL } from "./chutes-models.js";
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
 const ORIGINAL_VITEST_ENV = process.env.VITEST;
@@ -71,7 +71,7 @@ async function resolveChutesProvidersForProfiles(
 ) {
   const agentDir = createTempAgentDir();
   await writeChutesAuthProfiles(agentDir, profiles);
-  return await resolveImplicitProvidersForTest({ agentDir, env });
+  return resolveImplicitProvidersForTest({ agentDir, env });
 }
 
 function expectChutesApiKeyProvider(

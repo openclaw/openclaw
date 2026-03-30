@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { QWEN_OAUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { registerProviders, requireProvider } from "./testkit.js";
 
@@ -12,7 +11,6 @@ const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
 
 let runProviderCatalog: typeof import("../provider-discovery.js").runProviderCatalog;
-let qwenPortalProvider: Awaited<ReturnType<typeof requireProvider>>;
 let githubCopilotProvider: Awaited<ReturnType<typeof requireProvider>>;
 let ollamaProvider: Awaited<ReturnType<typeof requireProvider>>;
 let vllmProvider: Awaited<ReturnType<typeof requireProvider>>;
@@ -53,21 +51,6 @@ function setRuntimeAuthStore(store?: AuthProfileStore) {
   );
 }
 
-function setQwenPortalOauthSnapshot() {
-  setRuntimeAuthStore({
-    version: 1,
-    profiles: {
-      "qwen-portal:default": {
-        type: "oauth",
-        provider: "qwen-portal",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    },
-  });
-}
-
 function setGithubCopilotProfileSnapshot() {
   setRuntimeAuthStore({
     version: 1,
@@ -79,6 +62,45 @@ function setGithubCopilotProfileSnapshot() {
       },
     },
   });
+}
+
+function createNoAuthResolution() {
+  return {
+    apiKey: undefined,
+    discoveryApiKey: undefined,
+    mode: "none" as const,
+    source: "none" as const,
+  };
+}
+
+function createResolvedAuth(params: {
+  apiKey: string | undefined;
+  discoveryApiKey?: string;
+  mode: "api_key" | "oauth" | "token" | "none";
+  source: "env" | "profile" | "none";
+  profileId?: string;
+}) {
+  return {
+    apiKey: params.apiKey,
+    discoveryApiKey: params.discoveryApiKey,
+    mode: params.mode,
+    source: params.source,
+    ...(params.profileId ? { profileId: params.profileId } : {}),
+  };
+}
+
+function createNoAuthCatalogParams(
+  provider: Awaited<ReturnType<typeof requireProvider>>,
+  overrides: Partial<Parameters<typeof runProviderCatalog>[0]> = {},
+) {
+  return {
+    provider,
+    config: {},
+    env: {} as NodeJS.ProcessEnv,
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderAuth: () => createNoAuthResolution(),
+    ...overrides,
+  };
 }
 
 function runCatalog(params: {
@@ -112,8 +134,16 @@ function runCatalog(params: {
   });
 }
 
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return `../../../extensions/${pluginId}/${artifactBasename}`;
+}
+
 describe("provider discovery contract", () => {
   beforeEach(async () => {
+    const githubCopilotTokenModuleId = buildBundledPluginModuleId("github-copilot", "token.js");
+    const ollamaApiModuleId = buildBundledPluginModuleId("ollama", "api.js");
+    const vllmApiModuleId = buildBundledPluginModuleId("vllm", "api.js");
+    const sglangApiModuleId = buildBundledPluginModuleId("sglang", "api.js");
     vi.resetModules();
     vi.doMock("openclaw/plugin-sdk/agent-runtime", async () => {
       // Import the direct source module, not the mocked subpath, so bundled
@@ -133,43 +163,36 @@ describe("provider discovery contract", () => {
         listProfilesForProvider: listProfilesForProviderMock,
       };
     });
-    vi.doMock("../../../extensions/github-copilot/token.js", async () => {
-      const actual = await vi.importActual<object>("../../../extensions/github-copilot/token.js");
+    vi.doMock(githubCopilotTokenModuleId, async () => {
+      const actual = await vi.importActual<object>(githubCopilotTokenModuleId);
       return {
         ...actual,
         resolveCopilotApiToken: resolveCopilotApiTokenMock,
       };
     });
-    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
-      const actual = await vi.importActual<object>("openclaw/plugin-sdk/provider-setup");
-      return {
-        ...actual,
-        buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
-        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/self-hosted-provider-setup", async () => {
-      const actual = await vi.importActual<object>(
-        "openclaw/plugin-sdk/self-hosted-provider-setup",
-      );
-      return {
-        ...actual,
-        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/ollama-setup", async () => {
-      const actual = await vi.importActual<object>("openclaw/plugin-sdk/ollama-setup");
+    vi.doMock(ollamaApiModuleId, async () => {
+      const actual = await vi.importActual<object>(ollamaApiModuleId);
       return {
         ...actual,
         buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
       };
     });
-
+    vi.doMock(vllmApiModuleId, async () => {
+      const actual = await vi.importActual<object>(vllmApiModuleId);
+      return {
+        ...actual,
+        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
+      };
+    });
+    vi.doMock(sglangApiModuleId, async () => {
+      const actual = await vi.importActual<object>(sglangApiModuleId);
+      return {
+        ...actual,
+        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
+      };
+    });
     ({ runProviderCatalog } = await import("../provider-discovery.js"));
     const [
-      { default: qwenPortalPlugin },
       { default: githubCopilotPlugin },
       { default: ollamaPlugin },
       { default: vllmPlugin },
@@ -178,16 +201,28 @@ describe("provider discovery contract", () => {
       { default: modelStudioPlugin },
       { default: cloudflareAiGatewayPlugin },
     ] = await Promise.all([
-      import("../../../extensions/qwen-portal-auth/index.js"),
-      import("../../../extensions/github-copilot/index.js"),
-      import("../../../extensions/ollama/index.js"),
-      import("../../../extensions/vllm/index.js"),
-      import("../../../extensions/sglang/index.js"),
-      import("../../../extensions/minimax/index.js"),
-      import("../../../extensions/modelstudio/index.js"),
-      import("../../../extensions/cloudflare-ai-gateway/index.js"),
+      import(buildBundledPluginModuleId("github-copilot", "index.js")) as Promise<{
+        default: Parameters<typeof registerProviders>[0];
+      }>,
+      import(buildBundledPluginModuleId("ollama", "index.js")) as Promise<{
+        default: Parameters<typeof registerProviders>[0];
+      }>,
+      import(buildBundledPluginModuleId("vllm", "index.js")) as Promise<{
+        default: Parameters<typeof registerProviders>[0];
+      }>,
+      import(buildBundledPluginModuleId("sglang", "index.js")) as Promise<{
+        default: Parameters<typeof registerProviders>[0];
+      }>,
+      import(buildBundledPluginModuleId("minimax", "index.js")) as Promise<{
+        default: Parameters<typeof registerProviders>[0];
+      }>,
+      import(buildBundledPluginModuleId("modelstudio", "index.js")) as Promise<{
+        default: Parameters<typeof registerProviders>[0];
+      }>,
+      import(buildBundledPluginModuleId("cloudflare-ai-gateway", "index.js")) as Promise<{
+        default: Parameters<typeof registerProviders>[0];
+      }>,
     ]);
-    qwenPortalProvider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
     githubCopilotProvider = requireProvider(
       registerProviders(githubCopilotPlugin),
       "github-copilot",
@@ -215,44 +250,8 @@ describe("provider discovery contract", () => {
     listProfilesForProviderMock.mockReset();
   });
 
-  it("keeps qwen portal oauth marker fallback provider-owned", async () => {
-    setQwenPortalOauthSnapshot();
-
-    await expect(
-      runCatalog({
-        provider: qwenPortalProvider,
-      }),
-    ).resolves.toEqual({
-      provider: {
-        baseUrl: "https://portal.qwen.ai/v1",
-        apiKey: QWEN_OAUTH_MARKER,
-        api: "openai-completions",
-        models: [
-          expect.objectContaining({ id: "coder-model", name: "Qwen Coder" }),
-          expect.objectContaining({ id: "vision-model", name: "Qwen Vision" }),
-        ],
-      },
-    });
-  });
-
-  it("keeps qwen portal env api keys higher priority than oauth markers", async () => {
-    setQwenPortalOauthSnapshot();
-
-    await expect(
-      runCatalog({
-        provider: qwenPortalProvider,
-        env: { QWEN_PORTAL_API_KEY: "env-key" } as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({ apiKey: "env-key" }),
-      }),
-    ).resolves.toMatchObject({
-      provider: {
-        apiKey: "env-key",
-      },
-    });
-  });
-
   it("keeps GitHub Copilot catalog disabled without env tokens or profiles", async () => {
-    await expect(runCatalog({ provider: githubCopilotProvider })).resolves.toBeNull();
+    await expect(runCatalog(createNoAuthCatalogParams(githubCopilotProvider))).resolves.toBeNull();
   });
 
   it("keeps GitHub Copilot profile-only catalog fallback provider-owned", async () => {
@@ -260,7 +259,7 @@ describe("provider discovery contract", () => {
 
     await expect(
       runCatalog({
-        provider: githubCopilotProvider,
+        ...createNoAuthCatalogParams(githubCopilotProvider),
       }),
     ).resolves.toEqual({
       provider: {
@@ -302,24 +301,17 @@ describe("provider discovery contract", () => {
   it("keeps Ollama explicit catalog normalization provider-owned", async () => {
     await expect(
       runProviderCatalog({
-        provider: ollamaProvider,
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://ollama-host:11434/v1/",
-                models: [createModelConfig("llama3.2")],
+        ...createNoAuthCatalogParams(ollamaProvider, {
+          config: {
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl: "http://ollama-host:11434/v1/",
+                  models: [createModelConfig("llama3.2")],
+                },
               },
             },
           },
-        },
-        env: {} as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({
-          apiKey: undefined,
-          discoveryApiKey: undefined,
-          mode: "none",
-          source: "none",
         }),
       }),
     ).resolves.toMatchObject({
@@ -340,98 +332,99 @@ describe("provider discovery contract", () => {
       models: [],
     });
 
-    await expect(
-      runProviderCatalog({
-        provider: ollamaProvider,
-        config: {},
-        env: {} as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({
-          apiKey: undefined,
-          discoveryApiKey: undefined,
-          mode: "none",
-          source: "none",
-        }),
-      }),
-    ).resolves.toBeNull();
+    await expect(runProviderCatalog(createNoAuthCatalogParams(ollamaProvider))).resolves.toBeNull();
     expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, { quiet: true });
   });
 
-  it("keeps vLLM self-hosted discovery provider-owned", async () => {
-    buildVllmProviderMock.mockResolvedValueOnce({
-      baseUrl: "http://127.0.0.1:8000/v1",
-      api: "openai-completions",
-      models: [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
-    });
-
-    await expect(
-      runProviderCatalog({
-        provider: vllmProvider,
-        config: {},
-        env: {
-          VLLM_API_KEY: "env-vllm-key",
-        } as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({
-          apiKey: "VLLM_API_KEY",
-          discoveryApiKey: "env-vllm-key",
-        }),
-        resolveProviderAuth: () => ({
-          apiKey: "VLLM_API_KEY",
-          discoveryApiKey: "env-vllm-key",
-          mode: "api_key",
-          source: "env",
-        }),
-      }),
-    ).resolves.toEqual({
-      provider: {
+  it.each([
+    {
+      name: "keeps vLLM self-hosted discovery provider-owned",
+      provider: () => vllmProvider,
+      buildProviderMock: buildVllmProviderMock,
+      builtProvider: {
         baseUrl: "http://127.0.0.1:8000/v1",
         api: "openai-completions",
-        apiKey: "VLLM_API_KEY",
         models: [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
       },
-    });
-    expect(buildVllmProviderMock).toHaveBeenCalledWith({
-      apiKey: "env-vllm-key",
-    });
-  });
-
-  it("keeps SGLang self-hosted discovery provider-owned", async () => {
-    buildSglangProviderMock.mockResolvedValueOnce({
-      baseUrl: "http://127.0.0.1:30000/v1",
-      api: "openai-completions",
-      models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
-    });
-
-    await expect(
-      runProviderCatalog({
-        provider: sglangProvider,
-        config: {},
-        env: {
-          SGLANG_API_KEY: "env-sglang-key",
-        } as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({
-          apiKey: "SGLANG_API_KEY",
-          discoveryApiKey: "env-sglang-key",
-        }),
-        resolveProviderAuth: () => ({
-          apiKey: "SGLANG_API_KEY",
-          discoveryApiKey: "env-sglang-key",
-          mode: "api_key",
-          source: "env",
-        }),
+      env: {
+        VLLM_API_KEY: "env-vllm-key",
+      } as NodeJS.ProcessEnv,
+      resolvedAuth: createResolvedAuth({
+        apiKey: "VLLM_API_KEY",
+        discoveryApiKey: "env-vllm-key",
+        mode: "api_key",
+        source: "env",
       }),
-    ).resolves.toEqual({
-      provider: {
+      expected: {
+        provider: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          api: "openai-completions",
+          apiKey: "VLLM_API_KEY",
+          models: [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
+        },
+      },
+      expectedBuildCall: {
+        apiKey: "env-vllm-key",
+      },
+    },
+    {
+      name: "keeps SGLang self-hosted discovery provider-owned",
+      provider: () => sglangProvider,
+      buildProviderMock: buildSglangProviderMock,
+      builtProvider: {
         baseUrl: "http://127.0.0.1:30000/v1",
         api: "openai-completions",
-        apiKey: "SGLANG_API_KEY",
         models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
       },
-    });
-    expect(buildSglangProviderMock).toHaveBeenCalledWith({
-      apiKey: "env-sglang-key",
-    });
-  });
+      env: {
+        SGLANG_API_KEY: "env-sglang-key",
+      } as NodeJS.ProcessEnv,
+      resolvedAuth: createResolvedAuth({
+        apiKey: "SGLANG_API_KEY",
+        discoveryApiKey: "env-sglang-key",
+        mode: "api_key",
+        source: "env",
+      }),
+      expected: {
+        provider: {
+          baseUrl: "http://127.0.0.1:30000/v1",
+          api: "openai-completions",
+          apiKey: "SGLANG_API_KEY",
+          models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
+        },
+      },
+      expectedBuildCall: {
+        apiKey: "env-sglang-key",
+      },
+    },
+  ] as const)(
+    "$name",
+    async ({
+      provider,
+      buildProviderMock,
+      builtProvider,
+      env,
+      resolvedAuth,
+      expected,
+      expectedBuildCall,
+    }) => {
+      buildProviderMock.mockResolvedValueOnce(builtProvider);
+
+      await expect(
+        runProviderCatalog(
+          createNoAuthCatalogParams(provider(), {
+            env,
+            resolveProviderApiKey: () => ({
+              apiKey: resolvedAuth.apiKey,
+              discoveryApiKey: resolvedAuth.discoveryApiKey,
+            }),
+            resolveProviderAuth: () => resolvedAuth,
+          }),
+        ),
+      ).resolves.toEqual(expected);
+      expect(buildProviderMock).toHaveBeenCalledWith(expectedBuildCall);
+    },
+  );
 
   it("keeps MiniMax API catalog provider-owned", async () => {
     await expect(
@@ -457,7 +450,7 @@ describe("provider discovery contract", () => {
         apiKey: "minimax-key",
         models: expect.arrayContaining([
           expect.objectContaining({ id: "MiniMax-M2.7" }),
-          expect.objectContaining({ id: "MiniMax-VL-01" }),
+          expect.objectContaining({ id: "MiniMax-M2.7-highspeed" }),
         ]),
       },
     });

@@ -11,15 +11,31 @@ import {
 
 // ============ Actions ============
 
+type FeishuExplorerRootFolderMetaResponse = {
+  code: number;
+  msg?: string;
+  data?: {
+    token?: string;
+  };
+};
+
+type FeishuDriveInternalClient = Lark.Client & {
+  domain?: string;
+  httpInstance: Pick<Lark.HttpInstance, "get">;
+};
+
+function getDriveInternalClient(client: Lark.Client): FeishuDriveInternalClient {
+  return client as FeishuDriveInternalClient;
+}
+
 async function getRootFolderToken(client: Lark.Client): Promise<string> {
   // Use generic HTTP client to call the root folder meta API
   // as it's not directly exposed in the SDK
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing internal SDK property
-  const domain = (client as any).domain ?? "https://open.feishu.cn";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing internal SDK property
-  const res = (await (client as any).httpInstance.get(
+  const internalClient = getDriveInternalClient(client);
+  const domain = internalClient.domain ?? "https://open.feishu.cn";
+  const res = (await internalClient.httpInstance.get(
     `${domain}/open-apis/drive/explorer/v2/root_folder/meta`,
-  )) as { code: number; msg?: string; data?: { token?: string } };
+  )) as FeishuExplorerRootFolderMetaResponse;
   if (res.code !== 0) {
     throw new Error(res.msg ?? "Failed to get root folder");
   }
@@ -212,7 +228,6 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               case "delete":
                 return jsonToolResult(await deleteFile(client, p.file_token, p.type));
               default:
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return unknownToolActionResult((p as { action?: unknown }).action);
             }
           } catch (err) {

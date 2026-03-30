@@ -4,8 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Mock, vi } from "vitest";
-import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
-import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
@@ -16,8 +14,21 @@ import type { HooksConfig } from "../config/types.hooks.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
+
+const { buildElevenLabsSpeechProvider } = loadBundledPluginTestApiSync<{
+  buildElevenLabsSpeechProvider: () => SpeechProviderPlugin;
+}>("elevenlabs");
+const { buildOpenAISpeechProvider } = loadBundledPluginTestApiSync<{
+  buildOpenAISpeechProvider: () => SpeechProviderPlugin;
+}>("openai");
+
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
 
 type StubChannelOptions = {
   id: ChannelPlugin["id"];
@@ -692,7 +703,7 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
+vi.mock(buildBundledPluginModuleId("whatsapp", "runtime-api.js"), () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>

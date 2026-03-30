@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSandboxTestContext } from "../../../src/agents/sandbox/test-fixtures.js";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import {
   buildExecRemoteCommand,
@@ -12,7 +12,7 @@ import {
   setBundledOpenShellCommandResolverForTest,
   shellEscape,
 } from "./cli.js";
-import { resolveOpenShellPluginConfig } from "./config.js";
+import { createOpenShellPluginConfigSchema, resolveOpenShellPluginConfig } from "./config.js";
 
 const cliMocks = vi.hoisted(() => ({
   runOpenShellCli: vi.fn(),
@@ -56,6 +56,14 @@ describe("openshell plugin config", () => {
         mode: "bogus",
       }),
     ).toThrow("mode must be one of mirror, remote");
+  });
+
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const manifest = JSON.parse(
+      fsSync.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema?: unknown };
+
+    expect(createOpenShellPluginConfigSchema().jsonSchema).toEqual(manifest.configSchema);
   });
 });
 

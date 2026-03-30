@@ -344,6 +344,8 @@ Available action groups in current Slack tooling:
 | memberInfo | enabled |
 | emojiList  | enabled |
 
+Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`.
+
 ## Events and operational behavior
 
 - Message edits/deletes/thread broadcasts are mapped into system events.
@@ -597,6 +599,8 @@ Primary reference:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Troubleshooting](/channels/troubleshooting)
 - [Configuration](/gateway/configuration)

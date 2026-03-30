@@ -15,49 +15,34 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  docs-scope:
+  preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
-      docs_only: ${{ steps.check.outputs.docs_only }}
+      docs_only: ${{ steps.manifest.outputs.docs_only }}
+      run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
+          persist-credentials: false
+          submodules: false
 
-      - name: Ensure docs-scope base commit
+      - name: Ensure preflight base commit
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
-        id: check
+        id: docs_scope
         uses: ./.github/actions/detect-docs-changes
 
-  changed-smoke:
-    needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      run_changed_smoke: ${{ steps.scope.outputs.run_changed_smoke }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-
-      - name: Ensure changed-smoke base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
       - name: Detect changed smoke scope
-        id: scope
+        id: changed_scope
+        if: steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -70,9 +55,32 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
+      - name: Setup Node environment
+        if: steps.docs_scope.outputs.docs_only != 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+          use-sticky-disk: "false"
+
+      - name: Build install-smoke CI manifest
+        id: manifest
+        env:
+          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_DOCS_CHANGED: "false"
+          OPENCLAW_CI_RUN_NODE: "false"
+          OPENCLAW_CI_RUN_MACOS: "false"
+          OPENCLAW_CI_RUN_ANDROID: "false"
+          OPENCLAW_CI_RUN_WINDOWS: "false"
+          OPENCLAW_CI_RUN_SKILLS_PYTHON: "false"
+          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false"
+          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}'
+          OPENCLAW_CI_RUN_CHANGED_SMOKE: ${{ steps.changed_scope.outputs.run_changed_smoke || 'false' }}
+        run: node scripts/ci-write-manifest-outputs.mjs --workflow install-smoke
+
   install-smoke:
-    needs: [docs-scope, changed-smoke]
-    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-smoke.outputs.run_changed_smoke == 'true'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_install_smoke == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     env:
       DOCKER_BUILD_SUMMARY: "false"

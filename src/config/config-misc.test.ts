@@ -29,6 +29,14 @@ describe("$schema key in config (#14998)", () => {
     const result = OpenClawSchema.safeParse({ $schema: 123 });
     expect(result.success).toBe(false);
   });
+
+  it("accepts $schema during full config validation", () => {
+    const result = validateConfigObject({
+      $schema: "./schema.json",
+      gateway: { port: 18789 },
+    });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("plugins.slots.contextEngine", () => {
@@ -465,17 +473,16 @@ describe("config strict validation", () => {
     }
   });
 
-  it("flags legacy config entries without auto-migrating", async () => {
+  it("rejects removed legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        agents: { list: [{ id: "pi" }] },
-        routing: { allowFrom: ["+15555550123"] },
+        memorySearch: { provider: "local", fallback: "none" },
       });
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues).not.toHaveLength(0);
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
     });
   });
 
@@ -509,7 +516,7 @@ describe("config strict validation", () => {
       });
 
       const snap = await readConfigFileSnapshot();
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });

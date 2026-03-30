@@ -20,7 +20,11 @@ export async function runNonInteractiveSetup(
     return;
   }
 
-  const baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
+  const baseConfig: OpenClawConfig = snapshot.valid
+    ? snapshot.exists
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {}
+    : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
     runtime.error(`Invalid --mode "${String(mode)}" (use local|remote).`);
@@ -29,9 +33,9 @@ export async function runNonInteractiveSetup(
   }
 
   if (mode === "remote") {
-    await runNonInteractiveRemoteSetup({ opts, runtime, baseConfig });
+    await runNonInteractiveRemoteSetup({ opts, runtime, baseConfig, baseHash: snapshot.hash });
     return;
   }
 
-  await runNonInteractiveLocalSetup({ opts, runtime, baseConfig });
+  await runNonInteractiveLocalSetup({ opts, runtime, baseConfig, baseHash: snapshot.hash });
 }
