@@ -3,23 +3,8 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
-
-const {
-  buildTelegramExecApprovalPendingPayload,
-  shouldSuppressTelegramExecApprovalForwardingFallback,
-} = loadBundledPluginTestApiSync<{
-  buildTelegramExecApprovalPendingPayload: (params: {
-    request: unknown;
-    nowMs: number;
-  }) => ReplyPayload | null;
-  shouldSuppressTelegramExecApprovalForwardingFallback: (params: {
-    cfg: OpenClawConfig;
-    target: { channel: string; accountId?: string | null };
-  }) => boolean;
-}>("telegram");
 
 const baseRequest = {
   id: "req-1",
