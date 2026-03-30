@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
+import { maybeApplyChiefQualityGuard } from "../../agents/quality-guard.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
@@ -16,6 +17,11 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  recordChiefTaskFailure,
+  recordChiefTaskResult,
+  recordChiefTaskStart,
+} from "../../infra/chief-task-ledger.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -255,6 +261,15 @@ export async function runReplyAgent(params: {
 
   await typingSignals.signalRunStart();
 
+  const chiefTaskRecord = await recordChiefTaskStart({
+    cfg,
+    agentId: followupRun.run.agentId,
+    sessionKey: sessionKey ?? queueKey,
+    prompt: commandBody,
+    sourceChannel: sessionCtx.OriginatingChannel ?? sessionCtx.Provider,
+    sourceMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+  });
+
   activeSessionEntry = await runPreflightCompactionIfNeeded({
     cfg,
     followupRun,
@@ -426,17 +441,36 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      await recordChiefTaskResult({
+        cfg,
+        agentId: followupRun.run.agentId,
+        taskId: chiefTaskRecord?.taskId,
+        sessionKey: sessionKey ?? queueKey,
+        payloads: Array.isArray(runOutcome.payload)
+          ? runOutcome.payload
+          : runOutcome.payload
+            ? [runOutcome.payload]
+            : [],
+      });
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const {
+    const { runId, fallbackProvider, fallbackModel, fallbackAttempts, directlySentBlockKeys } =
+      runOutcome;
+    let runResult = runOutcome.runResult;
+    const reviewed = await maybeApplyChiefQualityGuard({
+      cfg,
+      agentId: followupRun.run.agentId,
+      originalPrompt: commandBody,
+      result: runResult,
+      timeoutMs: followupRun.run.timeoutMs,
       runId,
-      runResult,
-      fallbackProvider,
-      fallbackModel,
-      fallbackAttempts,
-      directlySentBlockKeys,
-    } = runOutcome;
+      workspaceDir: followupRun.run.workspaceDir,
+      provider: fallbackProvider,
+      model: fallbackModel,
+      chiefSkillsSnapshot: followupRun.run.skillsSnapshot,
+    });
+    runResult = reviewed.result;
     let { didLogHeartbeatStrip, autoCompactionCount } = runOutcome;
 
     if (
@@ -545,6 +579,13 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      await recordChiefTaskResult({
+        cfg,
+        agentId: followupRun.run.agentId,
+        taskId: chiefTaskRecord?.taskId,
+        sessionKey: sessionKey ?? queueKey,
+        payloads: [],
+      });
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -574,6 +615,13 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      await recordChiefTaskResult({
+        cfg,
+        agentId: followupRun.run.agentId,
+        taskId: chiefTaskRecord?.taskId,
+        sessionKey: sessionKey ?? queueKey,
+        payloads: [],
+      });
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -777,12 +825,27 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
+    await recordChiefTaskResult({
+      cfg,
+      agentId: followupRun.run.agentId,
+      taskId: chiefTaskRecord?.taskId,
+      sessionKey: sessionKey ?? queueKey,
+      payloads: finalPayloads,
+    });
+
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
       runFollowupTurn,
     );
   } catch (error) {
+    await recordChiefTaskFailure({
+      cfg,
+      agentId: followupRun.run.agentId,
+      taskId: chiefTaskRecord?.taskId,
+      sessionKey: sessionKey ?? queueKey,
+      error,
+    });
     // Keep the followup queue moving even when an unexpected exception escapes
     // the run path; the caller still receives the original error.
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);

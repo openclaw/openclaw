@@ -34,6 +34,11 @@ export type EmbeddedPiAgentMeta = {
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
+  qualityGuard?: {
+    applied: boolean;
+    verdict?: "approve" | "revise" | "block";
+    reviewRounds?: number;
+  };
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {

@@ -144,7 +144,7 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
   if (hasExplicitHeartbeatAgents(cfg)) {
     return list
-      .filter((entry) => entry?.heartbeat)
+      .filter((entry) => entry?.heartbeat && entry.heartbeat.enabled !== false)
       .map((entry) => {
         const id = normalizeAgentId(entry.id);
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
@@ -152,6 +152,9 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       .filter((entry) => entry.agentId);
   }
   const fallbackId = resolveDefaultAgentId(cfg);
+  if (cfg.agents?.defaults?.heartbeat?.enabled === false) {
+    return [];
+  }
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
 }
 

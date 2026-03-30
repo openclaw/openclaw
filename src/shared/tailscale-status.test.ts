@@ -21,11 +21,15 @@ describe("shared/tailscale-status", () => {
       code: 0,
       stdout: '{"Self":{"TailscaleIPs":["100.64.0.9","fd7a::1"]}}',
     });
+    const expectedSecondCandidate =
+      process.platform === "win32"
+        ? "C:\\Program Files\\Tailscale\\tailscale.exe"
+        : "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
     await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("100.64.0.9");
     expect(run).toHaveBeenNthCalledWith(
       2,
-      ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "status", "--json"],
+      [expectedSecondCandidate, "status", "--json"],
       {
         timeoutMs: 5000,
       },
@@ -81,5 +85,35 @@ describe("shared/tailscale-status", () => {
       stdout: "not-json",
     });
     await expect(resolveTailnetHostWithRunner(invalid)).resolves.toBeNull();
+  });
+
+  it("checks common Windows install locations when PATH lookup is unavailable", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousProgramFiles = process.env.ProgramFiles;
+
+    process.env.ProgramFiles = "C:\\Program Files";
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("missing binary"))
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: '{"Self":{"DNSName":"desktop.tail.ts.net."}}',
+      });
+
+    try {
+      await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("desktop.tail.ts.net");
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        ["C:\\Program Files\\Tailscale\\tailscale.exe", "status", "--json"],
+        { timeoutMs: 5000 },
+      );
+    } finally {
+      platformSpy.mockRestore();
+      if (previousProgramFiles === undefined) {
+        delete process.env.ProgramFiles;
+      } else {
+        process.env.ProgramFiles = previousProgramFiles;
+      }
+    }
   });
 });

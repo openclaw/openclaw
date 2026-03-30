@@ -123,6 +123,14 @@ describe("resolveHeartbeatIntervalMs", () => {
     expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
   });
 
+  it("returns null when heartbeat is explicitly disabled", () => {
+    expect(
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { enabled: false } } },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null when invalid or zero", () => {
     expect(
       resolveHeartbeatIntervalMs({
@@ -200,6 +208,31 @@ describe("isHeartbeatEnabledForAgent", () => {
       },
     };
     expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
+  });
+
+  it("disables the fallback default agent when heartbeat is explicitly disabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { enabled: false } },
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
+  });
+
+  it("ignores explicit agent heartbeat entries that are disabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [
+          { id: "main" },
+          { id: "ops", heartbeat: { enabled: false, every: "1h" } },
+        ],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
   });
 });

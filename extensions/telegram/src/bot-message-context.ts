@@ -76,6 +76,7 @@ export type TelegramMessageContext = {
   reactionApi: TelegramReactionApi | null;
   removeAckAfterReply: boolean;
   statusReactionController: StatusReactionController | null;
+  statusReactionsFinalizeAfterReply: boolean;
   accountId: string;
 };
 export const buildTelegramMessageContext = async ({
@@ -379,6 +380,7 @@ export const buildTelegramMessageContext = async ({
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
     statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
+  const statusReactionsFinalizeAfterReply = statusReactionsConfig?.finalizeAfterReply !== false;
   const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
     initialEmoji: ackReaction,
     overrides: statusReactionsConfig?.emojis,
@@ -505,6 +507,7 @@ export const buildTelegramMessageContext = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
+    statusReactionsFinalizeAfterReply,
     accountId: account.accountId,
   };
 };

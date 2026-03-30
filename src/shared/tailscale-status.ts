@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 
@@ -11,10 +12,26 @@ export type TailscaleStatusCommandRunner = (
   opts: { timeoutMs: number },
 ) => Promise<TailscaleStatusCommandResult>;
 
-const TAILSCALE_STATUS_COMMAND_CANDIDATES = [
-  "tailscale",
-  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-];
+function getTailscaleStatusCommandCandidates(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const candidates = new Set<string>(["tailscale"]);
+  if (platform === "win32") {
+    const programFiles = env.ProgramFiles?.trim();
+    const programFilesX86 = env["ProgramFiles(x86)"]?.trim();
+    const localAppData = env.LOCALAPPDATA?.trim();
+    for (const base of [programFiles, programFilesX86, localAppData]) {
+      if (!base) {
+        continue;
+      }
+      candidates.add(path.join(base, "Tailscale", "tailscale.exe"));
+    }
+  } else {
+    candidates.add("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+  }
+  return [...candidates];
+}
 
 const TailscaleStatusSchema = z.object({
   Self: z
@@ -50,7 +67,7 @@ export async function resolveTailnetHostWithRunner(
   if (!runCommandWithTimeout) {
     return null;
   }
-  for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
+  for (const candidate of getTailscaleStatusCommandCandidates()) {
     try {
       const result = await runCommandWithTimeout([candidate, "status", "--json"], {
         timeoutMs: 5000,

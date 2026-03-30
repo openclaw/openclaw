@@ -266,6 +266,14 @@ export class TelegramPollingSession {
     const forceCyclePromise = new Promise<void>((resolve) => {
       forceCycleResolve = resolve;
     });
+    let forceCycleResolved = false;
+    const resolveForceCycle = () => {
+      if (forceCycleResolved) {
+        return;
+      }
+      forceCycleResolved = true;
+      forceCycleResolve?.();
+    };
     const stopRunner = () => {
       fetchAbortController?.abort();
       stopPromise ??= Promise.resolve(runner.stop())
@@ -316,7 +324,13 @@ export class TelegramPollingSession {
         this.opts.log(
           `[telegram] Polling stall detected (${elapsedLabel}); forcing restart. [diag inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
         );
-        void stopRunner();
+        void stopRunner().finally(() => {
+          if (this.opts.abortSignal?.aborted) {
+            return;
+          }
+          this.opts.log("[telegram][diag] polling runner stop completed after stall; restarting cycle");
+          resolveForceCycle();
+        });
         void stopBot();
         if (!forceCycleTimer) {
           forceCycleTimer = setTimeout(() => {
@@ -326,7 +340,7 @@ export class TelegramPollingSession {
             this.opts.log(
               `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
             );
-            forceCycleResolve?.();
+            resolveForceCycle();
           }, POLL_STOP_GRACE_MS);
         }
       }

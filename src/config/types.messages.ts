@@ -77,6 +77,8 @@ export type StatusReactionsTimingConfig = {
 export type StatusReactionsConfig = {
   /** Enable lifecycle status reactions (default: false). */
   enabled?: boolean;
+  /** When true, set a terminal done/error reaction after reply completion. Default: true. */
+  finalizeAfterReply?: boolean;
   /** Override default emojis. */
   emojis?: StatusReactionsEmojiConfig;
   /** Override default timing. */

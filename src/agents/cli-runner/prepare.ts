@@ -1,4 +1,5 @@
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import { isHeartbeatEnabledForAgent } from "../../infra/heartbeat-summary.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -104,7 +105,9 @@ export async function prepareCliRunContext(
     agentId: params.agentId,
   });
   const heartbeatPrompt =
-    sessionAgentId === defaultAgentId
+    params.config &&
+    sessionAgentId === defaultAgentId &&
+    isHeartbeatEnabledForAgent(params.config, sessionAgentId)
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
   const docsPath = await resolveOpenClawDocsPath({

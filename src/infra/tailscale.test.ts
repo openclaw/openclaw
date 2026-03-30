@@ -5,6 +5,7 @@ import * as tailscale from "./tailscale.js";
 const {
   ensureGoInstalled,
   ensureTailscaledInstalled,
+  getTailscaleCommandCandidates,
   getTailnetHostname,
   enableTailscaleServe,
   disableTailscaleServe,
@@ -67,6 +68,19 @@ describe("tailscale helpers", () => {
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("noisy.tailnet.ts.net");
+  });
+
+  it("includes common Windows install locations in tailscale command candidates", () => {
+    expect(
+      getTailscaleCommandCandidates("win32", {
+        ProgramFiles: "C:\\Program Files",
+        LOCALAPPDATA: "C:\\Users\\dxhph\\AppData\\Local",
+      }),
+    ).toEqual([
+      "tailscale",
+      "C:\\Program Files\\Tailscale\\tailscale.exe",
+      "C:\\Users\\dxhph\\AppData\\Local\\Tailscale\\tailscale.exe",
+    ]);
   });
 
   it.each([

@@ -177,6 +177,27 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 
+  it("does not schedule heartbeats when defaults explicitly disable them", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { enabled: false } },
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.stop();
+  });
+
   it("reschedules timer when runOnce returns requests-in-flight", async () => {
     useFakeHeartbeatTime();
 

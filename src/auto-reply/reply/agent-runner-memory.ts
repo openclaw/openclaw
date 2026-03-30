@@ -180,6 +180,95 @@ async function appendPostCompactionRefreshPrompt(params: {
     .join("\n\n");
 }
 
+async function rotateSessionAfterFailedForcedMemoryFlush(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  followupRun: FollowupRun;
+  transcriptByteSize?: number;
+  reason: string;
+}): Promise<SessionEntry | undefined> {
+  const { sessionStore, sessionKey, storePath } = params;
+  if (!sessionStore || !sessionKey) {
+    return params.sessionEntry;
+  }
+  const current = sessionStore[sessionKey] ?? params.sessionEntry;
+  if (!current?.sessionId) {
+    return current ?? params.sessionEntry;
+  }
+  const nextSessionId = crypto.randomUUID();
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const nextSessionFile = resolveSessionFilePath(
+    nextSessionId,
+    undefined,
+    resolveSessionFilePathOptions({ agentId, storePath }),
+  );
+  const updatedAt = Date.now();
+  const nextEntry: SessionEntry = {
+    ...current,
+    sessionId: nextSessionId,
+    updatedAt,
+    sessionFile: nextSessionFile,
+    systemSent: false,
+    abortedLastRun: false,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    status: undefined,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    totalTokens: undefined,
+    totalTokensFresh: false,
+    estimatedCostUsd: undefined,
+    cacheRead: undefined,
+    cacheWrite: undefined,
+    modelProvider: undefined,
+    model: undefined,
+    fallbackNoticeSelectedModel: undefined,
+    fallbackNoticeActiveModel: undefined,
+    fallbackNoticeReason: undefined,
+    contextTokens: undefined,
+    memoryFlushAt: updatedAt,
+    memoryFlushCompactionCount: undefined,
+    memoryFlushContextHash: undefined,
+    systemPromptReport: undefined,
+    cliSessionIds: undefined,
+    cliSessionBindings: undefined,
+    claudeCliSessionId: undefined,
+  };
+  sessionStore[sessionKey] = nextEntry;
+  if (storePath) {
+    try {
+      const persisted = await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => nextEntry,
+      });
+      if (persisted) {
+        sessionStore[sessionKey] = persisted;
+      }
+    } catch (err) {
+      logVerbose(`failed to persist rotated session after memory flush failure: ${String(err)}`);
+    }
+  }
+  params.followupRun.run.sessionId = nextSessionId;
+  params.followupRun.run.sessionFile = nextSessionFile;
+  const queueKey = params.followupRun.run.sessionKey ?? sessionKey;
+  if (queueKey) {
+    refreshQueuedFollowupSession({
+      key: queueKey,
+      previousSessionId: current.sessionId,
+      nextSessionId,
+      nextSessionFile,
+    });
+  }
+  logVerbose(
+    `memory flush forced-session-rotate: sessionKey=${sessionKey} previousSessionId=${current.sessionId} nextSessionId=${nextSessionId} transcriptBytes=${params.transcriptByteSize ?? "unknown"} reason=${params.reason}`,
+  );
+  return sessionStore[sessionKey];
+}
+
 async function readSessionLogSnapshot(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
@@ -778,6 +867,20 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+    if (shouldForceFlushByTranscriptSize) {
+      const rotatedEntry = await rotateSessionAfterFailedForcedMemoryFlush({
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        followupRun: params.followupRun,
+        transcriptByteSize,
+        reason: String(err),
+      });
+      if (rotatedEntry) {
+        activeSessionEntry = rotatedEntry;
+      }
+    }
   }
 
   return activeSessionEntry;

@@ -178,6 +178,7 @@ export const dispatchTelegramMessage = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
+    statusReactionsFinalizeAfterReply,
   } = context;
 
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -934,7 +935,7 @@ export const dispatchTelegramMessage = async ({
     }
   }
 
-  if (statusReactionController) {
+  if (statusReactionController && statusReactionsFinalizeAfterReply) {
     void statusReactionController.setDone().catch((err) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });

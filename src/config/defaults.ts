@@ -449,6 +449,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   const nextDefaults = { ...defaults };
   const contextPruning = defaults.contextPruning ?? {};
   const heartbeat = defaults.heartbeat ?? {};
+  const heartbeatDisabled = defaults.heartbeat?.enabled === false;
 
   if (defaults.contextPruning?.mode === undefined) {
     nextDefaults.contextPruning = {
@@ -459,7 +460,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
     mutated = true;
   }
 
-  if (defaults.heartbeat?.every === undefined) {
+  if (!heartbeatDisabled && defaults.heartbeat?.every === undefined) {
     nextDefaults.heartbeat = {
       ...heartbeat,
       every: authMode === "oauth" ? "1h" : "30m",

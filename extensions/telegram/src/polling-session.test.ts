@@ -275,6 +275,81 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("restarts immediately after a stalled runner stops even if runner.task never resolves", async () => {
+    const abort = new AbortController();
+    const firstBot = makeBot();
+    const secondBot = makeBot();
+    createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
+
+    let cycle = 0;
+    const firstRunnerStop = vi.fn(async () => undefined);
+    runMock.mockImplementation(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          task: () => new Promise<void>(() => {}),
+          stop: firstRunnerStop,
+          isRunning: () => true,
+        };
+      }
+      return {
+        task: async () => {
+          abort.abort();
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      };
+    });
+
+    let watchdog: (() => void) | undefined;
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
+      watchdog = fn as () => void;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementationOnce(() => 0)
+      .mockImplementation(() => 120_001);
+
+    try {
+      const session = new TelegramPollingSession({
+        token: "tok",
+        config: {},
+        accountId: "default",
+        runtime: undefined,
+        proxyFetch: undefined,
+        abortSignal: abort.signal,
+        runnerOptions: {},
+        getLastUpdateId: () => null,
+        persistUpdateId: async () => undefined,
+        log: () => undefined,
+        telegramTransport: undefined,
+      });
+
+      const runPromise = session.runUntilAbort();
+      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(watchdog).toBeTypeOf("function");
+      watchdog?.();
+      await runPromise;
+
+      expect(firstRunnerStop).toHaveBeenCalledTimes(1);
+      expect(runMock).toHaveBeenCalledTimes(2);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("rebuilds the transport after a stalled polling cycle", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();

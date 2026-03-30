@@ -46,9 +46,31 @@ function which(cmd) {
 }
 
 function resolveRunner() {
+  const bundledPnpm = resolveBundledPnpmScript();
+  if (bundledPnpm) {
+    return { cmd: process.execPath, argsPrefix: [bundledPnpm], kind: "pnpm" };
+  }
   const pnpm = which("pnpm");
   if (pnpm) {
-    return { cmd: pnpm, kind: "pnpm" };
+    return { cmd: pnpm, argsPrefix: [], kind: "pnpm" };
+  }
+  return null;
+}
+
+function resolveBundledPnpmScript() {
+  const nodeDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(nodeDir, "node_modules", "corepack", "dist", "pnpm.js"),
+    path.join(nodeDir, "..", "lib", "node_modules", "corepack", "dist", "pnpm.js"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore
+    }
   }
   return null;
 }
@@ -84,9 +106,40 @@ function createSpawnOptions(cmd, args, envOverride) {
   return {
     cwd: uiDir,
     stdio: "inherit",
-    env: envOverride ?? process.env,
+    env: buildUiRunnerEnv(envOverride ?? process.env),
     ...(useShell ? { shell: true } : {}),
   };
+}
+
+function buildUiRunnerEnv(sourceEnv) {
+  const env = { ...sourceEnv };
+  const nodeDir = path.dirname(process.execPath);
+  const pathKey = findPathKey(env);
+  const existing = String(env[pathKey] ?? "");
+  const extras = [nodeDir];
+  const merged = [];
+  const seen = new Set();
+  for (const entry of [...extras, ...existing.split(path.delimiter).filter(Boolean)]) {
+    if (!entry || seen.has(entry)) {
+      continue;
+    }
+    seen.add(entry);
+    merged.push(entry);
+  }
+  env[pathKey] = merged.join(path.delimiter);
+  return env;
+}
+
+function findPathKey(env) {
+  if ("PATH" in env) {
+    return "PATH";
+  }
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PATH") {
+      return key;
+    }
+  }
+  return "PATH";
 }
 
 function run(cmd, args) {
@@ -179,7 +232,7 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (action === "install") {
-    run(runner.cmd, ["install", ...rest]);
+    run(runner.cmd, [...(runner.argsPrefix ?? []), "install", ...rest]);
     return;
   }
 
@@ -187,10 +240,10 @@ export function main(argv = process.argv.slice(2)) {
     const installEnv =
       action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
     const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
+    runSync(runner.cmd, [...(runner.argsPrefix ?? []), ...installArgs], installEnv);
   }
 
-  run(runner.cmd, ["run", script, ...rest]);
+  run(runner.cmd, [...(runner.argsPrefix ?? []), "run", script, ...rest]);
 }
 
 const isDirectExecution = (() => {

@@ -23,6 +23,10 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 
+function isHeartbeatConfigExplicitlyDisabled(heartbeat?: HeartbeatConfig) {
+  return heartbeat?.enabled === false;
+}
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
   return list.some((entry) => Boolean(entry?.heartbeat));
@@ -34,8 +38,14 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+      (entry) =>
+        Boolean(entry?.heartbeat) &&
+        !isHeartbeatConfigExplicitlyDisabled(entry.heartbeat) &&
+        normalizeAgentId(entry?.id) === resolvedAgentId,
     );
+  }
+  if (isHeartbeatConfigExplicitlyDisabled(cfg.agents?.defaults?.heartbeat)) {
+    return false;
   }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
@@ -45,6 +55,12 @@ export function resolveHeartbeatIntervalMs(
   overrideEvery?: string,
   heartbeat?: HeartbeatConfig,
 ) {
+  if (isHeartbeatConfigExplicitlyDisabled(heartbeat)) {
+    return null;
+  }
+  if (!heartbeat && isHeartbeatConfigExplicitlyDisabled(cfg.agents?.defaults?.heartbeat)) {
+    return null;
+  }
   const raw =
     overrideEvery ??
     heartbeat?.every ??

@@ -701,6 +701,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.removeAckAfterReply": "Remove Ack Reaction After Reply",
   "messages.statusReactions": "Status Reactions",
   "messages.statusReactions.enabled": "Enable Status Reactions",
+  "messages.statusReactions.finalizeAfterReply": "Finalize Status Reactions After Reply",
   "messages.statusReactions.emojis": "Status Reaction Emojis",
   "messages.statusReactions.timing": "Status Reaction Timing",
   "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",

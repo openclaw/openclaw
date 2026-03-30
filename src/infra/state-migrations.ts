@@ -791,6 +791,7 @@ async function migrateLegacySessions(
       normalized[key] = normalizedEntry;
     }
     await saveSessionStore(detected.sessions.targetStorePath, normalized, {
+      replaceStore: true,
       skipMaintenance: true,
     });
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);

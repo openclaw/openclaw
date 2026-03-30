@@ -27,6 +27,11 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import {
+  recordChiefTaskFailure,
+  recordChiefTaskResult,
+  recordChiefTaskStart,
+} from "../infra/chief-task-ledger.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -78,6 +83,7 @@ import {
 } from "./model-selection.js";
 import { buildWorkspaceSkillSnapshot } from "./skills.js";
 import { getSkillsSnapshotVersion } from "./skills/refresh.js";
+import { maybeApplyChiefQualityGuard } from "./quality-guard.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -727,6 +733,13 @@ async function agentCommandInternal(
 
     const startedAt = Date.now();
     let lifecycleEnded = false;
+    const chiefTaskRecord = await recordChiefTaskStart({
+      cfg,
+      agentId: sessionAgentId,
+      sessionKey: sessionKey ?? sessionId,
+      prompt: body,
+      sourceChannel: opts.replyChannel ?? opts.channel ?? opts.messageChannel,
+    });
 
     let result: Awaited<ReturnType<typeof runAgentAttempt>>;
     let fallbackProvider = provider;
@@ -801,6 +814,19 @@ async function agentCommandInternal(
       result = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      const reviewed = await maybeApplyChiefQualityGuard({
+        cfg,
+        agentId: sessionAgentId,
+        originalPrompt: body,
+        result,
+        timeoutMs,
+        runId,
+        workspaceDir,
+        provider: fallbackProvider,
+        model: fallbackModel,
+        chiefSkillsSnapshot: skillsSnapshot,
+      });
+      result = reviewed.result;
       if (!lifecycleEnded) {
         const stopReason = result.meta.stopReason;
         if (stopReason && stopReason !== "end_turn") {
@@ -819,6 +845,13 @@ async function agentCommandInternal(
         });
       }
     } catch (err) {
+      await recordChiefTaskFailure({
+        cfg,
+        agentId: sessionAgentId,
+        taskId: chiefTaskRecord?.taskId,
+        sessionKey: sessionKey ?? sessionId,
+        error: err,
+      });
       if (!lifecycleEnded) {
         emitAgentEvent({
           runId,
@@ -852,6 +885,13 @@ async function agentCommandInternal(
     }
 
     const payloads = result.payloads ?? [];
+    await recordChiefTaskResult({
+      cfg,
+      agentId: sessionAgentId,
+      taskId: chiefTaskRecord?.taskId,
+      sessionKey: sessionKey ?? sessionId,
+      payloads,
+    });
     return await deliverAgentCommandResult({
       cfg,
       deps,

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
@@ -44,20 +45,36 @@ export async function findTailscaleBinary(): Promise<string | null> {
     }
   };
 
-  // Strategy 1: which command
+  for (const candidate of getTailscaleCommandCandidates()) {
+    if (!candidate || candidate === "tailscale") {
+      continue;
+    }
+    if (await checkBinary(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Strategy 1: discover from PATH via which/where
   try {
-    const { stdout } = await runExec("which", ["tailscale"]);
-    const fromPath = stdout.trim();
-    if (fromPath && (await checkBinary(fromPath))) {
-      return fromPath;
+    const lookup = process.platform === "win32" ? "where" : "which";
+    const { stdout } = await runExec(lookup, ["tailscale"]);
+    const discovered = stdout
+      .trim()
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const fromPath of discovered) {
+      if (await checkBinary(fromPath)) {
+        return fromPath;
+      }
     }
   } catch {
-    // which failed, continue
+    // lookup failed, continue
   }
 
   // Strategy 2: Known macOS app path
   const macAppPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
-  if (await checkBinary(macAppPath)) {
+  if (process.platform !== "win32" && (await checkBinary(macAppPath))) {
     return macAppPath;
   }
 
@@ -103,11 +120,30 @@ export async function findTailscaleBinary(): Promise<string | null> {
   return null;
 }
 
+export function getTailscaleCommandCandidates(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const candidates = new Set<string>(["tailscale"]);
+  if (platform === "win32") {
+    const programFiles = env.ProgramFiles?.trim();
+    const programFilesX86 = env["ProgramFiles(x86)"]?.trim();
+    const localAppData = env.LOCALAPPDATA?.trim();
+    for (const base of [programFiles, programFilesX86, localAppData]) {
+      if (!base) {
+        continue;
+      }
+      candidates.add(path.join(base, "Tailscale", "tailscale.exe"));
+    }
+  } else {
+    candidates.add("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+  }
+  return [...candidates];
+}
+
 export async function getTailnetHostname(exec: typeof runExec = runExec, detectedBinary?: string) {
   // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
-  const candidates = detectedBinary
-    ? [detectedBinary]
-    : ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
+  const candidates = detectedBinary ? [detectedBinary] : getTailscaleCommandCandidates();
   let lastError: unknown;
 
   for (const candidate of candidates) {

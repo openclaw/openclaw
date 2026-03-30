@@ -8,6 +8,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -221,6 +222,34 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0].error).toBe("bad request");
     expect(result.attempts[0].reason).toBe("unknown");
+  });
+
+  it("rethrows live session model switches immediately without trying sibling fallbacks", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toMatchObject({
+      name: "LiveSessionModelSwitchError",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("passes original unknown errors to onError during fallback", async () => {

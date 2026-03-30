@@ -315,6 +315,12 @@ export {
 export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
 
 type SaveSessionStoreOptions = {
+  /**
+   * Replace the on-disk store with exactly the provided object.
+   * Callers should prefer merge-preserving saves by default so partial store
+   * snapshots cannot accidentally drop unrelated sessions.
+   */
+  replaceStore?: boolean;
   /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */
   skipMaintenance?: boolean;
   /** Active session key for warn-only maintenance. */
@@ -589,7 +595,21 @@ export async function saveSessionStore(
   opts?: SaveSessionStoreOptions,
 ): Promise<void> {
   await withSessionStoreLock(storePath, async () => {
-    await saveSessionStoreUnlocked(storePath, store, opts);
+    let nextStore = store;
+    if (!opts?.replaceStore) {
+      const existingStore = loadSessionStore(storePath, { skipCache: true });
+      const previousAcpByKey = collectAcpMetadataSnapshot(existingStore);
+      nextStore = {
+        ...existingStore,
+        ...store,
+      };
+      preserveExistingAcpMetadata({
+        previousAcpByKey,
+        nextStore,
+        allowDropSessionKeys: opts?.allowDropAcpMetaSessionKeys,
+      });
+    }
+    await saveSessionStoreUnlocked(storePath, nextStore, opts);
   });
 }
 

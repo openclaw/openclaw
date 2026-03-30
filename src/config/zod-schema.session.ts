@@ -159,6 +159,7 @@ export const MessagesSchema = z
     statusReactions: z
       .object({
         enabled: z.boolean().optional(),
+        finalizeAfterReply: z.boolean().optional(),
         emojis: z
           .object({
             thinking: z.string().optional(),

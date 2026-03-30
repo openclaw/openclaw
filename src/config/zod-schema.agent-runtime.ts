@@ -14,6 +14,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HeartbeatSchema = z
   .object({
+    enabled: z.boolean().optional(),
     every: z.string().optional(),
     activeHours: z
       .object({

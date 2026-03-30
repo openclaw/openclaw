@@ -32,6 +32,10 @@ import {
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import {
+  startChiefContinuationRunner,
+  type ChiefContinuationRunner,
+} from "../infra/chief-continuation-runner.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -748,6 +752,10 @@ export async function startGatewayServer(
     stop: () => {},
     updateConfig: () => {},
   };
+  let chiefContinuationRunner: ChiefContinuationRunner = {
+    stop: () => {},
+    updateConfig: () => {},
+  };
   let stopGatewayUpdateCheck = () => {};
   let tailscaleCleanup: (() => Promise<void>) | null = null;
   let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -768,6 +776,7 @@ export async function startGatewayServer(
     authRateLimiter?.dispose();
     browserAuthRateLimiter.dispose();
     stopModelPricingRefresh();
+    chiefContinuationRunner.stop();
     channelHealthMonitor?.stop();
     clearSecretsRuntimeSnapshot();
     await createGatewayCloseHandler({
@@ -1103,6 +1112,7 @@ export async function startGatewayServer(
 
     if (!minimalTestGateway) {
       heartbeatRunner = startHeartbeatRunner({ cfg: cfgAtStart });
+      chiefContinuationRunner = startChiefContinuationRunner({ cfg: cfgAtStart });
     }
 
     const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
@@ -1488,6 +1498,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       stopModelPricingRefresh();
+      chiefContinuationRunner.stop();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);
