@@ -35,9 +35,13 @@
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Gemini Search API Key",
-      "help": "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+      "help": "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var or models.providers.google.apiKey).",
       "sensitive": true,
       "placeholder": "AIza..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Gemini Search Base URL",
+      "help": "Optional Gemini API base URL override for web search grounding. Falls back to models.providers.google.baseUrl."
     },
     "webSearch.model": {
       "label": "Gemini Search Model",
@@ -59,6 +63,9 @@
         "properties": {
           "apiKey": {
             "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
           },
           "model": {
             "type": "string"

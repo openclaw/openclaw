@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
@@ -25,13 +26,13 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { DEFAULT_GOOGLE_API_BASE_URL } from "../api.js";
+import { DEFAULT_GOOGLE_API_BASE_URL, normalizeGoogleApiBaseUrl } from "../api.js";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_API_BASE = DEFAULT_GOOGLE_API_BASE_URL;
 
 type GeminiConfig = {
   apiKey?: string;
+  baseUrl?: string;
   model?: string;
 };
 
@@ -65,10 +66,28 @@ function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
     : {};
 }
 
-function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
+function resolveGeminiApiKey(
+  gemini?: GeminiConfig,
+  providerConfig?: ModelProviderConfig,
+): string | undefined {
   return (
     readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
-    readProviderEnvValue(["GEMINI_API_KEY"])
+    readProviderEnvValue(["GEMINI_API_KEY"]) ??
+    readConfiguredSecretString(providerConfig?.apiKey, "models.providers.google.apiKey")
+  );
+}
+
+function resolveGeminiBaseUrl(gemini?: GeminiConfig, providerConfig?: ModelProviderConfig): string {
+  const configuredBaseUrl =
+    typeof gemini?.baseUrl === "string" && gemini.baseUrl.trim().length > 0
+      ? gemini.baseUrl.trim()
+      : undefined;
+  const providerBaseUrl =
+    typeof providerConfig?.baseUrl === "string" && providerConfig.baseUrl.trim().length > 0
+      ? providerConfig.baseUrl.trim()
+      : undefined;
+  return normalizeGoogleApiBaseUrl(
+    configuredBaseUrl ?? providerBaseUrl ?? DEFAULT_GOOGLE_API_BASE_URL,
   );
 }
 
@@ -80,10 +99,11 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
 async function runGeminiSearch(params: {
   query: string;
   apiKey: string;
+  baseUrl: string;
   model: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
-  const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
+  const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
 
   return withTrustedWebSearchEndpoint(
     {
@@ -175,6 +195,7 @@ function createGeminiSchema() {
 
 function createGeminiToolDefinition(
   searchConfig?: SearchConfigRecord,
+  providerConfig?: ModelProviderConfig,
 ): WebSearchProviderToolDefinition {
   return {
     description:
@@ -188,12 +209,12 @@ function createGeminiToolDefinition(
       }
 
       const geminiConfig = resolveGeminiConfig(searchConfig);
-      const apiKey = resolveGeminiApiKey(geminiConfig);
+      const apiKey = resolveGeminiApiKey(geminiConfig, providerConfig);
       if (!apiKey) {
         return {
           error: "missing_gemini_api_key",
           message:
-            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey.",
+            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure tools.web.search.gemini.apiKey, or set models.providers.google.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -203,11 +224,13 @@ function createGeminiToolDefinition(
         readNumberParam(params, "count", { integer: true }) ??
         searchConfig?.maxResults ??
         undefined;
+      const baseUrl = resolveGeminiBaseUrl(geminiConfig, providerConfig);
       const model = resolveGeminiModel(geminiConfig);
       const cacheKey = buildSearchCacheKey([
         "gemini",
         query,
         resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        baseUrl,
         model,
       ]);
       const cached = readCachedSearchPayload(cacheKey);
@@ -219,6 +242,7 @@ function createGeminiToolDefinition(
       const result = await runGeminiSearch({
         query,
         apiKey,
+        baseUrl,
         model,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
       });
@@ -271,11 +295,13 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
           "gemini",
           resolveProviderWebSearchPluginConfig(ctx.config, "google"),
         ) as SearchConfigRecord | undefined,
+        ctx.config?.models?.providers?.google,
       ),
   };
 }
 
 export const __testing = {
   resolveGeminiApiKey,
+  resolveGeminiBaseUrl,
   resolveGeminiModel,
 } as const;

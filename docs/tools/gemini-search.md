@@ -22,7 +22,9 @@ citations.
     API key.
   </Step>
   <Step title="Store the key">
-    Set `GEMINI_API_KEY` in the Gateway environment, or configure via:
+    Set `GEMINI_API_KEY` in the Gateway environment, configure Gemini web
+    search directly, or reuse `models.providers.google.apiKey` from your model
+    provider config:
 
     ```bash
     openclaw configure --section web
@@ -40,10 +42,20 @@ citations.
       google: {
         config: {
           webSearch: {
-            apiKey: "AIza...", // optional if GEMINI_API_KEY is set
+            apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
+            baseUrl: "https://proxy.example.com/google", // optional; falls back to models.providers.google.baseUrl
             model: "gemini-2.5-flash", // default
           },
         },
+      },
+    },
+  },
+  models: {
+    providers: {
+      google: {
+        apiKey: "AIza...", // optional fallback for web_search and other Google features
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        models: [],
       },
     },
   },
@@ -59,6 +71,12 @@ citations.
 
 **Environment alternative:** set `GEMINI_API_KEY` in the Gateway environment.
 For a gateway install, put it in `~/.openclaw/.env`.
+
+Gemini web search resolves configuration in this order:
+
+1. `tools.web.search.gemini.*` or `plugins.entries.google.config.webSearch.*`
+2. `GEMINI_API_KEY` for the API key only
+3. `models.providers.google.apiKey` / `models.providers.google.baseUrl`
 
 ## How it works
 
@@ -85,6 +103,9 @@ Provider-specific filters like `country`, `language`, `freshness`, and
 The default model is `gemini-2.5-flash` (fast and cost-effective). Any Gemini
 model that supports grounding can be used via
 `plugins.entries.google.config.webSearch.model`.
+
+`models.providers.google` is used only for API key and base URL fallback. It
+does not override the web search model.
 
 ## Related
 
