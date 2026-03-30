@@ -174,7 +174,10 @@ describe("createOpenClawCodingTools", () => {
         edits: [],
       });
 
-      expect(result.content[0].text).toMatch(/Edited|Successfully replaced/i);
+      const textParts = result.content
+        .filter((part): part is Extract<(typeof result.content)[number], { type: "text" }> => part.type === "text")
+        .map((part) => part.text);
+      expect(textParts.join("\n")).toMatch(/Edited|Successfully replaced/i);
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe("const value = 'new';\n");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
