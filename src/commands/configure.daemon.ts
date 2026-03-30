@@ -120,7 +120,6 @@ export async function maybeInstallDaemon(params: {
           port: params.port,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
-          config: cfg,
         });
 
         progress.setLabel("Installing Gateway service…");

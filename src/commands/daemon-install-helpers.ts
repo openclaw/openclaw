@@ -1,18 +1,7 @@
-import {
-  loadAuthProfileStoreForSecretsRuntime,
-  type AuthProfileStore,
-} from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
-import {
-  isDangerousHostEnvOverrideVarName,
-  isDangerousHostEnvVarName,
-  normalizeEnvVarKey,
-} from "../infra/host-env-security.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -29,67 +18,6 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
-function collectAuthProfileServiceEnvVars(params: {
-  env: Record<string, string | undefined>;
-  authStore?: AuthProfileStore;
-  warn?: DaemonInstallWarnFn;
-}): Record<string, string> {
-  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
-  const entries: Record<string, string> = {};
-
-  for (const credential of Object.values(authStore.profiles)) {
-    const ref =
-      credential.type === "api_key"
-        ? credential.keyRef
-        : credential.type === "token"
-          ? credential.tokenRef
-          : undefined;
-    if (!ref || ref.source !== "env") {
-      continue;
-    }
-    const key = normalizeEnvVarKey(ref.id, { portable: true });
-    if (!key) {
-      continue;
-    }
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
-      params.warn?.(
-        `Auth profile env ref "${key}" blocked by host-env security policy`,
-        "Auth profile",
-      );
-      continue;
-    }
-    const value = params.env[key]?.trim();
-    if (!value) {
-      continue;
-    }
-    entries[key] = value;
-  }
-
-  return entries;
-}
-
-function buildGatewayInstallEnvironment(params: {
-  env: Record<string, string | undefined>;
-  config?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  warn?: DaemonInstallWarnFn;
-  serviceEnvironment: Record<string, string | undefined>;
-}): Record<string, string | undefined> {
-  const environment: Record<string, string | undefined> = {
-    ...collectDurableServiceEnvVars({
-      env: params.env,
-      config: params.config,
-    }),
-    ...collectAuthProfileServiceEnvVars({
-      env: params.env,
-      authStore: params.authStore,
-      warn: params.warn,
-    }),
-  };
-  Object.assign(environment, params.serviceEnvironment);
-  return environment;
-}
-
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -97,9 +25,6 @@ export async function buildGatewayInstallPlan(params: {
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
-  /** Full config to extract env vars from (env vars + inline env keys). */
-  config?: OpenClawConfig;
-  authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
@@ -132,21 +57,14 @@ export async function buildGatewayInstallPlan(params: {
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Merge env sources into the service environment in ascending priority:
-  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
-  //   2. Config env vars              (openclaw.json env.vars + inline keys)
-  //   3. Auth-profile env refs        (credential store → env var lookups)
-  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
+  // Only include the minimal service environment (HOME, PATH, OPENCLAW_*, port).
+  // Provider secrets (API keys, tokens) are intentionally excluded — the daemon
+  // resolves them at runtime from ~/.openclaw/.env and the credential store,
+  // so they never need to be persisted into service unit metadata.
   return {
     programArguments,
     workingDirectory,
-    environment: buildGatewayInstallEnvironment({
-      env: params.env,
-      config: params.config,
-      authStore: params.authStore,
-      warn: params.warn,
-      serviceEnvironment,
-    }),
+    environment: serviceEnvironment,
   };
 }
 

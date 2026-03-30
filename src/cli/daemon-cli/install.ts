@@ -131,7 +131,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         defaultRuntime.log(message);
       }
     },
-    config: cfg,
   });
 
   await installDaemonServiceAndEmit({

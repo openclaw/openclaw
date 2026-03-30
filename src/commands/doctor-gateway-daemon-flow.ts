@@ -199,7 +199,6 @@ export async function maybeRepairGatewayDaemon(params: {
           port,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
-          config: params.cfg,
         });
         try {
           await service.install({

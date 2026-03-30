@@ -198,7 +198,6 @@ export async function finalizeSetupWizard(
               port: settings.port,
               runtime: daemonRuntime,
               warn: (message, title) => prompter.note(message, title),
-              config: nextConfig,
             },
           );
 
