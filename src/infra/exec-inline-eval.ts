@@ -13,6 +13,14 @@ type InterpreterFlagSpec = {
   prefixFlags?: readonly string[];
 };
 
+type PositionalInterpreterSpec = {
+  names: readonly string[];
+  fileFlags: ReadonlySet<string>;
+  fileFlagPrefixes?: readonly string[];
+  exactValueFlags: ReadonlySet<string>;
+  prefixValueFlags?: readonly string[];
+};
+
 const INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["python", "python2", "python3", "pypy", "pypy3"], exactFlags: new Set(["-c"]) },
   {
@@ -26,18 +34,47 @@ const INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
 ];
 
+const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSpec[] = [
+  {
+    names: ["awk", "gawk", "mawk", "nawk"],
+    fileFlags: new Set(["-f", "--file"]),
+    fileFlagPrefixes: ["-f", "--file="],
+    exactValueFlags: new Set([
+      "-f",
+      "--file",
+      "-F",
+      "--field-separator",
+      "-v",
+      "--assign",
+      "-i",
+      "--include",
+      "-l",
+      "--load",
+      "-W",
+    ]),
+    prefixValueFlags: ["-F", "--field-separator=", "-v", "--assign=", "--include=", "--load="],
+  },
+];
+
 const INTERPRETER_ALLOWLIST_NAMES = new Set(
-  INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names).concat([
-    "awk",
-    "gawk",
-    "mawk",
-    "nawk",
-  ]),
+  INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names).concat(
+    POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS.flatMap((entry) => entry.names),
+  ),
 );
 
 function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
   const normalized = normalizeExecutableToken(executable);
   for (const spec of INTERPRETER_INLINE_EVAL_SPECS) {
+    if (spec.names.includes(normalized)) {
+      return spec;
+    }
+  }
+  return null;
+}
+
+function findPositionalInterpreterSpec(executable: string): PositionalInterpreterSpec | null {
+  const normalized = normalizeExecutableToken(executable);
+  for (const spec of POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS) {
     if (spec.names.includes(normalized)) {
       return spec;
     }
@@ -56,7 +93,37 @@ export function detectInterpreterInlineEvalArgv(
     return null;
   }
   const spec = findInterpreterSpec(executable);
-  if (!spec) {
+  if (spec) {
+    for (let idx = 1; idx < argv.length; idx += 1) {
+      const token = argv[idx]?.trim();
+      if (!token) {
+        continue;
+      }
+      if (token === "--") {
+        break;
+      }
+      const lower = token.toLowerCase();
+      if (spec.exactFlags.has(lower)) {
+        return {
+          executable,
+          normalizedExecutable: normalizeExecutableToken(executable),
+          flag: lower,
+          argv,
+        };
+      }
+      if (spec.prefixFlags?.some((prefix) => lower.startsWith(prefix))) {
+        return {
+          executable,
+          normalizedExecutable: normalizeExecutableToken(executable),
+          flag: lower,
+          argv,
+        };
+      }
+    }
+  }
+
+  const positionalSpec = findPositionalInterpreterSpec(executable);
+  if (!positionalSpec) {
     return null;
   }
   for (let idx = 1; idx < argv.length; idx += 1) {
@@ -65,30 +132,55 @@ export function detectInterpreterInlineEvalArgv(
       continue;
     }
     if (token === "--") {
-      break;
-    }
-    const lower = token.toLowerCase();
-    if (spec.exactFlags.has(lower)) {
+      const nextToken = argv[idx + 1]?.trim();
+      if (!nextToken) {
+        return null;
+      }
       return {
         executable,
         normalizedExecutable: normalizeExecutableToken(executable),
-        flag: lower,
+        flag: "<program>",
         argv,
       };
     }
-    if (spec.prefixFlags?.some((prefix) => lower.startsWith(prefix))) {
-      return {
-        executable,
-        normalizedExecutable: normalizeExecutableToken(executable),
-        flag: lower,
-        argv,
-      };
+    if (positionalSpec.fileFlags.has(token)) {
+      return null;
     }
+    if (
+      positionalSpec.fileFlagPrefixes?.some(
+        (prefix) => token.startsWith(prefix) && token.length > prefix.length,
+      )
+    ) {
+      return null;
+    }
+    if (positionalSpec.exactValueFlags.has(token)) {
+      idx += 1;
+      continue;
+    }
+    if (
+      positionalSpec.prefixValueFlags?.some(
+        (prefix) => token.startsWith(prefix) && token.length > prefix.length,
+      )
+    ) {
+      continue;
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    return {
+      executable,
+      normalizedExecutable: normalizeExecutableToken(executable),
+      flag: "<program>",
+      argv,
+    };
   }
   return null;
 }
 
 export function describeInterpreterInlineEval(hit: InterpreterInlineEvalHit): string {
+  if (hit.flag === "<program>") {
+    return `${hit.normalizedExecutable} inline program`;
+  }
   return `${hit.normalizedExecutable} ${hit.flag}`;
 }
 

@@ -675,6 +675,34 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("prevents allow-always bypass for shell-carried awk interpreters", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `sh -lc '$0 "$@"' awk '{print $1}' data.csv`,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: `sh -lc '$0 "$@"' awk 'BEGIN{system("id > /tmp/pwned")}'`,
+      allowlist: persisted.map((pattern) => ({ pattern })),
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
   it("prevents allow-always bypass for script wrapper chains", () => {
     if (process.platform !== "darwin" && process.platform !== "freebsd") {
       return;

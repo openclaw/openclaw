@@ -11,6 +11,8 @@ describe("exec inline eval detection", () => {
     { argv: ["/usr/bin/node", "--eval", "console.log('hi')"], expected: "node --eval" },
     { argv: ["perl", "-E", "say 1"], expected: "perl -e" },
     { argv: ["osascript", "-e", "beep"], expected: "osascript -e" },
+    { argv: ["awk", "BEGIN { print 1 }"], expected: "awk inline program" },
+    { argv: ["gawk", "-F", ",", "{print $1}", "data.csv"], expected: "gawk inline program" },
   ] as const)("detects interpreter eval flags for %j", ({ argv, expected }) => {
     const hit = detectInterpreterInlineEvalArgv([...argv]);
     expect(hit).not.toBeNull();
@@ -20,6 +22,7 @@ describe("exec inline eval detection", () => {
   it("ignores normal script execution", () => {
     expect(detectInterpreterInlineEvalArgv(["python3", "script.py"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["node", "script.js"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["awk", "-f", "script.awk", "data.csv"])).toBeNull();
   });
 
   it("matches interpreter-like allowlist patterns", () => {

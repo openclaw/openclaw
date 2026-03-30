@@ -535,6 +535,9 @@ function collectAllowAlwaysPatterns(params: {
     env: params.env,
   });
   if (positionalArgvPath) {
+    if (isInterpreterLikeAllowlistPattern(positionalArgvPath)) {
+      return;
+    }
     params.out.add(positionalArgvPath);
     return;
   }
