@@ -1742,7 +1742,7 @@ describe("QmdMemoryManager", () => {
       .filter((args: string[]) => args[0] === "search");
     expect(searchCalls).toEqual([
       ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "notes"],
     ]);
     await manager.close();
   });
@@ -1828,7 +1828,7 @@ describe("QmdMemoryManager", () => {
       .filter((args: string[]) => args[0] === "query");
     expect(queryCalls).toEqual([
       ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes"],
     ]);
     await manager.close();
   });
@@ -1880,7 +1880,7 @@ describe("QmdMemoryManager", () => {
     expect(searchAndQueryCalls).toEqual([
       ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
       ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes"],
     ]);
     await manager.close();
   });
@@ -2217,7 +2217,7 @@ describe("QmdMemoryManager", () => {
     await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
 
     expect(selectors).toEqual(["qmd.hybrid_search", "qmd.hybrid_search"]);
-    expect(collections).toEqual(["workspace-a-main", "workspace-b-main"]);
+    expect(collections).toEqual(["workspace-a", "workspace-b"]);
 
     await manager.close();
   });
@@ -3326,7 +3326,7 @@ describe("QmdMemoryManager", () => {
         );
         return child;
       }
-      if (args[0] === "search" && args.includes("notes-main")) {
+      if (args[0] === "search" && args.includes("notes")) {
         const child = createMockChild({ autoClose: false });
         emitAndClose(child, "stdout", "[]");
         return child;
@@ -3542,14 +3542,14 @@ describe("QmdMemoryManager", () => {
         );
         return child;
       }
-      if (args[0] === "search" && args.includes("notes-main")) {
+      if (args[0] === "search" && args.includes("notes")) {
         const child = createMockChild({ autoClose: false });
         emitAndClose(
           child,
           "stdout",
           JSON.stringify([
             {
-              file: "qmd://notes-main/guide.md",
+              file: "qmd://notes/guide.md",
               score: 0.7,
               snippet: "@@ -1,1\nnotes guide",
             },
