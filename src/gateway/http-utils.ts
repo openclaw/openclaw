@@ -10,6 +10,7 @@ import {
 import { loadConfig } from "../config/config.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -33,6 +34,31 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   }
   const token = raw.slice(7).trim();
   return token || undefined;
+}
+
+export function isGatewayBearerHttpRequest(req: IncomingMessage): boolean {
+  return Boolean(getBearerToken(req));
+}
+
+export function resolveTrustedHttpOperatorScopes(req: IncomingMessage): string[] {
+  if (isGatewayBearerHttpRequest(req)) {
+    // Gateway bearer auth only proves possession of the shared secret. Do not
+    // let HTTP clients self-assert operator scopes through request headers.
+    return [];
+  }
+
+  const raw = getHeader(req, "x-openclaw-scopes")?.trim();
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+}
+
+export function resolveHttpSenderIsOwner(req: IncomingMessage): boolean {
+  return resolveTrustedHttpOperatorScopes(req).includes(ADMIN_SCOPE);
 }
 
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {

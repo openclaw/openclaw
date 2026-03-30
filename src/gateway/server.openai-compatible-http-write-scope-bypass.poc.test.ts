@@ -84,7 +84,7 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
     }
   });
 
-  test("operator.write can still use /v1/chat/completions", async () => {
+  test("bearer auth cannot self-assert operator.write for /v1/chat/completions", async () => {
     const started = await startServerWithClient("secret", {
       openAiChatCompletionsEnabled: true,
     });
@@ -106,14 +106,13 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
         }),
       });
 
-      expect(httpRes.status).toBe(200);
+      expect(httpRes.status).toBe(403);
       const body = (await httpRes.json()) as {
-        object?: string;
-        choices?: Array<{ message?: { content?: string } }>;
+        error?: { type?: string; message?: string };
       };
-      expect(body.object).toBe("chat.completion");
-      expect(body.choices?.[0]?.message?.content).toBe("hello");
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(body.error?.type).toBe("forbidden");
+      expect(body.error?.message).toBe("missing scope: operator.write");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
     } finally {
       started.ws.close();
       await started.server.close();
@@ -169,7 +168,7 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
     }
   });
 
-  test("operator.write can still use /v1/responses", async () => {
+  test("bearer auth cannot self-assert operator.write for /v1/responses", async () => {
     const started = await startServerWithClient("secret", {
       openResponsesEnabled: true,
     });
@@ -192,23 +191,42 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
         }),
       });
 
-      expect(httpRes.status).toBe(200);
+      expect(httpRes.status).toBe(403);
       const body = (await httpRes.json()) as {
-        object?: string;
-        status?: string;
-        output?: Array<{
-          type?: string;
-          role?: string;
-          content?: Array<{ type?: string; text?: string }>;
-        }>;
+        error?: { type?: string; message?: string };
       };
-      expect(body.object).toBe("response");
-      expect(body.status).toBe("completed");
-      expect(body.output?.[0]?.type).toBe("message");
-      expect(body.output?.[0]?.role).toBe("assistant");
-      expect(body.output?.[0]?.content?.[0]?.type).toBe("output_text");
-      expect(body.output?.[0]?.content?.[0]?.text).toBe("hello");
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(body.error?.type).toBe("forbidden");
+      expect(body.error?.message).toBe("missing scope: operator.write");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("bearer auth cannot use /tools/invoke", async () => {
+    const started = await startServerWithClient("secret");
+
+    try {
+      const httpRes = await fetch(`http://127.0.0.1:${started.port}/tools/invoke`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          tool: "agents_list",
+          args: {},
+        }),
+      });
+
+      expect(httpRes.status).toBe(403);
+      const body = (await httpRes.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(body.error?.type).toBe("forbidden");
+      expect(body.error?.message).toBe("gateway bearer auth cannot invoke tools over HTTP");
     } finally {
       started.ws.close();
       await started.server.close();

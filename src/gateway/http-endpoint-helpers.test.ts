@@ -6,7 +6,12 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 vi.mock("./http-auth-helpers.js", () => {
   return {
     authorizeGatewayBearerRequestOrReply: vi.fn(),
-    resolveGatewayRequestedOperatorScopes: vi.fn(),
+  };
+});
+
+vi.mock("./http-utils.js", () => {
+  return {
+    resolveTrustedHttpOperatorScopes: vi.fn(),
   };
 });
 
@@ -25,8 +30,8 @@ vi.mock("./method-scopes.js", () => {
 });
 
 const { authorizeGatewayBearerRequestOrReply } = await import("./http-auth-helpers.js");
-const { resolveGatewayRequestedOperatorScopes } = await import("./http-auth-helpers.js");
 const { readJsonBodyOrError, sendJson, sendMethodNotAllowed } = await import("./http-common.js");
+const { resolveTrustedHttpOperatorScopes } = await import("./http-utils.js");
 const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
 
 describe("handleGatewayPostJsonEndpoint", () => {
@@ -90,7 +95,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
 
   it("returns undefined and replies when required operator scope is missing", async () => {
     vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(true);
-    vi.mocked(resolveGatewayRequestedOperatorScopes).mockReturnValue(["operator.approvals"]);
+    vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.approvals"]);
     vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({
       allowed: false,
       missingScope: "operator.write",

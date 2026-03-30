@@ -6,17 +6,14 @@ import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  authorizeGatewayBearerRequestOrReply,
-  resolveGatewayRequestedOperatorScopes,
-} from "./http-auth-helpers.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
 } from "./http-common.js";
-import { getHeader } from "./http-utils.js";
+import { getHeader, resolveTrustedHttpOperatorScopes } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -172,7 +169,7 @@ export async function handleSessionHistoryHttpRequest(
 
   // HTTP callers must declare the same least-privilege operator scopes they
   // intend to use over WS so both transport surfaces enforce the same gate.
-  const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

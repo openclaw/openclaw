@@ -1,6 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import {
+  resolveGatewayRequestContext,
+  resolveHttpSenderIsOwner,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
 
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
@@ -41,5 +45,39 @@ describe("resolveGatewayRequestContext", () => {
     });
 
     expect(result.sessionKey).toContain("openresponses-user:alice");
+  });
+});
+
+describe("resolveTrustedHttpOperatorScopes", () => {
+  it("drops self-asserted scopes for bearer-authenticated requests", () => {
+    const scopes = resolveTrustedHttpOperatorScopes(
+      createReq({
+        authorization: "Bearer secret",
+        "x-openclaw-scopes": "operator.admin, operator.write",
+      }),
+    );
+
+    expect(scopes).toEqual([]);
+  });
+
+  it("keeps declared scopes for non-bearer HTTP requests", () => {
+    const scopes = resolveTrustedHttpOperatorScopes(
+      createReq({
+        "x-openclaw-scopes": "operator.admin, operator.write",
+      }),
+    );
+
+    expect(scopes).toEqual(["operator.admin", "operator.write"]);
+  });
+});
+
+describe("resolveHttpSenderIsOwner", () => {
+  it("requires operator.admin on a trusted HTTP scope-bearing request", () => {
+    expect(resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.admin" }))).toBe(
+      true,
+    );
+    expect(resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.write" }))).toBe(
+      false,
+    );
   });
 });
