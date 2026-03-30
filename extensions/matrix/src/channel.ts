@@ -154,6 +154,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
     "name",
     "homeserver",
     "allowPrivateNetwork",
+    "proxy",
     "userId",
     "accessToken",
     "password",
@@ -439,6 +440,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
               accountId: account.accountId,
               allowPrivateNetwork: auth.allowPrivateNetwork,
               ssrfPolicy: auth.ssrfPolicy,
+              dispatcherPolicy: auth.dispatcherPolicy,
             });
           } catch (err) {
             return {
