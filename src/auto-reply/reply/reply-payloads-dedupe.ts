@@ -2,6 +2,7 @@ import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
@@ -64,6 +65,10 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
+const PROVIDER_ALIAS_MAP: Record<string, string> = {
+  lark: "feishu",
+};
+
 function normalizeProviderForComparison(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -74,7 +79,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   if (normalizedChannel) {
     return normalizedChannel;
   }
-  return lowered;
+  return PROVIDER_ALIAS_MAP[lowered] ?? lowered;
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {
@@ -113,7 +118,80 @@ function targetsMatchForSuppression(params: {
       targetThreadId: normalizeThreadIdForComparison(params.targetThreadId),
     });
   }
-  return params.targetKey === params.originTarget;
+
+  if (params.provider !== "telegram") {
+    return params.targetKey === params.originTarget;
+  }
+
+  const origin = parseExplicitTargetForChannel("telegram", params.originTarget);
+  const target = parseExplicitTargetForChannel("telegram", params.targetKey);
+  const parseFallbackTelegramTarget = (
+    raw: string,
+  ): { to: string; threadId?: string } | undefined => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    let normalized = trimmed;
+    let hasProviderPrefix = false;
+    while (true) {
+      const withProviderRemoved = normalized
+        .replace(/^(telegram|tg):/i, "")
+        .trim()
+        .replace(/^(telegram|tg):/i, "")
+        .trim();
+      if (withProviderRemoved !== normalized) {
+        hasProviderPrefix = true;
+        normalized = withProviderRemoved;
+        continue;
+      }
+      if (hasProviderPrefix && /^group:/i.test(normalized)) {
+        normalized = normalized.replace(/^group:/i, "").trim();
+        continue;
+      }
+      break;
+    }
+
+    const topicMatch = /^(.+?):topic:(\d+)$/i.exec(normalized);
+    if (topicMatch) {
+      return {
+        to: topicMatch[1].trim(),
+        threadId: topicMatch[2],
+      };
+    }
+    const colonMatch = /^(.+):(\d+)$/i.exec(normalized);
+    if (colonMatch) {
+      return {
+        to: colonMatch[1].trim(),
+        threadId: colonMatch[2],
+      };
+    }
+    return { to: normalized.trim() };
+  };
+
+  const parsedOrigin = origin ?? parseFallbackTelegramTarget(params.originTarget);
+  const parsedTarget = target ?? parseFallbackTelegramTarget(params.targetKey);
+  if (!parsedOrigin || !parsedTarget) {
+    return params.targetKey === params.originTarget;
+  }
+  const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
+  const targetThreadId =
+    explicitTargetThreadId ??
+    (parsedTarget.threadId != null ? String(parsedTarget.threadId) : undefined);
+  const originThreadId = parsedOrigin.threadId != null ? String(parsedOrigin.threadId) : undefined;
+  if (parsedOrigin.to.trim().toLowerCase() !== parsedTarget.to.trim().toLowerCase()) {
+    return false;
+  }
+  if (originThreadId && targetThreadId != null) {
+    return originThreadId === targetThreadId;
+  }
+  if (originThreadId && targetThreadId == null) {
+    return false;
+  }
+  if (!originThreadId && targetThreadId != null) {
+    return false;
+  }
+  return true;
 }
 
 export function shouldSuppressMessagingToolReplies(params: {

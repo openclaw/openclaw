@@ -241,4 +241,37 @@ describe("installTestEnv", () => {
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
   });
+
+  it("ignores malformed .profile parse failures during fallback parsing", () => {
+    const realHome = createTempHome();
+    writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
+
+    const existsSync = fs.existsSync.bind(fs);
+    const readFileSync = fs.readFileSync.bind(fs);
+
+    vi.spyOn(fs, "existsSync").mockImplementation((targetPath) => {
+      if (targetPath === "/bin/bash") {
+        return false;
+      }
+      return existsSync(targetPath);
+    });
+
+    vi.spyOn(fs, "readFileSync").mockImplementation((targetPath, encoding?: string) => {
+      if (String(targetPath) === path.join(realHome, ".profile")) {
+        throw new Error("failed to read profile");
+      }
+      return readFileSync(targetPath as fs.PathLike, encoding);
+    });
+
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_LIVE_TEST = "1";
+    process.env.OPENCLAW_LIVE_USE_REAL_HOME = "1";
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+
+    expect(() => {
+      const testEnv = installTestEnv();
+      expect(testEnv.tempHome).toBe(realHome);
+    }).not.toThrow();
+  });
 });

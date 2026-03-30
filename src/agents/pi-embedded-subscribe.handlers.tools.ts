@@ -527,8 +527,8 @@ async function emitToolResultOutput(params: {
         rawToolName,
         meta,
         outputText,
-        result,
         extractToolResultAudioAsVoice(result),
+        result,
       );
     }
     if (!hasStructuredMedia) {

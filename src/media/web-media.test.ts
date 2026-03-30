@@ -627,6 +627,42 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("audio/webm");
   });
 
+  it("does not probe remote webm URLs for stream metadata", async () => {
+    const runFfprobeMock = vi.fn();
+    const fetchRemoteMediaMock = vi
+      .fn()
+      .mockResolvedValue({ buffer: Buffer.from("fake-remote-webm"), contentType: "video/webm" });
+    vi.doMock("./fetch.js", async () => {
+      const actual = await vi.importActual<typeof import("./fetch.js")>("./fetch.js");
+      return {
+        ...actual,
+        fetchRemoteMedia: fetchRemoteMediaMock,
+      };
+    });
+    vi.doMock("./ffmpeg-exec.js", async () => {
+      const actual = await vi.importActual<typeof import("./ffmpeg-exec.js")>("./ffmpeg-exec.js");
+      return {
+        ...actual,
+        runFfprobe: runFfprobeMock,
+      };
+    });
+    const { loadWebMedia: loadFreshWebMedia } = await importFreshModule<
+      typeof import("./web-media.js")
+    >(import.meta.url, "./web-media.js?scope=remote-webm");
+
+    const result = await loadFreshWebMedia(
+      "https://example.com/voice.webm",
+      createLocalWebMediaOptions(),
+    );
+
+    expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://example.com/voice.webm" }),
+    );
+    expect(runFfprobeMock).not.toHaveBeenCalled();
+    expect(result.kind).toBe("video");
+    expect(result.contentType).toBe("video/webm");
+  });
+
   describe("host read capability", () => {
     it("rejects document uploads that only match by file extension", async () => {
       await expect(

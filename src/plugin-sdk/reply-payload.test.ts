@@ -13,6 +13,7 @@ import {
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
+  resolveToolDeliveryPayload,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
@@ -289,6 +290,20 @@ describe("resolveSendableOutboundReplyParts", () => {
       hasMedia: false,
       hasContent: true,
     });
+  });
+});
+
+describe("resolveToolDeliveryPayload", () => {
+  it("returns media-only payloads for MEDIA directives", () => {
+    expect(resolveToolDeliveryPayload({ text: "MEDIA:/tmp/out.mp3" })).toEqual({
+      text: undefined,
+      mediaUrls: ["/tmp/out.mp3"],
+      mediaUrl: "/tmp/out.mp3",
+    });
+  });
+
+  it("returns null for payloads with no media and no allowed text", () => {
+    expect(resolveToolDeliveryPayload({ text: "   " })).toBeNull();
   });
 });
 

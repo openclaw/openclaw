@@ -108,24 +108,28 @@ function stripProfileValueQuotes(value: string): string {
 }
 
 function parseProfileEnvFallback(profilePath: string): number {
-  const profile = fs.readFileSync(profilePath, "utf8");
-  const entries: string[] = [];
-  for (const line of profile.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
+  try {
+    const profile = fs.readFileSync(profilePath, "utf8");
+    const entries: string[] = [];
+    for (const line of profile.split(/\r?\n/u)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) {
+        continue;
+      }
+      const assignment = trimmed.startsWith("export ")
+        ? trimmed.slice("export ".length).trim()
+        : trimmed;
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(assignment);
+      if (!match) {
+        continue;
+      }
+      const [, key, rawValue] = match;
+      entries.push(`${key}=${stripProfileValueQuotes(rawValue)}`);
     }
-    const assignment = trimmed.startsWith("export ")
-      ? trimmed.slice("export ".length).trim()
-      : trimmed;
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(assignment);
-    if (!match) {
-      continue;
-    }
-    const [, key, rawValue] = match;
-    entries.push(`${key}=${stripProfileValueQuotes(rawValue)}`);
+    return applyProfileEnvEntries(entries);
+  } catch {
+    return 0;
   }
-  return applyProfileEnvEntries(entries);
 }
 
 function loadProfileEnv(homeDir = os.homedir()): void {

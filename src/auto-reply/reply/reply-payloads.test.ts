@@ -4,6 +4,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import {
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
+  resolveToolDeliveryPayload,
 } from "./reply-payloads.js";
 
 function targetsMatchTelegramReplySuppression(params: {
@@ -218,5 +219,39 @@ describe("shouldSuppressMessagingToolReplies", () => {
         ],
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveToolDeliveryPayload", () => {
+  it("returns media-only payloads for MEDIA directives", () => {
+    const payload = resolveToolDeliveryPayload({ text: "MEDIA:https://example.com/tts.opus" });
+    expect(payload).toEqual({
+      text: undefined,
+      mediaUrls: ["https://example.com/tts.opus"],
+      mediaUrl: "https://example.com/tts.opus",
+    });
+  });
+
+  it("returns null for text-only payloads when text is not allowed", () => {
+    const payload = resolveToolDeliveryPayload({ text: "No media here" });
+    expect(payload).toBeNull();
+  });
+
+  it("keeps existing media payloads and drops text", () => {
+    const payload = resolveToolDeliveryPayload({
+      text: "Tool result",
+      mediaUrl: "file:///tmp/screenshot.png",
+      mediaUrls: ["https://example.com/legacy.png"],
+    });
+    expect(payload).toEqual({
+      text: undefined,
+      mediaUrl: "https://example.com/legacy.png",
+      mediaUrls: ["https://example.com/legacy.png", "file:///tmp/screenshot.png"],
+    });
+  });
+
+  it("respects allowText when text is allowed", () => {
+    const payload = resolveToolDeliveryPayload({ text: "Some text" }, { allowText: true });
+    expect(payload).toEqual({ text: "Some text" });
   });
 });

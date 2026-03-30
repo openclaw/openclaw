@@ -11,6 +11,22 @@ export {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads-dedupe.js";
 import type { ReplyPayload } from "../types.js";
+import { parseReplyDirectives } from "./reply-directives.js";
+
+function extractToolDeliveryMediaUrls(payload: ReplyPayload): string[] {
+  const mediaUrls = payload.mediaUrls ?? [];
+  const mediaUrl = payload.mediaUrl ? [payload.mediaUrl] : [];
+  const parsed = payload.text ? parseReplyDirectives(payload.text) : undefined;
+  const textMediaUrls = parsed?.mediaUrls ?? [];
+  const seen = new Set<string>();
+  for (const url of [...mediaUrls, ...mediaUrl, ...textMediaUrls]) {
+    if (!url || seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+  }
+  return [...seen];
+}
 
 export function resolveToolDeliveryPayload(
   payload: ReplyPayload,
@@ -35,9 +51,15 @@ export function resolveToolDeliveryPayload(
   ) {
     return payload;
   }
-  const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+  const mediaUrls = extractToolDeliveryMediaUrls(payload);
+  const hasMedia = mediaUrls.length > 0;
   if (!hasMedia) {
     return null;
   }
-  return { ...payload, text: undefined };
+  return {
+    ...payload,
+    text: undefined,
+    mediaUrls,
+    mediaUrl: mediaUrls[0],
+  };
 }
