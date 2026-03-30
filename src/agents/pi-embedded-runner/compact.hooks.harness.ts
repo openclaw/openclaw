@@ -2,7 +2,15 @@ import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../harness/registry.js";
 
 type MockResolvedModel = {
-  model: { provider: string; api: string; id: string; input: unknown[] };
+  model: {
+    provider: string;
+    api: string;
+    id: string;
+    input: unknown[];
+    headers?: Record<string, string>;
+    baseUrl?: string;
+    contextWindow?: number;
+  };
   error: null;
   authStorage: { setRuntimeApiKey: Mock<(provider?: string, apiKey?: string) => void> };
   modelRegistry: Record<string, never>;
@@ -92,6 +100,37 @@ export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unkn
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
+export const createAgentSessionMock = vi.fn();
+
+function createMockAgentSession() {
+  const session = {
+    sessionId: "session-1",
+    messages: sessionMessages.map((message) =>
+      typeof structuredClone === "function"
+        ? structuredClone(message)
+        : JSON.parse(JSON.stringify(message)),
+    ),
+    agent: {
+      streamFn: vi.fn(),
+      transport: "sse",
+      state: {
+        get messages() {
+          return session.messages;
+        },
+        set messages(messages: unknown[]) {
+          session.messages = [...(messages as typeof session.messages)];
+        },
+      },
+    },
+    compact: vi.fn(async () => {
+      session.messages.splice(1);
+      return await sessionCompactImpl();
+    }),
+    abortCompaction: sessionAbortCompactionMock,
+    dispose: vi.fn(),
+  };
+  return { session };
+}
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -182,6 +221,8 @@ export function resetCompactHooksHarnessMocks(): void {
     tokensBefore: 120,
     details: { ok: true },
   });
+  createAgentSessionMock.mockReset();
+  createAgentSessionMock.mockImplementation(async () => createMockAgentSession());
 
   triggerInternalHook.mockReset();
   resetCompactSessionStateMocks();
@@ -232,38 +273,10 @@ export async function loadCompactHooksHarness(): Promise<{
   });
 
   vi.doMock("@mariozechner/pi-coding-agent", () => ({
-    AuthStorage: function AuthStorage() {},
-    ModelRegistry: function ModelRegistry() {},
-    createAgentSession: vi.fn(async () => {
-      const session = {
-        sessionId: "session-1",
-        messages: sessionMessages.map((message) =>
-          typeof structuredClone === "function"
-            ? structuredClone(message)
-            : JSON.parse(JSON.stringify(message)),
-        ),
-        agent: {
-          streamFn: vi.fn(),
-          transport: "sse",
-          state: {
-            get messages() {
-              return session.messages;
-            },
-            set messages(messages: unknown[]) {
-              session.messages = [...(messages as typeof session.messages)];
-            },
-          },
-        },
-        compact: vi.fn(async () => {
-          session.messages.splice(1);
-          return await sessionCompactImpl();
-        }),
-        abortCompaction: sessionAbortCompactionMock,
-        dispose: vi.fn(),
-      };
-      return { session };
-    }),
-    DefaultResourceLoader: function DefaultResourceLoader() {},
+    AuthStorage: class AuthStorage {},
+    ModelRegistry: class ModelRegistry {},
+    createAgentSession: createAgentSessionMock,
+    DefaultResourceLoader: class DefaultResourceLoader {},
     SessionManager: {
       open: vi.fn(() => ({})),
     },

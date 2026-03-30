@@ -77,6 +77,7 @@ import {
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
+import { applyProviderAttributionHeadersToModel } from "../provider-attribution.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -488,18 +489,20 @@ export async function compactEmbeddedPiSessionDirect(
       modelContextWindow: runtimeModelWithContext.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
-    const effectiveModel = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(
-        ctxInfo.tokens < (runtimeModelWithContext.contextWindow ?? Infinity)
-          ? { ...runtimeModelWithContext, contextWindow: ctxInfo.tokens }
-          : runtimeModelWithContext,
-        apiKeyInfo,
+    const effectiveModel = applyProviderAttributionHeadersToModel(
+      applyAuthHeaderOverride(
+        applyLocalNoAuthHeaderOverride(
+          ctxInfo.tokens < (runtimeModelWithContext.contextWindow ?? Infinity)
+            ? { ...runtimeModelWithContext, contextWindow: ctxInfo.tokens }
+            : runtimeModelWithContext,
+          apiKeyInfo,
+        ),
+        // Skip header injection when runtime auth exchange produced a
+        // different credential — the SDK reads the exchanged token from
+        // authStorage automatically.
+        hasRuntimeAuthExchange ? null : apiKeyInfo,
+        params.config,
       ),
-      // Skip header injection when runtime auth exchange produced a
-      // different credential — the SDK reads the exchanged token from
-      // authStorage automatically.
-      hasRuntimeAuthExchange ? null : apiKeyInfo,
-      params.config,
     );
 
     const runAbortController = new AbortController();

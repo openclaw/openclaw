@@ -99,6 +99,7 @@ async function stubPdfToolInfra(
     provider?: string;
     input?: string[];
     modelFound?: boolean;
+    headers?: Record<string, string>;
   },
 ) {
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
@@ -114,6 +115,7 @@ async function stubPdfToolInfra(
             provider: params?.provider ?? "anthropic",
             maxTokens: 8192,
             input: params?.input ?? ["text", "document"],
+            headers: params?.headers,
           }) as never;
   vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({ find } as never);
 
@@ -278,6 +280,53 @@ describe("createPdfTool", () => {
       expect(result).toMatchObject({
         content: [{ type: "text", text: "fallback summary" }],
         details: { native: false, model: OPENAI_PDF_MODEL },
+      });
+    });
+  });
+
+  it("applies OpenRouter attribution headers for extraction fallback requests", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "openrouter",
+        input: ["text"],
+        headers: {
+          "X-Custom": "1",
+        },
+      });
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "openrouter summary" }],
+      } as never);
+
+      const cfg = withPdfModel("openrouter/anthropic/claude-sonnet-4-5");
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "openrouter summary" }],
+        details: { native: false, model: "openrouter/anthropic/claude-sonnet-4-5" },
+      });
+      const [effectiveModel] = completeMock.mock.calls[0] ?? [];
+      expect(effectiveModel).toMatchObject({
+        provider: "openrouter",
+        headers: {
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-OpenRouter-Title": "OpenClaw",
+          "X-OpenRouter-Categories": "cli-agent",
+          "X-Custom": "1",
+        },
       });
     });
   });

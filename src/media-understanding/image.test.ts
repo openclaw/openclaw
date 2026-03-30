@@ -229,6 +229,55 @@ describe("describeImageWithModel", () => {
     expect(context?.messages?.[0]?.content).toHaveLength(1);
   });
 
+  it("applies OpenRouter attribution headers to direct image completion models", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4-5",
+        input: ["text", "image"],
+        headers: {
+          "X-Custom": "1",
+        },
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "openrouter ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "openrouter ok",
+      model: "anthropic/claude-sonnet-4-5",
+    });
+    const [effectiveModel] = completeMock.mock.calls[0] ?? [];
+    expect(effectiveModel).toMatchObject({
+      provider: "openrouter",
+      headers: {
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+        "X-OpenRouter-Categories": "cli-agent",
+        "X-Custom": "1",
+      },
+    });
+  });
+
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");

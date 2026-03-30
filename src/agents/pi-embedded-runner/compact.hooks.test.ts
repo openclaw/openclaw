@@ -4,6 +4,7 @@ import {
   applyExtraParamsToAgentMock,
   contextEngineCompactMock,
   createOpenClawCodingToolsMock,
+  createAgentSessionMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
@@ -646,6 +647,44 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         }),
         agentDir: "/tmp",
         workspaceDir: "/tmp",
+      }),
+    );
+  });
+
+  it("applies OpenRouter attribution headers before creating the compaction session", async () => {
+    resolveModelMock.mockReturnValue({
+      model: {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "anthropic/claude-sonnet-4-5",
+        input: ["text"],
+        headers: { "X-Custom": "1" },
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(createAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "openrouter",
+          headers: {
+            "HTTP-Referer": "https://openclaw.ai",
+            "X-OpenRouter-Title": "OpenClaw",
+            "X-OpenRouter-Categories": "cli-agent",
+            "X-Custom": "1",
+          },
+        }),
       }),
     );
   });

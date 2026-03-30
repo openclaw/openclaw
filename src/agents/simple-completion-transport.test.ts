@@ -158,4 +158,78 @@ describe("prepareModelForSimpleCompletion", () => {
       api: "openclaw-openai-responses-transport",
     });
   });
+
+  it("applies OpenRouter attribution headers to direct simple completion models", () => {
+    const model: Model<"openai-completions"> = {
+      id: "anthropic/claude-sonnet-4-5",
+      name: "Claude Sonnet",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      headers: {
+        "X-Custom": "1",
+      },
+    };
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(result).toEqual({
+      ...model,
+      headers: {
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+        "X-OpenRouter-Categories": "cli-agent",
+        "X-Custom": "1",
+      },
+    });
+  });
+
+  it("keeps OpenRouter attribution headers when the simple transport alias is used", () => {
+    const model: Model<"openai-completions"> = {
+      id: "anthropic/claude-sonnet-4-5",
+      name: "Claude Sonnet",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      headers: {
+        "X-Custom": "1",
+      },
+    };
+
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    buildTransportAwareSimpleStreamFn.mockReturnValueOnce("transport-stream");
+    prepareTransportAwareSimpleModel.mockReturnValueOnce({
+      ...model,
+      api: "openclaw-openai-completions-transport",
+    });
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(prepareTransportAwareSimpleModel).toHaveBeenCalledWith(model);
+    expect(buildTransportAwareSimpleStreamFn).toHaveBeenCalledWith(model);
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+      "openclaw-openai-completions-transport",
+      "transport-stream",
+    );
+    expect(result).toEqual({
+      ...model,
+      api: "openclaw-openai-completions-transport",
+      headers: {
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+        "X-OpenRouter-Categories": "cli-agent",
+        "X-Custom": "1",
+      },
+    });
+  });
 });

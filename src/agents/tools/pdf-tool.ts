@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { applyProviderAttributionHeadersToModel } from "../provider-attribution.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -144,6 +145,7 @@ async function runPdfPrompt(params: {
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
       const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const completionModel = applyProviderAttributionHeadersToModel(model);
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,
@@ -201,7 +203,7 @@ async function runPdfPrompt(params: {
           images: [],
         }));
         const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
-        const message = await complete(model, context, {
+        const message = await complete(completionModel, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
         });
@@ -210,7 +212,7 @@ async function runPdfPrompt(params: {
       }
 
       const context = buildPdfExtractionContext(params.prompt, extractions);
-      const message = await complete(model, context, {
+      const message = await complete(completionModel, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
       });
