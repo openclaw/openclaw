@@ -221,6 +221,14 @@ export function resolveCanonicalIdentityFromLinks(params: {
   return null;
 }
 
+function resolveLinkedPeerId(params: {
+  identityLinks?: Record<string, string[]>;
+  channel: string;
+  peerId: string;
+}): string | null {
+  return resolveCanonicalIdentityFromLinks(params);
+}
+
 export function buildGroupHistoryKey(params: {
   channel: string;
   accountId?: string | null;
