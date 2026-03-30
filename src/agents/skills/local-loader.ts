@@ -54,7 +54,8 @@ function loadSingleSkillDirectory(params: {
     return null;
   }
 
-  const name = frontmatter.name?.trim();
+  const fallbackName = path.basename(params.skillDir).trim();
+  const name = frontmatter.name?.trim() || fallbackName;
   const description = frontmatter.description?.trim();
   if (!name || !description) {
     return null;

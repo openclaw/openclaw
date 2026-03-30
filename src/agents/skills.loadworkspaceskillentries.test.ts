@@ -130,6 +130,24 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
   });
 
+  it("falls back to the skill directory name when frontmatter omits name", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const skillDir = path.join(workspaceDir, "skills", "fallback-name");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ["---", "description: Skill without explicit name", "---", "", "# Fallback"].join("\n"),
+      "utf8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
+  });
+
   it.runIf(process.platform !== "win32")(
     "skips workspace skill directories that resolve outside the workspace root",
     async () => {
