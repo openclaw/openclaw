@@ -8,9 +8,10 @@ import {
   ensureTaskRegistryReady,
   getTaskById,
   listTaskRecords,
+  markTaskLostById,
   maybeDeliverTaskTerminalUpdate,
   resolveTaskForLookupToken,
-  updateTaskRecordById,
+  setTaskCleanupAfterById,
 } from "./task-registry.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -108,24 +109,32 @@ function resolveCleanupAfter(task: TaskRecord): number {
 }
 
 function markTaskLost(task: TaskRecord, now: number): TaskRecord {
+  const cleanupAfter = task.cleanupAfter ?? projectTaskLost(task, now).cleanupAfter;
   const updated =
-    updateTaskRecordById(task.taskId, {
-      status: "lost",
+    markTaskLostById({
+      taskId: task.taskId,
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
       error: task.error ?? "backing session missing",
+      cleanupAfter,
     }) ?? task;
   void maybeDeliverTaskTerminalUpdate(updated.taskId);
   return updated;
 }
 
 function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
-  return {
+  const projected: TaskRecord = {
     ...task,
     status: "lost",
     endedAt: task.endedAt ?? now,
     lastEventAt: now,
     error: task.error ?? "backing session missing",
+  };
+  return {
+    ...projected,
+    ...(typeof projected.cleanupAfter === "number"
+      ? {}
+      : { cleanupAfter: resolveCleanupAfter(projected) }),
   };
 }
 
@@ -199,7 +208,8 @@ export function runTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
     }
     if (
       shouldStampCleanupAfter(task) &&
-      updateTaskRecordById(task.taskId, {
+      setTaskCleanupAfterById({
+        taskId: task.taskId,
         cleanupAfter: resolveCleanupAfter(task),
       })
     ) {

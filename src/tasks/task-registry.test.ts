@@ -17,8 +17,9 @@ import {
   maybeDeliverTaskTerminalUpdate,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  setTaskProgressById,
+  setTaskTimingById,
   updateTaskNotifyPolicyById,
-  updateTaskRecordById,
   updateTaskStateByRunId,
 } from "./task-registry.js";
 import {
@@ -440,7 +441,8 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      updateTaskRecordById(findTaskByRunId("run-detail-leak")!.taskId, {
+      setTaskProgressById({
+        taskId: findTaskByRunId("run-detail-leak")!.taskId,
         progressSummary:
           "I am loading the local session context and checking helper command availability before writing the file.",
       });
@@ -800,7 +802,8 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
       });
-      updateTaskRecordById(task.taskId, {
+      setTaskTimingById({
+        taskId: task.taskId,
         lastEventAt: Date.now() - 10 * 60_000,
       });
 
@@ -814,6 +817,39 @@ describe("task-registry", () => {
         status: "running",
       });
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    });
+  });
+
+  it("marks orphaned tasks lost with cleanupAfter in a single maintenance pass", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:acp:missing",
+        runId: "run-lost-maintenance",
+        task: "Missing child",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      expect(runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "lost",
+        error: "backing session missing",
+      });
+      expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
     });
   });
 
@@ -832,7 +868,8 @@ describe("task-registry", () => {
         deliveryStatus: "not_applicable",
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
       });
-      updateTaskRecordById(task.taskId, {
+      setTaskTimingById({
+        taskId: task.taskId,
         endedAt: Date.now() - 8 * 24 * 60 * 60_000,
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
