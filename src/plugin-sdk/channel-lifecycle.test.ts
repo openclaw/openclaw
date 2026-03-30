@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAccountStatusSink,
   keepHttpServerTaskAlive,
@@ -31,6 +31,14 @@ async function expectTaskPending(task: Promise<unknown>) {
 }
 
 describe("plugin-sdk channel lifecycle helpers", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("binds account id onto status patches", () => {
     const setStatus = vi.fn();
     const statusSink = createAccountStatusSink({
