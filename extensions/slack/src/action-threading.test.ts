@@ -1,10 +1,16 @@
-import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
 
+type SlackThreadingToolContext = {
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  replyToMode?: "off" | "first" | "all";
+  hasRepliedRef?: { value: boolean };
+};
+
 function createToolContext(
-  overrides: Partial<ChannelThreadingToolContext> = {},
-): ChannelThreadingToolContext {
+  overrides: Partial<SlackThreadingToolContext> = {},
+): SlackThreadingToolContext {
   return {
     currentChannelId: "C123",
     currentThreadTs: "thread-1",
