@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
 import {
+  clearSessionStoreCacheForTest,
   getSessionStoreLockQueueSizeForTest,
   withSessionStoreLockForTest,
 } from "../config/sessions/store.js";
+import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 const acquireSessionWriteLockMock = vi.hoisted(() =>
@@ -31,15 +34,19 @@ function createDeferred<T>() {
 }
 
 describe("cleanupSessionStateForTest", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useRealTimers();
-    await cleanupSessionStateForTest();
+    clearSessionStoreCacheForTest();
+    resetFileLockStateForTest();
+    resetSessionWriteLockStateForTest();
     acquireSessionWriteLockMock.mockClear();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
-    await cleanupSessionStateForTest();
+    clearSessionStoreCacheForTest();
+    resetFileLockStateForTest();
+    resetSessionWriteLockStateForTest();
     vi.restoreAllMocks();
   });
 
