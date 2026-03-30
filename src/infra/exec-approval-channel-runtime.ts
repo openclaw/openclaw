@@ -68,6 +68,13 @@ export function createExecApprovalChannelRuntime<
   let gatewayClient: GatewayClient | null = null;
   let started = false;
 
+  const spawn = (label: string, promise: Promise<void>): void => {
+    void promise.catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`${label}: ${message}`);
+    });
+  };
+
   const clearPendingEntry = (approvalId: string): PendingApprovalEntry<TPending, TRequest> | null => {
     const entry = pending.get(approvalId);
     if (!entry) {
@@ -135,19 +142,19 @@ export function createExecApprovalChannelRuntime<
 
   const handleGatewayEvent = (evt: EventFrame): void => {
     if (evt.event === "exec.approval.requested" && eventKinds.has("exec")) {
-      void handleRequested(evt.payload as TRequest);
+      spawn("error handling approval request", handleRequested(evt.payload as TRequest));
       return;
     }
     if (evt.event === "plugin.approval.requested" && eventKinds.has("plugin")) {
-      void handleRequested(evt.payload as TRequest);
+      spawn("error handling approval request", handleRequested(evt.payload as TRequest));
       return;
     }
     if (evt.event === "exec.approval.resolved" && eventKinds.has("exec")) {
-      void handleResolved(evt.payload as TResolved);
+      spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
       return;
     }
     if (evt.event === "plugin.approval.resolved" && eventKinds.has("plugin")) {
-      void handleResolved(evt.payload as TResolved);
+      spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
     }
   };
 
@@ -156,14 +163,13 @@ export function createExecApprovalChannelRuntime<
       if (started) {
         return;
       }
-      started = true;
 
       if (!adapter.isConfigured()) {
         log.debug("disabled");
         return;
       }
 
-      gatewayClient = await createOperatorApprovalsGatewayClient({
+      const client = await createOperatorApprovalsGatewayClient({
         config: adapter.cfg,
         gatewayUrl: adapter.gatewayUrl,
         clientDisplayName: adapter.clientDisplayName,
@@ -179,7 +185,9 @@ export function createExecApprovalChannelRuntime<
         },
       });
 
-      gatewayClient.start();
+      client.start();
+      gatewayClient = client;
+      started = true;
     },
 
     async stop(): Promise<void> {

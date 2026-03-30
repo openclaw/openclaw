@@ -4,9 +4,17 @@ const mockGatewayClientStarts = vi.hoisted(() => vi.fn());
 const mockGatewayClientStops = vi.hoisted(() => vi.fn());
 const mockGatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const mockCreateOperatorApprovalsGatewayClient = vi.hoisted(() => vi.fn());
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+}));
 
 vi.mock("../gateway/operator-approvals-client.js", () => ({
   createOperatorApprovalsGatewayClient: mockCreateOperatorApprovalsGatewayClient,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => loggerMocks,
 }));
 
 let createExecApprovalChannelRuntime: typeof import("./exec-approval-channel-runtime.js").createExecApprovalChannelRuntime;
@@ -16,6 +24,8 @@ beforeEach(() => {
   mockGatewayClientStops.mockReset();
   mockGatewayClientRequests.mockReset();
   mockGatewayClientRequests.mockResolvedValue({ ok: true });
+  loggerMocks.debug.mockReset();
+  loggerMocks.error.mockReset();
   mockCreateOperatorApprovalsGatewayClient.mockReset().mockImplementation(async () => ({
     start: mockGatewayClientStarts,
     stop: mockGatewayClientStops,
@@ -124,6 +134,71 @@ describe("createExecApprovalChannelRuntime", () => {
     expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "abc",
       decision: "deny",
+    });
+  });
+
+  it("can retry start after gateway client creation fails", async () => {
+    const boom = new Error("boom");
+    mockCreateOperatorApprovalsGatewayClient
+      .mockRejectedValueOnce(boom)
+      .mockResolvedValueOnce({
+        start: mockGatewayClientStarts,
+        stop: mockGatewayClientStops,
+        request: mockGatewayClientRequests,
+      });
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    await expect(runtime.start()).rejects.toThrow("boom");
+    await runtime.start();
+
+    expect(mockCreateOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(2);
+    expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs async request handling failures from gateway events", async () => {
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/plugin-approvals",
+      clientDisplayName: "Test Plugin Approvals",
+      cfg: {} as never,
+      eventKinds: ["plugin"],
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => {
+        throw new Error("deliver failed");
+      },
+      finalizeResolved: async () => undefined,
+    });
+
+    await runtime.start();
+    const clientParams = mockCreateOperatorApprovalsGatewayClient.mock.calls[0]?.[0] as
+      | { onEvent?: (evt: { event: string; payload: unknown }) => void }
+      | undefined;
+
+    clientParams?.onEvent?.({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "plugin:abc",
+        request: {
+          title: "Plugin approval",
+          description: "Let plugin proceed",
+        },
+        createdAtMs: 1000,
+        expiresAtMs: 2000,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(loggerMocks.error).toHaveBeenCalledWith(
+        "error handling approval request: deliver failed",
+      );
     });
   });
 
