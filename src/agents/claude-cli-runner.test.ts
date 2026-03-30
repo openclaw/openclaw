@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  setupClaudeCliRunnerTestModule,
-  supervisorSpawnMock,
-} from "./cli-runner.test-support.js";
+import { setupClaudeCliRunnerTestModule, supervisorSpawnMock } from "./cli-runner.test-support.js";
 
 function createDeferred<T>() {
   let resolve: (value: T) => void = () => {};
