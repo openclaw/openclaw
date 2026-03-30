@@ -134,7 +134,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       env,
       safeBins,
     });
-    expect(persisted).not.toContain(touch);
+    expect(persisted).toEqual([]);
 
     const second = evaluateShellAllowlist({
       command: expandedCommand,
@@ -706,7 +706,7 @@ $0 \\"$1\\"" touch {marker}`,
       return;
     }
     const dir = makeTempDir();
-    makeExecutable(dir, "env");
+    const envPath = makeExecutable(dir, "env");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
 
@@ -720,7 +720,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const second = evaluateShellAllowlist({
       command: `sh -lc '$0 "$@"' env BASH_ENV=/tmp/payload.sh bash -lc 'id > /tmp/pwned'`,
-      allowlist: persisted.map((pattern) => ({ pattern })),
+      allowlist: [{ pattern: envPath }],
       safeBins,
       cwd: dir,
       env,
@@ -734,7 +734,7 @@ $0 \\"$1\\"" touch {marker}`,
       return;
     }
     const dir = makeTempDir();
-    makeExecutable(dir, "bash");
+    const bashPath = makeExecutable(dir, "bash");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
 
@@ -748,7 +748,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const second = evaluateShellAllowlist({
       command: `sh -lc '$0 "$@"' bash -lc 'id > /tmp/pwned'`,
-      allowlist: persisted.map((pattern) => ({ pattern })),
+      allowlist: [{ pattern: bashPath }],
       safeBins,
       cwd: dir,
       env,
@@ -762,7 +762,7 @@ $0 \\"$1\\"" touch {marker}`,
       return;
     }
     const dir = makeTempDir();
-    makeExecutable(dir, "xargs");
+    const xargsPath = makeExecutable(dir, "xargs");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
 
@@ -776,7 +776,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const second = evaluateShellAllowlist({
       command: `sh -lc '$0 "$@"' xargs sh -lc 'id > /tmp/pwned'`,
-      allowlist: persisted.map((pattern) => ({ pattern })),
+      allowlist: [{ pattern: xargsPath }],
       safeBins,
       cwd: dir,
       env,
