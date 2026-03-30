@@ -199,6 +199,53 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(respond).toHaveBeenCalledWith([]);
   });
 
+  it("returns no autocomplete choices for group DMs outside dm.groupChannels", async () => {
+    const command = createNativeCommand("think", {
+      cfg: {
+        channels: {
+          discord: {
+            dm: {
+              enabled: true,
+              policy: "open",
+              groupEnabled: true,
+              groupChannels: ["allowed-group"],
+            },
+          },
+        },
+      } as ReturnType<typeof loadConfig>,
+    });
+    const level = requireOption(command, "level");
+    const autocomplete = readAutocomplete(level);
+    if (typeof autocomplete !== "function") {
+      throw new Error("think level option did not wire autocomplete");
+    }
+    const respond = vi.fn(async (_choices: unknown[]) => undefined);
+
+    await autocomplete({
+      user: {
+        id: "allowed-user",
+        username: "allowed",
+        globalName: "Allowed",
+      },
+      channel: {
+        type: ChannelType.GroupDM,
+        id: "blocked-group",
+        name: "Blocked Group",
+      },
+      guild: undefined,
+      rawData: {
+        member: { roles: [] },
+      },
+      options: {
+        getFocused: () => ({ value: "xh" }),
+      },
+      respond,
+      client: {},
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith([]);
+  });
+
   it("truncates Discord command and option descriptions to Discord's limit", () => {
     const longDescription = "x".repeat(140);
     const cfg = {} as ReturnType<typeof loadConfig>;
