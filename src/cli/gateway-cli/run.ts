@@ -436,17 +436,35 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }),
     });
 
-  try {
-    const supervisor = detectRespawnSupervisor(process.env);
+  const supervisor = detectRespawnSupervisor(process.env);
+    const MAX_CONSECUTIVE_STARTUP_FAILURES = 3;
+    let consecutiveFailures = 0;
     while (true) {
       try {
         await startLoop();
+        consecutiveFailures = 0;
         break;
       } catch (err) {
         const isGatewayAlreadyRunning =
           err instanceof GatewayLockError &&
           typeof err.message === "string" &&
           err.message.includes("gateway already running");
+        if (!isGatewayAlreadyRunning) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_STARTUP_FAILURES) {
+            gatewayLog.error(
+              `Gateway failed to start ${consecutiveFailures} consecutive times. This may be caused by an invalid config or unresolvable startup error.\n` +
+                `To diagnose: run \`${formatCliCommand("openclaw gateway start --verbose")}\` or \`${formatCliCommand("openclaw doctor")}\`.\n` +
+                `To fix config: edit ~/.openclaw/openclaw.json to remove or correct the invalid key.\n` +
+                `Stopping restart loop to prevent resource exhaustion.`,
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
+          gatewayLog.warn(
+            `Gateway startup failed (attempt ${consecutiveFailures}/${MAX_CONSECUTIVE_STARTUP_FAILURES}): ${String(err).split("\n")[0]}`,
+          );
+        }
         if (!supervisor || !isGatewayAlreadyRunning) {
           throw err;
         }
