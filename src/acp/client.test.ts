@@ -4,11 +4,19 @@ import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
   resolveAcpClientSpawnInvocation,
   resolvePermissionRequest,
+  shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client.js";
-import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
+import {
+  extractAttachmentsFromPrompt,
+  extractTextFromPrompt,
+  formatToolTitle,
+} from "./event-mapper.js";
+
+const envVar = (...parts: string[]) => parts.join("_");
 
 function makePermissionRequest(
   overrides: Partial<RequestPermissionRequest> = {},
@@ -59,6 +67,168 @@ describe("resolveAcpClientSpawnEnv", () => {
       OPENCLAW_SHELL: "wrong",
     });
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+
+  it("strips skill-injected env keys when stripKeys is provided", () => {
+    const openAiApiKeyEnv = envVar("OPENAI", "API", "KEY");
+    const elevenLabsApiKeyEnv = envVar("ELEVENLABS", "API", "KEY");
+    const anthropicApiKeyEnv = envVar("ANTHROPIC", "API", "KEY");
+    const stripKeys = new Set([openAiApiKeyEnv, elevenLabsApiKeyEnv]);
+    const env = resolveAcpClientSpawnEnv(
+      {
+        PATH: "/usr/bin",
+        [openAiApiKeyEnv]: "openai-test-value", // pragma: allowlist secret
+        [elevenLabsApiKeyEnv]: "elevenlabs-test-value", // pragma: allowlist secret
+        [anthropicApiKeyEnv]: "anthropic-test-value", // pragma: allowlist secret
+      },
+      { stripKeys },
+    );
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-test-value");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ELEVENLABS_API_KEY).toBeUndefined();
+  });
+
+  it("does not modify the original baseEnv when stripping keys", () => {
+    const openAiApiKeyEnv = envVar("OPENAI", "API", "KEY");
+    const baseEnv: NodeJS.ProcessEnv = {
+      [openAiApiKeyEnv]: "openai-original", // pragma: allowlist secret
+      PATH: "/usr/bin",
+    };
+    const stripKeys = new Set([openAiApiKeyEnv]);
+    resolveAcpClientSpawnEnv(baseEnv, { stripKeys });
+
+    expect(baseEnv.OPENAI_API_KEY).toBe("openai-original");
+  });
+
+  it("preserves OPENCLAW_SHELL even when stripKeys contains it", () => {
+    const openAiApiKeyEnv = envVar("OPENAI", "API", "KEY");
+    const env = resolveAcpClientSpawnEnv(
+      {
+        OPENCLAW_SHELL: "skill-overridden",
+        [openAiApiKeyEnv]: "openai-leaked", // pragma: allowlist secret
+      },
+      { stripKeys: new Set(["OPENCLAW_SHELL", openAiApiKeyEnv]) },
+    );
+
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("strips provider auth env vars for the default OpenClaw bridge", () => {
+    const stripKeys = new Set(["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"]);
+    const env = resolveAcpClientSpawnEnv(
+      {
+        OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
+        GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
+        HF_TOKEN: "hf-secret", // pragma: allowlist secret
+        OPENCLAW_API_KEY: "keep-me",
+        PATH: "/usr/bin",
+      },
+      { stripKeys },
+    );
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.HF_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_API_KEY).toBe("keep-me");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+
+  it("strips provider auth env vars case-insensitively", () => {
+    const env = resolveAcpClientSpawnEnv(
+      {
+        OpenAI_Api_Key: "openai-secret", // pragma: allowlist secret
+        Github_Token: "gh-secret", // pragma: allowlist secret
+        OPENCLAW_API_KEY: "keep-me",
+      },
+      { stripKeys: new Set(["OPENAI_API_KEY", "GITHUB_TOKEN"]) },
+    );
+
+    expect(env.OpenAI_Api_Key).toBeUndefined();
+    expect(env.Github_Token).toBeUndefined();
+    expect(env.OPENCLAW_API_KEY).toBe("keep-me");
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+
+  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+    const env = resolveAcpClientSpawnEnv({
+      OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
+      GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
+      HF_TOKEN: "hf-secret", // pragma: allowlist secret
+      OPENCLAW_API_KEY: "keep-me",
+    });
+
+    expect(env.OPENAI_API_KEY).toBe("openai-secret");
+    expect(env.GITHUB_TOKEN).toBe("gh-secret");
+    expect(env.HF_TOKEN).toBe("hf-secret");
+    expect(env.OPENCLAW_API_KEY).toBe("keep-me");
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+});
+
+describe("shouldStripProviderAuthEnvVarsForAcpServer", () => {
+  it("strips provider auth env vars for the default bridge", () => {
+    expect(shouldStripProviderAuthEnvVarsForAcpServer()).toBe(true);
+    expect(
+      shouldStripProviderAuthEnvVarsForAcpServer({
+        serverCommand: "openclaw",
+        serverArgs: ["acp"],
+        defaultServerCommand: "openclaw",
+        defaultServerArgs: ["acp"],
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+    expect(
+      shouldStripProviderAuthEnvVarsForAcpServer({
+        serverCommand: "custom-acp-server",
+        serverArgs: ["serve"],
+        defaultServerCommand: "openclaw",
+        defaultServerArgs: ["acp"],
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves provider auth env vars when an explicit override uses the default executable with different args", () => {
+    expect(
+      shouldStripProviderAuthEnvVarsForAcpServer({
+        serverCommand: process.execPath,
+        serverArgs: ["custom-entry.js"],
+        defaultServerCommand: process.execPath,
+        defaultServerArgs: ["dist/entry.js", "acp"],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("buildAcpClientStripKeys", () => {
+  it("always includes active skill env keys", () => {
+    const stripKeys = buildAcpClientStripKeys({
+      stripProviderAuthEnvVars: false,
+      activeSkillEnvKeys: ["SKILL_SECRET", "OPENAI_API_KEY"],
+    });
+
+    expect(stripKeys.has("SKILL_SECRET")).toBe(true);
+    expect(stripKeys.has("OPENAI_API_KEY")).toBe(true);
+    expect(stripKeys.has("GITHUB_TOKEN")).toBe(false);
+  });
+
+  it("adds provider auth env vars for the default bridge", () => {
+    const stripKeys = buildAcpClientStripKeys({
+      stripProviderAuthEnvVars: true,
+      activeSkillEnvKeys: ["SKILL_SECRET"],
+    });
+
+    expect(stripKeys.has("SKILL_SECRET")).toBe(true);
+    expect(stripKeys.has("OPENAI_API_KEY")).toBe(true);
+    expect(stripKeys.has("GITHUB_TOKEN")).toBe(true);
+    expect(stripKeys.has("HF_TOKEN")).toBe(true);
+    expect(stripKeys.has("OPENCLAW_API_KEY")).toBe(false);
   });
 });
 
@@ -198,6 +368,47 @@ describe("resolvePermissionRequest", () => {
     );
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
     expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("auto-approves safe tools when rawInput is the only identity hint", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-raw-only",
+          title: "Searching files",
+          status: "pending",
+          rawInput: {
+            name: "search",
+            query: "foo",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("prompts when raw input spoofs a safe tool name for a dangerous title", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-exec-spoof",
+          title: "exec: cat /etc/passwd",
+          status: "pending",
+          rawInput: {
+            command: "cat /etc/passwd",
+            name: "search",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith(undefined, "exec: cat /etc/passwd");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
 
   it("prompts for read outside cwd scope", async () => {
@@ -418,6 +629,27 @@ describe("resolvePermissionRequest", () => {
     expect(prompt).not.toHaveBeenCalled();
     expect(res).toEqual({ outcome: { outcome: "cancelled" } });
   });
+
+  it("sanitizes tool titles before logging and prompting", async () => {
+    const prompt = vi.fn(async () => false);
+    const log = vi.fn();
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-ansi",
+          title: 'exec: \u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext',
+          status: "pending",
+        },
+      }),
+      { prompt, log },
+    );
+
+    expect(prompt).toHaveBeenCalledWith("exec", 'exec: [permission] Allow "safe"? (y/N) \\nnext');
+    expect(log).toHaveBeenCalledWith(
+      '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [other]',
+    );
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
 });
 
 describe("acp event mapper", () => {
@@ -542,5 +774,15 @@ describe("acp event mapper", () => {
         content: "abc",
       },
     ]);
+  });
+
+  it("escapes inline control characters in tool titles", () => {
+    const title = formatToolTitle("exec", {
+      command: '\u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext',
+    });
+
+    expect(title).toBe(
+      'exec: command: \\x1b[2K\\x1b[1A\\x1b[2K[permission] Allow "safe"? (y/N) \\nnext',
+    );
   });
 });

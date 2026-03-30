@@ -1,11 +1,17 @@
-import { type IncomingMessage } from "node:http";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { type IncomingMessage, type ServerResponse } from "node:http";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
+import { setMattermostRuntime } from "../runtime.js";
+import { resolveMattermostAccount } from "./accounts.js";
+import type { MattermostClient, MattermostPost } from "./client.js";
 import {
   buildButtonAttachments,
+  computeInteractionCallbackUrl,
+  createMattermostInteractionHandler,
   generateInteractionToken,
   getInteractionCallbackUrl,
   getInteractionSecret,
-  isLocalhostRequest,
+  resolveInteractionCallbackPath,
   resolveInteractionCallbackUrl,
   setInteractionCallbackUrl,
   setInteractionSecret,
@@ -104,6 +110,53 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
     expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
   });
 
+  it("verifies nested context regardless of nested key order", () => {
+    const originalContext = {
+      action_id: "nested",
+      payload: {
+        model: "gpt-5",
+        meta: {
+          provider: "openai",
+          page: 2,
+        },
+      },
+    };
+    const token = generateInteractionToken(originalContext);
+
+    const reorderedContext = {
+      payload: {
+        meta: {
+          page: 2,
+          provider: "openai",
+        },
+        model: "gpt-5",
+      },
+      action_id: "nested",
+    };
+
+    expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
+  });
+
+  it("rejects nested context tampering", () => {
+    const originalContext = {
+      action_id: "nested",
+      payload: {
+        provider: "openai",
+        model: "gpt-5",
+      },
+    };
+    const token = generateInteractionToken(originalContext);
+    const tamperedContext = {
+      action_id: "nested",
+      payload: {
+        provider: "anthropic",
+        model: "gpt-5",
+      },
+    };
+
+    expect(verifyInteractionToken(tamperedContext, token)).toBe(false);
+  });
+
   it("scopes tokens per account when account secrets differ", () => {
     setInteractionSecret("acct-a", "bot-token-a");
     setInteractionSecret("acct-b", "bot-token-b");
@@ -132,7 +185,9 @@ describe("callback URL registry", () => {
 
 describe("resolveInteractionCallbackUrl", () => {
   afterEach(() => {
-    setInteractionCallbackUrl("resolve-test", "");
+    for (const accountId of ["cached", "default", "acct", "myaccount"]) {
+      setInteractionCallbackUrl(accountId, "");
+    }
   });
 
   it("prefers cached URL from registry", () => {
@@ -140,19 +195,99 @@ describe("resolveInteractionCallbackUrl", () => {
     expect(resolveInteractionCallbackUrl("cached")).toBe("http://cached:1234/path");
   });
 
-  it("falls back to computed URL from gateway port config", () => {
-    const url = resolveInteractionCallbackUrl("default", { gateway: { port: 9999 } });
+  it("recomputes from config when bypassing the cache explicitly", () => {
+    setInteractionCallbackUrl("acct", "http://cached:1234/path");
+    const url = computeInteractionCallbackUrl("acct", {
+      gateway: { port: 9999, customBindHost: "gateway.internal" },
+    });
+    expect(url).toBe("http://gateway.internal:9999/mattermost/interactions/acct");
+  });
+
+  it("uses interactions.callbackBaseUrl when configured", () => {
+    const url = resolveInteractionCallbackUrl("default", {
+      channels: {
+        mattermost: {
+          interactions: {
+            callbackBaseUrl: "https://gateway.example.com/openclaw",
+          },
+        },
+      },
+    });
+    expect(url).toBe("https://gateway.example.com/openclaw/mattermost/interactions/default");
+  });
+
+  it("trims trailing slashes from callbackBaseUrl", () => {
+    const url = resolveInteractionCallbackUrl("acct", {
+      channels: {
+        mattermost: {
+          interactions: {
+            callbackBaseUrl: "https://gateway.example.com/root///",
+          },
+        },
+      },
+    });
+    expect(url).toBe("https://gateway.example.com/root/mattermost/interactions/acct");
+  });
+
+  it("uses merged per-account interactions.callbackBaseUrl", () => {
+    const cfg = {
+      gateway: { port: 9999 },
+      channels: {
+        mattermost: {
+          accounts: {
+            acct: {
+              botToken: "bot-token",
+              baseUrl: "https://chat.example.com",
+              interactions: {
+                callbackBaseUrl: "https://gateway.example.com/root",
+              },
+            },
+          },
+        },
+      },
+    };
+    const account = resolveMattermostAccount({
+      cfg,
+      accountId: "acct",
+      allowUnresolvedSecretRef: true,
+    });
+    const url = resolveInteractionCallbackUrl(account.accountId, {
+      gateway: cfg.gateway,
+      interactions: account.config.interactions,
+    });
+    expect(url).toBe("https://gateway.example.com/root/mattermost/interactions/acct");
+  });
+
+  it("falls back to gateway.customBindHost when configured", () => {
+    const url = resolveInteractionCallbackUrl("default", {
+      gateway: { port: 9999, customBindHost: "gateway.internal" },
+    });
+    expect(url).toBe("http://gateway.internal:9999/mattermost/interactions/default");
+  });
+
+  it("falls back to localhost when customBindHost is a wildcard bind address", () => {
+    const url = resolveInteractionCallbackUrl("default", {
+      gateway: { port: 9999, customBindHost: "0.0.0.0" },
+    });
     expect(url).toBe("http://localhost:9999/mattermost/interactions/default");
+  });
+
+  it("brackets IPv6 custom bind hosts", () => {
+    const url = resolveInteractionCallbackUrl("acct", {
+      gateway: { port: 9999, customBindHost: "::1" },
+    });
+    expect(url).toBe("http://[::1]:9999/mattermost/interactions/acct");
   });
 
   it("uses default port 18789 when no config provided", () => {
     const url = resolveInteractionCallbackUrl("myaccount");
     expect(url).toBe("http://localhost:18789/mattermost/interactions/myaccount");
   });
+});
 
-  it("uses default port when gateway config has no port", () => {
-    const url = resolveInteractionCallbackUrl("acct", { gateway: {} });
-    expect(url).toBe("http://localhost:18789/mattermost/interactions/acct");
+describe("resolveInteractionCallbackPath", () => {
+  it("builds the per-account callback path", () => {
+    expect(resolveInteractionCallbackPath("acct")).toBe("/mattermost/interactions/acct");
   });
 });
 
@@ -299,37 +434,449 @@ describe("buildButtonAttachments", () => {
   });
 });
 
-// ── isLocalhostRequest ───────────────────────────────────────────────
-
-describe("isLocalhostRequest", () => {
-  function fakeReq(remoteAddress?: string): IncomingMessage {
-    return {
-      socket: { remoteAddress },
-    } as unknown as IncomingMessage;
+describe("createMattermostInteractionHandler", () => {
+  function setInteractionRuntime(
+    enqueueSystemEvent: (
+      text: string,
+      options: { sessionKey?: string | null; sessionId?: string | null; userId?: string | null },
+    ) => boolean = () => true,
+  ) {
+    setMattermostRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent,
+        },
+      }),
+    );
   }
 
-  it("accepts 127.0.0.1", () => {
-    expect(isLocalhostRequest(fakeReq("127.0.0.1"))).toBe(true);
+  function createMattermostClientMock(
+    requestImpl: (path: string, init?: { method?: string }) => Promise<unknown>,
+  ): MattermostClient {
+    return {
+      baseUrl: "https://chat.example.com",
+      apiBaseUrl: "https://chat.example.com/api/v4",
+      token: "bot-token",
+      request: async <T>(path: string, init?: RequestInit) => (await requestImpl(path, init)) as T,
+      fetchImpl: vi.fn<typeof fetch>(),
+    };
+  }
+
+  beforeEach(() => {
+    setInteractionRuntime();
+    setInteractionSecret("acct", "bot-token");
   });
 
-  it("accepts ::1", () => {
-    expect(isLocalhostRequest(fakeReq("::1"))).toBe(true);
+  function createReq(params: {
+    method?: string;
+    body?: unknown;
+    remoteAddress?: string;
+    headers?: Record<string, string>;
+  }): IncomingMessage {
+    const body = params.body === undefined ? "" : JSON.stringify(params.body);
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+
+    const req = {
+      method: params.method ?? "POST",
+      headers: params.headers ?? {},
+      socket: { remoteAddress: params.remoteAddress ?? "203.0.113.10" },
+      on(event: string, handler: (...args: unknown[]) => void) {
+        const existing = listeners.get(event) ?? [];
+        existing.push(handler);
+        listeners.set(event, existing);
+        return this;
+      },
+    } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };
+
+    req.emitTest = (event: string, ...args: unknown[]) => {
+      const handlers = listeners.get(event) ?? [];
+      for (const handler of handlers) {
+        handler(...args);
+      }
+    };
+
+    queueMicrotask(() => {
+      if (body) {
+        req.emitTest("data", Buffer.from(body));
+      }
+      req.emitTest("end");
+    });
+
+    return req;
+  }
+
+  function createRes(): ServerResponse & { headers: Record<string, string>; body: string } {
+    const res = {
+      statusCode: 200,
+      headers: {},
+      body: "",
+      setHeader(name: string, value: string | number | readonly string[]) {
+        res.headers[name] = Array.isArray(value) ? value.join(",") : String(value);
+        return res;
+      },
+      end(
+        chunk?: string | Buffer | Uint8Array,
+        _encoding?: BufferEncoding | (() => void),
+        cb?: () => void,
+      ) {
+        res.body = chunk ? String(chunk) : "";
+        cb?.();
+        return res;
+      },
+    } as ServerResponse & { headers: Record<string, string>; body: string };
+    return res;
+  }
+
+  function createActionContext(actionId = "approve", channelId = "chan-1") {
+    const context = { action_id: actionId, __openclaw_channel_id: channelId };
+    return { context, token: generateInteractionToken(context, "acct") };
+  }
+
+  function createInteractionBody(params: {
+    context: Record<string, unknown>;
+    token: string;
+    channelId?: string;
+    postId?: string;
+    userId?: string;
+    userName?: string;
+  }) {
+    return {
+      user_id: params.userId ?? "user-1",
+      ...(params.userName ? { user_name: params.userName } : {}),
+      channel_id: params.channelId ?? "chan-1",
+      post_id: params.postId ?? "post-1",
+      context: { ...params.context, _token: params.token },
+    };
+  }
+
+  async function runHandler(
+    handler: ReturnType<typeof createMattermostInteractionHandler>,
+    params: {
+      body: unknown;
+      remoteAddress?: string;
+      headers?: Record<string, string>;
+    },
+  ) {
+    const req = createReq({
+      remoteAddress: params.remoteAddress,
+      headers: params.headers,
+      body: params.body,
+    });
+    const res = createRes();
+    await handler(req, res);
+    return res;
+  }
+
+  function expectForbiddenResponse(
+    res: ServerResponse & { body: string },
+    expectedMessage: string,
+  ) {
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain(expectedMessage);
+  }
+
+  function expectSuccessfulApprovalUpdate(
+    res: ServerResponse & { body: string },
+    requestLog?: Array<{ path: string; method?: string }>,
+  ) {
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
+    if (requestLog) {
+      expect(requestLog).toEqual([
+        { path: "/posts/post-1", method: undefined },
+        { path: "/posts/post-1", method: "PUT" },
+      ]);
+    }
+  }
+
+  function createActionPost(params?: {
+    actionId?: string;
+    actionName?: string;
+    channelId?: string;
+    rootId?: string;
+  }): MattermostPost {
+    return {
+      id: "post-1",
+      channel_id: params?.channelId ?? "chan-1",
+      ...(params?.rootId ? { root_id: params.rootId } : {}),
+      message: "Choose",
+      props: {
+        attachments: [
+          {
+            actions: [
+              {
+                id: params?.actionId ?? "approve",
+                name: params?.actionName ?? "Approve",
+              },
+            ],
+          },
+        ],
+      },
+    };
+  }
+
+  function createUnusedInteractionHandler() {
+    return createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () => ({ message: "unused" })),
+      botUserId: "bot",
+      accountId: "acct",
+    });
+  }
+
+  async function runApproveInteraction(params?: {
+    actionName?: string;
+    allowedSourceIps?: string[];
+    trustedProxies?: string[];
+    remoteAddress?: string;
+    headers?: Record<string, string>;
+  }) {
+    const { context, token } = createActionContext();
+    const requestLog: Array<{ path: string; method?: string }> = [];
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        if (init?.method === "PUT") {
+          return { id: "post-1" };
+        }
+        return createActionPost({ actionName: params?.actionName });
+      }),
+      botUserId: "bot",
+      accountId: "acct",
+      allowedSourceIps: params?.allowedSourceIps,
+      trustedProxies: params?.trustedProxies,
+    });
+
+    const res = await runHandler(handler, {
+      remoteAddress: params?.remoteAddress,
+      headers: params?.headers,
+      body: createInteractionBody({ context, token, userName: "alice" }),
+    });
+    return { res, requestLog };
+  }
+
+  async function runInvalidActionRequest(actionId: string) {
+    const { context, token } = createActionContext();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () =>
+        createActionPost({ actionId, actionName: actionId }),
+      ),
+      botUserId: "bot",
+      accountId: "acct",
+    });
+
+    return await runHandler(handler, {
+      body: createInteractionBody({ context, token }),
+    });
+  }
+
+  it("accepts callback requests from an allowlisted source IP", async () => {
+    const { res, requestLog } = await runApproveInteraction({
+      allowedSourceIps: ["198.51.100.8"],
+      remoteAddress: "198.51.100.8",
+    });
+
+    expectSuccessfulApprovalUpdate(res, requestLog);
   });
 
-  it("accepts ::ffff:127.0.0.1", () => {
-    expect(isLocalhostRequest(fakeReq("::ffff:127.0.0.1"))).toBe(true);
+  it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {
+    const { res } = await runApproveInteraction({
+      allowedSourceIps: ["198.51.100.8"],
+      trustedProxies: ["127.0.0.1"],
+      remoteAddress: "127.0.0.1",
+      headers: { "x-forwarded-for": "198.51.100.8" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
   });
 
-  it("rejects external addresses", () => {
-    expect(isLocalhostRequest(fakeReq("10.0.0.1"))).toBe(false);
-    expect(isLocalhostRequest(fakeReq("192.168.1.1"))).toBe(false);
+  it("rejects callback requests from non-allowlisted source IPs", async () => {
+    const { context, token } = createActionContext();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () => {
+        throw new Error("should not fetch post for rejected origins");
+      }),
+      botUserId: "bot",
+      accountId: "acct",
+      allowedSourceIps: ["127.0.0.1"],
+    });
+
+    const res = await runHandler(handler, {
+      remoteAddress: "198.51.100.8",
+      body: createInteractionBody({ context, token }),
+    });
+    expectForbiddenResponse(res, "Forbidden origin");
   });
 
-  it("rejects when socket has no remote address", () => {
-    expect(isLocalhostRequest(fakeReq(undefined))).toBe(false);
+  it("rejects requests with an invalid interaction token", async () => {
+    const handler = createUnusedInteractionHandler();
+
+    const res = await runHandler(handler, {
+      body: {
+        user_id: "user-1",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { action_id: "approve", _token: "deadbeef" },
+      },
+    });
+    expectForbiddenResponse(res, "Invalid token");
   });
 
-  it("rejects when socket is missing", () => {
-    expect(isLocalhostRequest({} as IncomingMessage)).toBe(false);
+  it("rejects requests when the signed channel does not match the callback payload", async () => {
+    const { context, token } = createActionContext();
+    const handler = createUnusedInteractionHandler();
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token, channelId: "chan-2" }),
+    });
+    expectForbiddenResponse(res, "Channel mismatch");
+  });
+
+  it("rejects requests when the fetched post does not belong to the callback channel", async () => {
+    const { context, token } = createActionContext();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () => createActionPost({ channelId: "chan-9" })),
+      botUserId: "bot",
+      accountId: "acct",
+    });
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token }),
+    });
+    expectForbiddenResponse(res, "Post/channel mismatch");
+  });
+
+  it("rejects requests when the action is not present on the fetched post", async () => {
+    const res = await runInvalidActionRequest("reject");
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain("Unknown action");
+  });
+
+  it("accepts actions when the button name matches the action id", async () => {
+    const { res, requestLog } = await runApproveInteraction({
+      actionName: "approve",
+    });
+
+    expectSuccessfulApprovalUpdate(res, requestLog);
+  });
+
+  it("blocks button dispatch when the sender is not allowed for the action", async () => {
+    const { context, token } = createActionContext();
+    const dispatchButtonClick = vi.fn();
+    const handleInteraction = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : createActionPost(),
+      ),
+      botUserId: "bot",
+      accountId: "acct",
+      authorizeButtonClick: async () => ({
+        ok: false,
+        response: {
+          ephemeral_text: "blocked",
+        },
+      }),
+      handleInteraction,
+      dispatchButtonClick,
+    });
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("blocked");
+    expect(handleInteraction).not.toHaveBeenCalled();
+    expect(dispatchButtonClick).not.toHaveBeenCalled();
+  });
+
+  it("forwards fetched post threading metadata to session and button callbacks", async () => {
+    const enqueueSystemEvent = vi.fn();
+    setInteractionRuntime(enqueueSystemEvent);
+    const { context, token } = createActionContext();
+    const resolveSessionKey = vi.fn().mockResolvedValue("session:thread:root-9");
+    const dispatchButtonClick = vi.fn();
+    const fetchedPost = createActionPost({ rootId: "root-9" });
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
+      ),
+      botUserId: "bot",
+      accountId: "acct",
+      resolveSessionKey,
+      dispatchButtonClick,
+    });
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token, userName: "alice" }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "chan-1",
+      userId: "user-1",
+      post: fetchedPost,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('Mattermost button click: action="approve"'),
+      expect.objectContaining({ sessionKey: "session:thread:root-9" }),
+    );
+    expect(dispatchButtonClick).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "chan-1",
+        userId: "user-1",
+        postId: "post-1",
+        post: fetchedPost,
+      }),
+    );
+  });
+
+  it("lets a custom interaction handler short-circuit generic completion updates", async () => {
+    const { context, token } = createActionContext("mdlprov");
+    const requestLog: Array<{ path: string; method?: string }> = [];
+    const handleInteraction = vi.fn().mockResolvedValue({
+      ephemeral_text: "Only the original requester can use this picker.",
+    });
+    const dispatchButtonClick = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        return createActionPost({
+          actionId: "mdlprov",
+          actionName: "Browse providers",
+        });
+      }),
+      botUserId: "bot",
+      accountId: "acct",
+      handleInteraction,
+      dispatchButtonClick,
+    });
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({
+        context,
+        token,
+        userId: "user-2",
+        userName: "alice",
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(
+      JSON.stringify({
+        ephemeral_text: "Only the original requester can use this picker.",
+      }),
+    );
+    expect(requestLog).toEqual([{ path: "/posts/post-1", method: undefined }]);
+    expect(handleInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "mdlprov",
+        actionName: "Browse providers",
+        originalMessage: "Choose",
+        post: expect.objectContaining({ id: "post-1" }),
+        userName: "alice",
+      }),
+    );
+    expect(dispatchButtonClick).not.toHaveBeenCalled();
   });
 });

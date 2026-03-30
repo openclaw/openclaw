@@ -1,11 +1,15 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
-    agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-  })),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+    })),
+  };
+});
 
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),
@@ -210,6 +214,82 @@ describe("subagent registry nested agent tracking", () => {
       cleanupCompletedAt: 3,
     });
     expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
+  });
+
+  it("keeps parent pending for parallel children until both descendants complete cleanup", async () => {
+    const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
+    const parentSessionKey = "agent:main:subagent:orch-parallel";
+
+    addSubagentRunForTests({
+      runId: "run-parent-parallel",
+      childSessionKey: parentSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "parallel orchestrator",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+    addSubagentRunForTests({
+      runId: "run-leaf-a",
+      childSessionKey: `${parentSessionKey}:subagent:leaf-a`,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: "orch-parallel",
+      task: "leaf a",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: true,
+      cleanupCompletedAt: undefined,
+    });
+    addSubagentRunForTests({
+      runId: "run-leaf-b",
+      childSessionKey: `${parentSessionKey}:subagent:leaf-b`,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: "orch-parallel",
+      task: "leaf b",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    expect(countPendingDescendantRuns(parentSessionKey)).toBe(2);
+
+    addSubagentRunForTests({
+      runId: "run-leaf-a",
+      childSessionKey: `${parentSessionKey}:subagent:leaf-a`,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: "orch-parallel",
+      task: "leaf a",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: true,
+      cleanupCompletedAt: 3,
+    });
+    expect(countPendingDescendantRuns(parentSessionKey)).toBe(1);
+
+    addSubagentRunForTests({
+      runId: "run-leaf-b",
+      childSessionKey: `${parentSessionKey}:subagent:leaf-b`,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: "orch-parallel",
+      task: "leaf b",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 4,
+      cleanupHandled: true,
+      cleanupCompletedAt: 5,
+    });
+    expect(countPendingDescendantRuns(parentSessionKey)).toBe(0);
   });
 
   it("countPendingDescendantRunsExcludingRun ignores only the active announce run", async () => {

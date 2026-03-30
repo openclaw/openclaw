@@ -1,17 +1,13 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-
-// ============ Helpers ============
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
+import {
+  jsonToolResult,
+  toolExecutionErrorResult,
+  unknownToolActionResult,
+} from "./tool-result.js";
 
 type ListTokenType =
   | "doc"
@@ -154,21 +150,20 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
             });
             switch (p.action) {
               case "list":
-                return json(await listMembers(client, p.token, p.type));
+                return jsonToolResult(await listMembers(client, p.token, p.type));
               case "add":
-                return json(
+                return jsonToolResult(
                   await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
                 );
               case "remove":
-                return json(
+                return jsonToolResult(
                   await removeMember(client, p.token, p.type, p.member_type, p.member_id),
                 );
               default:
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-                return json({ error: `Unknown action: ${(p as any).action}` });
+                return unknownToolActionResult((p as { action?: unknown }).action);
             }
           } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
+            return toolExecutionErrorResult(err);
           }
         },
       };

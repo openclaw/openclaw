@@ -1,7 +1,6 @@
 ---
 title: "Diffs"
 summary: "Read-only diff viewer and file renderer for agents (optional plugin tool)"
-description: "Use the optional Diffs plugin to render before and after text or unified patches as a gateway-hosted diff view, a file (PNG or PDF), or both."
 read_when:
   - You want agents to show code or markdown edits as diffs
   - You want a canvas-ready viewer URL or a rendered diff file
@@ -10,7 +9,7 @@ read_when:
 
 # Diffs
 
-`diffs` is an optional plugin tool and companion skill that turns change content into a read-only diff artifact for agents.
+`diffs` is an optional plugin tool with short built-in system guidance and a companion skill that turns change content into a read-only diff artifact for agents.
 
 It accepts either:
 
@@ -22,6 +21,8 @@ It can return:
 - a gateway viewer URL for canvas presentation
 - a rendered file path (PNG or PDF) for message delivery
 - both outputs in one call
+
+When enabled, the plugin prepends concise usage guidance into system-prompt space and also exposes a detailed skill for cases where the agent needs fuller instructions.
 
 ## Quick start
 
@@ -43,6 +44,29 @@ It can return:
   },
 }
 ```
+
+## Disable built-in system guidance
+
+If you want to keep the `diffs` tool enabled but disable its built-in system-prompt guidance, set `plugins.entries.diffs.hooks.allowPromptInjection` to `false`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        hooks: {
+          allowPromptInjection: false,
+        },
+      },
+    },
+  },
+}
+```
+
+This blocks the diffs plugin's `before_prompt_build` hook while keeping the plugin, tool, and companion skill available.
+
+If you want to disable both the guidance and the tool, disable the plugin instead.
 
 ## Typical agent workflow
 
@@ -83,9 +107,10 @@ All fields are optional unless noted:
 - `after` (`string`): updated text. Required with `before` when `patch` is omitted.
 - `patch` (`string`): unified diff text. Mutually exclusive with `before` and `after`.
 - `path` (`string`): display filename for before and after mode.
-- `lang` (`string`): language override hint for before and after mode.
+- `lang` (`string`): language override hint for before and after mode. Unknown values fall back to plain text.
 - `title` (`string`): viewer title override.
 - `mode` (`"view" | "file" | "both"`): output mode. Defaults to plugin default `defaults.mode`.
+  Deprecated alias: `"image"` behaves like `"file"` and is still accepted for backward compatibility.
 - `theme` (`"light" | "dark"`): viewer theme. Defaults to plugin default `defaults.theme`.
 - `layout` (`"unified" | "split"`): diff layout. Defaults to plugin default `defaults.layout`.
 - `expandUnchanged` (`boolean`): expand unchanged sections when full context is available. Per-call option only (not a plugin default key).
@@ -125,9 +150,12 @@ Shared fields for modes that create a viewer:
 - `inputKind`
 - `fileCount`
 - `mode`
+- `context` (`agentId`, `sessionId`, `messageChannel`, `agentAccountId` when available)
 
 File fields when PNG or PDF is rendered:
 
+- `artifactId`
+- `expiresAt`
 - `filePath`
 - `path` (same value as `filePath`, for message tool compatibility)
 - `fileBytes`
@@ -252,6 +280,8 @@ Viewer assets:
 
 - `/plugins/diffs/assets/viewer.js`
 - `/plugins/diffs/assets/viewer-runtime.js`
+
+The viewer document resolves those assets relative to the viewer URL, so an optional `baseUrl` path prefix is preserved for both asset requests too.
 
 URL construction behavior:
 

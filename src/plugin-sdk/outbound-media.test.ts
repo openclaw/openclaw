@@ -1,13 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
-import { loadOutboundMediaFromUrl } from "./outbound-media.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../web/media.js", () => ({
+vi.mock("./web-media.js", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
 
+type OutboundMediaModule = typeof import("./outbound-media.js");
+
+let loadOutboundMediaFromUrl: OutboundMediaModule["loadOutboundMediaFromUrl"];
+
 describe("loadOutboundMediaFromUrl", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ loadOutboundMediaFromUrl } = await import("./outbound-media.js"));
+    loadWebMediaMock.mockReset();
+  });
+
   it("forwards maxBytes and mediaLocalRoots to loadWebMedia", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("x"),

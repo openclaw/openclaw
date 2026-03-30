@@ -6,22 +6,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants.js";
 import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
+import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills.js";
+import { resolveSkillSource } from "../agents/skills/source.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
-import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
@@ -56,6 +53,18 @@ type ExecDockerRawFn = (
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
 const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
 const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
+let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
+let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+
+function loadSkillsModule() {
+  skillsModulePromise ??= import("../agents/skills.js");
+  return skillsModulePromise;
+}
+
+function loadConfigModule() {
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
+}
 
 // --------------------------------------------------------------------------
 // Helpers
@@ -1130,6 +1139,7 @@ export async function readConfigSnapshotForAudit(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
 }): Promise<ConfigFileSnapshot> {
+  const { createConfigIO } = await loadConfigModule();
   return await createConfigIO({
     env: params.env,
     configPath: params.configPath,
@@ -1247,11 +1257,12 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
     for (const entry of entries) {
-      if (entry.skill.source === "openclaw-bundled") {
+      if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
         continue;
       }
 

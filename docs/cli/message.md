@@ -9,7 +9,7 @@ title: "message"
 # `openclaw message`
 
 Single outbound command for sending messages and channel actions
-(Discord/Google Chat/Slack/Mattermost (plugin)/Telegram/WhatsApp/Signal/iMessage/MS Teams).
+(Discord/Google Chat/iMessage/Matrix/Mattermost (plugin)/Microsoft Teams/Signal/Slack/Telegram/WhatsApp).
 
 ## Usage
 
@@ -21,7 +21,7 @@ Channel selection:
 
 - `--channel` required if more than one channel is configured.
 - If exactly one channel is configured, it becomes the default.
-- Values: `whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams` (Mattermost requires plugin)
+- Values: `discord|googlechat|imessage|matrix|mattermost|msteams|signal|slack|telegram|whatsapp` (Mattermost requires plugin)
 
 Target formats (`--target`):
 
@@ -33,7 +33,8 @@ Target formats (`--target`):
 - Mattermost (plugin): `channel:<id>`, `user:<id>`, or `@username` (bare ids are treated as channels)
 - Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
 - iMessage: handle, `chat_id:<id>`, `chat_guid:<guid>`, or `chat_identifier:<id>`
-- MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
+- Matrix: `@user:server`, `!room:server`, or `#alias:server`
+- Microsoft Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
 Name lookup:
 
@@ -50,28 +51,39 @@ Name lookup:
 - `--dry-run`
 - `--verbose`
 
+## SecretRef behavior
+
+- `openclaw message` resolves supported channel SecretRefs before running the selected action.
+- Resolution is scoped to the active action target when possible:
+  - channel-scoped when `--channel` is set (or inferred from prefixed targets like `discord:...`)
+  - account-scoped when `--account` is set (channel globals + selected account surfaces)
+  - when `--account` is omitted, OpenClaw does not force a `default` account SecretRef scope
+- Unresolved SecretRefs on unrelated channels do not block a targeted message action.
+- If the selected channel/account SecretRef is unresolved, the command fails closed for that action.
+
 ## Actions
 
 ### Core
 
 - `send`
-  - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Matrix/Microsoft Teams
   - Required: `--target`, plus `--message` or `--media`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons` (requires `channels.telegram.capabilities.inlineButtons` to allow it)
+  - Telegram only: `--force-document` (send images and GIFs as documents to avoid Telegram compression)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - WhatsApp only: `--gif-playback`
 
 - `poll`
-  - Channels: WhatsApp/Telegram/Discord/Matrix/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Matrix/Microsoft Teams
   - Required: `--target`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`
   - Discord only: `--poll-duration-hours`, `--silent`, `--message`
   - Telegram only: `--poll-duration-seconds` (5-600), `--silent`, `--poll-anonymous` / `--poll-public`, `--thread-id`
 
 - `react`
-  - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
+  - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/Matrix
   - Required: `--message-id`, `--target`
   - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--target-author`, `--target-author-uuid`
   - Note: `--remove` requires `--emoji` (omit `--emoji` to clear own reactions where supported; see /tools/reactions)
@@ -79,35 +91,36 @@ Name lookup:
   - Signal group reactions: `--target-author` or `--target-author-uuid` required
 
 - `reactions`
-  - Channels: Discord/Google Chat/Slack
+  - Channels: Discord/Google Chat/Slack/Matrix
   - Required: `--message-id`, `--target`
   - Optional: `--limit`
 
 - `read`
-  - Channels: Discord/Slack
+  - Channels: Discord/Slack/Matrix
   - Required: `--target`
   - Optional: `--limit`, `--before`, `--after`
   - Discord only: `--around`
 
 - `edit`
-  - Channels: Discord/Slack
+  - Channels: Discord/Slack/Matrix
   - Required: `--message-id`, `--message`, `--target`
 
 - `delete`
-  - Channels: Discord/Slack/Telegram
+  - Channels: Discord/Slack/Telegram/Matrix
   - Required: `--message-id`, `--target`
 
 - `pin` / `unpin`
-  - Channels: Discord/Slack
+  - Channels: Discord/Slack/Matrix
   - Required: `--message-id`, `--target`
 
 - `pins` (list)
-  - Channels: Discord/Slack
+  - Channels: Discord/Slack/Matrix
   - Required: `--target`
 
 - `permissions`
-  - Channels: Discord
+  - Channels: Discord/Matrix
   - Required: `--target`
+  - Matrix only: available when Matrix encryption is enabled and verification actions are allowed
 
 - `search`
   - Channels: Discord
@@ -257,4 +270,11 @@ Send Telegram inline buttons:
 ```
 openclaw message send --channel telegram --target @mychat --message "Choose:" \
   --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
+```
+
+Send a Telegram image as a document to avoid compression:
+
+```bash
+openclaw message send --channel telegram --target @mychat \
+  --media ./diagram.png --force-document
 ```

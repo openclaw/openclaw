@@ -1,7 +1,9 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 
@@ -21,8 +23,12 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
 }
 
 const BACKSPACE_CHAR = "\u0008";
-const mentionRegexCompileCache = new Map<string, RegExp[]>();
+const mentionMatchRegexCompileCache = new Map<string, RegExp[]>();
+const mentionStripRegexCompileCache = new Map<string, RegExp[]>();
 const MAX_MENTION_REGEX_COMPILE_CACHE_KEYS = 512;
+const mentionPatternWarningCache = new Set<string>();
+const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
+const log = createSubsystemLogger("mentions");
 
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
@@ -35,6 +41,64 @@ function normalizeMentionPattern(pattern: string): string {
 
 function normalizeMentionPatterns(patterns: string[]): string[] {
   return patterns.map(normalizeMentionPattern);
+}
+
+function warnRejectedMentionPattern(
+  pattern: string,
+  flags: string,
+  reason: ConfigRegexRejectReason,
+) {
+  const key = `${flags}::${reason}::${pattern}`;
+  if (mentionPatternWarningCache.has(key)) {
+    return;
+  }
+  mentionPatternWarningCache.add(key);
+  if (mentionPatternWarningCache.size > MAX_MENTION_PATTERN_WARNING_KEYS) {
+    mentionPatternWarningCache.clear();
+    mentionPatternWarningCache.add(key);
+  }
+  log.warn("Ignoring unsupported group mention pattern", {
+    pattern,
+    flags,
+    reason,
+  });
+}
+
+function cacheMentionRegexes(
+  cache: Map<string, RegExp[]>,
+  cacheKey: string,
+  regexes: RegExp[],
+): RegExp[] {
+  cache.set(cacheKey, regexes);
+  if (cache.size > MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
+    cache.clear();
+    cache.set(cacheKey, regexes);
+  }
+  return [...regexes];
+}
+
+function compileMentionPatternsCached(params: {
+  patterns: string[];
+  flags: string;
+  cache: Map<string, RegExp[]>;
+  warnRejected: boolean;
+}): RegExp[] {
+  if (params.patterns.length === 0) {
+    return [];
+  }
+  const cacheKey = `${params.flags}\u001e${params.patterns.join("\u001f")}`;
+  const cached = params.cache.get(cacheKey);
+  if (cached) {
+    return [...cached];
+  }
+
+  const compiled = compileConfigRegexes(params.patterns, params.flags);
+  if (params.warnRejected) {
+    for (const rejected of compiled.rejected) {
+      warnRejectedMentionPattern(rejected.pattern, rejected.flags, rejected.reason);
+    }
+  }
+  return cacheMentionRegexes(params.cache, cacheKey, compiled.regexes);
 }
 
 function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string): string[] {
@@ -54,31 +118,25 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   return derived.length > 0 ? derived : [];
 }
 
+function resolveFallbackProviderMentionStripRegexes(providerId?: string | null): RegExp[] {
+  switch (providerId?.trim().toLowerCase()) {
+    case "discord":
+      return [/<@!?\d+>/gi];
+    case "slack":
+      return [/<@[^>\s]+>/gi];
+    default:
+      return [];
+  }
+}
+
 export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
   const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
-  if (patterns.length === 0) {
-    return [];
-  }
-  const cacheKey = patterns.join("\u001f");
-  const cached = mentionRegexCompileCache.get(cacheKey);
-  if (cached) {
-    return [...cached];
-  }
-  const compiled = patterns
-    .map((pattern) => {
-      try {
-        return new RegExp(pattern, "i");
-      } catch {
-        return null;
-      }
-    })
-    .filter((value): value is RegExp => Boolean(value));
-  mentionRegexCompileCache.set(cacheKey, compiled);
-  if (mentionRegexCompileCache.size > MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
-    mentionRegexCompileCache.clear();
-    mentionRegexCompileCache.set(cacheKey, compiled);
-  }
-  return [...compiled];
+  return compileMentionPatternsCached({
+    patterns,
+    flags: "i",
+    cache: mentionMatchRegexCompileCache,
+    warnRejected: true,
+  });
 }
 
 export function normalizeMentionText(text: string): string {
@@ -151,19 +209,31 @@ export function stripMentions(
   agentId?: string,
 ): string {
   let result = text;
-  const providerId = ctx.Provider ? normalizeChannelId(ctx.Provider) : null;
-  const providerMentions = providerId ? getChannelDock(providerId)?.mentions : undefined;
-  const patterns = normalizeMentionPatterns([
-    ...resolveMentionPatterns(cfg, agentId),
-    ...(providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []),
-  ]);
-  for (const p of patterns) {
-    try {
-      const re = new RegExp(p, "gi");
-      result = result.replace(re, " ");
-    } catch {
-      // ignore invalid regex
-    }
+  const providerId =
+    (ctx.Provider ? normalizeChannelId(ctx.Provider) : null) ??
+    (ctx.Provider?.trim().toLowerCase() as ChannelId | undefined) ??
+    null;
+  const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
+  const configRegexes = compileMentionPatternsCached({
+    patterns: normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId)),
+    flags: "gi",
+    cache: mentionStripRegexCompileCache,
+    warnRejected: true,
+  });
+  const providerRegexes =
+    providerMentions?.stripRegexes?.({ ctx, cfg, agentId }) ??
+    compileMentionPatternsCached({
+      patterns: normalizeMentionPatterns(
+        providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? [],
+      ),
+      flags: "gi",
+      cache: mentionStripRegexCompileCache,
+      warnRejected: false,
+    });
+  const fallbackProviderRegexes =
+    providerRegexes.length > 0 ? [] : resolveFallbackProviderMentionStripRegexes(providerId);
+  for (const re of [...configRegexes, ...providerRegexes, ...fallbackProviderRegexes]) {
+    result = result.replace(re, " ");
   }
   if (providerMentions?.stripMentions) {
     result = providerMentions.stripMentions({

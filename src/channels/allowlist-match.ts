@@ -16,16 +16,10 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
   matchSource?: TSource;
 };
 
-type CachedAllowListSet = {
-  size: number;
-  set: Set<string>;
+export type CompiledAllowlist = {
+  set: ReadonlySet<string>;
+  wildcard: boolean;
 };
-
-const ALLOWLIST_SET_CACHE = new WeakMap<string[], CachedAllowListSet>();
-const SIMPLE_ALLOWLIST_CACHE = new WeakMap<
-  Array<string | number>,
-  { normalized: string[]; size: number; wildcard: boolean; set: Set<string> }
->();
 
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
@@ -33,16 +27,29 @@ export function formatAllowlistMatchMeta(
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
-export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
-  allowList: string[];
+export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowlist {
+  const set = new Set(entries.filter(Boolean));
+  return {
+    set,
+    wildcard: set.has("*"),
+  };
+}
+
+function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): CompiledAllowlist {
+  return compileAllowlist(
+    entries.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean),
+  );
+}
+
+export function resolveAllowlistCandidates<TSource extends string>(params: {
+  compiledAllowlist: CompiledAllowlist;
   candidates: Array<{ value?: string; source: TSource }>;
 }): AllowlistMatch<TSource> {
-  const allowSet = resolveAllowListSet(params.allowList);
   for (const candidate of params.candidates) {
     if (!candidate.value) {
       continue;
     }
-    if (allowSet.has(candidate.value)) {
+    if (params.compiledAllowlist.set.has(candidate.value)) {
       return {
         allowed: true,
         matchKey: candidate.value,
@@ -53,15 +60,38 @@ export function resolveAllowlistMatchByCandidates<TSource extends string>(params
   return { allowed: false };
 }
 
+export function resolveCompiledAllowlistMatch<TSource extends string>(params: {
+  compiledAllowlist: CompiledAllowlist;
+  candidates: Array<{ value?: string; source: TSource }>;
+}): AllowlistMatch<TSource> {
+  if (params.compiledAllowlist.set.size === 0) {
+    return { allowed: false };
+  }
+  if (params.compiledAllowlist.wildcard) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" as TSource };
+  }
+  return resolveAllowlistCandidates(params);
+}
+
+export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
+  allowList: ReadonlyArray<string>;
+  candidates: Array<{ value?: string; source: TSource }>;
+}): AllowlistMatch<TSource> {
+  return resolveCompiledAllowlistMatch({
+    compiledAllowlist: compileAllowlist(params.allowList),
+    candidates: params.candidates,
+  });
+}
+
 export function resolveAllowlistMatchSimple(params: {
-  allowFrom: Array<string | number>;
+  allowFrom: ReadonlyArray<string | number>;
   senderId: string;
   senderName?: string | null;
   allowNameMatching?: boolean;
 }): AllowlistMatch<"wildcard" | "id" | "name"> {
-  const allowFrom = resolveSimpleAllowFrom(params.allowFrom);
+  const allowFrom = compileSimpleAllowlist(params.allowFrom);
 
-  if (allowFrom.size === 0) {
+  if (allowFrom.set.size === 0) {
     return { allowed: false };
   }
   if (allowFrom.wildcard) {
@@ -69,47 +99,17 @@ export function resolveAllowlistMatchSimple(params: {
   }
 
   const senderId = params.senderId.toLowerCase();
-  if (allowFrom.set.has(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-
   const senderName = params.senderName?.toLowerCase();
-  if (params.allowNameMatching === true && senderName && allowFrom.set.has(senderName)) {
-    return { allowed: true, matchKey: senderName, matchSource: "name" };
-  }
-
-  return { allowed: false };
-}
-
-function resolveAllowListSet(allowList: string[]): Set<string> {
-  const cached = ALLOWLIST_SET_CACHE.get(allowList);
-  if (cached && cached.size === allowList.length) {
-    return cached.set;
-  }
-  const set = new Set(allowList);
-  ALLOWLIST_SET_CACHE.set(allowList, { size: allowList.length, set });
-  return set;
-}
-
-function resolveSimpleAllowFrom(allowFrom: Array<string | number>): {
-  normalized: string[];
-  size: number;
-  wildcard: boolean;
-  set: Set<string>;
-} {
-  const cached = SIMPLE_ALLOWLIST_CACHE.get(allowFrom);
-  if (cached && cached.size === allowFrom.length) {
-    return cached;
-  }
-
-  const normalized = allowFrom.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean);
-  const set = new Set(normalized);
-  const built = {
-    normalized,
-    size: allowFrom.length,
-    wildcard: set.has("*"),
-    set,
-  };
-  SIMPLE_ALLOWLIST_CACHE.set(allowFrom, built);
-  return built;
+  return resolveAllowlistCandidates({
+    compiledAllowlist: allowFrom,
+    candidates: [
+      { value: senderId, source: "id" },
+      ...(params.allowNameMatching === true && senderName
+        ? ([{ value: senderName, source: "name" as const }] satisfies Array<{
+            value?: string;
+            source: "id" | "name";
+          }>)
+        : []),
+    ],
+  });
 }

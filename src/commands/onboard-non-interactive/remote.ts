@@ -1,17 +1,18 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { writeConfigFile } from "../../config/config.js";
+import { replaceConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 
-export async function runNonInteractiveOnboardingRemote(params: {
+export async function runNonInteractiveRemoteSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  baseHash?: string;
 }) {
-  const { opts, runtime, baseConfig } = params;
+  const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "remote" as const;
 
   const remoteUrl = opts.remoteUrl?.trim();
@@ -33,7 +34,10 @@ export async function runNonInteractiveOnboardingRemote(params: {
     },
   };
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+  });
   logConfigUpdated(runtime);
 
   const payload = {
@@ -42,7 +46,7 @@ export async function runNonInteractiveOnboardingRemote(params: {
     auth: opts.remoteToken ? "token" : "none",
   };
   if (opts.json) {
-    runtime.log(JSON.stringify(payload, null, 2));
+    writeRuntimeJson(runtime, payload);
   } else {
     runtime.log(`Remote gateway: ${remoteUrl}`);
     runtime.log(`Auth: ${payload.auth}`);

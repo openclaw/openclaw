@@ -1,14 +1,17 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import { pathToFileURL } from "node:url";
+import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveAcpxPluginConfig } from "./config.js";
+import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
   createMockRuntimeFixture,
   NOOP_LOGGER,
   readMockRuntimeLogEntries,
-} from "./runtime-internals/test-fixtures.js";
-import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
+} from "./test-utils/runtime-fixtures.js";
 
 let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
 let missingCommandRuntime: AcpxRuntime | null = null;
@@ -19,12 +22,15 @@ beforeAll(async () => {
     {
       command: "/definitely/missing/acpx",
       allowPluginLocalInstall: false,
+      stripProviderAuthEnvVars: false,
       installCommand: "n/a",
       cwd: process.cwd(),
       permissionMode: "approve-reads",
       nonInteractivePermissions: "fail",
+      pluginToolsMcpBridge: false,
       strictWindowsCmdWrapper: true,
       queueOwnerTtlSeconds: 0.1,
+      mcpServers: {},
     },
     { logger: NOOP_LOGGER },
   );
@@ -35,6 +41,53 @@ afterAll(async () => {
   missingCommandRuntime = null;
   await cleanupMockRuntimeFixtures();
 });
+
+async function expectSessionEnsureFallback(params: {
+  sessionKey: string;
+  env?: Record<string, string>;
+  expectNewAfterStatus: boolean;
+  expectedRecordId?: string;
+}) {
+  const previousEnv = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(params.env ?? {})) {
+    previousEnv.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+
+  try {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: params.sessionKey,
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(handle.backend).toBe("acpx");
+    if (params.expectedRecordId) {
+      expect(handle.acpxRecordId).toBe(params.expectedRecordId);
+    }
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
+    const statusIndex = logs.findIndex((entry) => entry.kind === "status");
+    const newIndex = logs.findIndex((entry) => entry.kind === "new");
+    expect(ensureIndex).toBeGreaterThanOrEqual(0);
+    expect(statusIndex).toBeGreaterThan(ensureIndex);
+    if (params.expectNewAfterStatus) {
+      expect(newIndex).toBeGreaterThan(statusIndex);
+    } else {
+      expect(newIndex).toBe(-1);
+    }
+  } finally {
+    for (const [key, value] of previousEnv.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 describe("AcpxRuntime", () => {
   it("passes the shared ACP adapter contract suite", async () => {
@@ -124,6 +177,170 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--ttl");
     expect(promptArgs).toContain("180");
     expect(promptArgs).toContain("--approve-all");
+  });
+
+  it("surfaces signal-only prompt exits as runtime errors", async () => {
+    const previousSignal = process.env.MOCK_ACPX_PROMPT_SIGNAL;
+    process.env.MOCK_ACPX_PROMPT_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:signal-exit",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const events = [];
+      for await (const event of runtime.runTurn({
+        handle,
+        text: "signal-only-exit",
+        mode: "prompt",
+        requestId: "req-signal",
+      })) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual({
+        type: "error",
+        message: "acpx exited with signal SIGTERM",
+      });
+      expect(events.some((event) => event.type === "done")).toBe(false);
+    } finally {
+      if (previousSignal === undefined) {
+        delete process.env.MOCK_ACPX_PROMPT_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_PROMPT_SIGNAL = previousSignal;
+      }
+    }
+  });
+
+  it("uses sessions new with --resume-session when resumeSessionId is provided", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const resumeSessionId = "sid-resume-123";
+    const sessionKey = "agent:codex:acp:resume";
+    const handle = await runtime.ensureSession({
+      sessionKey,
+      agent: "codex",
+      mode: "persistent",
+      resumeSessionId,
+    });
+
+    expect(handle.backend).toBe("acpx");
+    expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    expect(logs.some((entry) => entry.kind === "ensure")).toBe(false);
+    const resumeEntry = logs.find(
+      (entry) => entry.kind === "new" && String(entry.sessionName ?? "") === sessionKey,
+    );
+    expect(resumeEntry).toBeDefined();
+    const resumeArgs = (resumeEntry?.args as string[]) ?? [];
+    const resumeFlagIndex = resumeArgs.indexOf("--resume-session");
+    expect(resumeFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
+  });
+
+  it("replaces dead named sessions returned by sessions ensure", async () => {
+    await expectSessionEnsureFallback({
+      sessionKey: "agent:codex:acp:dead-session",
+      env: {
+        MOCK_ACPX_STATUS_STATUS: "dead",
+        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
+      },
+      expectNewAfterStatus: true,
+    });
+  });
+
+  it("reuses a live named session when sessions ensure exits before returning identifiers", async () => {
+    await expectSessionEnsureFallback({
+      sessionKey: "agent:codex:acp:ensure-fallback-alive",
+      env: {
+        MOCK_ACPX_ENSURE_EXIT_1: "1",
+        MOCK_ACPX_STATUS_STATUS: "alive",
+      },
+      expectNewAfterStatus: false,
+      expectedRecordId: "rec-agent:codex:acp:ensure-fallback-alive",
+    });
+  });
+
+  it("creates a fresh named session when sessions ensure exits and status is dead", async () => {
+    await expectSessionEnsureFallback({
+      sessionKey: "agent:codex:acp:ensure-fallback-dead",
+      env: {
+        MOCK_ACPX_ENSURE_EXIT_1: "1",
+        MOCK_ACPX_STATUS_STATUS: "dead",
+        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
+      },
+      expectNewAfterStatus: true,
+    });
+  });
+
+  it("serializes text plus image attachments into ACP prompt blocks", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:with-image",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "describe this image",
+      attachments: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }], // pragma: allowlist secret
+      mode: "prompt",
+      requestId: "req-image",
+    })) {
+      // Consume stream to completion so prompt logging is finalized.
+    }
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const prompt = logs.find(
+      (entry) =>
+        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:with-image",
+    );
+    expect(prompt).toBeDefined();
+
+    const stdinBlocks = JSON.parse(String(prompt?.stdinText ?? ""));
+    expect(stdinBlocks).toEqual([
+      { type: "text", text: "describe this image" },
+      { type: "image", mimeType: "image/png", data: "aW1hZ2UtYnl0ZXM=" },
+    ]);
+  });
+
+  it("preserves provider auth env vars when runtime uses a custom acpx command", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-secret"); // pragma: allowlist secret
+    vi.stubEnv("GITHUB_TOKEN", "gh-secret"); // pragma: allowlist secret
+
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:custom-env",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      for await (const _event of runtime.runTurn({
+        handle,
+        text: "custom-env",
+        mode: "prompt",
+        requestId: "req-custom-env",
+      })) {
+        // Drain events; assertions inspect the mock runtime log.
+      }
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const prompt = logs.find(
+        (entry) =>
+          entry.kind === "prompt" &&
+          String(entry.sessionName ?? "") === "agent:codex:acp:custom-env",
+      );
+      expect(prompt?.openaiApiKey).toBe("openai-secret");
+      expect(prompt?.githubToken).toBe("gh-secret");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {
@@ -224,6 +441,42 @@ describe("AcpxRuntime", () => {
     });
   });
 
+  it("maps acpx permission-denied exits to actionable guidance", async () => {
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:permission-denied",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "permission-denied",
+      mode: "prompt",
+      requestId: "req-perm",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("Permission denied by ACP runtime (acpx)."),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("approve-reads, approve-all, deny-all"),
+      }),
+    );
+  });
+
   it("supports cancel and close using encoded runtime handle state", async () => {
     const { runtime, logPath, config } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
@@ -267,7 +520,7 @@ describe("AcpxRuntime", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "openai-codex/gpt-5.3-codex",
+      value: "openai-codex/gpt-5.4",
     });
     const status = await runtime.getStatus({ handle });
     const ensuredSessionName = "agent:codex:acp:controls";
@@ -284,6 +537,174 @@ describe("AcpxRuntime", () => {
     expect(logs.find((entry) => entry.kind === "set-mode")?.mode).toBe("plan");
     expect(logs.find((entry) => entry.kind === "set")?.key).toBe("model");
     expect(logs.find((entry) => entry.kind === "status")).toBeDefined();
+  });
+
+  it("surfaces signal-only status exits as control command failures", async () => {
+    const previousSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
+    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:controls-signal",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      await expect(runtime.getStatus({ handle })).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+        message: "acpx exited with signal SIGTERM",
+      });
+    } finally {
+      if (previousSignal === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_STATUS_SIGNAL = previousSignal;
+      }
+    }
+  });
+
+  it("routes ACPX commands through an MCP proxy agent when MCP servers are configured", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "npx custom-codex-acp",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture({
+        mcpServers: {
+          canva: {
+            command: "npx",
+            args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+            env: {
+              CANVA_TOKEN: "secret", // pragma: allowlist secret
+            },
+          },
+        },
+      });
+
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:mcp",
+        agent: "codex",
+        mode: "persistent",
+      });
+      await runtime.setMode({
+        handle,
+        mode: "plan",
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const setModeArgs = (logs.find((entry) => entry.kind === "set-mode")?.args as string[]) ?? [];
+
+      for (const args of [ensureArgs, setModeArgs]) {
+        const agentFlagIndex = args.indexOf("--agent");
+        expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+        const rawAgentCommand = args[agentFlagIndex + 1];
+        expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+        const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+        expect(payloadMatch?.[1]).toBeDefined();
+        const payload = JSON.parse(
+          Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+        ) as {
+          targetCommand: string;
+        };
+        expect(payload.targetCommand).toContain("custom-codex-acp");
+      }
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
+  });
+
+  it("routes ACPX commands through the built-in plugin-tools bridge only when explicitly enabled", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "npx custom-codex-acp",
+      },
+    });
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acpx-plugin-tools-"));
+    const pluginRoot = path.join(repoRoot, "extensions", "acpx");
+    const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
+    try {
+      fs.mkdirSync(path.join(pluginRoot, "src"), { recursive: true });
+      fs.mkdirSync(path.dirname(distEntry), { recursive: true });
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "src", "config.ts"), "// test\n", "utf8");
+      fs.writeFileSync(distEntry, "// built entry\n", "utf8");
+
+      const fixture = await createMockRuntimeFixture();
+      const runtime = new AcpxRuntime(
+        resolveAcpxPluginConfig({
+          rawConfig: {
+            command: fixture.config.command,
+            pluginToolsMcpBridge: true,
+          },
+          workspaceDir: repoRoot,
+          moduleUrl: pathToFileURL(path.join(pluginRoot, "src", "config.ts")).href,
+        }),
+        { logger: NOOP_LOGGER },
+      );
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:plugin-tools-bridge",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const logs = await readMockRuntimeLogEntries(fixture.logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const agentFlagIndex = ensureArgs.indexOf("--agent");
+      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+      const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
+      expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+      const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+      expect(payloadMatch?.[1]).toBeDefined();
+      const payload = JSON.parse(
+        Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+      ) as {
+        targetCommand: string;
+        mcpServers: Array<{ name: string; command: string; args: string[] }>;
+      };
+      expect(payload.targetCommand).toContain("custom-codex-acp");
+      expect(payload.mcpServers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "openclaw-plugin-tools",
+            command: process.execPath,
+            args: [distEntry],
+          }),
+        ]),
+      );
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not pass unknown agent ids through acpx --agent when MCP servers are configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      mcpServers: {
+        canva: {
+          command: "npx",
+          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+          env: {
+            CANVA_TOKEN: "secret", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:sh:acp:mcp",
+      agent: "sh -c whoami",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    expect(ensureArgs).not.toContain("--agent");
+    expect(ensureArgs).toContain("sh -c whoami");
   });
 
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {
@@ -340,6 +761,23 @@ describe("AcpxRuntime", () => {
     }
     await missingCommandRuntime.probeAvailability();
     expect(missingCommandRuntime.isHealthy()).toBe(false);
+  });
+
+  it("marks runtime unhealthy when the help check exits on a signal", async () => {
+    const previousSignal = process.env.MOCK_ACPX_HELP_SIGNAL;
+    process.env.MOCK_ACPX_HELP_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      await runtime.probeAvailability();
+      expect(runtime.isHealthy()).toBe(false);
+    } finally {
+      if (previousSignal === undefined) {
+        delete process.env.MOCK_ACPX_HELP_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_HELP_SIGNAL = previousSignal;
+      }
+    }
   });
 
   it("logs ACPX spawn resolution once per command policy", async () => {
