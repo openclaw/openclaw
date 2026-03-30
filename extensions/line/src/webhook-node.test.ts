@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
 import { describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
@@ -257,6 +258,98 @@ describe("createLineNodeWebhookHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(readBody).toHaveBeenCalledTimes(1);
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects signed POST requests when the shared pre-auth in-flight cap is reached", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const readBody = vi.fn(async () => rawBody);
+    const inFlightLimiter: WebhookInFlightLimiter = {
+      tryAcquire: vi.fn(() => false),
+      release: vi.fn(),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: "secret",
+      bot,
+      runtime,
+      readBody,
+      inFlightLimiter,
+      inFlightKey: "/line/webhook",
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret: "secret", res });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.body).toBe("Too Many Requests");
+    expect(inFlightLimiter.tryAcquire).toHaveBeenCalledWith("/line/webhook");
+    expect(inFlightLimiter.release).not.toHaveBeenCalled();
+    expect(readBody).not.toHaveBeenCalled();
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
+  });
+
+  it("releases the shared pre-auth in-flight slot after reading the body", async () => {
+    const rawBody = JSON.stringify({ events: [] });
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const inFlightLimiter: WebhookInFlightLimiter = {
+      tryAcquire: vi.fn(() => true),
+      release: vi.fn(),
+      size: vi.fn(() => 1),
+      clear: vi.fn(),
+    };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: "secret",
+      bot,
+      runtime,
+      readBody: async () => rawBody,
+      inFlightLimiter,
+      inFlightKey: "/line/webhook",
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret: "secret", res });
+
+    expect(inFlightLimiter.tryAcquire).toHaveBeenCalledWith("/line/webhook");
+    expect(inFlightLimiter.release).toHaveBeenCalledWith("/line/webhook");
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("falls back to the request pathname when a limiter is provided without an explicit key", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const inFlightLimiter: WebhookInFlightLimiter = {
+      tryAcquire: vi.fn(() => false),
+      release: vi.fn(),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: "secret",
+      bot,
+      runtime,
+      readBody: async () => rawBody,
+      inFlightLimiter,
+    });
+
+    const { res } = createRes();
+    await handler(
+      {
+        method: "POST",
+        url: "/line/custom-webhook?foo=bar",
+        headers: { "x-line-signature": sign(rawBody, "secret") },
+      } as unknown as IncomingMessage,
+      res,
+    );
+
+    expect(res.statusCode).toBe(429);
+    expect(inFlightLimiter.tryAcquire).toHaveBeenCalledWith("/line/custom-webhook");
+    expect(inFlightLimiter.release).not.toHaveBeenCalled();
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
   it("rejects invalid signature", async () => {

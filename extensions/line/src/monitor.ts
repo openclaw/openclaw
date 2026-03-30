@@ -15,6 +15,7 @@ import {
   normalizePluginHttpPath,
   registerPluginHttpRoute,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { createWebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -35,6 +36,8 @@ import {
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
+
+const webhookInFlightLimiter = createWebhookInFlightLimiter();
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -290,7 +293,13 @@ export async function monitorLineProvider(
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
+    handler: createLineNodeWebhookHandler({
+      channelSecret: secret,
+      bot,
+      runtime,
+      inFlightLimiter: webhookInFlightLimiter,
+      inFlightKey: normalizedPath,
+    }),
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);

@@ -2,10 +2,23 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } = vi.hoisted(() => ({
+const {
+  createLineBotMock,
+  createLineNodeWebhookHandlerMock,
+  createWebhookInFlightLimiterMock,
+  registerPluginHttpRouteMock,
+  unregisterHttpMock,
+} = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
     account: { accountId: "default" },
     handleWebhook: vi.fn(),
+  })),
+  createLineNodeWebhookHandlerMock: vi.fn(() => vi.fn()),
+  createWebhookInFlightLimiterMock: vi.fn(() => ({
+    tryAcquire: vi.fn(() => true),
+    release: vi.fn(),
+    size: vi.fn(() => 0),
+    clear: vi.fn(),
   })),
   registerPluginHttpRouteMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
@@ -41,8 +54,12 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
   registerPluginHttpRoute: registerPluginHttpRouteMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
+  createWebhookInFlightLimiter: createWebhookInFlightLimiterMock,
+}));
+
 vi.mock("./webhook-node.js", () => ({
-  createLineNodeWebhookHandler: vi.fn(() => vi.fn()),
+  createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
 }));
 
 vi.mock("./auto-reply-delivery.js", () => ({
@@ -83,6 +100,8 @@ describe("monitorLineProvider lifecycle", () => {
       account: { accountId: "default" },
       handleWebhook: vi.fn(),
     });
+    createLineNodeWebhookHandlerMock.mockReset().mockReturnValue(vi.fn());
+    createWebhookInFlightLimiterMock.mockClear();
     unregisterHttpMock.mockReset();
     registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
     ({ monitorLineProvider } = await import("./monitor.js"));
@@ -141,6 +160,26 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
     monitor.stop();
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the shared webhook in-flight limiter to the LINE node handler", async () => {
+    await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    expect(createWebhookInFlightLimiterMock).toHaveBeenCalledTimes(1);
+    expect(createLineNodeWebhookHandlerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inFlightLimiter: expect.objectContaining({
+          tryAcquire: expect.any(Function),
+          release: expect.any(Function),
+        }),
+        inFlightKey: "/line/webhook",
+      }),
+    );
   });
 
   it("rejects startup when channel secret is missing", async () => {

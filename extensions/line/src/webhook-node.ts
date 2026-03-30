@@ -2,9 +2,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
+  beginWebhookRequestPipelineOrReject,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
+  type WebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -25,12 +27,21 @@ export async function readLineWebhookRequestBody(
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
 
+function resolveLineWebhookInFlightKey(req: IncomingMessage, explicitKey?: string): string {
+  if (explicitKey?.trim()) {
+    return explicitKey;
+  }
+  return new URL(req.url ?? "/", "http://localhost").pathname;
+}
+
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
   bot: { handleWebhook: (body: WebhookRequestBody) => Promise<void> };
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
+  inFlightLimiter?: WebhookInFlightLimiter;
+  inFlightKey?: string;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
@@ -73,11 +84,27 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
-      const rawBody = await readBody(
+      const requestLifecycle = beginWebhookRequestPipelineOrReject({
         req,
-        Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
-        LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
-      );
+        res,
+        inFlightLimiter: params.inFlightLimiter,
+        inFlightKey: resolveLineWebhookInFlightKey(req, params.inFlightKey),
+      });
+      if (!requestLifecycle.ok) {
+        return;
+      }
+
+      let rawBody: string;
+      try {
+        rawBody = await readBody(
+          req,
+          Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
+          LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+        );
+      } finally {
+        // Bound only the unauthenticated body-read phase; post-auth handling can continue normally.
+        requestLifecycle.release();
+      }
 
       if (!validateLineSignature(rawBody, signature, params.channelSecret)) {
         logVerbose("line: webhook signature validation failed");
