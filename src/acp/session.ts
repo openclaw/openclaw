@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AcpSession } from "./types.js";
 
 export type AcpSessionStore = {
@@ -88,7 +91,97 @@ export function createInMemorySessionStore(): AcpSessionStore {
     clearActiveRun,
     cancelActiveRun,
     clearAllSessionsForTest,
+    /** Return all sessions for persistence (internal use) */
+    _getAllSessions: () => Record<string, AcpSession>,
   };
 }
 
-export const defaultAcpSessionStore = createInMemorySessionStore();
+/**
+ * File-backed session store for ACP persistence across process restarts.
+ * Sessions are stored in ~/.openclaw/acp-sessions.json
+ */
+export function createFileSessionStore(): AcpSessionStore {
+  const memoryStore = createInMemorySessionStore();
+  const sessionFile = path.join(
+    process.env.OPENCLAW_STATE_DIR || path.join(os.homedir() || "", ".openclaw"),
+    "acp-sessions.json",
+  );
+  let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+  let loaded = false;
+
+  const loadFromDisk = () => {
+    if (loaded) {
+      return;
+    }
+    loaded = true;
+    try {
+      if (fs.existsSync(sessionFile)) {
+        const data = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+        for (const [sessionId, sessionData] of Object.entries(data)) {
+          try {
+            memoryStore.createSession({
+              sessionId,
+              sessionKey: sessionData.sessionKey,
+              cwd: sessionData.cwd,
+            });
+          } catch {
+            // ignore individual session errors
+          }
+        }
+      }
+    } catch {
+      // ignore load errors
+    }
+  };
+
+  const saveToDisk = () => {
+    if (saveTimeout) {
+      return;
+    }
+    saveTimeout = setTimeout(() => {
+      saveTimeout = null;
+      try {
+        const sessions = memoryStore._getAllSessions?.() || {};
+        fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+        fs.writeFileSync(sessionFile, JSON.stringify(sessions, null, 2), "utf8");
+      } catch {
+        // ignore save errors
+      }
+    }, 1000);
+  };
+
+  // Load existing sessions on startup
+  loadFromDisk();
+
+  return {
+    createSession: (params) => {
+      const s = memoryStore.createSession(params);
+      saveToDisk();
+      return s;
+    },
+    getSession: (id) => {
+      loadFromDisk();
+      return memoryStore.getSession(id);
+    },
+    getSessionByRunId: (id) => memoryStore.getSessionByRunId(id),
+    setActiveRun: (sid, rid, ac) => {
+      memoryStore.setActiveRun(sid, rid, ac);
+      saveToDisk();
+    },
+    clearActiveRun: (sid) => {
+      memoryStore.clearActiveRun(sid);
+      saveToDisk();
+    },
+    cancelActiveRun: (sid) => {
+      const r = memoryStore.cancelActiveRun(sid);
+      saveToDisk();
+      return r;
+    },
+    clearAllSessionsForTest: () => {
+      memoryStore.clearAllSessionsForTest();
+      saveToDisk();
+    },
+  };
+}
+
+export const defaultAcpSessionStore = createFileSessionStore();
