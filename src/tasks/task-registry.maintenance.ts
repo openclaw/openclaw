@@ -108,24 +108,32 @@ function resolveCleanupAfter(task: TaskRecord): number {
 }
 
 function markTaskLost(task: TaskRecord, now: number): TaskRecord {
+  const cleanupAfter = task.cleanupAfter ?? resolveCleanupAfter(projectTaskLost(task, now));
   const updated =
     updateTaskRecordById(task.taskId, {
       status: "lost",
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
       error: task.error ?? "backing session missing",
+      cleanupAfter,
     }) ?? task;
   void maybeDeliverTaskTerminalUpdate(updated.taskId);
   return updated;
 }
 
 function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
-  return {
+  const projected: TaskRecord = {
     ...task,
     status: "lost",
     endedAt: task.endedAt ?? now,
     lastEventAt: now,
     error: task.error ?? "backing session missing",
+  };
+  return {
+    ...projected,
+    ...(typeof projected.cleanupAfter === "number"
+      ? {}
+      : { cleanupAfter: resolveCleanupAfter(projected) }),
   };
 }
 
