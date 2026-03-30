@@ -13,4 +13,8 @@ export {
   deriveQmdScopeChatType,
   isQmdScopeAllowed,
 } from "./host/qmd-scope.js";
-export { resolveCliSpawnInvocation, runCliCommand } from "./host/qmd-process.js";
+export {
+  checkQmdBinaryAvailability,
+  resolveCliSpawnInvocation,
+  runCliCommand,
+} from "./host/qmd-process.js";
