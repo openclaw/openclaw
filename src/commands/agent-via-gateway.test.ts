@@ -136,7 +136,7 @@ describe("agentCliCommand", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
-        cleanupBundleMcpOnAttemptEnd: true,
+        cleanupBundleMcpOnRunEnd: true,
       });
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
@@ -151,7 +151,7 @@ describe("agentCliCommand", () => {
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).not.toMatchObject({
-        cleanupBundleMcpOnAttemptEnd: true,
+        cleanupBundleMcpOnRunEnd: true,
       });
     });
   });

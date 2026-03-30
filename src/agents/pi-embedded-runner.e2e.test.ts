@@ -15,6 +15,10 @@ import {
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
 
 const runEmbeddedAttemptMock = vi.fn();
+const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
+  return undefined;
+});
+let refreshRuntimeAuthOnFirstPromptError = false;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -94,6 +98,9 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
+  vi.doMock("./pi-bundle-mcp-tools.js", () => ({
+    disposeSessionMcpRuntime: (sessionId: string) => disposeSessionMcpRuntimeMock(sessionId),
+  }));
   vi.doMock("./pi-embedded-runner/model.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./pi-embedded-runner/model.js")>();
     return {
@@ -102,6 +109,16 @@ const installRunEmbeddedMocks = () => {
         createResolvedEmbeddedRunnerModel(provider, modelId),
     };
   });
+  vi.doMock("./pi-embedded-runner/run/auth-controller.js", () => ({
+    createEmbeddedRunAuthController: () => ({
+      advanceAuthProfile: vi.fn(async () => false),
+      initializeAuthProfile: vi.fn(async () => undefined),
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async (_errorText: string, runtimeAuthRetry) => {
+        return refreshRuntimeAuthOnFirstPromptError && runtimeAuthRetry !== true;
+      }),
+      stopRuntimeAuthRefreshTimer: vi.fn(),
+    }),
+  }));
   vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
     return {
@@ -144,6 +161,8 @@ afterAll(async () => {
 beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
+  disposeSessionMcpRuntimeMock.mockReset();
+  refreshRuntimeAuthOnFirstPromptError = false;
   runEmbeddedAttemptMock.mockImplementation(async () => {
     throw new Error("unexpected extra runEmbeddedAttempt call");
   });
@@ -245,7 +264,7 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
 };
 
 describe("runEmbeddedPiAgent", () => {
-  it("forwards one-shot bundle MCP cleanup to each embedded attempt", async () => {
+  it("disposes bundle MCP once when a one-shot local run completes", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
     const sessionKey = nextSessionKey();
@@ -269,15 +288,58 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
-      runId: nextRunId("bundle-mcp-cleanup"),
+      runId: nextRunId("bundle-mcp-run-cleanup"),
       enqueue: immediateEnqueue,
-      cleanupBundleMcpOnAttemptEnd: true,
+      cleanupBundleMcpOnRunEnd: true,
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
-      cleanupBundleMcpOnAttemptEnd: true,
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
+  });
+
+  it("preserves bundle MCP state across retries within one local run", async () => {
+    refreshRuntimeAuthOnFirstPromptError = true;
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const sessionKey = nextSessionKey();
+    runEmbeddedAttemptMock
+      .mockImplementationOnce(async () => {
+        expect(disposeSessionMcpRuntimeMock).not.toHaveBeenCalled();
+        return makeEmbeddedRunnerAttempt({
+          promptError: new Error("401 unauthorized"),
+        });
+      })
+      .mockImplementationOnce(async () => {
+        expect(disposeSessionMcpRuntimeMock).not.toHaveBeenCalled();
+        return makeEmbeddedRunnerAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        });
+      });
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("bundle-mcp-retry"),
+      enqueue: immediateEnqueue,
+      cleanupBundleMcpOnRunEnd: true,
     });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
 
   it("handles prompt error paths without dropping user state", async () => {

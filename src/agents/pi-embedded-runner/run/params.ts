@@ -133,9 +133,9 @@ export type RunEmbeddedPiAgentParams = {
    */
   allowTransientCooldownProbe?: boolean;
   /**
-   * Dispose bundled MCP runtimes when an attempt ends instead of preserving
+   * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must
    * exit promptly after emitting the final JSON result.
    */
-  cleanupBundleMcpOnAttemptEnd?: boolean;
+  cleanupBundleMcpOnRunEnd?: boolean;
 };

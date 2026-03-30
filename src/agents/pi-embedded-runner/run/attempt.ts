@@ -59,7 +59,6 @@ import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
 import {
-  disposeSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../pi-bundle-mcp-tools.js";
@@ -497,11 +496,6 @@ export async function runEmbeddedAttempt(
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
           ],
-          disposeRuntime: params.cleanupBundleMcpOnAttemptEnd
-            ? async () => {
-                await disposeSessionMcpRuntime(params.sessionId);
-              }
-            : undefined,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -1884,7 +1878,6 @@ export async function runEmbeddedAttempt(
       });
       session?.dispose();
       releaseWsSession(params.sessionId);
-      await bundleMcpRuntime?.dispose();
       await bundleLspRuntime?.dispose();
       await sessionLock.release();
     }
