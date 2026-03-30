@@ -4,6 +4,7 @@ type InstallScanLogger = {
 
 export type InstallSecurityScanResult = {
   blocked?: {
+    code?: "security_scan_blocked" | "security_scan_failed";
     reason: string;
   };
 };
