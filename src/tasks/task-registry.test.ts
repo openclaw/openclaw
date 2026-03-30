@@ -817,6 +817,38 @@ describe("task-registry", () => {
     });
   });
 
+  it("marks orphaned tasks lost with cleanupAfter in a single maintenance pass", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:acp:missing",
+        runId: "run-lost-maintenance",
+        task: "Missing child",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      updateTaskRecordById(task.taskId, {
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      expect(runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "lost",
+        error: "backing session missing",
+      });
+      expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
+    });
+  });
+
   it("prunes old terminal tasks during maintenance sweeps", async () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
