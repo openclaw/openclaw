@@ -6,6 +6,7 @@ export const LogsTailParamsSchema = Type.Object(
     cursor: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
     maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
+    source: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("llm")])),
   },
   { additionalProperties: false },
 );
@@ -13,11 +14,13 @@ export const LogsTailParamsSchema = Type.Object(
 export const LogsTailResultSchema = Type.Object(
   {
     file: NonEmptyString,
+    source: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("llm")])),
     cursor: Type.Integer({ minimum: 0 }),
     size: Type.Integer({ minimum: 0 }),
     lines: Type.Array(Type.String()),
     truncated: Type.Optional(Type.Boolean()),
     reset: Type.Optional(Type.Boolean()),
+    hint: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

@@ -1144,4 +1144,123 @@ describe("logs.tail", () => {
 
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });
+
+  it("reads llm logs from the configured llm log path override", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-llm-logs-"));
+    const llmLog = path.join(tempDir, "cache-trace.jsonl");
+
+    await fsPromises.writeFile(llmLog, '{"stage":"prompt:before","prompt":"hello"}\n');
+    const previousOverride = process.env.OPENCLAW_CACHE_TRACE_FILE;
+    process.env.OPENCLAW_CACHE_TRACE_FILE = llmLog;
+
+    const respond = vi.fn();
+    await logsHandlers["logs.tail"]({
+      params: { source: "llm" },
+      respond,
+      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      client: null,
+      req: { id: "req-2", type: "req", method: "logs.tail" },
+      isWebchatConnect: logsNoop,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: llmLog,
+        source: "llm",
+        lines: ['{"stage":"prompt:before","prompt":"hello"}'],
+      }),
+      undefined,
+    );
+
+    if (previousOverride === undefined) {
+      delete process.env.OPENCLAW_CACHE_TRACE_FILE;
+    } else {
+      process.env.OPENCLAW_CACHE_TRACE_FILE = previousOverride;
+    }
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("returns a hint when llm logs are disabled", async () => {
+    const previousEnabled = process.env.OPENCLAW_CACHE_TRACE;
+    const previousFile = process.env.OPENCLAW_CACHE_TRACE_FILE;
+    process.env.OPENCLAW_CACHE_TRACE = "0";
+    delete process.env.OPENCLAW_CACHE_TRACE_FILE;
+
+    const respond = vi.fn();
+    await logsHandlers["logs.tail"]({
+      params: { source: "llm" },
+      respond,
+      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      client: null,
+      req: { id: "req-3", type: "req", method: "logs.tail" },
+      isWebchatConnect: logsNoop,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        source: "llm",
+        hint: expect.stringContaining("LLM logs are disabled"),
+      }),
+      undefined,
+    );
+
+    if (previousEnabled === undefined) {
+      delete process.env.OPENCLAW_CACHE_TRACE;
+    } else {
+      process.env.OPENCLAW_CACHE_TRACE = previousEnabled;
+    }
+    if (previousFile === undefined) {
+      delete process.env.OPENCLAW_CACHE_TRACE_FILE;
+    } else {
+      process.env.OPENCLAW_CACHE_TRACE_FILE = previousFile;
+    }
+  });
+
+  it("still returns a hint when disabled llm logs have historical trace contents", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-llm-history-"));
+    const llmLog = path.join(tempDir, "cache-trace.jsonl");
+    const previousEnabled = process.env.OPENCLAW_CACHE_TRACE;
+    const previousFile = process.env.OPENCLAW_CACHE_TRACE_FILE;
+    process.env.OPENCLAW_CACHE_TRACE = "0";
+    process.env.OPENCLAW_CACHE_TRACE_FILE = llmLog;
+    await fsPromises.writeFile(
+      llmLog,
+      '{"stage":"session:after","messages":[{"role":"assistant","content":"old"}]}\n',
+    );
+
+    const respond = vi.fn();
+    await logsHandlers["logs.tail"]({
+      params: { source: "llm" },
+      respond,
+      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      client: null,
+      req: { id: "req-4", type: "req", method: "logs.tail" },
+      isWebchatConnect: logsNoop,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: llmLog,
+        source: "llm",
+        lines: ['{"stage":"session:after","messages":[{"role":"assistant","content":"old"}]}'],
+        hint: expect.stringContaining("historical"),
+      }),
+      undefined,
+    );
+
+    if (previousEnabled === undefined) {
+      delete process.env.OPENCLAW_CACHE_TRACE;
+    } else {
+      process.env.OPENCLAW_CACHE_TRACE = previousEnabled;
+    }
+    if (previousFile === undefined) {
+      delete process.env.OPENCLAW_CACHE_TRACE_FILE;
+    } else {
+      process.env.OPENCLAW_CACHE_TRACE_FILE = previousFile;
+    }
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
 });

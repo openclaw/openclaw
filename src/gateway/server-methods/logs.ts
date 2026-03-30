@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadConfig } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { clamp } from "../../utils.js";
+import { resolveUserPath } from "../../utils.js";
+import { parseBooleanValue } from "../../utils/boolean.js";
 import {
   ErrorCodes,
   errorShape,
@@ -11,10 +15,11 @@ import {
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_LIMIT = 500;
-const DEFAULT_MAX_BYTES = 250_000;
+const DEFAULT_MAX_BYTES = 1_000_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
 const ROLLING_LOG_RE = /^openclaw-\d{4}-\d{2}-\d{2}\.log$/;
+type LogsSource = "gateway" | "llm";
 
 function isRollingLogFile(file: string): boolean {
   return ROLLING_LOG_RE.test(path.basename(file));
@@ -48,6 +53,29 @@ async function resolveLogFile(file: string): Promise<string> {
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
     .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
   return sorted[0]?.path ?? file;
+}
+
+function resolveLlmLogFile(): string {
+  const config = loadConfig();
+  const configuredFile = config.diagnostics?.cacheTrace?.filePath?.trim();
+  const envFile = process.env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const filePath = configuredFile || envFile;
+  return filePath
+    ? resolveUserPath(filePath)
+    : path.join(resolveStateDir(process.env), "logs", "cache-trace.jsonl");
+}
+
+async function resolveLogFileForSource(source: LogsSource): Promise<string> {
+  if (source === "llm") {
+    return resolveLlmLogFile();
+  }
+  return resolveLogFile(getResolvedLoggerSettings().file);
+}
+
+function isLlmSourceEnabled(): boolean {
+  const config = loadConfig();
+  const envEnabled = parseBooleanValue(process.env.OPENCLAW_CACHE_TRACE);
+  return envEnabled ?? config.diagnostics?.cacheTrace?.enabled ?? false;
 }
 
 async function readLogSlice(params: {
@@ -158,17 +186,26 @@ export const logsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const p = params as { cursor?: number; limit?: number; maxBytes?: number };
-    const configuredFile = getResolvedLoggerSettings().file;
+    const p = params as {
+      cursor?: number;
+      limit?: number;
+      maxBytes?: number;
+      source?: LogsSource;
+    };
+    const source: LogsSource = p.source ?? "gateway";
     try {
-      const file = await resolveLogFile(configuredFile);
+      const file = await resolveLogFileForSource(source);
       const result = await readLogSlice({
         file,
         cursor: p.cursor,
         limit: p.limit ?? DEFAULT_LIMIT,
         maxBytes: p.maxBytes ?? DEFAULT_MAX_BYTES,
       });
-      respond(true, { file, ...result }, undefined);
+      const hint =
+        source === "llm" && !isLlmSourceEnabled()
+          ? "LLM logs are disabled for the current gateway process. Enable diagnostics.cacheTrace.enabled=true or set OPENCLAW_CACHE_TRACE=1, restart the gateway, then reproduce the run. Existing cache-trace.jsonl contents may be historical."
+          : undefined;
+      respond(true, { file, source, ...result, hint }, undefined);
     } catch (err) {
       respond(
         false,
