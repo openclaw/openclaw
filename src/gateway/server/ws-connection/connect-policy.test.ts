@@ -346,7 +346,7 @@ describe("ws connect policy", () => {
         decision: { kind: "allow" },
         controlUiAuthPolicy: nonControlUi,
         preserveInsecureLocalControlUiScopes: false,
-        authMethod: "token",
+        authMethod: undefined,
         trustedProxyAuthOk: true,
       }),
     ).toBe(true);
