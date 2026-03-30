@@ -528,15 +528,39 @@ async function resolveHeartbeatPreflight(params: {
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
       // Restore migrated events to the originating session — the heartbeat
       // won't run, so leaving them in the heartbeat session would orphan them.
+      //
+      // Instead of draining the entire destination queue and rebuilding it
+      // from preExistingHeartbeatEvents + migratedEvents, we compute a diff:
+      // only remove the events we migrated, leaving any events that arrived
+      // concurrently (between the earlier enqueue and the fs.readFile await)
+      // intact.
       if (migratedEvents.length > 0 && originatingSessionKey) {
-        drainSystemEventEntries(session.sessionKey);
-        for (const event of preExistingHeartbeatEvents) {
-          enqueueSystemEvent(event.text, {
-            sessionKey: session.sessionKey,
-            contextKey: event.contextKey,
-            deliveryContext: event.deliveryContext,
-          });
+        const currentDestEvents = drainSystemEventEntries(session.sessionKey);
+
+        // Build a removal multiset from migrated events so we can identify
+        // and remove exactly those entries from the destination queue.
+        const removalCounts = new Map<string, number>();
+        for (const event of migratedEvents) {
+          const key = `${event.contextKey ?? ""}\0${event.text}`;
+          removalCounts.set(key, (removalCounts.get(key) ?? 0) + 1);
         }
+
+        // Re-enqueue events that are NOT migrated (pre-existing + concurrent).
+        for (const event of currentDestEvents) {
+          const key = `${event.contextKey ?? ""}\0${event.text}`;
+          const remaining = removalCounts.get(key) ?? 0;
+          if (remaining > 0) {
+            removalCounts.set(key, remaining - 1);
+          } else {
+            enqueueSystemEvent(event.text, {
+              sessionKey: session.sessionKey,
+              contextKey: event.contextKey,
+              deliveryContext: event.deliveryContext,
+            });
+          }
+        }
+
+        // Restore migrated events to the originating session.
         for (const event of migratedEvents) {
           enqueueSystemEvent(event.text, {
             sessionKey: originatingSessionKey,

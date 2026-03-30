@@ -767,4 +767,119 @@ describe("system-event-triggered heartbeat session routing", () => {
     // Heartbeat session should be empty (no orphaned events)
     expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
   });
+
+  it("preserves concurrent heartbeat-session events when restoring on skip", async () => {
+    const tmpDir = await createCaseDir("hb-skip-concurrent");
+    const storePath = path.join(tmpDir, "sessions.json");
+
+    const agentId = "main";
+    const heartbeatSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "group",
+      peerId: "-100heartbeat",
+    });
+    const dmSessionKey = buildAgentPeerSessionKey({
+      agentId,
+      channel: "telegram",
+      peerKind: "direct",
+      peerId: "888777666",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "telegram",
+            to: "-100heartbeat",
+            session: heartbeatSessionKey,
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveAgentMainSessionKey({ cfg, agentId })]: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [heartbeatSessionKey]: {
+          sessionId: "sid-heartbeat",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "-100heartbeat",
+        },
+        [dmSessionKey]: {
+          sessionId: "sid-dm",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "888777666",
+        },
+      }),
+    );
+
+    // Create an empty HEARTBEAT.md so the heartbeat is skipped.
+    // Use a real fs.readFile spy to inject a concurrent event during the
+    // await gap between migration and the skip check.
+    const originalReadFile = fs.readFile;
+    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      // Let the real readFile run first
+      const result = await originalReadFile.apply(fs, args);
+      // Simulate a concurrent event arriving in the heartbeat session
+      // during the await fs.readFile gap
+      enqueueSystemEvent("Concurrent restart notification", {
+        sessionKey: heartbeatSessionKey,
+        contextKey: "system:restart",
+      });
+      return result;
+    });
+
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "   \n");
+
+    // Enqueue an event into the DM session that will be migrated
+    enqueueSystemEvent("exec finished (concurrent-test, code 0) :: task done", {
+      sessionKey: dmSessionKey,
+      contextKey: "exec:concurrent-test",
+    });
+
+    expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(1);
+    expect(hasSystemEvents(heartbeatSessionKey)).toBe(false);
+
+    const sendTelegram = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; chatId: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", chatId: "-100heartbeat" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      reason: "exec:concurrent-test:exit",
+      sessionKey: dmSessionKey,
+      deps: createHeartbeatDeps(sendTelegram),
+    });
+
+    expect(res.status).toBe("skipped");
+    expect(res).toHaveProperty("reason", "empty-heartbeat-file");
+
+    // Migrated events must be restored to the originating DM session
+    const dmEntries = peekSystemEventEntries(dmSessionKey);
+    expect(dmEntries).toHaveLength(1);
+    expect(dmEntries[0].text).toContain("task done");
+
+    // The concurrent event that arrived during the await gap must be
+    // preserved in the heartbeat session — NOT dropped
+    const heartbeatEntries = peekSystemEventEntries(heartbeatSessionKey);
+    expect(heartbeatEntries).toHaveLength(1);
+    expect(heartbeatEntries[0].text).toBe("Concurrent restart notification");
+    expect(heartbeatEntries[0].contextKey).toBe("system:restart");
+
+    readFileSpy.mockRestore();
+  });
 });
