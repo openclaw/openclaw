@@ -50,4 +50,16 @@ describe("zai model definitions", () => {
       cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
     });
   });
+
+  it("includes glm-5.1 with glm-5-class limits", () => {
+    expect(buildZaiModelDefinition({ id: "glm-5.1" })).toMatchObject({
+      id: "glm-5.1",
+      name: "GLM-5.1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 202800,
+      maxTokens: 131100,
+      cost: ZAI_DEFAULT_COST,
+    });
+  });
 });

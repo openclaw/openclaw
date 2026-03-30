@@ -40,6 +40,15 @@ const ZAI_MODEL_CATALOG = {
     maxTokens: 131100,
     cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
   },
+  /** Minor release; align with glm-5 until Z.AI publishes distinct pricing. */
+  "glm-5.1": {
+    name: "GLM-5.1",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202800,
+    maxTokens: 131100,
+    cost: ZAI_DEFAULT_COST,
+  },
   "glm-4.7": {
     name: "GLM-4.7",
     reasoning: true,

@@ -39,7 +39,7 @@ openclaw onboard --auth-choice zai-cn
 
 ## Notes
 
-- GLM models are available as `zai/<model>` (example: `zai/glm-5`).
+- GLM models are available as `zai/<model>` (examples: `zai/glm-5`, `zai/glm-5.1`, `zai/glm-5-turbo`).
 - `tool_stream` is enabled by default for Z.AI tool-call streaming. Set
   `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 - See [/providers/glm](/providers/glm) for the model family overview.

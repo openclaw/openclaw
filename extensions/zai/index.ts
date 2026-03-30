@@ -31,12 +31,21 @@ const GLM5_MODEL_ID = "glm-5";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 
+/** GLM-5 base id, hyphen variants (e.g. glm-5-turbo), and semver-style minors (e.g. glm-5.1). */
+function isGlm5FamilyModelId(modelIdLower: string): boolean {
+  return (
+    modelIdLower === GLM5_MODEL_ID ||
+    modelIdLower.startsWith(`${GLM5_MODEL_ID}-`) ||
+    modelIdLower.startsWith(`${GLM5_MODEL_ID}.`)
+  );
+}
+
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
   const lower = trimmedModelId.toLowerCase();
-  if (lower !== GLM5_MODEL_ID && !lower.startsWith(`${GLM5_MODEL_ID}-`)) {
+  if (!isGlm5FamilyModelId(lower)) {
     return undefined;
   }
 

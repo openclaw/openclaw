@@ -46,7 +46,7 @@ openclaw onboard --auth-choice zai-cn
 
 ## 说明
 
-- GLM 模型可用作 `zai/<model>`（例如：`zai/glm-5`）。
+- GLM 模型可用作 `zai/<model>`（例如：`zai/glm-5`、`zai/glm-5.1`、`zai/glm-5-turbo`）。
 - `tool_stream` 默认启用，用于 Z.AI 工具调用流式传输。若要禁用，请设置
   `agents.defaults.models["zai/<model>"].params.tool_stream` 为 `false`。
 - 关于模型家族概览，请参阅 [/providers/glm](/providers/glm)。
