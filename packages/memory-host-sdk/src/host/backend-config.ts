@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
@@ -115,8 +116,20 @@ function scopeCollectionBase(base: string, agentId: string): string {
   return `${base}-${sanitizeName(agentId)}`;
 }
 
+function canonicalizePathForContainment(rawPath: string): string {
+  const resolved = path.resolve(rawPath);
+  try {
+    return path.normalize(fs.realpathSync.native(resolved));
+  } catch {
+    return path.normalize(resolved);
+  }
+}
+
 function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
-  const relative = path.relative(path.resolve(rootPath), path.resolve(candidatePath));
+  const relative = path.relative(
+    canonicalizePathForContainment(rootPath),
+    canonicalizePathForContainment(candidatePath),
+  );
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
