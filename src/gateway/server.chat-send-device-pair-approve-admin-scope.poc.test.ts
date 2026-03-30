@@ -5,7 +5,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import registerDevicePair from "../../extensions/device-pair/index.js";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import { getReplyFromConfig as getActualReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, writeConfigFile } from "../config/config.js";
 import {
@@ -13,6 +12,7 @@ import {
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
+import { buildPluginApi } from "../plugins/api-builder.js";
 import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -46,14 +46,21 @@ function loadDeviceIdentity(name: string) {
 function createDevicePairApi(params: {
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
 }): OpenClawPluginApi {
-  return createTestPluginApi({
+  return buildPluginApi({
     id: "device-pair",
     name: "device-pair",
     source: "test",
+    registrationMode: "full",
     config: {},
     pluginConfig: {},
     runtime: {} as OpenClawPluginApi["runtime"],
-    registerCommand: params.registerCommand,
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    resolvePath(input: string) {
+      return input;
+    },
+    handlers: {
+      registerCommand: params.registerCommand,
+    },
   });
 }
 
