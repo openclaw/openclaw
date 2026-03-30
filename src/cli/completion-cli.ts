@@ -280,7 +280,7 @@ export function registerCompletionCli(program: Command) {
       const config = await loadValidatedConfigForPluginRegistration();
       if (config) {
         const { registerPluginCliCommands } = await import("../plugins/cli.js");
-        registerPluginCliCommands(program, config);
+        await registerPluginCliCommands(program, config, undefined, undefined, { mode: "eager" });
       }
 
       if (options.writeState) {

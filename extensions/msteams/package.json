@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.3.29",
+  "version": "2026.3.30",
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.29"
+    "openclaw": ">=2026.3.30"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -39,7 +39,7 @@
     "install": {
       "npmSpec": "@openclaw/msteams",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.29"
+      "minHostVersion": ">=2026.3.30"
     },
     "release": {
       "publishToNpm": true
