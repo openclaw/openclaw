@@ -18,6 +18,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import { initializeMemoryProxyAuditState } from "./memory-proxy.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import {
   createGatewayBroadcaster,
@@ -170,6 +171,8 @@ export async function createGatewayRuntimeState(params: {
           "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
       );
     }
+    await initializeMemoryProxyAuditState();
+
     const httpServers: HttpServer[] = [];
     const httpBindHosts: string[] = [];
     for (const host of bindHosts) {
