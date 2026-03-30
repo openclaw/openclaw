@@ -535,6 +535,10 @@ class NodeRuntime(
   fun setGatewayBootstrapToken(value: String) = prefs.setGatewayBootstrapToken(value)
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
+  fun hasStoredNodeDeviceToken(): Boolean {
+    val deviceId = identityStore.loadOrCreate().deviceId
+    return !deviceAuthStore.loadToken(deviceId, "node").isNullOrBlank()
+  }
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
