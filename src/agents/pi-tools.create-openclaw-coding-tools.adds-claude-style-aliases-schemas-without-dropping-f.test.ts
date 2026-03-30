@@ -137,4 +137,25 @@ describe("createOpenClawCodingTools", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("still rejects malformed legacy single-edit input missing newText", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-edit-invalid-"));
+    try {
+      const filePath = path.join(tmpDir, "legacy-invalid.js");
+      await fs.writeFile(filePath, "const value = 'old';\n", "utf8");
+
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { editTool } = expectReadWriteEditTools(tools);
+
+      await expect(
+        editTool.execute("tool-legacy-edit-invalid", {
+          path: "legacy-invalid.js",
+          oldText: "old",
+        }),
+      ).rejects.toThrow(/newText|oldText/i);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
 });

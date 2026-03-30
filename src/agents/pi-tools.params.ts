@@ -220,7 +220,10 @@ export function assertRequiredParams(
 
   const missingLabels: string[] = [];
   for (const group of groups) {
-    if (group.validate?.(record)) {
+    if (group.validate !== undefined) {
+      if (!group.validate(record)) {
+        missingLabels.push(group.label ?? group.keys.join(" or "));
+      }
       continue;
     }
     const satisfied = group.keys.some((key) => {
