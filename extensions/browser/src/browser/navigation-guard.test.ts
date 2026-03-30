@@ -13,20 +13,18 @@ function createLookupFn(address: string): LookupFn {
   return vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
 }
 
-const PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
+function clearProxyEnvironment(): void {
+  vi.stubEnv("HTTP_PROXY", "");
+  vi.stubEnv("HTTPS_PROXY", "");
+  vi.stubEnv("ALL_PROXY", "");
+  vi.stubEnv("http_proxy", "");
+  vi.stubEnv("https_proxy", "");
+  vi.stubEnv("all_proxy", "");
+}
 
 describe("browser navigation guard", () => {
   beforeEach(() => {
-    for (const key of PROXY_ENV_KEYS) {
-      vi.stubEnv(key, "");
-    }
+    clearProxyEnvironment();
   });
 
   afterEach(() => {

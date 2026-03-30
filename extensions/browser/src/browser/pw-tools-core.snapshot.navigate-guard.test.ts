@@ -20,11 +20,15 @@ const PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
+function clearProxyEnvironment(): void {
+  for (const key of PROXY_ENV_KEYS) {
+    vi.stubEnv(key, "");
+  }
+}
+
 describe("pw-tools-core.snapshot navigate guard", () => {
   beforeEach(() => {
-    for (const key of PROXY_ENV_KEYS) {
-      vi.stubEnv(key, "");
-    }
+    clearProxyEnvironment();
   });
 
   afterEach(() => {
