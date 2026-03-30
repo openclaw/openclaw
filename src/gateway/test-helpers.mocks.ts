@@ -313,7 +313,7 @@ const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () =
 
 export const setTestConfigRoot = (root: string) => {
   testConfigRoot.value = root;
-  process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
+  process.env.NEXUS_CONFIG_PATH = path.join(root, "nexus-agent.json");
 };
 
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
@@ -419,7 +419,7 @@ vi.mock("../config/sessions.js", async () => {
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
+  const resolveConfigPath = () => path.join(testConfigRoot.value, "nexus-agent.json");
   const hashConfigRaw = (raw: string | null) =>
     crypto
       .createHash("sha256")
@@ -780,7 +780,7 @@ vi.mock("/src/plugins/runtime/runtime-whatsapp-boundary.js", () => ({
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";
+process.env.NEXUS_SKIP_CHANNELS = "1";
+process.env.NEXUS_SKIP_CRON = "1";
+process.env.NEXUS_SKIP_CHANNELS = "1";
+process.env.NEXUS_SKIP_CRON = "1";

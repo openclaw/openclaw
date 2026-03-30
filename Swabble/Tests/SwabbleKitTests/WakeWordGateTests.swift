@@ -4,7 +4,7 @@ import Testing
 
 @Suite struct WakeWordGateTests {
     @Test func matchRequiresGapAfterTrigger() {
-        let transcript = "hey clawd do thing"
+        let transcript = "hey nexus do thing"
         let segments = makeSegments(
             transcript: transcript,
             words: [
@@ -18,7 +18,7 @@ import Testing
     }
 
     @Test func matchAllowsGapAndExtractsCommand() {
-        let transcript = "hey clawd do thing"
+        let transcript = "hey nexus do thing"
         let segments = makeSegments(
             transcript: transcript,
             words: [
@@ -33,7 +33,7 @@ import Testing
     }
 
     @Test func matchHandlesMultiWordTriggers() {
-        let transcript = "hey clawd do it"
+        let transcript = "hey nexus do it"
         let segments = makeSegments(
             transcript: transcript,
             words: [
@@ -42,13 +42,13 @@ import Testing
                 ("do", 0.8, 0.1),
                 ("it", 1.0, 0.1),
             ])
-        let config = WakeWordGateConfig(triggers: ["hey clawd"], minPostTriggerGap: 0.3)
+        let config = WakeWordGateConfig(triggers: ["hey nexus"], minPostTriggerGap: 0.3)
         let match = WakeWordGate.match(transcript: transcript, segments: segments, config: config)
         #expect(match?.command == "do it")
     }
 
     @Test func commandTextHandlesForeignRangeIndices() {
-        let transcript = "hey clawd do thing"
+        let transcript = "hey nexus do thing"
         let other = "do thing"
         let foreignRange = other.range(of: "do")
         let segments = [

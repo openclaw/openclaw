@@ -3,10 +3,10 @@ import { expect } from "vitest";
 
 export const IS_WINDOWS = process.platform === "win32";
 
-export function resolveConfigPathFromTempState(fileName = "openclaw.json"): string {
-  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+export function resolveConfigPathFromTempState(fileName = "nexus-agent.json"): string {
+  const stateDir = process.env.NEXUS_STATE_DIR?.trim();
   if (!stateDir) {
-    throw new Error("Expected OPENCLAW_STATE_DIR to be set by withTempHome");
+    throw new Error("Expected NEXUS_STATE_DIR to be set by withTempHome");
   }
   return path.join(stateDir, fileName);
 }

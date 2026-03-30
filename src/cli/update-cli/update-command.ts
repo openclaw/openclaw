@@ -76,11 +76,11 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
-  "OPENCLAW_HOME",
+  "NEXUS_HOME",
   "NEXUS_STATE_DIR",
   "NEXUS_CONFIG_PATH",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
+  "NEXUS_STATE_DIR",
+  "NEXUS_CONFIG_PATH",
 ] as const;
 
 const UPDATE_QUIPS = [

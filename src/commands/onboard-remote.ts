@@ -182,10 +182,10 @@ export async function promptRemoteGatewayConfig(
         provider: "gateway-remote-token",
         config: cfg,
         prompter,
-        preferredEnvVar: "OPENCLAW_GATEWAY_TOKEN",
+        preferredEnvVar: "NEXUS_GATEWAY_TOKEN",
         copy: {
           sourceMessage: "Where is this gateway token stored?",
-          envVarPlaceholder: "OPENCLAW_GATEWAY_TOKEN",
+          envVarPlaceholder: "NEXUS_GATEWAY_TOKEN",
         },
       });
       token = resolved.ref;
@@ -214,10 +214,10 @@ export async function promptRemoteGatewayConfig(
         provider: "gateway-remote-password",
         config: cfg,
         prompter,
-        preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
+        preferredEnvVar: "NEXUS_GATEWAY_PASSWORD",
         copy: {
           sourceMessage: "Where is this gateway password stored?",
-          envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
+          envVarPlaceholder: "NEXUS_GATEWAY_PASSWORD",
         },
       });
       password = resolved.ref;

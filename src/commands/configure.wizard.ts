@@ -87,8 +87,8 @@ async function runGatewayHealthCheck(params: {
     value: params.cfg.gateway?.auth?.password,
     path: "gateway.auth.password",
   });
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN ?? configuredToken;
-  const password = process.env.OPENCLAW_GATEWAY_PASSWORD ?? configuredPassword;
+  const token = process.env.NEXUS_GATEWAY_TOKEN ?? configuredToken;
+  const password = process.env.NEXUS_GATEWAY_PASSWORD ?? configuredPassword;
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -277,8 +277,8 @@ export async function runConfigureWizard(
     });
     const localProbe = await probeGatewayReachable({
       url: localUrl,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
-      password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
+      token: process.env.NEXUS_GATEWAY_TOKEN ?? baseLocalProbeToken,
+      password: process.env.NEXUS_GATEWAY_PASSWORD ?? baseLocalProbePassword,
     });
     const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
     const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
@@ -572,21 +572,21 @@ export async function runConfigureWizard(
     });
     // Try both newly written and preexisting passwords while the gateway restarts.
     const newPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      process.env.NEXUS_GATEWAY_PASSWORD ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
       }));
     const oldPassword =
-      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      process.env.NEXUS_GATEWAY_PASSWORD ??
       (await resolveGatewaySecretInputForWizard({
         cfg: baseConfig,
         value: baseConfig.gateway?.auth?.password,
         path: "gateway.auth.password",
       }));
     const token =
-      process.env.OPENCLAW_GATEWAY_TOKEN ??
+      process.env.NEXUS_GATEWAY_TOKEN ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.token,

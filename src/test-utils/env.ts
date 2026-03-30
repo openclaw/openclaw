@@ -34,8 +34,8 @@ const PATH_RESOLUTION_ENV_KEYS = [
   "USERPROFILE",
   "HOMEDRIVE",
   "HOMEPATH",
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
+  "NEXUS_HOME",
+  "NEXUS_STATE_DIR",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ] as const;
 
@@ -62,8 +62,8 @@ export function createPathResolutionEnv(
     ...process.env,
     HOME: resolvedHome,
     USERPROFILE: resolvedHome,
-    OPENCLAW_HOME: undefined,
-    OPENCLAW_STATE_DIR: undefined,
+    NEXUS_HOME: undefined,
+    NEXUS_STATE_DIR: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
   };
 

@@ -69,7 +69,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
         {
           value: "config",
           label: "Config only",
-          hint: "openclaw.json",
+          hint: "nexus-agent.json",
         },
         {
           value: "config+creds+sessions",

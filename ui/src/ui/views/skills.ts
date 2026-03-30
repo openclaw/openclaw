@@ -145,7 +145,7 @@ export function renderSkills(props: SkillsProps) {
           href="https://clawhub.com"
           target="_blank"
           rel="noreferrer"
-          title="Browse skills on ClawHub"
+          title="Browse skills on Skills Hub"
           >Browse Skills Store</a
         >
         <label class="field" style="flex: 1; min-width: 180px;">

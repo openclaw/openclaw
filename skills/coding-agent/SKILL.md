@@ -313,4 +313,4 @@ This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 
 - **Git repo required:** Codex won't run outside a git directory. Use `mktemp -d && git init` for scratch work.
 - **exec is your friend:** `codex exec "prompt"` runs and exits cleanly - perfect for one-shots.
 - **submit vs write:** Use `submit` to send input + Enter, `write` for raw data without newline.
-- **Sass works:** Codex responds well to playful prompts. Asked it to write a haiku about being second fiddle to a space lobster, got: _"Second chair, I code / Space lobster sets the tempo / Keys glow, I follow"_ 🦞
+- **Sass works:** Codex responds well to playful prompts. Asked it to write a haiku about coding, got: _"Second chair, I code / Nexus sets the tempo right / Keys glow, I follow"_

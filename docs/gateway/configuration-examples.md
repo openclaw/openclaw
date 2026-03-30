@@ -29,7 +29,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 ```json5
 {
   identity: {
-    name: "Clawd",
+    name: "Nexus",
     theme: "helpful assistant",
     emoji: "🦞",
   },

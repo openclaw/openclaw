@@ -96,14 +96,14 @@ export async function withBundleHomeEnv<T>(
   prefix: string,
   run: (params: { homeDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
-  const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+  const env = captureEnv(["HOME", "USERPROFILE", "NEXUS_HOME", "NEXUS_STATE_DIR"]);
   try {
     const homeDir = await tempHarness.createTempDir(`${prefix}-home-`);
     const workspaceDir = await tempHarness.createTempDir(`${prefix}-workspace-`);
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
-    delete process.env.OPENCLAW_HOME;
-    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.NEXUS_HOME;
+    delete process.env.NEXUS_STATE_DIR;
     return await run({ homeDir, workspaceDir });
   } finally {
     env.restore();

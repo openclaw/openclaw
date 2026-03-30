@@ -173,8 +173,8 @@ function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   delete next.OPENCLAW_PROFILE;
   delete next.OPENCLAW_GATEWAY_PORT;
   delete next.OPENCLAW_GATEWAY_URL;
-  delete next.OPENCLAW_GATEWAY_TOKEN;
-  delete next.OPENCLAW_GATEWAY_PASSWORD;
+  delete next.NEXUS_GATEWAY_TOKEN;
+  delete next.NEXUS_GATEWAY_PASSWORD;
   // The child CLI should render container-aware follow-up commands via
   // OPENCLAW_CONTAINER_HINT, but it should not treat itself as still
   // container-targeted for validation/routing.

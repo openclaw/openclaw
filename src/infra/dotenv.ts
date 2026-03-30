@@ -17,18 +17,18 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "OPENCLAW_AGENT_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_PASSWORD",
+  "NEXUS_CONFIG_PATH",
+  "NEXUS_GATEWAY_PASSWORD",
   "OPENCLAW_GATEWAY_SECRET",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_HOME",
+  "NEXUS_GATEWAY_TOKEN",
+  "NEXUS_HOME",
   "OPENCLAW_LIVE_ANTHROPIC_KEY",
   "OPENCLAW_LIVE_ANTHROPIC_KEYS",
   "OPENCLAW_LIVE_GEMINI_KEY",
   "OPENCLAW_LIVE_OPENAI_KEY",
   "OPENCLAW_OAUTH_DIR",
   "OPENCLAW_PROFILE",
-  "OPENCLAW_STATE_DIR",
+  "NEXUS_STATE_DIR",
   "OPENAI_API_KEY",
   "OPENAI_API_KEYS",
   "PI_CODING_AGENT_DIR",
@@ -112,7 +112,7 @@ export function loadDotEnv(opts?: { quiet?: boolean }) {
   const cwdEnvPath = path.join(process.cwd(), ".env");
   loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
 
-  // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
+  // Then load global fallback: ~/.openclaw/.env (or NEXUS_STATE_DIR/.env),
   // without overriding any env vars already present.
   const globalEnvPath = path.join(resolveConfigDir(process.env), ".env");
   loadRuntimeDotEnvFile(globalEnvPath, { quiet });

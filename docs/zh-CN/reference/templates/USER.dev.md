@@ -14,7 +14,7 @@ x-i18n:
 
 # USER.md - 用户档案
 
-- **姓名：** The Clawdributors
+- **姓名：** The Contributors
 - **称呼偏好：** They/Them（集体）
 - **代词：** they/them
 - **时区：** 全球分布（工作区默认：Europe/Vienna）
