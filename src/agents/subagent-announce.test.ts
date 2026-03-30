@@ -258,4 +258,80 @@ describe("subagent announce seam flow", () => {
     );
     expect(agentSpy).not.toHaveBeenCalled();
   });
+
+  it("keeps completion direct announce session-only when requester origin is webchat", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:webchat",
+      childRunId: "run-webchat-direct-announce",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "webchat",
+        to: "chat:123",
+        accountId: "default",
+      },
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          deliver: false,
+          bestEffortDeliver: true,
+          channel: "webchat",
+          to: "chat:123",
+          accountId: "default",
+        }),
+      }),
+    );
+  });
+
+  it("keeps nested subagent completion announces channel-less in session-only mode", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-nested-subagent-direct-announce",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "orchestrator",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "-100123",
+        accountId: "default",
+      },
+      task: "deliver nested completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0];
+    const params = call?.params ?? {};
+    expect(params.sessionKey).toBe("agent:main:subagent:orchestrator");
+    expect(params.deliver).toBe(false);
+    expect(params.bestEffortDeliver).toBe(true);
+    expect(params.channel).toBeUndefined();
+    expect(params.to).toBeUndefined();
+    expect(params.accountId).toBeUndefined();
+    expect(params.threadId).toBeUndefined();
+  });
 });
