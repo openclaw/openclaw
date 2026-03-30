@@ -395,6 +395,7 @@ function loadSkillEntries(
     }
 
     const loadedSkills: Skill[] = [];
+    let remainingGroupedProbeBudget = maxCandidates;
 
     // Support the bounded set of layouts we intentionally document:
     // - <skillsRoot>/<skill>/SKILL.md
@@ -437,12 +438,12 @@ function loadSkillEntries(
           );
         }
 
-        const remainingBudget = Math.max(0, limits.maxSkillsLoadedPerSource - loadedSkills.length);
         const groupedChildren = rawGroupedChildren
           .slice()
           .sort()
-          .slice(0, Math.min(maxCandidates, remainingBudget));
+          .slice(0, remainingGroupedProbeBudget);
         for (const groupedName of groupedChildren) {
+          remainingGroupedProbeBudget -= 1;
           loadedSkills.push(
             ...loadSkillDirectory({
               skillDir: path.join(skillDir, groupedName),
@@ -453,13 +454,19 @@ function loadSkillEntries(
               maxSkillFileBytes: limits.maxSkillFileBytes,
             }),
           );
-          if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
+          if (
+            loadedSkills.length >= limits.maxSkillsLoadedPerSource ||
+            remainingGroupedProbeBudget <= 0
+          ) {
             break;
           }
         }
       }
 
-      if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
+      if (
+        loadedSkills.length >= limits.maxSkillsLoadedPerSource ||
+        remainingGroupedProbeBudget <= 0
+      ) {
         break;
       }
     }
