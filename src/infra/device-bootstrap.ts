@@ -2,10 +2,10 @@ import path from "node:path";
 import {
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  sameDeviceBootstrapProfile,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 import {
   createAsyncLock,
@@ -58,6 +58,21 @@ function resolveIssuedBootstrapProfile(params: {
     });
   }
   return PAIRING_SETUP_BOOTSTRAP_PROFILE;
+}
+
+function bootstrapProfileAllowsRequest(params: {
+  allowedProfile: DeviceBootstrapProfile;
+  requestedRole: string;
+  requestedScopes: readonly string[];
+}): boolean {
+  return (
+    params.allowedProfile.roles.includes(params.requestedRole) &&
+    roleScopesAllow({
+      role: params.requestedRole,
+      requestedScopes: params.requestedScopes,
+      allowedScopes: params.allowedProfile.scopes,
+    })
+  );
 }
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
@@ -174,7 +189,7 @@ export async function verifyDeviceBootstrapToken(params: {
     if (!found) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const [tokenKey, record] = found;
+    const [, record] = found;
 
     const deviceId = params.deviceId.trim();
     const publicKey = params.publicKey.trim();
@@ -182,24 +197,23 @@ export async function verifyDeviceBootstrapToken(params: {
     if (!deviceId || !publicKey || !role) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const requestedProfile = normalizeDeviceBootstrapProfile({
-      roles: [role],
-      scopes: params.scopes,
-    });
     const allowedProfile = resolvePersistedBootstrapProfile(record);
     // Fail closed for unbound legacy setup codes and for any attempt to redeem
-    // the token outside the exact role/scope profile it was issued for.
+    // the token outside the issued role/scope allowlist.
     if (
       allowedProfile.roles.length === 0 ||
-      !sameDeviceBootstrapProfile(requestedProfile, allowedProfile)
+      !bootstrapProfileAllowsRequest({
+        allowedProfile,
+        requestedRole: role,
+        requestedScopes: params.scopes,
+      })
     ) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
 
-    // Bootstrap setup codes are single-use. Consume the record before returning
-    // success so the same token cannot be replayed to mutate a pending request.
-    delete state[tokenKey];
-    await persistState(state, params.baseDir);
+    // Keep valid setup codes alive until they expire or are explicitly revoked.
+    // Approval happens after bootstrap verification, so consuming the token here
+    // makes post-approval reconnect impossible.
     return { ok: true };
   });
 }
