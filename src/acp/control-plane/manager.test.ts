@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { resetFlowRegistryForTests } from "../../tasks/flow-registry.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
@@ -52,10 +53,12 @@ async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>):
   await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests();
     try {
       await run(root);
     } finally {
       resetTaskRegistryForTests();
+      resetFlowRegistryForTests();
     }
   });
 }
@@ -190,6 +193,7 @@ describe("AcpSessionManager", () => {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests();
   });
 
   it("marks ACP-shaped sessions without metadata as stale", () => {
