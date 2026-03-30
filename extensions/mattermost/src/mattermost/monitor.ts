@@ -419,10 +419,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
         });
         if (kind === "unknown") {
-          // Channel type unresolvable — return the base session key without
-          // thread session forking. handlePost will drop the post via its own
-          // early-exit guard before this session key is used for routing.
-          return route.sessionKey;
+          // Throw so the caller's try/catch skips enqueueSystemEvent entirely.
+          // Returning any session key here would enqueue the event into the
+          // wrong session before handlePost's own guard ever runs.
+          throw new Error(
+            `mattermost: cannot resolve session key — unknown channel type for ${channelId}`,
+          );
         }
         const replyToMode = resolveMattermostReplyToMode(account, kind);
         return resolveMattermostThreadSessionContext({
