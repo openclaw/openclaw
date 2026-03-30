@@ -481,6 +481,7 @@ describe("voice transcript events", () => {
       message: "check provenance",
       deliver: false,
       messageChannel: "node",
+      sessionKey: "voice-provenance-session",
       inputProvenance: {
         kind: "external_user",
         sourceChannel: "voice",
@@ -488,7 +489,7 @@ describe("voice transcript events", () => {
       },
     });
     expect(typeof opts.runId).toBe("string");
-    expect(opts.runId).not.toBe(opts.sessionId);
+    expect(opts.sessionId).toBeUndefined();
     expect(addChatRun).toHaveBeenCalledWith(
       opts.runId,
       expect.objectContaining({ clientRunId: expect.stringMatching(/^voice-/) }),
@@ -797,6 +798,7 @@ describe("agent request events", () => {
       channel: "telegram",
       to: "123",
     });
-    expect(opts.runId).toBe(opts.sessionId);
+    expect(opts.runId).toBe("sid-current");
+    expect(opts.sessionId).toBeUndefined();
   });
 });

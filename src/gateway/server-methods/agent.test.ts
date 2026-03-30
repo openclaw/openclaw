@@ -231,10 +231,11 @@ function readLastAgentCommandCall():
   | {
       message?: string;
       sessionId?: string;
+      sessionKey?: string;
     }
   | undefined {
   return mocks.agentCommand.mock.calls.at(-1)?.[0] as
-    | { message?: string; sessionId?: string }
+    | { message?: string; sessionId?: string; sessionKey?: string }
     | undefined;
 }
 
@@ -974,7 +975,8 @@ describe("gateway agent handler", () => {
     expect(call?.message).toContain("Run your Session Startup sequence");
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
-    expect(call?.sessionId).toBe("reset-session-id");
+    expect(call?.sessionKey).toBe("agent:main:main");
+    expect(call?.sessionId).toBeUndefined();
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
@@ -999,9 +1001,27 @@ describe("gateway agent handler", () => {
     );
 
     const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
-    expect(call?.sessionId).toBe("reset-session-id");
+    expect(call?.sessionKey).toBe("agent:main:main");
+    expect(call?.sessionId).toBeUndefined();
 
     resetTimeConfig();
+  });
+
+  it("does not forward stored sessionId when dispatching by session key", async () => {
+    primeMainAgentRun({ sessionId: "existing-session-id" });
+
+    await invokeAgent(
+      {
+        message: "continue",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-session-freshness",
+      },
+      { reqId: "4d" },
+    );
+
+    const call = readLastAgentCommandCall();
+    expect(call?.sessionKey).toBe("agent:main:main");
+    expect(call?.sessionId).toBeUndefined();
   });
 
   it("rejects malformed agent session keys early in agent handler", async () => {

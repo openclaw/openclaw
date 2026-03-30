@@ -722,6 +722,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         : resolvedChannel);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+    // When a gateway request already resolved a canonical session key and
+    // updated the backing store entry, passing sessionId downstream is
+    // redundant and can pin a stale session across daily/idle reset rollovers.
+    const ingressSessionId = resolvedSessionKey ? undefined : resolvedSessionId;
 
     const accepted = {
       runId,
@@ -769,7 +773,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         provider: providerOverride,
         model: modelOverride,
         to: resolvedTo,
-        sessionId: resolvedSessionId,
+        sessionId: ingressSessionId,
         sessionKey: resolvedSessionKey,
         thinking: request.thinking,
         deliver,
