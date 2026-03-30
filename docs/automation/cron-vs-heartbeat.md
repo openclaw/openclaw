@@ -13,11 +13,11 @@ Both heartbeats and cron jobs let you run tasks on a schedule. This guide helps 
 
 One important distinction:
 
-- **Heartbeat** is a scheduled **main-session turn**.
-- **Cron (main)** is a scheduled **system event into the main session**.
-- **Cron (isolated)** is a scheduled **background run**.
+- **Heartbeat** is a scheduled **main-session turn** — no task record created.
+- **Cron (main)** is a scheduled **system event into the main session** — no task record created.
+- **Cron (isolated)** is a scheduled **background run** — tracked in `openclaw tasks`.
 
-Only detached background runs show up in `openclaw tasks`. Normal heartbeat runs and main-session cron reminders do not.
+Only detached background runs (isolated cron, ACP, subagents) appear in the [task ledger](/automation/tasks). Heartbeat turns and main-session cron reminders stay in session history.
 
 ## Quick Decision Guide
 
@@ -48,7 +48,7 @@ Heartbeats run in the **main session** at a regular interval (default: 30 min). 
 - **Context-aware**: The agent knows what you've been working on and can prioritize accordingly.
 - **Smart suppression**: If nothing needs attention, the agent replies `HEARTBEAT_OK` and no message is delivered.
 - **Natural timing**: Drifts slightly based on queue load, which is fine for most monitoring.
-- **No background task ledger**: heartbeat turns stay in main-session history instead of creating a separate task run.
+- **No task record**: heartbeat turns stay in main-session history (see [Background Tasks](/automation/tasks)).
 
 ### Heartbeat example: HEARTBEAT.md checklist
 
@@ -107,7 +107,7 @@ per-job offset in a 0-5 minute window.
 - **Immediate delivery**: Announce mode posts directly without waiting for heartbeat.
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
-- **Task visibility for detached runs**: isolated jobs show up in `openclaw tasks`, `openclaw tasks audit`, and maintenance surfaces.
+- **Task tracking**: isolated jobs create [background task](/automation/tasks) records visible in `openclaw tasks` and `openclaw tasks audit`.
 
 ### Cron example: Daily morning briefing
 
@@ -294,4 +294,5 @@ openclaw cron add \
 
 - [Heartbeat](/gateway/heartbeat) - full heartbeat configuration
 - [Cron jobs](/automation/cron-jobs) - full cron CLI and API reference
+- [Background Tasks](/automation/tasks) - task ledger, audit, and lifecycle
 - [System](/cli/system) - system events + heartbeat controls
