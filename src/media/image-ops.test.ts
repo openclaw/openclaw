@@ -53,6 +53,12 @@ function createJpegHeader(width: number, height: number): Buffer {
   return buffer;
 }
 
+async function loadImageOpsWithSharpMock(sharpFactory: (...args: unknown[]) => unknown) {
+  vi.resetModules();
+  vi.doMock("sharp", () => ({ default: sharpFactory }));
+  return await import("./image-ops.js");
+}
+
 describe("probeImageMetadataFromHeader", () => {
   it.each([
     {
@@ -96,5 +102,27 @@ describe("image pixel limit guard", () => {
       }),
     ).rejects.toThrow(/maximum allowed pixel count/i);
     expect(runExecMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to sips metadata when sharp cannot decode an unrecognized format", async () => {
+    process.env.OPENCLAW_IMAGE_BACKEND = "sips";
+    runExecMock.mockResolvedValueOnce({
+      stdout: "pixelWidth: 40\npixelHeight: 50\n",
+    });
+
+    try {
+      const { getImageMetadata: getImageMetadataWithSharpFailure } =
+        await loadImageOpsWithSharpMock(() => {
+          throw new Error("sharp cannot decode this format");
+        });
+
+      await expect(
+        getImageMetadataWithSharpFailure(Buffer.from("not-a-known-header")),
+      ).resolves.toEqual({ width: 40, height: 50 });
+      expect(runExecMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("sharp");
+      vi.resetModules();
+    }
   });
 });

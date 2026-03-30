@@ -172,7 +172,13 @@ async function assertImageBufferWithinPixelLimit(buffer: Buffer): Promise<void> 
     return;
   }
 
-  await getSharpImageMetadata(buffer);
+  try {
+    await getSharpImageMetadata(buffer);
+  } catch (error) {
+    if (error instanceof ImagePixelLimitError) {
+      throw error;
+    }
+  }
 }
 
 /**
