@@ -906,6 +906,13 @@ export async function preflightDiscordMessage(
     bypassMentionRequirement,
   });
 
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig,
+    guildInfo,
+    memberRoleIds,
+    sender,
+    allowNameMatching,
+  });
   if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
     logDebug(`[discord-preflight] drop: member not allowed`);
     // Keep stable Discord user IDs out of routine deny-path logs.
@@ -953,13 +960,6 @@ export async function preflightDiscordMessage(
     surface: "discord",
   });
   const hasControlCommandInMessage = hasControlCommand(baseText, params.cfg);
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig,
-    guildInfo,
-    memberRoleIds,
-    sender,
-    allowNameMatching,
-  });
 
   if (!isDirectMessage) {
     const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
@@ -1015,11 +1015,6 @@ export async function preflightDiscordMessage(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionDecision.shouldSkip=${mentionDecision.shouldSkip} wasMentioned=${wasMentioned}`,
   );
 
-  if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
-    logDebug(`[discord-preflight] drop: member not allowed`);
-    logVerbose(`Blocked discord guild sender ${sender.id} (not in users/roles allowlist)`);
-    return null;
-  }
 
   if (isGuildMessage && shouldRequireMention) {
     if (botId && mentionDecision.shouldSkip) {
