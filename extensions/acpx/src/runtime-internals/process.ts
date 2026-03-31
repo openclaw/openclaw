@@ -88,6 +88,13 @@ function resolveExecutableFromPath(command: string, runtime: SpawnRuntime): stri
   return undefined;
 }
 
+function resolveNodeExecPath(runtime: SpawnRuntime): string {
+  if (runtime.execPath && isExecutableFile(runtime.execPath, runtime.platform)) {
+    return runtime.execPath;
+  }
+  return resolveExecutableFromPath("node", runtime) ?? runtime.execPath;
+}
+
 function resolveNodeShebangScriptPath(command: string, runtime: SpawnRuntime): string | undefined {
   const commandPath =
     path.isAbsolute(command) || command.includes(path.sep)
@@ -122,7 +129,7 @@ export function resolveSpawnCommand(
         resolution: "direct",
       });
       return {
-        command: runtime.execPath,
+        command: resolveNodeExecPath(runtime),
         args: [nodeShebangScript, ...params.args],
       };
     }
@@ -186,18 +193,6 @@ function createAbortError(): Error {
   const error = new Error("Operation aborted.");
   error.name = "AbortError";
   return error;
-}
-
-async function collectStreamOutput(stream: NodeJS.ReadableStream): Promise<string> {
-  let output = "";
-  try {
-    for await (const chunk of stream) {
-      output += String(chunk);
-    }
-  } catch {
-    // Return whatever was captured before the stream failed.
-  }
-  return output;
 }
 
 export function spawnWithResolvedCommand(
@@ -292,8 +287,14 @@ export async function spawnAndCollect(
   const child = spawnWithResolvedCommand(params, options);
   child.stdin.end();
 
-  const stdoutPromise = collectStreamOutput(child.stdout);
-  const stderrPromise = collectStreamOutput(child.stderr);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
 
   let abortKillTimer: NodeJS.Timeout | undefined;
   let aborted = false;
@@ -320,7 +321,6 @@ export async function spawnAndCollect(
 
   try {
     const exit = await waitForExit(child);
-    const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
     return {
       stdout,
       stderr,
