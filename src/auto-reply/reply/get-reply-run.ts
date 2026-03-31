@@ -37,6 +37,7 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import type { FollowupRun } from "./queue.js";
 import { getFollowupQueueDepth } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings.js";
 import type { RouteReplyParams } from "./route-reply.js";
@@ -542,7 +543,7 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  let followupRun = {
+  let followupRun: FollowupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
