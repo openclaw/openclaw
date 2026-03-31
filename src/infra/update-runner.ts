@@ -908,6 +908,100 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     // Use --fix so that doctor auto-strips unknown config keys introduced by
     // schema changes between versions, preventing a startup validation crash.
     const doctorNodePath = await resolveStableNodePath(process.execPath);
+    
+    // First, check if the binary version matches the package version to prevent
+    // applying new-version config changes to old-version binaries (#58041)
+    const versionCheckArgv = [doctorNodePath, doctorEntry, "--version"];
+    const versionCheckStep = await runStep(
+      step("version check", versionCheckArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+    );
+    steps.push(versionCheckStep);
+    
+    if (versionCheckStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "version-check-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    
+    // Parse version from output (format: "openclaw 2026.3.28")
+    const versionOutput = versionCheckStep.stdoutTail || "";
+    const versionMatch = versionOutput.match(/openclaw\s+(\d+\.\d+\.\d+)/);
+    if (!versionMatch) {
+      steps.push({
+        name: "version parse",
+        command: "parse version from output",
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `Could not parse version from: ${versionOutput.substring(0, 100)}`,
+      });
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "version-parse-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    
+    const currentVersion = versionMatch[1];
+    
+    // Read package.json to get expected version
+    const packageJsonPath = path.join(gitRoot, "package.json");
+    let expectedVersion: string;
+    try {
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
+      expectedVersion = packageJson.version;
+    } catch (err) {
+      steps.push({
+        name: "package.json read",
+        command: `read ${packageJsonPath}`,
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `Failed to read package.json: ${err}`,
+      });
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "package-json-read-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    
+    // Check if versions match
+    if (currentVersion !== expectedVersion) {
+      steps.push({
+        name: "version validation",
+        command: "check version consistency",
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `Version mismatch: binary is ${currentVersion} but package expects ${expectedVersion}. This would cause config/plugin version mismatch crash loops (#58041).`,
+      });
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "version-mismatch",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    
+    // Only run doctor --fix if versions match
     const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
     const doctorStep = await runStep(
       step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
