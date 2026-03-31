@@ -57,6 +57,7 @@ describe("runCommandWithTimeout no-output timer", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ runCommandWithTimeout } = await import("./exec.js"));
+    spawnMock.mockClear();
   });
 
   afterEach(() => {
