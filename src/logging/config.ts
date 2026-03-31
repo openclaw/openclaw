@@ -6,15 +6,25 @@ type LoggingConfig = OpenClawConfig["logging"];
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
+let readingLoggingConfig = false;
+
 export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
   return primary === "config" && (secondary === "schema" || secondary === "validate");
+}
+
+export function isReadingLoggingConfig(): boolean {
+  return readingLoggingConfig;
 }
 
 export function readLoggingConfig(): LoggingConfig | undefined {
   if (shouldSkipMutatingLoggingConfigRead()) {
     return undefined;
   }
+  if (readingLoggingConfig) {
+    return undefined;
+  }
+  readingLoggingConfig = true;
   try {
     const loaded = requireConfig?.("../config/config.js") as
       | {
@@ -29,5 +39,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
     return logging as LoggingConfig;
   } catch {
     return undefined;
+  } finally {
+    readingLoggingConfig = false;
   }
 }

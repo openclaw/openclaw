@@ -6,7 +6,11 @@ import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
-import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
+import {
+  isReadingLoggingConfig,
+  readLoggingConfig,
+  shouldSkipMutatingLoggingConfigRead,
+} from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -114,8 +118,11 @@ function resolveSettings(): ResolvedSettings {
   }
 
   let cfg: OpenClawConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
+    (loggingState.overrideSettings as LoggerSettings | null) ?? undefined;
+  if (!cfg && !isReadingLoggingConfig()) {
+    cfg = readLoggingConfig();
+  }
+  if (!cfg && !shouldSkipMutatingLoggingConfigRead() && !isReadingLoggingConfig()) {
     try {
       const loaded = requireConfig?.("../config/config.js") as
         | {
