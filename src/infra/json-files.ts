@@ -49,7 +49,7 @@ export async function writeTextAtomic(
   }
   const parentDir = path.dirname(filePath);
   await fs.mkdir(parentDir, mkdirOptions);
-  for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+  for (let attempt = 0; attempt < MAX_RETRIES + 1; attempt++) {
     const tmp = `${filePath}.${randomUUID()}.tmp`;
     try {
       const tmpHandle = await fs.open(tmp, "w", mode);
@@ -89,9 +89,9 @@ export async function writeTextAtomic(
         typeof err === "object" &&
         "code" in err &&
         err.code === "EPERM" &&
-        attempt < MAX_RETRIES + 1
+        attempt < MAX_RETRIES
       ) {
-        const delay = computeBackoff(EPERM_BACKOFF, attempt);
+        const delay = computeBackoff(EPERM_BACKOFF, attempt + 1);
         await sleepWithAbort(delay);
         continue;
       }
