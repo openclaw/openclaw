@@ -13,6 +13,7 @@ import {
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
+  searchSlackMessages,
   sendSlackMessage,
   unpinSlackMessage,
 } from "./actions.js";
@@ -57,6 +58,7 @@ export const slackActionRuntime = {
   recordSlackThreadParticipation,
   removeOwnSlackReactions,
   removeSlackReaction,
+  searchSlackMessages,
   sendSlackMessage,
   unpinSlackMessage,
 };
@@ -440,6 +442,32 @@ export async function handleSlackAction(
       ? await slackActionRuntime.getSlackMemberInfo(userId, readOpts)
       : await slackActionRuntime.getSlackMemberInfo(userId);
     return jsonResult({ ok: true, info });
+  }
+
+  if (action === "searchMessages") {
+    if (!isActionEnabled("messages")) {
+      throw new Error("Slack messages are disabled.");
+    }
+    if (!userToken) {
+      throw new Error(
+        "Slack search requires a User Token (xoxp-) with search:read scope. " +
+          "Set channels.slack.userToken in your config.",
+      );
+    }
+    const query = readStringParam(params, "query", { required: true });
+    const count = readNumberParam(params, "count", { integer: true });
+    const sort = readStringParam(params, "sort") as "score" | "timestamp" | undefined;
+    const sortDir = readStringParam(params, "sortDir") as "asc" | "desc" | undefined;
+    const page = readNumberParam(params, "page", { integer: true });
+    const result = await slackActionRuntime.searchSlackMessages(query, {
+      ...(accountId ? { accountId } : {}),
+      token: userToken,
+      count: count ?? undefined,
+      sort: sort ?? undefined,
+      sortDir: sortDir ?? undefined,
+      page: page ?? undefined,
+    });
+    return jsonResult({ ok: true, ...result });
   }
 
   if (action === "emojiList") {
