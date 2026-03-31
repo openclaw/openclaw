@@ -8,6 +8,7 @@ import {
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../plugin-sdk/memory-core-host-multimodal.js";
+import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -370,6 +371,10 @@ export function resolveMemorySearchConfig(
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
+  if (multimodalActive) {
+    // Ensure built-in providers are registered before validation in CLI/Status flows
+    resolveRuntimePluginRegistry({ config: cfg });
+  }
   const multimodalProvider =
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
   if (
