@@ -89,7 +89,6 @@ enum HostEnvSecurityPolicy {
         "UV_INDEX_URL",
         "UV_EXTRA_INDEX_URL",
         "UV_DEFAULT_INDEX",
-        "UV_EXTRA_INDEX_URL",
         "LUA_PATH",
         "LUA_CPATH",
         "GEM_HOME",
