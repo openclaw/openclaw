@@ -75,6 +75,10 @@ function isKnownArchSelectorToken(token: string): boolean {
   );
 }
 
+function isKnownArchNameToken(token: string): boolean {
+  return isKnownArchSelectorToken(`-${token}`);
+}
+
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
 
 function withWindowsExeAliases(names: readonly string[]): string[] {
@@ -374,8 +378,13 @@ function unwrapTimeoutInvocation(argv: string[]): string[] | null {
 }
 
 function unwrapArchInvocation(argv: string[]): string[] | null {
+  let expectsArchName = false;
   return scanWrapperInvocation(argv, {
     onToken: (token, lower) => {
+      if (expectsArchName) {
+        expectsArchName = false;
+        return isKnownArchNameToken(lower) ? "continue" : "invalid";
+      }
       if (!token.startsWith("-") || token === "-") {
         return "stop";
       }
@@ -383,7 +392,8 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
         return "continue";
       }
       if (lower === "-arch") {
-        return "consume-next";
+        expectsArchName = true;
+        return "continue";
       }
       // `arch` can also mutate the launched environment, which is not transparent.
       if (lower === "-c" || lower === "-d" || lower === "-e" || lower === "-h") {

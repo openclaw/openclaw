@@ -210,7 +210,11 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "blocked", wrapper: "arch" },
     },
     {
-      argv: ["arch", "-bogus", "bash", "-lc", "echo hi"],
+      argv: ["arch", "-arch", "bogus", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "arch" },
+    },
+    {
+      argv: ["arch", "-arch", "bogus", "bash", "-lc", "echo hi"],
       expected: { kind: "blocked", wrapper: "arch" },
     },
     {
