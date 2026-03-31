@@ -1,0 +1,10 @@
+{
+  "id": "hw.bridge.abb",
+  "name": "ABB 机器人控制插件",
+  "version": "1.2.0",
+  "entry": "ABB.dll",
+  "runtime": "dotnet",
+  "description": "原生 C# ABB 机器人硬件对接插件，支持查询、系统信息、所有的RAPID程序控制指令等。",
+  "capabilities": ["tools"],
+  "permissions": ["hardware.access", "network"]
+}

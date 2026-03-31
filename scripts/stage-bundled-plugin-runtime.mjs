@@ -14,7 +14,7 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
 
 function ensureSymlink(targetValue, targetPath, type) {
   try {
-    fs.symlinkSync(targetValue, targetPath, type);
+    try { fs.symlinkSync(targetValue, targetPath, type); } catch(e) { if(e.code === "EPERM") { fs.copyFileSync(path.resolve(path.dirname(targetPath), targetValue), targetPath); } else { throw e; } }
     return;
   } catch (error) {
     if (error?.code !== "EEXIST") {
@@ -31,7 +31,7 @@ function ensureSymlink(targetValue, targetPath, type) {
   }
 
   removePathIfExists(targetPath);
-  fs.symlinkSync(targetValue, targetPath, type);
+  try { fs.symlinkSync(targetValue, targetPath, type); } catch(e) { if(e.code === "EPERM") { fs.copyFileSync(path.resolve(path.dirname(targetPath), targetValue), targetPath); } else { throw e; } }
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
@@ -150,3 +150,5 @@ export function stageBundledPluginRuntime(params = {}) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   stageBundledPluginRuntime();
 }
+
+
