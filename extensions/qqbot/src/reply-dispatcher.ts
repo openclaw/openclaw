@@ -42,6 +42,7 @@ import {
   getQQBotDataDir,
   normalizePath,
   resolveQQBotLocalMediaPath,
+  resolveQQBotPayloadLocalFilePath,
   sanitizeFileName,
 } from "./utils/platform.js";
 
@@ -194,9 +195,41 @@ export async function handleStructuredPayload(
 
 // Media payload handlers.
 
+function validateStructuredPayloadLocalPath(
+  ctx: ReplyContext,
+  payloadPath: string,
+  mediaType: "image" | "video" | "file",
+): string | null {
+  const allowedPath = resolveQQBotPayloadLocalFilePath(payloadPath);
+  if (allowedPath) {
+    return allowedPath;
+  }
+
+  ctx.log?.error(
+    `[qqbot:${ctx.account.accountId}] Blocked ${mediaType} payload local path outside QQ Bot storage: ${payloadPath}`,
+  );
+  return null;
+}
+
+function isRemoteHttpUrl(p: string): boolean {
+  return p.startsWith("http://") || p.startsWith("https://");
+}
+
 async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
-  let imageUrl = resolveQQBotLocalMediaPath(normalizePath(payload.path));
+  const normalizedPath = normalizePath(payload.path);
+  let imageUrl: string | null;
+  if (payload.source === "file") {
+    imageUrl = validateStructuredPayloadLocalPath(ctx, normalizedPath, "image");
+  } else if (isRemoteHttpUrl(normalizedPath)) {
+    imageUrl = normalizedPath;
+  } else {
+    log?.error(`[qqbot:${account.accountId}] Image payload URL must use http(s): ${payload.path}`);
+    return;
+  }
+  if (!imageUrl) {
+    return;
+  }
   const originalImagePath = payload.source === "file" ? imageUrl : undefined;
 
   if (payload.source === "file") {
@@ -405,90 +438,98 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
   try {
-    const videoPath = resolveQQBotLocalMediaPath(normalizePath(payload.path ?? ""));
-    if (!videoPath?.trim()) {
+    const originalPath = payload.path ?? "";
+    const normalizedPath = normalizePath(originalPath);
+    const isHttpUrl = isRemoteHttpUrl(normalizedPath);
+    const videoPath = isHttpUrl
+      ? normalizedPath
+      : validateStructuredPayloadLocalPath(ctx, originalPath, "video");
+    if (!videoPath) {
+      return;
+    }
+    if (!videoPath.trim()) {
       log?.error(`[qqbot:${account.accountId}] Video missing path`);
-    } else {
-      const isHttpUrl = videoPath.startsWith("http://") || videoPath.startsWith("https://");
-      log?.info(`[qqbot:${account.accountId}] Video send: "${videoPath.slice(0, 60)}..."`);
+      return;
+    }
 
-      await sendWithTokenRetry(
-        account.appId,
-        account.clientSecret,
-        async (token) => {
-          if (isHttpUrl) {
-            if (target.type === "c2c") {
-              await sendC2CVideoMessage(
-                account.appId,
-                token,
-                target.senderId,
-                videoPath,
-                undefined,
-                target.messageId,
-              );
-            } else if (target.type === "group" && target.groupOpenid) {
-              await sendGroupVideoMessage(
-                account.appId,
-                token,
-                target.groupOpenid,
-                videoPath,
-                undefined,
-                target.messageId,
-              );
-            } else if (target.type === "dm") {
-              log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
-            } else if (target.channelId) {
-              log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
-            }
-          } else {
-            if (!(await fileExistsAsync(videoPath))) {
-              throw new Error(`Video file does not exist: ${videoPath}`);
-            }
-            const vPaySzCheck = checkFileSize(videoPath);
-            if (!vPaySzCheck.ok) {
-              throw new Error(vPaySzCheck.error!);
-            }
-            const fileBuffer = await readFileAsync(videoPath);
-            const videoBase64 = fileBuffer.toString("base64");
-            log?.info(
-              `[qqbot:${account.accountId}] Read local video (${formatFileSize(fileBuffer.length)}): ${videoPath}`,
+    log?.info(`[qqbot:${account.accountId}] Video send: "${videoPath.slice(0, 60)}..."`);
+
+    await sendWithTokenRetry(
+      account.appId,
+      account.clientSecret,
+      async (token) => {
+        if (isHttpUrl) {
+          if (target.type === "c2c") {
+            await sendC2CVideoMessage(
+              account.appId,
+              token,
+              target.senderId,
+              videoPath,
+              undefined,
+              target.messageId,
             );
-
-            if (target.type === "c2c") {
-              await sendC2CVideoMessage(
-                account.appId,
-                token,
-                target.senderId,
-                undefined,
-                videoBase64,
-                target.messageId,
-                undefined,
-                videoPath,
-              );
-            } else if (target.type === "group" && target.groupOpenid) {
-              await sendGroupVideoMessage(
-                account.appId,
-                token,
-                target.groupOpenid,
-                undefined,
-                videoBase64,
-                target.messageId,
-              );
-            } else if (target.type === "dm") {
-              log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
-            } else if (target.channelId) {
-              log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
-            }
+          } else if (target.type === "group" && target.groupOpenid) {
+            await sendGroupVideoMessage(
+              account.appId,
+              token,
+              target.groupOpenid,
+              videoPath,
+              undefined,
+              target.messageId,
+            );
+          } else if (target.type === "dm") {
+            log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
+          } else if (target.channelId) {
+            log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
           }
-        },
-        log,
-        account.accountId,
-      );
-      log?.info(`[qqbot:${account.accountId}] Video message sent`);
+        } else {
+          if (!(await fileExistsAsync(videoPath))) {
+            throw new Error(`Video file does not exist: ${videoPath}`);
+          }
+          const vPaySzCheck = checkFileSize(videoPath);
+          if (!vPaySzCheck.ok) {
+            throw new Error(vPaySzCheck.error!);
+          }
+          const fileBuffer = await readFileAsync(videoPath);
+          const videoBase64 = fileBuffer.toString("base64");
+          log?.info(
+            `[qqbot:${account.accountId}] Read local video (${formatFileSize(fileBuffer.length)}): ${videoPath}`,
+          );
 
-      if (payload.caption) {
-        await sendTextToTarget(ctx, payload.caption);
-      }
+          if (target.type === "c2c") {
+            await sendC2CVideoMessage(
+              account.appId,
+              token,
+              target.senderId,
+              undefined,
+              videoBase64,
+              target.messageId,
+              undefined,
+              videoPath,
+            );
+          } else if (target.type === "group" && target.groupOpenid) {
+            await sendGroupVideoMessage(
+              account.appId,
+              token,
+              target.groupOpenid,
+              undefined,
+              videoBase64,
+              target.messageId,
+            );
+          } else if (target.type === "dm") {
+            log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
+          } else if (target.channelId) {
+            log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
+          }
+        }
+      },
+      log,
+      account.accountId,
+    );
+    log?.info(`[qqbot:${account.accountId}] Video message sent`);
+
+    if (payload.caption) {
+      await sendTextToTarget(ctx, payload.caption);
     }
   } catch (err) {
     log?.error(`[qqbot:${account.accountId}] Video send failed: ${err}`);
@@ -498,89 +539,97 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
   try {
-    const filePath = resolveQQBotLocalMediaPath(normalizePath(payload.path ?? ""));
-    if (!filePath?.trim()) {
-      log?.error(`[qqbot:${account.accountId}] File missing path`);
-    } else {
-      const isHttpUrl = filePath.startsWith("http://") || filePath.startsWith("https://");
-      const fileName = sanitizeFileName(path.basename(filePath));
-      log?.info(
-        `[qqbot:${account.accountId}] File send: "${filePath.slice(0, 60)}..." (${isHttpUrl ? "URL" : "local"})`,
-      );
-
-      await sendWithTokenRetry(
-        account.appId,
-        account.clientSecret,
-        async (token) => {
-          if (isHttpUrl) {
-            if (target.type === "c2c") {
-              await sendC2CFileMessage(
-                account.appId,
-                token,
-                target.senderId,
-                undefined,
-                filePath,
-                target.messageId,
-                fileName,
-              );
-            } else if (target.type === "group" && target.groupOpenid) {
-              await sendGroupFileMessage(
-                account.appId,
-                token,
-                target.groupOpenid,
-                undefined,
-                filePath,
-                target.messageId,
-                fileName,
-              );
-            } else if (target.type === "dm") {
-              log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
-            } else if (target.channelId) {
-              log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
-            }
-          } else {
-            if (!(await fileExistsAsync(filePath))) {
-              throw new Error(`File does not exist: ${filePath}`);
-            }
-            const fPaySzCheck = checkFileSize(filePath);
-            if (!fPaySzCheck.ok) {
-              throw new Error(fPaySzCheck.error!);
-            }
-            const fileBuffer = await readFileAsync(filePath);
-            const fileBase64 = fileBuffer.toString("base64");
-            if (target.type === "c2c") {
-              await sendC2CFileMessage(
-                account.appId,
-                token,
-                target.senderId,
-                fileBase64,
-                undefined,
-                target.messageId,
-                fileName,
-                filePath,
-              );
-            } else if (target.type === "group" && target.groupOpenid) {
-              await sendGroupFileMessage(
-                account.appId,
-                token,
-                target.groupOpenid,
-                fileBase64,
-                undefined,
-                target.messageId,
-                fileName,
-              );
-            } else if (target.type === "dm") {
-              log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
-            } else if (target.channelId) {
-              log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
-            }
-          }
-        },
-        log,
-        account.accountId,
-      );
-      log?.info(`[qqbot:${account.accountId}] File message sent`);
+    const originalPath = payload.path ?? "";
+    const normalizedPath = normalizePath(originalPath);
+    const isHttpUrl = isRemoteHttpUrl(normalizedPath);
+    const filePath = isHttpUrl
+      ? normalizedPath
+      : validateStructuredPayloadLocalPath(ctx, originalPath, "file");
+    if (!filePath) {
+      return;
     }
+    if (!filePath.trim()) {
+      log?.error(`[qqbot:${account.accountId}] File missing path`);
+      return;
+    }
+
+    const fileName = sanitizeFileName(path.basename(filePath));
+    log?.info(
+      `[qqbot:${account.accountId}] File send: "${filePath.slice(0, 60)}..." (${isHttpUrl ? "URL" : "local"})`,
+    );
+
+    await sendWithTokenRetry(
+      account.appId,
+      account.clientSecret,
+      async (token) => {
+        if (isHttpUrl) {
+          if (target.type === "c2c") {
+            await sendC2CFileMessage(
+              account.appId,
+              token,
+              target.senderId,
+              undefined,
+              filePath,
+              target.messageId,
+              fileName,
+            );
+          } else if (target.type === "group" && target.groupOpenid) {
+            await sendGroupFileMessage(
+              account.appId,
+              token,
+              target.groupOpenid,
+              undefined,
+              filePath,
+              target.messageId,
+              fileName,
+            );
+          } else if (target.type === "dm") {
+            log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
+          } else if (target.channelId) {
+            log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
+          }
+        } else {
+          if (!(await fileExistsAsync(filePath))) {
+            throw new Error(`File does not exist: ${filePath}`);
+          }
+          const fPaySzCheck = checkFileSize(filePath);
+          if (!fPaySzCheck.ok) {
+            throw new Error(fPaySzCheck.error!);
+          }
+          const fileBuffer = await readFileAsync(filePath);
+          const fileBase64 = fileBuffer.toString("base64");
+          if (target.type === "c2c") {
+            await sendC2CFileMessage(
+              account.appId,
+              token,
+              target.senderId,
+              fileBase64,
+              undefined,
+              target.messageId,
+              fileName,
+              filePath,
+            );
+          } else if (target.type === "group" && target.groupOpenid) {
+            await sendGroupFileMessage(
+              account.appId,
+              token,
+              target.groupOpenid,
+              fileBase64,
+              undefined,
+              target.messageId,
+              fileName,
+            );
+          } else if (target.type === "dm") {
+            log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
+          } else if (target.channelId) {
+            log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
+          }
+        }
+      },
+      log,
+      account.accountId,
+    );
+    log?.info(`[qqbot:${account.accountId}] File message sent`);
   } catch (err) {
     log?.error(`[qqbot:${account.accountId}] File send failed: ${err}`);
   }

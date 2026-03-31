@@ -154,6 +154,36 @@ export function resolveQQBotLocalMediaPath(p: string): string {
   return normalized;
 }
 
+/**
+ * Resolve a structured-payload local file path and enforce that it stays within
+ * QQ Bot-owned storage roots.
+ */
+export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
+  const candidate = resolveQQBotLocalMediaPath(normalizePath(p));
+  if (!candidate.trim()) {
+    return null;
+  }
+
+  const resolvedCandidate = path.resolve(candidate);
+  const canonicalCandidate = fs.existsSync(resolvedCandidate)
+    ? fs.realpathSync(resolvedCandidate)
+    : resolvedCandidate;
+  const workspaceRoot = path.join(getHomeDir(), ".openclaw", "workspace", "qqbot");
+  const allowedRoots = [getQQBotMediaDir(), getQQBotDataDir(), workspaceRoot];
+
+  for (const root of allowedRoots) {
+    const resolvedRoot = path.resolve(root);
+    const canonicalRoot = fs.existsSync(resolvedRoot)
+      ? fs.realpathSync(resolvedRoot)
+      : resolvedRoot;
+    if (isPathWithinRoot(canonicalCandidate, canonicalRoot)) {
+      return canonicalCandidate;
+    }
+  }
+
+  return null;
+}
+
 // Filename normalization.
 
 /**
