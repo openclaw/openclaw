@@ -114,7 +114,7 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authOk).toBe(true);
     expect(decision.authMethod).toBe("device-token");
     expect(verifyDeviceToken).toHaveBeenCalledOnce();
-    expect(rateLimiter.reset).toHaveBeenCalledOnce();
+    expect(rateLimiter.reset).toHaveBeenCalledWith("203.0.113.20", "device-token");
   });
 
   it("accepts valid bootstrap tokens before device-token fallback", async () => {

@@ -28,7 +28,7 @@ import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   isPluginHookName,
   isPromptInjectionHookName,
@@ -188,7 +188,7 @@ export type PluginRecord = {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   source: string;
   rootDir?: string;
   origin: PluginOrigin;
@@ -214,6 +214,7 @@ export type PluginRecord = {
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: Record<string, unknown>;
+  memorySlotSelected?: boolean;
 };
 
 export type PluginRegistry = {
@@ -243,9 +244,9 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
-  // When true, skip writing to the global plugin command registry during register().
-  // Used by non-activating snapshot loads to avoid leaking commands into the running gateway.
-  suppressGlobalCommands?: boolean;
+  // When false, keep registration local to the returned registry and avoid mutating
+  // process-global command/hook state during non-activating snapshot loads.
+  activateGlobalSideEffects?: boolean;
 };
 
 type PluginTypedHookPolicy = {
@@ -375,8 +376,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
     });
 
-    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
-    if (!hookSystemEnabled || opts?.register === false) {
+    const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
+    if (
+      !registryParams.activateGlobalSideEffects ||
+      !hookSystemEnabled ||
+      opts?.register === false
+    ) {
       return;
     }
 
@@ -812,7 +817,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // NOTE: cross-plugin duplicate command detection is intentionally skipped here because
     // snapshot registries are isolated and never write to the global command table. Conflicts
     // will surface when the plugin is loaded via the normal activation path at gateway startup.
-    if (registryParams.suppressGlobalCommands) {
+    if (!registryParams.activateGlobalSideEffects) {
       const validationError = validatePluginCommandDefinition(command);
       if (validationError) {
         pushDiagnostic({
@@ -1030,7 +1035,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }
               },
               registerMemoryPromptSection: (builder) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
@@ -1039,10 +1044,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory prompt section registration",
+                  });
+                  return;
+                }
                 registerMemoryPromptSection(builder);
               },
               registerMemoryFlushPlan: (resolver) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
@@ -1051,10 +1070,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory flush plan registration",
+                  });
+                  return;
+                }
                 registerMemoryFlushPlanResolver(resolver);
               },
               registerMemoryRuntime: (runtime) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
@@ -1063,15 +1096,43 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
+                  });
+                  return;
+                }
                 registerMemoryRuntime(runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
-                if (record.kind !== "memory") {
+                if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
                     message: "only memory plugins can register memory embedding providers",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
                   });
                   return;
                 }

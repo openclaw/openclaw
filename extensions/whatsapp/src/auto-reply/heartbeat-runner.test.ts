@@ -41,14 +41,6 @@ vi.mock("../../../../src/channels/plugins/whatsapp-heartbeat.js", () => ({
   resolveWhatsAppHeartbeatRecipients: () => [],
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
   return {
@@ -91,18 +83,27 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  getReplyFromConfig: vi.fn(async () => undefined),
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: vi.fn(async () => undefined),
+  };
+});
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  loadSessionStore: () => state.store,
-  resolveSessionKey: () => "k",
-  resolveStorePath: () => "/tmp/store.json",
-  updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
-    updater(state.store);
-  },
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
+    loadSessionStore: () => state.store,
+    resolveSessionKey: () => "k",
+    resolveStorePath: () => "/tmp/store.json",
+    updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
+      updater(state.store);
+    },
+  };
+});
 
 vi.mock("./session-snapshot.js", () => ({
   getSessionSnapshot: () => state.snapshot,

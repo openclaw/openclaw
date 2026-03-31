@@ -1,14 +1,17 @@
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
+import type { TaskAuditSummary } from "./task-registry.audit.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
   listTaskRecords,
+  markTaskLostById,
   maybeDeliverTaskTerminalUpdate,
   resolveTaskForLookupToken,
-  updateTaskRecordById,
+  setTaskCleanupAfterById,
 } from "./task-registry.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -18,6 +21,12 @@ const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 let sweeper: NodeJS.Timeout | null = null;
+
+export type TaskRegistryMaintenanceSummary = {
+  reconciled: number;
+  cleanupStamped: number;
+  pruned: number;
+};
 
 function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: string): unknown {
   const direct = store[sessionKey];
@@ -90,25 +99,42 @@ function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
   return now - terminalAt >= TASK_RETENTION_MS;
 }
 
+function shouldStampCleanupAfter(task: TaskRecord): boolean {
+  return isTerminalTask(task) && typeof task.cleanupAfter !== "number";
+}
+
+function resolveCleanupAfter(task: TaskRecord): number {
+  const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
+  return terminalAt + TASK_RETENTION_MS;
+}
+
 function markTaskLost(task: TaskRecord, now: number): TaskRecord {
+  const cleanupAfter = task.cleanupAfter ?? projectTaskLost(task, now).cleanupAfter;
   const updated =
-    updateTaskRecordById(task.taskId, {
-      status: "lost",
+    markTaskLostById({
+      taskId: task.taskId,
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
       error: task.error ?? "backing session missing",
+      cleanupAfter,
     }) ?? task;
   void maybeDeliverTaskTerminalUpdate(updated.taskId);
   return updated;
 }
 
 function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
-  return {
+  const projected: TaskRecord = {
     ...task,
     status: "lost",
     endedAt: task.endedAt ?? now,
     lastEventAt: now,
     error: task.error ?? "backing session missing",
+  };
+  return {
+    ...projected,
+    ...(typeof projected.cleanupAfter === "number"
+      ? {}
+      : { cleanupAfter: resolveCleanupAfter(projected) }),
   };
 }
 
@@ -129,16 +155,44 @@ export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());
 }
 
+export function getInspectableTaskAuditSummary(): TaskAuditSummary {
+  const tasks = reconcileInspectableTasks();
+  return summarizeTaskAuditFindings(listTaskAuditFindings({ tasks }));
+}
+
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = resolveTaskForLookupToken(token);
   return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }
 
-export function sweepTaskRegistry(): { reconciled: number; pruned: number } {
+export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
   ensureTaskRegistryReady();
   const now = Date.now();
   let reconciled = 0;
+  let cleanupStamped = 0;
+  let pruned = 0;
+  for (const task of listTaskRecords()) {
+    if (shouldMarkLost(task, now)) {
+      reconciled += 1;
+      continue;
+    }
+    if (shouldPruneTerminalTask(task, now)) {
+      pruned += 1;
+      continue;
+    }
+    if (shouldStampCleanupAfter(task)) {
+      cleanupStamped += 1;
+    }
+  }
+  return { reconciled, cleanupStamped, pruned };
+}
+
+export function runTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
+  ensureTaskRegistryReady();
+  const now = Date.now();
+  let reconciled = 0;
+  let cleanupStamped = 0;
   let pruned = 0;
   for (const task of listTaskRecords()) {
     if (shouldMarkLost(task, now)) {
@@ -150,9 +204,23 @@ export function sweepTaskRegistry(): { reconciled: number; pruned: number } {
     }
     if (shouldPruneTerminalTask(task, now) && deleteTaskRecordById(task.taskId)) {
       pruned += 1;
+      continue;
+    }
+    if (
+      shouldStampCleanupAfter(task) &&
+      setTaskCleanupAfterById({
+        taskId: task.taskId,
+        cleanupAfter: resolveCleanupAfter(task),
+      })
+    ) {
+      cleanupStamped += 1;
     }
   }
-  return { reconciled, pruned };
+  return { reconciled, cleanupStamped, pruned };
+}
+
+export function sweepTaskRegistry(): TaskRegistryMaintenanceSummary {
+  return runTaskRegistryMaintenance();
 }
 
 export function startTaskRegistryMaintenance() {
