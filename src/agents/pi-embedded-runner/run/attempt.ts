@@ -1875,13 +1875,11 @@ export async function runEmbeddedAttempt(
 
           if (llmOutputResult?.assistantTexts !== undefined) {
             finalAssistantTexts = llmOutputResult.assistantTexts;
-            // When a plugin fully redacts the response (empty array), also
-            // clear lastAssistant so downstream payload construction does
-            // not fall back to extractAssistantText(lastAssistant) and
-            // leak the original model output.
-            if (finalAssistantTexts.length === 0) {
-              lastAssistant = undefined;
-            }
+            // Clear lastAssistant whenever a plugin overrides the response.
+            // This prevents downstream payload construction from leaking
+            // the original model output — including reasoning blocks
+            // extracted from lastAssistant in reasoning mode.
+            lastAssistant = undefined;
           }
         } catch (err) {
           log.warn(`llm_output hook failed: ${String(err)}`);
