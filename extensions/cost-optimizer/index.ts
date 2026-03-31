@@ -56,5 +56,20 @@ export default definePluginEntry({
       }) as OpenClawPluginToolFactory,
       { optional: true },
     );
+
+    // Hook: record usage events
+    api.on("llm_output", (event, ctx) => {
+      if (event && event.provider && event.model && event.usage) {
+        tracker.recordUsage({
+          agentId: ctx?.agentId ?? "main",
+          provider: event.provider,
+          model: event.model,
+          inputTokens: event.usage.input ?? 0,
+          outputTokens: event.usage.output ?? 0,
+          cacheReadTokens: event.usage.cacheRead ?? 0,
+          cacheWriteTokens: event.usage.cacheWrite ?? 0,
+        });
+      }
+    });
   },
 });

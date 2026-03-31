@@ -53,7 +53,7 @@ function weekKey(ts: number): string {
   const weekNumber = Math.ceil(
     ((d.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7,
   );
-  return `${d.getFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+  return `${d.getFullYear()}-W${String(Math.min(weekNumber, 53)).padStart(2, "0")}`;
 }
 
 function monthKey(ts: number): string {

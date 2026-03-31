@@ -16,7 +16,7 @@ export default definePluginEntry({
     const pluginConfig = api.pluginConfig ?? {};
 
     const detector = new PatternDetector({
-      maxInteractions: 5000,
+      maxInteractions: 500,
       maxPatterns: typeof pluginConfig.maxPatterns === "number" ? pluginConfig.maxPatterns : 100,
       minOccurrences:
         typeof pluginConfig.minInteractionsForPattern === "number"

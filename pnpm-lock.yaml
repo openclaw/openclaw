@@ -281,6 +281,16 @@ importers:
 
   extensions/copilot-proxy: {}
 
+  extensions/cost-optimizer:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/deepgram: {}
 
   extensions/deepseek: {}
@@ -559,6 +569,16 @@ importers:
 
   extensions/perplexity: {}
 
+  extensions/proactive-intel:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/qianfan: {}
 
   extensions/qqbot:
@@ -598,8 +618,6 @@ importers:
   extensions/synology-chat: {}
 
   extensions/synthetic: {}
-
-  extensions/tasks: {}
 
   extensions/tavily: {}
 
@@ -729,8 +747,6 @@ importers:
         version: link:../..
 
   packages/plugin-package-contract: {}
-
-  packages/tasks-host-sdk: {}
 
   ui:
     dependencies:

@@ -35,7 +35,7 @@ export function createInsightsTool(
       const deliverNow = typeof params.deliverNow === "boolean" ? params.deliverNow : false;
 
       // Trigger analysis
-      detector.analyzePatterns();
+      const allPatterns = detector.analyzePatterns();
 
       // Generate insights
       const insights = engine.generateInsights();
@@ -49,7 +49,6 @@ export function createInsightsTool(
       lines.push(`*${detector.getInteractionCount()} interactions analyzed • ${detector.getPatternCount()} patterns detected*`);
 
       if (includePatterns) {
-        const allPatterns = detector.analyzePatterns();
         lines.push("");
         lines.push("### Detected Patterns");
         lines.push("");

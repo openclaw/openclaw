@@ -125,7 +125,7 @@ export class PatternDetector {
     maxPatterns?: number;
     minOccurrences?: number;
   }) {
-    this.maxInteractions = options?.maxInteractions ?? 5000;
+    this.maxInteractions = options?.maxInteractions ?? 500;
     this.maxPatterns = options?.maxPatterns ?? 100;
     this.minOccurrences = options?.minOccurrences ?? 5;
   }
@@ -371,38 +371,44 @@ export class PatternDetector {
 
   private detectChannelPreferences(): DetectedPattern[] {
     const patterns: DetectedPattern[] = [];
-    const channelIntentMap = new Map<string, Map<IntentCategory, number>>();
+    const channelIntentMap = new Map<string, Map<IntentCategory, InteractionRecord[]>>();
 
     for (const record of this.interactions) {
       const channelMap = channelIntentMap.get(record.channelId) ?? new Map();
-      channelMap.set(record.intent, (channelMap.get(record.intent) ?? 0) + 1);
+      const records = channelMap.get(record.intent) ?? [];
+      records.push(record);
+      channelMap.set(record.intent, records);
       channelIntentMap.set(record.channelId, channelMap);
     }
 
     for (const [channel, intentMap] of channelIntentMap) {
-      const sorted = [...intentMap.entries()].sort((a, b) => b[1] - a[1]);
+      const sorted = [...intentMap.entries()].sort((a, b) => b[1].length - a[1].length);
       const top = sorted[0];
-      if (!top || top[1] < this.minOccurrences) {
+      if (!top || top[1].length < this.minOccurrences) {
         continue;
       }
 
-      const totalForChannel = [...intentMap.values()].reduce((a, b) => a + b, 0);
-      const dominance = (top[1] / totalForChannel) * 100;
+      const topIntent = top[0];
+      const records = top[1];
+      const occurrences = records.length;
+
+      const totalForChannel = [...intentMap.values()].reduce((a, b) => a + b.length, 0);
+      const dominance = (occurrences / totalForChannel) * 100;
 
       if (dominance < 40) {
         continue; // Not dominant enough
       }
 
       patterns.push({
-        id: `channel-pref:${channel}:${top[0]}`,
+        id: `channel-pref:${channel}:${topIntent}`,
         type: "channel-pref",
         confidence: Math.min(85, Math.round(dominance)),
-        occurrences: top[1],
-        description: `You prefer ${channel} for ${top[0]} tasks (${Math.round(dominance)}% of ${channel} usage)`,
+        occurrences: occurrences,
+        description: `You prefer ${channel} for ${topIntent} tasks (${Math.round(dominance)}% of ${channel} usage)`,
         trigger: { minOccurrences: this.minOccurrences },
-        suggestedAction: `Route ${top[0]}-related proactive messages to ${channel}`,
-        lastSeen: Date.now(),
-        firstSeen: Date.now(),
+        suggestedAction: `Route ${topIntent}-related proactive messages to ${channel}`,
+        lastSeen: Math.max(...records.map((r) => r.timestamp)),
+        firstSeen: Math.min(...records.map((r) => r.timestamp)),
       });
     }
 

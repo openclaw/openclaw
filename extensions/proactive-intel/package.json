@@ -6,7 +6,13 @@
   "dependencies": {
     "@sinclair/typebox": "^0.34.49"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
+    "install": {
+      "npmSpec": "@openclaw/proactive-intel"
+    },
     "extensions": [
       "./index.ts"
     ],
