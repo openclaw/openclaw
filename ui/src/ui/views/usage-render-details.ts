@@ -564,8 +564,8 @@ function renderTimeSeriesCompact(
           <!-- X axis labels (first and last) -->
           ${points.length > 0
             ? svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${new Date(points[0].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${new Date(points[points.length - 1].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${new Date(points[0].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${new Date(points[points.length - 1].timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}</text>
           `
             : nothing}
           <!-- Bars -->
@@ -732,9 +732,11 @@ function renderTimeSeriesCompact(
               </span>
               ·
               ${new Date(rangeStartTs).toLocaleTimeString(undefined, {
+                hour12: false,
                 hour: "2-digit",
                 minute: "2-digit",
               })}–${new Date(rangeEndTs).toLocaleTimeString(undefined, {
+                hour12: false,
                 hour: "2-digit",
                 minute: "2-digit",
               })}
