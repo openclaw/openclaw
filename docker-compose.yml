@@ -15,6 +15,7 @@ services:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
       - ~/MyDocs/Obsidian/Primary/1-Chronicle/2026/DailyNotes:/home/node/.openclaw/workspace/memory/:rw
+      - ~/MyDocs/Obsidian/Primary:/data/obsidian:ro
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
