@@ -767,7 +767,7 @@ export async function runHeartbeatOnce(opts: {
     To: sender,
     OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
     OriginatingTo: delivery.to,
-    AccountId: delivery.accountId,
+    AccountId: delivery.reason !== "unknown-account" ? delivery.accountId : undefined,
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
