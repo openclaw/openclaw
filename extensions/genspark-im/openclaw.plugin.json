@@ -1,0 +1,10 @@
+{
+  "id": "genspark-im",
+  "channels": ["genspark-im"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+

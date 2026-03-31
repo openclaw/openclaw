@@ -1,0 +1,27 @@
+{
+  "name": "@genspark/genspark-im",
+  "version": "0.7.2",
+  "private": true,
+  "description": "OpenClaw channel plugin for Genspark IM",
+  "type": "module",
+  "main": "src/index.ts",
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "channel": {
+      "id": "genspark-im",
+      "label": "Genspark IM",
+      "selectionLabel": "Genspark IM",
+      "docsPath": "/channels/genspark-im",
+      "docsLabel": "genspark-im",
+      "blurb": "Send and receive messages via Genspark IM.",
+      "order": 90
+    },
+    "install": {
+      "localPath": "plugins/genspark-im",
+      "defaultChoice": "local"
+    }
+  }
+}
+
