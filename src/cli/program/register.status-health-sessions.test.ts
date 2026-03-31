@@ -5,6 +5,9 @@ import { registerStatusHealthSessionsCommands } from "./register.status-health-s
 const mocks = vi.hoisted(() => ({
   statusCommand: vi.fn(),
   healthCommand: vi.fn(),
+  flowsListCommand: vi.fn(),
+  flowsShowCommand: vi.fn(),
+  flowsCancelCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
   tasksListCommand: vi.fn(),
@@ -23,6 +26,9 @@ const mocks = vi.hoisted(() => ({
 
 const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
+const flowsListCommand = mocks.flowsListCommand;
+const flowsShowCommand = mocks.flowsShowCommand;
+const flowsCancelCommand = mocks.flowsCancelCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const tasksListCommand = mocks.tasksListCommand;
@@ -40,6 +46,12 @@ vi.mock("../../commands/status.js", () => ({
 
 vi.mock("../../commands/health.js", () => ({
   healthCommand: mocks.healthCommand,
+}));
+
+vi.mock("../../commands/flows.js", () => ({
+  flowsListCommand: mocks.flowsListCommand,
+  flowsShowCommand: mocks.flowsShowCommand,
+  flowsCancelCommand: mocks.flowsCancelCommand,
 }));
 
 vi.mock("../../commands/sessions.js", () => ({
@@ -79,6 +91,9 @@ describe("registerStatusHealthSessionsCommands", () => {
     runtime.exit.mockImplementation(() => {});
     statusCommand.mockResolvedValue(undefined);
     healthCommand.mockResolvedValue(undefined);
+    flowsListCommand.mockResolvedValue(undefined);
+    flowsShowCommand.mockResolvedValue(undefined);
+    flowsCancelCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
@@ -313,6 +328,41 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(tasksCancelCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         lookup: "run-123",
+      }),
+      runtime,
+    );
+  });
+
+  it("runs flows list from the parent command", async () => {
+    await runCli(["flows", "--json", "--status", "blocked"]);
+
+    expect(flowsListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        status: "blocked",
+      }),
+      runtime,
+    );
+  });
+
+  it("runs flows show subcommand with lookup forwarding", async () => {
+    await runCli(["flows", "show", "flow-123", "--json"]);
+
+    expect(flowsShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs flows cancel subcommand with lookup forwarding", async () => {
+    await runCli(["flows", "cancel", "flow-123"]);
+
+    expect(flowsCancelCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
       }),
       runtime,
     );
