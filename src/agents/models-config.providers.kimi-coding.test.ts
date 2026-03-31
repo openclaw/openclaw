@@ -2,16 +2,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
-function buildExplicitKimiModels() {
+function buildExplicitKimiModels(): ModelDefinitionConfig[] {
   return [
     {
       id: "kimi-code",
       name: "Kimi Code",
       reasoning: true,
-      input: ["text", "image"] as const,
+      input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 262144,
       maxTokens: 32768,

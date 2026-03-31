@@ -1451,11 +1451,19 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
-  it("injects native Codex web_search for api-compatible Responses models", () => {
+  it("injects native Codex web_search for direct openai-codex Responses models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "gateway",
+      applyProvider: "openai-codex",
       applyModelId: "gpt-5.4",
       cfg: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+            },
+          },
+        },
         tools: {
           web: {
             search: {
@@ -1471,7 +1479,7 @@ describe("applyExtraParamsToAgent", () => {
       },
       model: {
         api: "openai-codex-responses",
-        provider: "gateway",
+        provider: "openai-codex",
         id: "gpt-5.4",
       } as Model<"openai-codex-responses">,
       payload: { tools: [{ type: "function", name: "read" }] },
