@@ -227,7 +227,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
   - `last`: deliver to the last used external channel.
-  - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
+  - explicit channel: any configured channel or plugin id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
   - `none` (default): run the heartbeat but **do not deliver** externally.
 - `directPolicy`: controls direct/DM delivery behavior:
   - `allow` (default): allow direct/DM heartbeat delivery.

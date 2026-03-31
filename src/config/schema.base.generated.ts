@@ -2823,6 +2823,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
+                  requireAgentId: {
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -3978,6 +3981,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     thinking: {
                       type: "string",
+                    },
+                    requireAgentId: {
+                      type: "boolean",
                     },
                   },
                   additionalProperties: false,

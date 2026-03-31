@@ -28,9 +28,24 @@ import {
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-update.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "../credentials-read.js";
-import { MatrixClient } from "../sdk.js";
-import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
+
+type MatrixAuthClientDeps = {
+  MatrixClient: typeof import("../sdk.js").MatrixClient;
+  ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+};
+
+let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
+
+async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
+  matrixAuthClientDepsPromise ??= Promise.all([import("../sdk.js"), import("./logging.js")]).then(
+    ([sdkModule, loggingModule]) => ({
+      MatrixClient: sdkModule.MatrixClient,
+      ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+    }),
+  );
+  return await matrixAuthClientDepsPromise;
+}
 
 function readEnvSecretRefFallback(params: {
   value: unknown;
@@ -670,8 +685,9 @@ export async function resolveMatrixAuth(params?: {
 
     if (!userId || !knownDeviceId) {
       // Fetch whoami when we need to resolve userId and/or deviceId from token auth.
+      const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
       ensureMatrixSdkLoggingConfigured();
-      const tempClient = new MatrixClient(homeserver, accessToken, undefined, undefined, {
+      const tempClient = new MatrixClient(homeserver, accessToken, {
         ssrfPolicy: resolved.ssrfPolicy,
         dispatcherPolicy: resolved.dispatcherPolicy,
       });
@@ -767,8 +783,9 @@ export async function resolveMatrixAuth(params?: {
   }
 
   // Login with password using the same hardened request path as other Matrix HTTP calls.
+  const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
   ensureMatrixSdkLoggingConfigured();
-  const loginClient = new MatrixClient(homeserver, "", undefined, undefined, {
+  const loginClient = new MatrixClient(homeserver, "", {
     ssrfPolicy: resolved.ssrfPolicy,
     dispatcherPolicy: resolved.dispatcherPolicy,
   });
