@@ -321,11 +321,23 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
     resolve_auth(auth_obj, config);
     if (!validate_auth(config)) return config;
 
+    /* Resolve controlUi.basePath */
+    if (gateway_obj && json_object_has_member(gateway_obj, "controlUi")) {
+        JsonObject *cui_obj = json_object_get_object_member(gateway_obj, "controlUi");
+        if (cui_obj && json_object_has_member(cui_obj, "basePath")) {
+            const gchar *bp = json_object_get_string_member(cui_obj, "basePath");
+            if (bp && bp[0] != '\0') {
+                config->control_ui_base_path = g_strdup(bp);
+            }
+        }
+    }
+
     config->valid = TRUE;
     config->error_code = GW_CFG_OK;
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
-              "gateway_config_load valid host=%s port=%d auth_mode=%s has_token=%d",
-              config->host, config->port, config->auth_mode, config->token != NULL);
+              "gateway_config_load valid host=%s port=%d auth_mode=%s has_token=%d basePath=%s",
+              config->host, config->port, config->auth_mode, config->token != NULL,
+              config->control_ui_base_path ? config->control_ui_base_path : "(default)");
     return config;
 }
 
@@ -336,6 +348,7 @@ void gateway_config_free(GatewayConfig *config) {
     g_free(config->auth_mode);
     g_free(config->token);
     g_free(config->password);
+    g_free(config->control_ui_base_path);
     g_free(config->config_path);
     g_free(config->error);
     g_free(config);
@@ -391,5 +404,57 @@ gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *
     g_autofree gchar *b_ws = gateway_config_ws_url(b);
     if (g_strcmp0(a_ws, b_ws) != 0) return FALSE;
 
+    /* controlUi.basePath */
+    if (g_strcmp0(a->control_ui_base_path, b->control_ui_base_path) != 0) return FALSE;
+
     return TRUE;
+}
+
+/*
+ * Build the dashboard (Control UI) URL from the configured gateway endpoint.
+ *
+ * Uses the configured endpoint as the source of truth — not transient
+ * health-state values. The URL pattern matches the CLI (dashboard.ts)
+ * and macOS (GatewayEndpointStore.dashboardURL):
+ *   http://{host}:{port}{basePath}#token={token}
+ *
+ * Token is embedded as a URL fragment (not query param) to avoid leaking
+ * via server logs. SecretRef-managed tokens are never embedded.
+ */
+gchar* gateway_config_dashboard_url(const GatewayConfig *config) {
+    if (!config || !config->valid) return NULL;
+
+    /* Normalize basePath: ensure leading slash, trailing slash */
+    const gchar *raw_path = config->control_ui_base_path;
+    g_autofree gchar *normalized = NULL;
+    if (!raw_path || raw_path[0] == '\0') {
+        normalized = g_strdup("/");
+    } else {
+        gboolean has_leading = (raw_path[0] == '/');
+        gsize len = strlen(raw_path);
+        gboolean has_trailing = (len > 0 && raw_path[len - 1] == '/');
+
+        if (has_leading && has_trailing) {
+            normalized = g_strdup(raw_path);
+        } else if (has_leading && !has_trailing) {
+            normalized = g_strdup_printf("%s/", raw_path);
+        } else if (!has_leading && has_trailing) {
+            normalized = g_strdup_printf("/%s", raw_path);
+        } else {
+            normalized = g_strdup_printf("/%s/", raw_path);
+        }
+    }
+
+    /* Build base URL */
+    g_autofree gchar *base = g_strdup_printf("http://%s:%d%s",
+        config->host, config->port,
+        g_strcmp0(normalized, "/") == 0 ? "/" : normalized);
+
+    /* Append token fragment if available and not a SecretRef */
+    if (config->token && config->token[0] != '\0' && !config->token_is_secret_ref) {
+        g_autofree gchar *escaped = g_uri_escape_string(config->token, NULL, FALSE);
+        return g_strdup_printf("%s#token=%s", base, escaped);
+    }
+
+    return g_strdup(base);
 }

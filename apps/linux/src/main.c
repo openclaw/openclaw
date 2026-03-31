@@ -18,6 +18,7 @@
 
 #include "log.h"
 #include "gateway_client.h"
+#include "onboarding.h"
 
 extern void tray_init(void);
 extern void systemd_init(void);
@@ -27,6 +28,12 @@ extern void notify_init(void);
 
 void state_on_gateway_refresh_requested(void) {
     gateway_client_refresh();
+}
+
+static gboolean onboarding_check_timeout_cb(gpointer user_data) {
+    (void)user_data;
+    onboarding_check_and_show();
+    return G_SOURCE_REMOVE;
 }
 
 static void on_activate(GtkApplication *app, gpointer user_data) {
@@ -60,6 +67,12 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     // The gateway client manages its own internal timers for health polling
     // and WebSocket reconnection with exponential backoff.
     gateway_client_init();
+
+    // 6. Schedule onboarding check after a short delay so the initial
+    // health probe has time to complete and state is meaningful.
+    // Tray-first: after onboarding is completed, steady-state launches
+    // do NOT auto-open the main window.
+    g_timeout_add_seconds(2, onboarding_check_timeout_cb, NULL);
 }
 
 int main(int argc, char **argv) {

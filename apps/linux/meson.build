@@ -42,6 +42,9 @@ sources = [
   'src/readiness.c',
   'src/notify.c',
   'src/diagnostics.c',
+  'src/display_model.c',
+  'src/app_window.c',
+  'src/onboarding.c',
   'src/log.c'
 ]
 
@@ -95,3 +98,9 @@ test_gateway_exe = executable('test_gateway',
   ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('gateway', test_gateway_exe)
+
+test_display_model_exe = executable('test_display_model',
+  ['tests/test_display_model.c', 'src/display_model.c', 'src/readiness.c',
+   'src/runtime_mode.c', 'src/gateway_config.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('display_model', test_display_model_exe)
