@@ -74,35 +74,24 @@ goto MENU
 
 echo.
 echo =========================================
-echo Starting ABB Hardware Bridge Plugin...
-echo =========================================
-:: 启动 ABB 的 C# 网桥微服务 (在新窗口中运行以免阻塞)
-if exist "Plugins\hw.bridge.abb\ABB.dll" (
-    pushd "Plugins\hw.bridge.abb"
-    start "ABB Bridge Plugin" cmd /k "dotnet ABB.dll"
-    popd
-    echo [INFO] ABB Plugin process started in a new cmd window.
-) else (
-    echo [WARNING] ABB.dll not found. Skipping plugin start.
-)
-
-echo.
-echo =========================================
 echo Starting OpenClaw Gateway (Standard Mode)...
 echo =========================================
+echo (Note: ABB Bridge Plugin is now automatically managed via MCP)
 echo Running: node openclaw.mjs gateway run --bind loopback --port 18789 --force
 echo.
 
-node openclaw.mjs gateway run --bind loopback --port 18789 --force
+:: 使用 powershell 调用 node，这样按下 Ctrl+C 时可以避免出现“是否终止批处理”选项
+powershell -NoProfile -Command "node openclaw.mjs gateway run --bind loopback --port 18789 --force"
 
 echo.
+echo [INFO] OpenClaw service stopped.
 pause
 goto MENU
 
 :CHECK_AND_STOP
 echo.
 echo Checking for running OpenClaw services...
-powershell -NoProfile -Command "$sys = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue; $n = $sys | Where-Object { $_.CommandLine -match 'node.*openclaw\.mjs' }; $d = $sys | Where-Object { $_.CommandLine -match 'dotnet.*ABB\.dll' }; if ($n -or $d) { exit 1 } else { exit 0 }"
+powershell -NoProfile -Command "$sys = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue; $n = $sys | Where-Object { $_.CommandLine -match 'node.*openclaw\.mjs' }; $d = $sys | Where-Object { $_.Name -match 'ABB\.exe' }; if ($n -or $d) { exit 1 } else { exit 0 }"
 if %ERRORLEVEL% equ 1 (
     echo [WARNING] OpenClaw or ABB Plugin is already running!
     choice /C YN /M "Do you want to fully stop the existing services before starting?"
@@ -116,8 +105,8 @@ exit /b
 
 :STOP_SERVICES_SILENT
 echo Stopping OpenClaw and ABB Plugin processes...
-powershell -NoProfile -Command "$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'node.*openclaw\.mjs|dotnet.*ABB\.dll' }; if ($procs) { $procs | Invoke-CimMethod -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null }"
-taskkill /F /FI "WINDOWTITLE eq ABB Bridge Plugin*" >nul 2>&1
+powershell -NoProfile -Command "$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'node.*openclaw\.mjs' -or $_.Name -match 'ABB\.exe' }; if ($procs) { $procs | Invoke-CimMethod -MethodName Terminate -ErrorAction SilentlyContinue | Out-Null }"
+taskkill /F /IM ABB.exe >nul 2>&1
 :: Ensure port 18789 is freed
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr LISTENING ^| findstr :18789') do (
     if not "%%a" == "0" taskkill /F /PID %%a >nul 2>&1
