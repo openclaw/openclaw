@@ -68,8 +68,8 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
-}): (payload: ReplyPayload) => Promise<void> {
-  return async (payload) => {
+}): (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> {
+  return async (payload, context) => {
     const { text, skip } = params.normalizeStreamingText(payload);
     if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return;
@@ -122,18 +122,18 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-      params.blockReplyPipeline.enqueue(blockPayload);
+      params.blockReplyPipeline.enqueue(blockPayload, context);
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply(blockPayload);
+      await params.onBlockReply(blockPayload, context);
     } else if (blockHasMedia) {
       // When block streaming is disabled, text-only block replies are accumulated into the
       // final response. Media cannot be reconstructed later, so send it immediately and let
       // the assistant's final text arrive through the normal final-reply path.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply({ ...blockPayload, text: undefined });
+      await params.onBlockReply({ ...blockPayload, text: undefined }, context);
     }
     // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };

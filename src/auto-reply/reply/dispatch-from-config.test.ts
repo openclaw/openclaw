@@ -45,6 +45,7 @@ const hookMocks = vi.hoisted(() => ({
       async () => ({ status: "no_handler" as const }),
     ),
     runMessageReceived: vi.fn(async () => {}),
+    runBeforeBlockReply: vi.fn(async () => undefined),
     runBeforeDispatch: vi.fn<
       (_event: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),

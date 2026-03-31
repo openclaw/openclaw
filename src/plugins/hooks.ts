@@ -35,6 +35,8 @@ import type {
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookBeforeBlockReplyEvent,
+  PluginHookBeforeBlockReplyResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -84,6 +86,8 @@ export type {
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookBeforeBlockReplyEvent,
+  PluginHookBeforeBlockReplyResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -631,6 +635,35 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_block_reply hook.
+   * Allows plugins to modify or cancel block replies before delivery.
+   * Runs sequentially.
+   */
+  async function runBeforeBlockReply(
+    event: PluginHookBeforeBlockReplyEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeBlockReplyResult | undefined> {
+    return runModifyingHook<"before_block_reply", PluginHookBeforeBlockReplyResult>(
+      "before_block_reply",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.cancel === true) {
+            return acc;
+          }
+          return {
+            text: lastDefined(acc?.text, next.text),
+            cancel: stickyTrue(acc?.cancel, next.cancel),
+          };
+        },
+        shouldStop: (result) => result.cancel === true,
+        terminalLabel: "cancel=true",
+      },
+    );
+  }
+
+  /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
    * First handler returning { handled: true } wins.
@@ -1052,6 +1085,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runMessageReceived,
+    runBeforeBlockReply,
     runBeforeDispatch,
     runMessageSending,
     runMessageSent,

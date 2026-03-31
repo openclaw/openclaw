@@ -1,6 +1,20 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+
+/**
+ * Thrown when a `before_block_reply` plugin hook cancels delivery.
+ * The pipeline catch handler should treat this as "not sent" so the
+ * payload is not marked as delivered and can still appear in the
+ * final reply path.
+ */
+export class BlockReplyCancelledError extends Error {
+  readonly isBlockReplyCancelled = true;
+  constructor() {
+    super("block reply cancelled by before_block_reply hook");
+    this.name = "BlockReplyCancelledError";
+  }
+}
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -693,18 +707,47 @@ export async function dispatchReplyFromConfig(params: {
             if (payload.isReasoning === true) {
               return;
             }
+
+            let blockPayload = payload;
+            if (hookRunner?.hasHooks("before_block_reply")) {
+              const hookResult = await hookRunner.runBeforeBlockReply(
+                {
+                  text: blockPayload.text,
+                  mediaUrls: blockPayload.mediaUrls,
+                  // Note: isReasoning is always falsy here because reasoning
+                  // payloads are returned early above. Included for API completeness.
+                  isReasoning: blockPayload.isReasoning,
+                  trigger: context?.trigger,
+                },
+                {
+                  agentId: sessionKey
+                    ? resolveSessionAgentId({ sessionKey, config: cfg })
+                    : undefined,
+                  sessionKey,
+                  runId: params.replyOptions?.runId,
+                },
+              );
+              if (hookResult?.cancel === true) {
+                // Throw a typed error so the pipeline does not mark this payload
+                // as delivered (which would suppress it in the final reply path).
+                throw new BlockReplyCancelledError();
+              }
+              if (hookResult?.text !== undefined) {
+                blockPayload = { ...blockPayload, text: hookResult.text };
+              }
+            }
             // Accumulate block text for TTS generation after streaming.
             // Exclude compaction status notices — they are informational UI
             // signals and must not be synthesised into the spoken reply.
-            if (payload.text && !payload.isCompactionNotice) {
+            if (blockPayload.text && !blockPayload.isCompactionNotice) {
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
-              accumulatedBlockText += payload.text;
+              accumulatedBlockText += blockPayload.text;
               blockCount++;
             }
             const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
+              payload: blockPayload,
               cfg,
               channel: ttsChannel,
               kind: "block",

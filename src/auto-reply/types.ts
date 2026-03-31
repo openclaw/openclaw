@@ -3,9 +3,12 @@ import type { InteractiveReply } from "../interactive/payload.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { TypingController } from "./reply/typing.js";
 
+export type BlockReplyFlushTrigger = "tool_start" | "text_end" | "message_end" | "run_end";
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  trigger?: BlockReplyFlushTrigger;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */

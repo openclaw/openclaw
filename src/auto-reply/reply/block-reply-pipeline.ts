@@ -1,11 +1,18 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import type { ReplyPayload } from "../types.js";
+import type { BlockReplyContext, ReplyPayload } from "../types.js";
+
+function isBlockReplyCancelled(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as Error & { isBlockReplyCancelled?: boolean }).isBlockReplyCancelled === true
+  );
+}
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
 export type BlockReplyPipeline = {
-  enqueue: (payload: ReplyPayload) => void;
+  enqueue: (payload: ReplyPayload, context?: BlockReplyContext) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
   stop: () => void;
   hasBuffered: () => boolean;
@@ -74,10 +81,7 @@ const withTimeout = async <T>(
 };
 
 export function createBlockReplyPipeline(params: {
-  onBlockReply: (
-    payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<void> | void;
+  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
@@ -95,7 +99,11 @@ export function createBlockReplyPipeline(params: {
   let didStream = false;
   let didLogTimeout = false;
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
+  const sendPayload = (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+    bypassSeenCheck: boolean = false,
+  ) => {
     if (aborted) {
       return;
     }
@@ -124,6 +132,7 @@ export function createBlockReplyPipeline(params: {
             onBlockReply(payload, {
               abortSignal: abortController.signal,
               timeoutMs,
+              trigger: context?.trigger,
             }),
           ),
           timeoutMs,
@@ -151,6 +160,11 @@ export function createBlockReplyPipeline(params: {
           }
           return;
         }
+        if (isBlockReplyCancelled(err)) {
+          // Plugin cancelled this delivery via before_block_reply hook.
+          // Do not mark as sent so the content can appear in the final reply.
+          return;
+        }
         logVerbose(`block reply delivery failed: ${String(err)}`);
       })
       .finally(() => {
@@ -164,7 +178,7 @@ export function createBlockReplyPipeline(params: {
         shouldAbort: () => aborted,
         onFlush: (payload) => {
           bufferedKeys.clear();
-          sendPayload(payload, /* bypassSeenCheck */ true);
+          sendPayload(payload, undefined, /* bypassSeenCheck */ true);
         },
       })
     : null;
@@ -195,13 +209,13 @@ export function createBlockReplyPipeline(params: {
     }
     for (const payload of bufferedPayloads) {
       const finalPayload = buffer?.finalize?.(payload) ?? payload;
-      sendPayload(finalPayload, /* bypassSeenCheck */ true);
+      sendPayload(finalPayload, undefined, /* bypassSeenCheck */ true);
     }
     bufferedPayloads.length = 0;
     bufferedPayloadKeys.clear();
   };
 
-  const enqueue = (payload: ReplyPayload) => {
+  const enqueue = (payload: ReplyPayload, context?: BlockReplyContext) => {
     if (aborted) {
       return;
     }
@@ -211,9 +225,10 @@ export function createBlockReplyPipeline(params: {
     const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
     if (hasMedia) {
       void coalescer?.flush({ force: true });
-      sendPayload(payload, /* bypassSeenCheck */ false);
+      sendPayload(payload, context, /* bypassSeenCheck */ false);
       return;
     }
+
     if (coalescer) {
       const payloadKey = createBlockReplyPayloadKey(payload);
       if (seenKeys.has(payloadKey) || pendingKeys.has(payloadKey) || bufferedKeys.has(payloadKey)) {
@@ -224,7 +239,7 @@ export function createBlockReplyPipeline(params: {
       coalescer.enqueue(payload);
       return;
     }
-    sendPayload(payload, /* bypassSeenCheck */ false);
+    sendPayload(payload, context, /* bypassSeenCheck */ false);
   };
 
   const flush = async (options?: { force?: boolean }) => {
