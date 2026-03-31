@@ -45,7 +45,7 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
-}) {
+}): Promise<{ sentText: string | null } | undefined> {
   const {
     replyResult,
     msg,
@@ -70,6 +70,7 @@ export async function deliverWebReply(params: {
     accountId,
   });
   if (hookResult === null) return;
+  const effectiveSentText = hookResult.content !== (replyResult.text ?? "") ? hookResult.content : null;
   const convertedText = markdownToWhatsApp(convertMarkdownTables(hookResult.content, tableMode));
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = resolveOutboundMediaUrls(replyResult);
@@ -230,4 +231,5 @@ export async function deliverWebReply(params: {
   for (const chunk of remainingText) {
     await msg.reply(chunk);
   }
+  return { sentText: effectiveSentText };
 }

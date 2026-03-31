@@ -115,9 +115,11 @@ export async function deliverLineAutoReply(params: {
     richMessages.push(deps.createLocationMessage(lineData.location));
   }
 
-  // Run the message_sending hook only when there is text to potentially modify or cancel.
-  // When only rich messages (flex/template/location) exist, skip the hook — a plugin
-  // seeing empty text should not inadvertently cancel non-text rich content.
+  // Run the message_sending hook when there is text. The hook sees the text content and
+  // can modify or cancel. Cancel is always honored — if a hook cancels, the entire reply
+  // (including any already-queued rich messages) is suppressed.
+  // When payload has no text at all (pure rich payload), skip the hook — a plugin
+  // filtering on empty text would inadvertently cancel every rich-only message.
   let effectiveText = payload.text ?? "";
   if (effectiveText) {
     const hookResult = await runOutboundMessageHook({
@@ -126,12 +128,10 @@ export async function deliverLineAutoReply(params: {
       channel: "line",
       accountId,
     });
-    if (hookResult === null && richMessages.length === 0) {
+    if (hookResult === null) {
       return { replyTokenUsed };
     }
-    if (hookResult !== null) {
-      effectiveText = hookResult.content;
-    }
+    effectiveText = hookResult.content;
   }
   const processed = effectiveText
     ? deps.processLineMessage(effectiveText)

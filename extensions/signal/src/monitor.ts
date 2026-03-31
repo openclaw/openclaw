@@ -317,7 +317,7 @@ async function deliverReplies(params: {
     const reply = resolveSendableOutboundReplyParts(payload);
     const delivered = await deliverTextOrMediaReply({
       payload,
-      text: hookResult.content || reply.text,
+      text: hookResult.content,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {
