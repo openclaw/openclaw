@@ -103,6 +103,8 @@ USER.md
 package-lock.json
 # Committed lockfiles for bundled plugin runtime deps (supply chain safety)
 !extensions/*/package-lock.json
+# Temp dirs from sync-plugin-lockfiles.mjs (cleaned on success, guard against interruption)
+extensions/*/.lockfile-gen-*/
 .claude/
 .agent/
 skills-lock.json

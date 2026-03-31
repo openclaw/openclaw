@@ -124,26 +124,7 @@ function generateLockfile(pluginDir) {
   }
 }
 
-function checkLockfileUpToDate(pluginDir) {
-  const pluginId = path.basename(pluginDir);
-  const existingLockfilePath = path.join(pluginDir, "package-lock.json");
-
-  if (!fs.existsSync(existingLockfilePath)) {
-    return { pluginId, ok: false, reason: "missing" };
-  }
-
-  // Verify the committed lockfile's dependency ranges still match the current
-  // package.json by comparing the packages.\"\" entry (the root project spec)
-  // in the existing lockfile against the sanitized package.json.
-  const packageJson = readJson(path.join(pluginDir, "package.json"));
-  const sanitized = sanitizeForInstall(packageJson);
-  const existingLock = readJson(existingLockfilePath);
-
-  const lockRootDeps = existingLock.packages?.[""]?.dependencies ?? {};
-  const manifestDeps = sanitized.dependencies ?? {};
-
-  // Check that every declared dependency appears in the lockfile root with
-  // a matching version range. This catches outdated lockfiles after dep bumps.
+function checkDepsMatch(pluginId, fieldName, manifestDeps, lockRootDeps) {
   for (const [name, range] of Object.entries(manifestDeps)) {
     if (lockRootDeps[name] !== range) {
       const lockValue = name in lockRootDeps ? lockRootDeps[name] : "(missing)";
@@ -151,7 +132,8 @@ function checkLockfileUpToDate(pluginDir) {
         pluginId,
         ok: false,
         reason:
-          "dependency " +
+          fieldName +
+          " " +
           name +
           " mismatch: package.json has " +
           JSON.stringify(range) +
@@ -161,15 +143,53 @@ function checkLockfileUpToDate(pluginDir) {
     }
   }
 
-  // Check for deps that were removed from package.json but remain in lockfile root
   for (const name of Object.keys(lockRootDeps)) {
     if (!(name in manifestDeps)) {
       return {
         pluginId,
         ok: false,
-        reason: `dependency ${name} in lockfile but not in package.json`,
+        reason: fieldName + " " + name + " in lockfile but not in package.json",
       };
     }
+  }
+  return null;
+}
+
+function checkLockfileUpToDate(pluginDir) {
+  const pluginId = path.basename(pluginDir);
+  const existingLockfilePath = path.join(pluginDir, "package-lock.json");
+
+  if (!fs.existsSync(existingLockfilePath)) {
+    return { pluginId, ok: false, reason: "missing" };
+  }
+
+  // Verify the committed lockfile's dependency ranges still match the current
+  // package.json by comparing the packages."" entry (the root project spec)
+  // in the existing lockfile against the sanitized package.json.
+  const packageJson = readJson(path.join(pluginDir, "package.json"));
+  const sanitized = sanitizeForInstall(packageJson);
+  const existingLock = readJson(existingLockfilePath);
+  const lockRoot = existingLock.packages?.[""] ?? {};
+
+  // Check both dependencies and optionalDependencies
+  const depsResult = checkDepsMatch(
+    pluginId,
+    "dependency",
+    sanitized.dependencies ?? {},
+    lockRoot.dependencies ?? {},
+  );
+  if (depsResult) {
+    return depsResult;
+  }
+
+  const optDepsResult = checkDepsMatch(
+    pluginId,
+    "optionalDependency",
+    sanitized.optionalDependencies ?? {},
+    lockRoot.optionalDependencies ?? {},
+  );
+  if (optDepsResult) {
+    return optDepsResult;
   }
 
   return { pluginId, ok: true, reason: "ok" };
