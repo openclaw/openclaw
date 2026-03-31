@@ -50,6 +50,7 @@ export type ResolvedAgentRoute = {
   matchedBy:
     | "binding.peer"
     | "binding.peer.parent"
+    | "binding.peer.wildcard"
     | "binding.guild+roles"
     | "binding.guild"
     | "binding.team"
@@ -214,6 +215,7 @@ const MAX_RESOLVED_ROUTE_CACHE_KEYS = 4000;
 
 type EvaluatedBindingsIndex = {
   byPeer: Map<string, EvaluatedBinding[]>;
+  byPeerWildcard: EvaluatedBinding[];
   byGuildWithRoles: Map<string, EvaluatedBinding[]>;
   byGuild: Map<string, EvaluatedBinding[]>;
   byTeam: Map<string, EvaluatedBinding[]>;
@@ -369,6 +371,7 @@ function collectPeerIndexedBindings(
 
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
   const byPeer = new Map<string, EvaluatedBinding[]>();
+  const byPeerWildcard: EvaluatedBinding[] = [];
   const byGuildWithRoles = new Map<string, EvaluatedBinding[]>();
   const byGuild = new Map<string, EvaluatedBinding[]>();
   const byTeam = new Map<string, EvaluatedBinding[]>();
@@ -380,6 +383,10 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
       for (const key of peerLookupKeys(binding.match.peer.kind, binding.match.peer.id)) {
         pushToIndexMap(byPeer, key, binding);
       }
+      continue;
+    }
+    if (binding.match.peer.state === "wildcard-kind") {
+      byPeerWildcard.push(binding);
       continue;
     }
     if (binding.match.guildId && binding.match.roles) {
@@ -403,6 +410,7 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
 
   return {
     byPeer,
+    byPeerWildcard,
     byGuildWithRoles,
     byGuild,
     byTeam,
@@ -752,6 +760,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
       candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
       predicate: (candidate) => candidate.match.peer.state === "valid",
+    },
+    {
+      matchedBy: "binding.peer.wildcard",
+      enabled: Boolean(peer),
+      scopePeer: peer,
+      candidates: bindingsIndex.byPeerWildcard,
+      predicate: (candidate) => candidate.match.peer.state === "wildcard-kind",
     },
     {
       matchedBy: "binding.guild+roles",

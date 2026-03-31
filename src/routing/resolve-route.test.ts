@@ -945,7 +945,7 @@ describe("wildcard peer bindings (peer.id=*)", () => {
     });
     expect(route.agentId).toBe("second-ana");
     expect(route.sessionKey).toContain("agent:second-ana:");
-    expect(route.matchedBy).toBe("binding.account");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
   });
 
   test("peer.id=* does not match group peers when kind is direct", () => {
@@ -1033,7 +1033,7 @@ describe("wildcard peer bindings (peer.id=*)", () => {
       peer: { kind: "direct", id: "+9999" },
     });
     expect(route.agentId).toBe("wild");
-    expect(route.matchedBy).toBe("binding.account");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
   });
 
   test("group wildcard peer matches any group peer", () => {
@@ -1057,7 +1057,7 @@ describe("wildcard peer bindings (peer.id=*)", () => {
       peer: { kind: "group", id: "g-42" },
     });
     expect(route.agentId).toBe("grp");
-    expect(route.matchedBy).toBe("binding.account");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
   });
 });
 
