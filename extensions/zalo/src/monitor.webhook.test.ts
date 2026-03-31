@@ -306,10 +306,6 @@ describe("handleZaloWebhookRequest", () => {
       path: "/hook-replay-scope-b",
       secret: "secret-b",
       statusSink: sinkB,
-      account: {
-        ...DEFAULT_ACCOUNT,
-        accountId: "work",
-      },
     });
     const payload = createTextUpdate({
       messageId: "msg-replay-cross-path-1",
