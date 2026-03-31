@@ -43,6 +43,9 @@ const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() 
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
+const ModelRegistryCtor = ModelRegistry as unknown as {
+  new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
+};
 
 function resolveTemplateModelId(modelId: string) {
   switch (modelId) {
@@ -58,7 +61,7 @@ function resolveTemplateModelId(modelId: string) {
 }
 
 function createTemplateModelRegistry(modelId: string): ModelRegistry {
-  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  const registry = new ModelRegistryCtor(AuthStorage.inMemory());
   const template = getModel("openai", resolveTemplateModelId(modelId));
   registry.registerProvider("openai", {
     apiKey: "test",
