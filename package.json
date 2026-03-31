@@ -1249,10 +1249,6 @@
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
-    "minimumReleaseAge": 2880,
-    "minimumReleaseAgeExclude": [
-      "@mariozechner/*"
-    ],
     "overrides": {
       "hono": "4.12.9",
       "@hono/node-server": "1.19.10",
