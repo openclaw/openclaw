@@ -572,10 +572,10 @@ install_build_tools_linux() {
     if command -v apt-get &> /dev/null; then
         if is_root; then
             run_quiet_step "Updating package index" apt-get update -qq
-            run_quiet_step "Installing build tools" apt-get install -y -qq build-essential python3 make g++ cmake
+            run_quiet_step "Installing build tools" apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold build-essential python3 make g++ cmake
         else
             run_quiet_step "Updating package index" sudo apt-get update -qq
-            run_quiet_step "Installing build tools" sudo apt-get install -y -qq build-essential python3 make g++ cmake
+            run_quiet_step "Installing build tools" sudo apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold build-essential python3 make g++ cmake
         fi
         return 0
     fi
@@ -1435,10 +1435,10 @@ install_node() {
             download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
-                run_quiet_step "Installing Node.js" apt-get install -y -qq nodejs
+                run_quiet_step "Installing Node.js" apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold nodejs
             else
                 run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"
-                run_quiet_step "Installing Node.js" sudo apt-get install -y -qq nodejs
+                run_quiet_step "Installing Node.js" sudo apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold nodejs
             fi
         elif command -v dnf &> /dev/null; then
             local tmp
@@ -1527,10 +1527,10 @@ install_git() {
         if command -v apt-get &> /dev/null; then
             if is_root; then
                 run_quiet_step "Updating package index" apt-get update -qq
-                run_quiet_step "Installing Git" apt-get install -y -qq git
+                run_quiet_step "Installing Git" apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold git
             else
                 run_quiet_step "Updating package index" sudo apt-get update -qq
-                run_quiet_step "Installing Git" sudo apt-get install -y -qq git
+                run_quiet_step "Installing Git" sudo apt-get install -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold git
             fi
         elif command -v pacman &> /dev/null || is_arch_linux; then
             if is_root; then
@@ -2263,6 +2263,12 @@ main() {
     print_installer_banner
     print_gum_status
     detect_os_or_die
+
+    # Prevent interactive dpkg prompts (needrestart, tzdata, etc.) that hang
+    # in a curl|bash pipe context.  Ubuntu 24.04+ ships needrestart by default.
+    if [[ "$OS" == "linux" ]]; then
+        export DEBIAN_FRONTEND=noninteractive
+    fi
 
     local detected_checkout=""
     detected_checkout="$(detect_openclaw_checkout "$PWD" || true)"
