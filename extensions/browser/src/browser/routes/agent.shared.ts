@@ -1,4 +1,5 @@
 import { toBrowserErrorResponse } from "../errors.js";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
@@ -94,22 +95,15 @@ export async function assertPlaywrightTabTargetAllowed(params: {
   url: string;
 }): Promise<void> {
   try {
-    let guardUrl = params.url;
-    try {
-      // Prefer the live Playwright page URL when available so follow-up guards do
-      // not rely solely on route-dispatch-time tab metadata.
-      const page = await params.pw.getPageForTargetId({
-        cdpUrl: params.cdpUrl,
-        targetId: params.targetId,
-      });
-      const liveUrl = page.url();
-      if (typeof liveUrl === "string" && liveUrl.trim()) {
-        guardUrl = liveUrl;
-      }
-    } catch {
-      console.warn(
-        `browser: failed to resolve live Playwright page URL for SSRF guard; falling back to cached tab metadata for target ${params.targetId}`,
-      );
+    // Follow-up guards must verify the current Playwright page state, not cached route
+    // metadata, or a redirect to a private URL could bypass the check during CDP churn.
+    const page = await params.pw.getPageForTargetId({
+      cdpUrl: params.cdpUrl,
+      targetId: params.targetId,
+    });
+    const guardUrl = page.url();
+    if (typeof guardUrl !== "string" || !guardUrl.trim()) {
+      throw new SsrFBlockedError("Blocked: unable to verify the current Playwright target URL");
     }
     await assertBrowserNavigationResultAllowed({
       url: guardUrl,
