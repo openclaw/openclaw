@@ -912,6 +912,7 @@ HOLIDAY_CHRISTMAS="Christmas: Ho ho ho—Santa's little claw-sistant is here to 
 HOLIDAY_EID="Eid al-Fitr: Celebration mode: queues cleared, tasks completed, and good vibes committed to main with clean history."
 HOLIDAY_DIWALI="Diwali: Let the logs sparkle and the bugs flee—today we light up the terminal and ship with pride."
 HOLIDAY_EASTER="Easter: I found your missing environment variable—consider it a tiny CLI egg hunt with fewer jellybeans."
+HOLIDAY_APRIL_FOOLS="April Fools: Don't worry, this is a real install-the lobster would never lie to you. (Probably.)"
 HOLIDAY_HANUKKAH="Hanukkah: Eight nights, eight retries, zero shame—may your gateway stay lit and your deployments stay peaceful."
 HOLIDAY_HALLOWEEN="Halloween: Spooky season: beware haunted dependencies, cursed caches, and the ghost of node_modules past."
 HOLIDAY_THANKSGIVING="Thanksgiving: Grateful for stable ports, working DNS, and a bot that reads the logs so nobody has to."
@@ -926,6 +927,7 @@ append_holiday_taglines() {
     case "$month_day" in
         "01-01") TAGLINES+=("$HOLIDAY_NEW_YEAR") ;;
         "02-14") TAGLINES+=("$HOLIDAY_VALENTINES") ;;
+        "04-01") TAGLINES+=("$HOLIDAY_APRIL_FOOLS") ;;
         "10-31") TAGLINES+=("$HOLIDAY_HALLOWEEN") ;;
         "12-25") TAGLINES+=("$HOLIDAY_CHRISTMAS") ;;
     esac
