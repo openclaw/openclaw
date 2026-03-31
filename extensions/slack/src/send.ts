@@ -442,12 +442,13 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
     // If there were no follow-up chunks but we have table attachments,
-    // send them as a separate message.
+    // send them as a separate message. Use NBSP as text since the
+    // fallback was already used as the media upload caption.
     if (rest.length === 0 && tableAttachments) {
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
-        text: renderSlackTablesFallbackText(allTables).slice(0, chunkLimit),
+        text: "\u00a0",
         threadTs: opts.threadTs,
         identity: opts.identity,
         attachments: tableAttachments,
