@@ -1207,6 +1207,7 @@
     "oxfmt": "0.42.0",
     "oxlint": "^1.57.0",
     "oxlint-tsgolint": "^0.18.1",
+    "pnpm": "^10.33.0",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.7",
     "tsx": "^4.21.0",
