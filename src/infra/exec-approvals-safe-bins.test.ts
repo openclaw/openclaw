@@ -27,6 +27,7 @@ describe("exec approvals safe bins", () => {
     resolvedPath: string;
     expected: boolean;
     safeBins?: string[];
+    safeBinProfiles?: Readonly<Record<string, { minPositional?: number; maxPositional?: number }>>;
     executableName?: string;
     rawExecutable?: string;
     cwd?: string;
@@ -198,6 +199,24 @@ describe("exec approvals safe bins", () => {
       expected: false,
     },
     {
+      name: "blocks awk scripts even when awk is explicitly profiled",
+      argv: ["awk", 'BEGIN { system("id") }'],
+      resolvedPath: "/usr/bin/awk",
+      expected: false,
+      safeBins: ["awk"],
+      safeBinProfiles: { awk: {} },
+      executableName: "awk",
+    },
+    {
+      name: "blocks sed scripts even when sed is explicitly profiled",
+      argv: ["sed", "e"],
+      resolvedPath: "/usr/bin/sed",
+      expected: false,
+      safeBins: ["sed"],
+      safeBinProfiles: { sed: {} },
+      executableName: "sed",
+    },
+    {
       name: "blocks safe bins with file args",
       argv: ["jq", ".foo", "secret.json"],
       resolvedPath: "/usr/bin/jq",
@@ -267,6 +286,7 @@ describe("exec approvals safe bins", () => {
         executableName,
       },
       safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
+      safeBinProfiles: testCase.safeBinProfiles,
     });
     expect(ok).toBe(testCase.expected);
   });
