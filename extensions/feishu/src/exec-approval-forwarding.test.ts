@@ -112,6 +112,52 @@ describe("buildFeishuExecApprovalPendingPayload target routing", () => {
     expect(dmResult).not.toBeNull();
     expect(groupResult).toBeNull();
   });
+
+  it("detects bare ou_ IDs as DM targets", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "dm" });
+    const result = buildFeishuExecApprovalPendingPayload({
+      cfg,
+      request: buildRequest(),
+      target: { channel: "feishu", to: "ou_abc123" },
+      nowMs: Date.now(),
+    });
+    expect(result).not.toBeNull();
+    expect(result?.channelData?.feishu?.card).toBeDefined();
+  });
+
+  it("detects bare on_ IDs as DM targets", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "channel" });
+    const result = buildFeishuExecApprovalPendingPayload({
+      cfg,
+      request: buildRequest(),
+      target: { channel: "feishu", to: "on_abc123" },
+      nowMs: Date.now(),
+    });
+    // on_ is a DM target, but config is channel-only → null
+    expect(result).toBeNull();
+  });
+
+  it("returns null when exec approvals are disabled", () => {
+    const cfg = buildConfig({ enabled: false, approvers: ["ou_123"], target: "both" });
+    const result = buildFeishuExecApprovalPendingPayload({
+      cfg,
+      request: buildRequest(),
+      target: { channel: "feishu", to: "user:ou_123" },
+      nowMs: Date.now(),
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when no approvers are configured", () => {
+    const cfg = buildConfig({ enabled: true, approvers: [], target: "both" });
+    const result = buildFeishuExecApprovalPendingPayload({
+      cfg,
+      request: buildRequest(),
+      target: { channel: "feishu", to: "user:ou_123" },
+      nowMs: Date.now(),
+    });
+    expect(result).toBeNull();
+  });
 });
 
 describe("shouldSuppressFeishuExecApprovalForwardingFallback", () => {
@@ -183,6 +229,28 @@ describe("shouldSuppressFeishuExecApprovalForwardingFallback", () => {
       shouldSuppressFeishuExecApprovalForwardingFallback({
         cfg,
         target: { channel: "feishu", to: "chat:oc_group123" },
+        request: buildRequest(),
+      }),
+    ).toBe(false);
+  });
+
+  it("suppresses bare ou_ DM target when configured as channel", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "channel" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "ou_abc123" },
+        request: buildRequest(),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress bare ou_ DM target when configured as dm", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "dm" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "ou_abc123" },
         request: buildRequest(),
       }),
     ).toBe(false);

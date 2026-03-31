@@ -41,9 +41,14 @@ export function shouldSuppressFeishuExecApprovalForwardingFallback(params: {
   return false;
 }
 
-// Determine whether a Feishu target address is a DM (user:*) or group (chat:*).
+// Determine whether a Feishu target address is a DM. Handles both prefixed
+// forms (user:ou_xxx) and bare normalized IDs (ou_xxx, on_xxx) since
+// normalizeFeishuTarget strips type prefixes and session routes store bare IDs.
 function isFeishuDmTarget(to: string): boolean {
-  return to.startsWith("user:");
+  if (to.startsWith("user:") || to.startsWith("dm:")) return true;
+  const lower = to.toLowerCase();
+  if (lower.startsWith("ou_") || lower.startsWith("on_")) return true;
+  return false;
 }
 
 export function buildFeishuExecApprovalPendingPayload(params: {
@@ -52,6 +57,13 @@ export function buildFeishuExecApprovalPendingPayload(params: {
   target: { channel: string; to: string; accountId?: string | null };
   nowMs: number;
 }) {
+  // Don't attach an Interactive Card when exec approvals are disabled or no
+  // approvers are configured — button clicks would be rejected by the Feishu
+  // gate in handleApproveCommand, producing dead buttons.
+  if (!isFeishuExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.target.accountId })) {
+    return null;
+  }
+
   // Defense-in-depth: if the configured target routing doesn't match this
   // specific forward target, return null so the framework falls back to
   // plain text instead of leaking an Interactive Card into an excluded chat.
