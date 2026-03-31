@@ -10,8 +10,12 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
 ACP_AGENT="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
-# Keep in sync with the pinned ACPX version used by the bundled ACP runtime.
-ACPX_VERSION="${OPENCLAW_DOCKER_ACPX_VERSION:-0.3.1}"
+ACPX_VERSION="${OPENCLAW_DOCKER_ACPX_VERSION:-$(node -p "const pkg=require(process.argv[1]); process.stdout.write(String(pkg.dependencies?.acpx ?? ''))" "$ROOT_DIR/extensions/acpx/package.json")}"
+
+if [[ -z "$ACPX_VERSION" ]]; then
+  echo "Unable to resolve bundled ACPX version from extensions/acpx/package.json" >&2
+  exit 1
+fi
 
 case "$ACP_AGENT" in
   claude)
@@ -100,7 +104,7 @@ if ((${#auth_files[@]} > 0)); then
   done
 fi
 if [ ! -x "$HOME/.npm-global/bin/acpx" ]; then
-  npm_config_prefix="$HOME/.npm-global" npm install -g "acpx@${OPENCLAW_DOCKER_ACPX_VERSION:-0.3.1}"
+  npm_config_prefix="$HOME/.npm-global" npm install -g "acpx@${OPENCLAW_DOCKER_ACPX_VERSION}"
 fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
@@ -170,7 +174,6 @@ echo "==> Agent: $ACP_AGENT"
 echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \
-  -u node \
   --entrypoint bash \
   -e ANTHROPIC_API_KEY \
   -e ANTHROPIC_API_KEY_OLD \
