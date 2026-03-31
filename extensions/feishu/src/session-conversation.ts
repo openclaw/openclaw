@@ -34,6 +34,7 @@ export function resolveFeishuSessionConversation(params: {
   }
   return {
     id: parsed.canonicalConversationId,
+    baseConversationId: parsed.chatId,
     parentConversationCandidates: resolveFeishuParentConversationCandidates(
       parsed.canonicalConversationId,
     ),

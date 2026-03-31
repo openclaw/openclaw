@@ -197,6 +197,7 @@ describe("telegramPlugin messaging", () => {
     ).toEqual({
       id: "-1001",
       threadId: "77",
+      baseConversationId: "-1001",
       parentConversationCandidates: ["-1001"],
     });
     expect(
@@ -207,6 +208,7 @@ describe("telegramPlugin messaging", () => {
     ).toEqual({
       id: "-1001",
       threadId: "77",
+      baseConversationId: "-1001",
       parentConversationCandidates: ["-1001"],
     });
     expect(

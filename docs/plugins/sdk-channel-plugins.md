@@ -38,7 +38,9 @@ generic `:thread:` bookkeeping, and dispatch.
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the
 canonical hook for mapping `rawId` to the base conversation id, optional thread
-id, and any `parentConversationCandidates`.
+id, explicit `baseConversationId`, and any `parentConversationCandidates`.
+When you return `parentConversationCandidates`, keep them ordered from the
+narrowest parent to the broadest/base conversation.
 
 Bundled plugins that need the same parsing before the channel registry boots
 can also expose a top-level `session-key-api.ts` file with a matching

@@ -24,6 +24,7 @@ describe("session conversation routing", () => {
       id: "general",
       threadId: "1699999999.0001",
       baseSessionKey: "agent:main:slack:channel:general",
+      baseConversationId: "general",
       parentConversationCandidates: ["general"],
     });
   });
@@ -36,6 +37,7 @@ describe("session conversation routing", () => {
       id: "-100123",
       threadId: "77",
       baseSessionKey: "agent:main:telegram:group:-100123",
+      baseConversationId: "-100123",
       parentConversationCandidates: ["-100123"],
     });
     expect(resolveSessionThreadInfo("agent:main:telegram:group:-100123:topic:77")).toEqual({
@@ -57,6 +59,7 @@ describe("session conversation routing", () => {
       id: "-100123",
       threadId: "77",
       baseSessionKey: "agent:main:telegram:group:-100123",
+      baseConversationId: "-100123",
       parentConversationCandidates: ["-100123"],
     });
   });
@@ -76,6 +79,7 @@ describe("session conversation routing", () => {
       threadId: undefined,
       baseSessionKey:
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      baseConversationId: "oc_group_chat",
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
   });
@@ -93,6 +97,7 @@ describe("session conversation routing", () => {
       threadId: undefined,
       baseSessionKey:
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      baseConversationId: "oc_group_chat",
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
     expect(
@@ -140,6 +145,7 @@ describe("session conversation routing", () => {
     ).toEqual({
       id: "room:sender:user",
       threadId: undefined,
+      baseConversationId: "room",
       parentConversationCandidates: ["room"],
     });
   });

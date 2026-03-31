@@ -141,8 +141,7 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   }
   const resolvedConversation = resolveSessionConversationRef(raw);
   if (resolvedConversation) {
-    const groupId =
-      resolvedConversation.parentConversationCandidates.at(-1) ?? resolvedConversation.id;
+    const groupId = resolvedConversation.baseConversationId;
     if (!groupId) {
       return {};
     }

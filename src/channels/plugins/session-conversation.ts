@@ -14,6 +14,7 @@ import { getChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from ".
 export type ResolvedSessionConversation = {
   id: string;
   threadId: string | undefined;
+  baseConversationId: string;
   parentConversationCandidates: string[];
 };
 
@@ -24,12 +25,14 @@ export type ResolvedSessionConversationRef = {
   id: string;
   threadId: string | undefined;
   baseSessionKey: string;
+  baseConversationId: string;
   parentConversationCandidates: string[];
 };
 
 type SessionConversationHookResult = {
   id: string;
   threadId?: string | null;
+  baseConversationId?: string | null;
   parentConversationCandidates?: string[];
 };
 
@@ -100,6 +103,7 @@ function buildGenericConversationResolution(rawId: string): ResolvedSessionConve
   return {
     id,
     threadId: parsed.threadId,
+    baseConversationId: id,
     parentConversationCandidates: dedupeConversationIds(
       parsed.threadId ? [parsed.baseSessionKey] : [],
     ),
@@ -116,6 +120,10 @@ function normalizeSessionConversationResolution(
   return {
     id: resolved.id.trim(),
     threadId: resolved.threadId?.trim() || undefined,
+    baseConversationId:
+      resolved.baseConversationId?.trim() ||
+      dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ||
+      resolved.id.trim(),
     parentConversationCandidates: dedupeConversationIds(
       resolved.parentConversationCandidates ?? [],
     ),
@@ -197,9 +205,12 @@ function resolveSessionConversationResolution(params: {
           rawId,
         }) ?? resolved.parentConversationCandidates),
   );
+  const baseConversationId =
+    parentConversationCandidates.at(-1) ?? resolved.baseConversationId ?? resolved.id;
 
   return {
     ...resolved,
+    baseConversationId,
     parentConversationCandidates,
   };
 }
@@ -236,6 +247,7 @@ export function resolveSessionConversationRef(
     id: resolved.id,
     threadId: resolved.threadId,
     baseSessionKey: buildBaseSessionKey(raw, resolved.id),
+    baseConversationId: resolved.baseConversationId,
     parentConversationCandidates: resolved.parentConversationCandidates,
   };
 }

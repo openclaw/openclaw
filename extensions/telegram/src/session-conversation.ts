@@ -11,6 +11,7 @@ export function resolveTelegramSessionConversation(params: {
   return {
     id: parsed.chatId,
     threadId: parsed.topicId,
+    baseConversationId: parsed.chatId,
     parentConversationCandidates: [parsed.chatId],
   };
 }

@@ -197,6 +197,7 @@ describe("feishuPlugin messaging", () => {
       }),
     ).toEqual({
       id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      baseConversationId: "oc_group_chat",
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
     expect(
@@ -206,6 +207,7 @@ describe("feishuPlugin messaging", () => {
       }),
     ).toEqual({
       id: "oc_group_chat:topic:om_topic_root",
+      baseConversationId: "oc_group_chat",
       parentConversationCandidates: ["oc_group_chat"],
     });
     expect(
@@ -215,6 +217,7 @@ describe("feishuPlugin messaging", () => {
       }),
     ).toEqual({
       id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      baseConversationId: "oc_group_chat",
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
   });
