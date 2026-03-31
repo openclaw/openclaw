@@ -4,7 +4,10 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import {
+  resolveFreshSessionTotalTokens,
+  type SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -93,8 +96,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const report = await resolveContextReport(params);
+  const cachedContextUsageTokens = resolveFreshSessionTotalTokens(params.sessionEntry);
   const session = {
     totalTokens: params.sessionEntry?.totalTokens ?? null,
+    totalTokensFresh: params.sessionEntry?.totalTokensFresh ?? null,
     inputTokens: params.sessionEntry?.inputTokens ?? null,
     outputTokens: params.sessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
@@ -188,8 +193,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       : [];
 
   const totalsLine =
-    session.totalTokens != null
-      ? `Session tokens (cached): ${formatInt(session.totalTokens)} total / ctx=${session.contextTokens ?? "?"}`
+    cachedContextUsageTokens != null
+      ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${session.contextTokens ?? "?"}`
       : `Session tokens (cached): unknown / ctx=${session.contextTokens ?? "?"}`;
   const sharedContextLines = [
     `Workspace: ${workspaceLabel}`,
@@ -228,14 +233,15 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
     // Add only tool schemas here so the tracked estimate stays disjoint.
     const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
-    const trackedPromptTokens = estimateTokensFromChars(trackedPromptChars);
     const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
     const actualContextLine =
-      session.contextTokens != null
-        ? `Actual context usage (cached): ${formatInt(session.contextTokens)} tok`
+      cachedContextUsageTokens != null
+        ? `Actual context usage (cached): ${formatInt(cachedContextUsageTokens)} tok`
         : "Actual context usage (cached): unavailable";
     const overheadTokens =
-      session.contextTokens != null ? session.contextTokens - trackedPromptTokens : null;
+      cachedContextUsageTokens != null
+        ? cachedContextUsageTokens - estimateTokensFromChars(trackedPromptChars)
+        : null;
     const overheadLine =
       overheadTokens == null
         ? null
