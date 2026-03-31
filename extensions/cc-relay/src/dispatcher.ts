@@ -158,9 +158,10 @@ export class CcRelayDispatcher {
       try {
         fs.writeFileSync(tmpPath, result.resultText, "utf-8");
         await this.callbacks.sendFile(job.channel, job.target, tmpPath, "full-output.md");
-        fs.unlinkSync(tmpPath);
       } catch {
         /* best-effort */
+      } finally {
+        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
       }
     }
   }

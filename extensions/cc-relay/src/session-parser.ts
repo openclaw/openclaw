@@ -20,7 +20,7 @@ export function findLatestSession(homeDir: string): string | null {
     if (!statIsDir(projectPath)) continue;
 
     for (const file of readdirSafe(projectPath)) {
-      if (!/^[0-9a-f]+\.jsonl$/i.test(file)) continue;
+      if (!/^[0-9a-f][-0-9a-f]*\.jsonl$/i.test(file)) continue;
       const fullPath = path.join(projectPath, file);
       const mtime = mtimeSafe(fullPath);
       if (mtime > latestMtime) {
@@ -123,10 +123,13 @@ export function extractFinalResult(filepath: string): string {
   for (let i = promptIdx; i < entries.length; i++) {
     const entry = entries[i]!;
     if (entry.type === "user") {
-      // A user message with very long content indicates a compaction event
       const content = entry.message?.content;
       if (Array.isArray(content) && content.length >= 50) {
+        // Very long user content indicates a compaction event
         skipAfterCompaction = true;
+      } else {
+        // Normal user message resets the compaction flag
+        skipAfterCompaction = false;
       }
     } else if (entry.type === "assistant" && !skipAfterCompaction) {
       const content = entry.message?.content;

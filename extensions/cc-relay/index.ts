@@ -36,7 +36,9 @@ const plugin = {
     if (api.registrationMode !== "full") return;
 
     const pluginConfig = resolveConfig(api.pluginConfig);
-    let dispatcher: CcRelayDispatcher | null = null;
+    // Per-session dispatchers keyed by session key, so different agents/sessions
+    // get independent work queues and workdirs.
+    const dispatchers = new Map<string, CcRelayDispatcher>();
 
     // ── Hook: inject behavioral directive into the system prompt ──
     // This is the key design: instead of replacing SOUL.md, we APPEND a
@@ -51,6 +53,8 @@ const plugin = {
 
     // ── Tool: register cc_dispatch via factory ──
     api.registerTool(((ctx: OpenClawPluginToolContext) => {
+      const sessionKey = ctx.sessionKey ?? "default";
+      let dispatcher = dispatchers.get(sessionKey);
       if (!dispatcher) {
         dispatcher = new CcRelayDispatcher(
           {
@@ -62,11 +66,12 @@ const plugin = {
             sendFile: createFileSender(api),
           },
         );
+        dispatchers.set(sessionKey, dispatcher);
       }
 
       const channel = ctx.messageChannel ?? ctx.deliveryContext?.channel ?? "";
       const target = ctx.deliveryContext?.to ?? "";
-      return createCcDispatchTool(() => dispatcher, channel, target);
+      return createCcDispatchTool(() => dispatcher!, channel, target);
     }) as OpenClawPluginToolFactory);
 
     // ── Service: manage dispatcher lifecycle ──
@@ -76,10 +81,10 @@ const plugin = {
         api.logger.info(`[cc-relay] Service started (mode: ${pluginConfig.mode})`);
       },
       stop: async () => {
-        if (dispatcher) {
+        for (const dispatcher of dispatchers.values()) {
           dispatcher.stop();
-          dispatcher = null;
         }
+        dispatchers.clear();
         api.logger.info("[cc-relay] Service stopped");
       },
     });

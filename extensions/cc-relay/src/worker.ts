@@ -77,8 +77,9 @@ export async function runCcWorker(job: CcRelayJob, cfg: CcRelayConfig): Promise<
 function buildClaudeArgs(job: CcRelayJob, cfg: CcRelayConfig): string[] {
   const args: string[] = [];
 
-  if (job.permissionMode || cfg.permissionMode) {
-    args.push("--permission-mode", job.permissionMode || cfg.permissionMode);
+  const mode = job.permissionMode || cfg.permissionMode;
+  if (mode && mode !== "default") {
+    args.push("--permission-mode", mode);
   }
 
   args.push("-p", job.prompt);
@@ -130,6 +131,10 @@ async function executeClaudeCli(
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
+
+    // Drain stdout/stderr to prevent pipe buffer from blocking the child
+    child.stdout?.resume();
+    child.stderr?.resume();
 
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
