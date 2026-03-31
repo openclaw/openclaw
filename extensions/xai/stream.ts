@@ -37,17 +37,22 @@ function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
 
+type NormalizedFunctionCallOutput = {
+  normalizedItem: unknown;
+  imageParts: Array<Record<string, unknown>>;
+};
+
 function normalizeXaiResponsesFunctionCallOutput(
   item: unknown,
   includeImages: boolean,
-): Array<Record<string, unknown>> {
+): NormalizedFunctionCallOutput {
   if (!item || typeof item !== "object") {
-    return [];
+    return { normalizedItem: item, imageParts: [] };
   }
 
   const itemObj = item as Record<string, unknown>;
   if (itemObj.type !== "function_call_output" || !Array.isArray(itemObj.output)) {
-    return [itemObj];
+    return { normalizedItem: itemObj, imageParts: [] };
   }
 
   const outputParts = itemObj.output as Array<Record<string, unknown>>;
@@ -67,22 +72,13 @@ function normalizeXaiResponsesFunctionCallOutput(
     : [];
   const hadNonTextParts = outputParts.some((part) => part.type !== "input_text");
 
-  const normalizedItems: Array<Record<string, unknown>> = [
-    {
+  return {
+    normalizedItem: {
       ...itemObj,
       output: textOutput || (hadNonTextParts ? "(see attached image)" : ""),
     },
-  ];
-
-  if (imageParts.length > 0) {
-    normalizedItems.push({
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: "Attached image(s) from tool result:" }, ...imageParts],
-    });
-  }
-
-  return normalizedItems;
+    imageParts,
+  };
 }
 
 function normalizeXaiResponsesToolResultPayload(
@@ -94,9 +90,27 @@ function normalizeXaiResponsesToolResultPayload(
   }
 
   const includeImages = supportsExplicitImageInput(model);
-  payloadObj.input = payloadObj.input.flatMap((item) =>
-    normalizeXaiResponsesFunctionCallOutput(item, includeImages),
-  );
+  const normalizedInput: unknown[] = [];
+  const collectedImageParts: Array<Record<string, unknown>> = [];
+
+  for (const item of payloadObj.input) {
+    const normalized = normalizeXaiResponsesFunctionCallOutput(item, includeImages);
+    normalizedInput.push(normalized.normalizedItem);
+    collectedImageParts.push(...normalized.imageParts);
+  }
+
+  if (collectedImageParts.length > 0) {
+    normalizedInput.push({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "Attached image(s) from tool result:" },
+        ...collectedImageParts,
+      ],
+    });
+  }
+
+  payloadObj.input = normalizedInput;
 }
 
 export function createXaiToolPayloadCompatibilityWrapper(
