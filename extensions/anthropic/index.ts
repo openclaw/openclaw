@@ -29,6 +29,7 @@ import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shar
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
+import { CLAUDE_CLI_BACKEND_ID } from "./cli-shared.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "anthropic";
@@ -352,6 +353,7 @@ export default definePluginEntry({
     api.registerCliBackend(buildAnthropicCliBackend());
     api.registerProvider({
       id: PROVIDER_ID,
+      hookAliases: [CLAUDE_CLI_BACKEND_ID],
       label: "Anthropic",
       docsPath: "/providers/models",
       envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
