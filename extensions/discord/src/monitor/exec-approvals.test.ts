@@ -46,7 +46,9 @@ const mockRestPatch = vi.hoisted(() => vi.fn());
 const mockRestDelete = vi.hoisted(() => vi.fn());
 const gatewayClientStarts = vi.hoisted(() => vi.fn());
 const gatewayClientStops = vi.hoisted(() => vi.fn());
-const gatewayClientRequests = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
+const gatewayClientRequests = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ ok: true })),
+);
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
 const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
@@ -955,9 +957,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("999888777"),
       expect.objectContaining({
         body: expect.objectContaining({
-          content: expect.stringContaining(
-            "I sent approval DMs to the approvers for this account",
-          ),
+          content: expect.stringContaining("I sent approval DMs to the approvers for this account"),
         }),
       }),
     );
@@ -986,6 +986,45 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("999888777"),
       expect.anything(),
     );
+  });
+
+  it("dedupes delivery when the origin route and approver DM resolve to the same Discord channel", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["999"],
+      target: "both",
+    });
+
+    mockRestPost.mockImplementation(async (route: string) => {
+      if (route === Routes.channelMessages("123")) {
+        return { id: "msg-1", channel_id: "123" };
+      }
+      if (route === Routes.userChannels()) {
+        return { id: "123" };
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+
+    await handler.handleApprovalRequested(
+      createRequest({
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+      }),
+    );
+
+    expect(mockRestPost).toHaveBeenCalledTimes(2);
+    expect(mockRestPost).toHaveBeenNthCalledWith(
+      1,
+      Routes.channelMessages("123"),
+      expect.objectContaining({
+        body: expect.any(Object),
+      }),
+    );
+    expect(mockRestPost).toHaveBeenNthCalledWith(2, Routes.userChannels(), {
+      body: { recipient_id: "999" },
+    });
   });
 
   it("delivers plugin approvals through the shared runtime flow", async () => {
