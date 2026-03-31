@@ -808,6 +808,17 @@ export async function runEmbeddedAttempt(
       const { builtInTools, customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
+        hookContext: {
+          ...beforeToolCallContext,
+          agentId: sessionAgentId,
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          loopDetection: resolveToolLoopDetectionConfig({
+            cfg: params.config,
+            agentId: sessionAgentId,
+          }),
+        },
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools

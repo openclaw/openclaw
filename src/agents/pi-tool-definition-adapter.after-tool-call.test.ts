@@ -108,4 +108,42 @@ describe("pi tool definition adapter after_tool_call", () => {
     expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
     expect(hookMocks.consumeAdjustedParamsForToolCall).not.toHaveBeenCalled();
   });
+
+  it("passes hook context to unwrapped tool definitions", async () => {
+    const defs = toToolDefinitions([createReadTool()], {
+      agentId: "agent-main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      runId: "run-1",
+      getSystemPrompt: () => "You are an assistant.",
+      getMessages: () => [],
+      getTools: () => [],
+    });
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-context",
+      { path: "/tmp/file" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "read",
+        toolCallId: "call-context",
+        params: { path: "/tmp/file" },
+        ctx: expect.objectContaining({
+          agentId: "agent-main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-1",
+          runId: "run-1",
+        }),
+      }),
+    );
+  });
 });
