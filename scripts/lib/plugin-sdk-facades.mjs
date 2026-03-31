@@ -1225,6 +1225,7 @@ const MODULE_RESOLUTION_OPTIONS = {
   target: ts.ScriptTarget.ESNext,
 };
 const MODULE_RESOLUTION_HOST = ts.createCompilerHost(MODULE_RESOLUTION_OPTIONS, true);
+const moduleResolutionContextCache = new Map();
 const sourceExportKindsCache = new Map();
 
 function listFacadeEntrySourcePaths(entry) {
@@ -1324,6 +1325,48 @@ function resolveFacadeSourceTypescriptPath(repoRoot, sourcePath) {
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
+function resolveFacadeModuleResolutionContext(repoRoot) {
+  const cacheKey = repoRoot || "__default__";
+  const cached = moduleResolutionContextCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  let context = {
+    options: MODULE_RESOLUTION_OPTIONS,
+    host: MODULE_RESOLUTION_HOST,
+  };
+
+  if (repoRoot) {
+    const fileExists = (filePath) => ts.sys.fileExists(filePath);
+    const readFile = (filePath) => ts.sys.readFile(filePath);
+    const configPath = ts.findConfigFile(repoRoot, fileExists, "tsconfig.json");
+    if (configPath) {
+      const configFile = ts.readConfigFile(configPath, readFile);
+      if (!configFile.error) {
+        const parsedConfig = ts.parseJsonConfigFileContent(
+          configFile.config,
+          ts.sys,
+          path.dirname(configPath),
+          MODULE_RESOLUTION_OPTIONS,
+          configPath,
+        );
+        const options = {
+          ...MODULE_RESOLUTION_OPTIONS,
+          ...parsedConfig.options,
+        };
+        context = {
+          options,
+          host: ts.createCompilerHost(options, true),
+        };
+      }
+    }
+  }
+
+  moduleResolutionContextCache.set(cacheKey, context);
+  return context;
+}
+
 function resolveFacadeSourceExportKinds(repoRoot, sourcePath) {
   const cacheKey = `${repoRoot}::${sourcePath}`;
   const cached = sourceExportKindsCache.get(cacheKey);
@@ -1338,10 +1381,11 @@ function resolveFacadeSourceExportKinds(repoRoot, sourcePath) {
     return empty;
   }
 
+  const moduleResolutionContext = resolveFacadeModuleResolutionContext(repoRoot);
   const program = ts.createProgram(
     [sourceTsPath],
-    MODULE_RESOLUTION_OPTIONS,
-    MODULE_RESOLUTION_HOST,
+    moduleResolutionContext.options,
+    moduleResolutionContext.host,
   );
   const sourceFile = program.getSourceFile(sourceTsPath);
   if (!sourceFile) {
