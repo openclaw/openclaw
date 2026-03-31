@@ -79,6 +79,7 @@
     "PIP_PYPI_URL",
     "PIP_EXTRA_INDEX_URL",
     "UV_INDEX_URL",
+    "UV_EXTRA_INDEX_URL",
     "UV_DEFAULT_INDEX",
     "LUA_PATH",
     "LUA_CPATH",
