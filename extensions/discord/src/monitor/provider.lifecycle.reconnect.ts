@@ -14,6 +14,21 @@ const DISCORD_GATEWAY_HELLO_CONNECTED_POLL_MS = 250;
 const DISCORD_GATEWAY_MAX_CONSECUTIVE_HELLO_STALLS = 3;
 const DISCORD_GATEWAY_RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
 
+/** Discord gateway close code indicating authentication failed (invalid/revoked token). */
+const DISCORD_CLOSE_CODE_AUTH_FAILED = 4004;
+const DISCORD_AUTH_BACKOFF_INITIAL_MS = 5_000;
+const DISCORD_AUTH_BACKOFF_MAX_MS = 5 * 60_000;
+
+function isAuthFailureCloseCode(code: number | undefined): boolean {
+  return code === DISCORD_CLOSE_CODE_AUTH_FAILED;
+}
+
+function computeAuthBackoffMs(consecutiveAuthFailures: number): number {
+  // Exponential backoff: 5s → 10s → 20s → 40s → ... → cap at 5 min
+  const delayMs = DISCORD_AUTH_BACKOFF_INITIAL_MS * 2 ** (consecutiveAuthFailures - 1);
+  return Math.min(delayMs, DISCORD_AUTH_BACKOFF_MAX_MS);
+}
+
 type GatewayReadyWaitResult = "ready" | "timeout" | "stopped";
 
 async function waitForDiscordGatewayReady(params: {
@@ -57,10 +72,14 @@ export function createDiscordGatewayReconnectController(params: {
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let reconnectInFlight: Promise<void> | undefined;
   let consecutiveHelloStalls = 0;
+  let consecutiveAuthFailures = 0;
 
   const shouldStop = () => params.isLifecycleStopping() || params.abortSignal?.aborted;
   const resetHelloStallCounter = () => {
     consecutiveHelloStalls = 0;
+  };
+  const resetAuthFailureCounter = () => {
+    consecutiveAuthFailures = 0;
   };
   const clearHelloWatch = () => {
     if (helloTimeoutId) {
@@ -127,6 +146,7 @@ export function createDiscordGatewayReconnectController(params: {
     },
   });
   const pushConnectedStatus = (at: number) => {
+    resetAuthFailureCounter();
     params.pushStatus({
       ...createConnectedChannelStatusPatch(at),
       lastDisconnect: null,
@@ -285,6 +305,21 @@ export function createDiscordGatewayReconnectController(params: {
       if (shouldStop()) {
         return;
       }
+
+      // Apply exponential backoff when the last close was an auth failure.
+      // This prevents rapid reconnect loops that trigger Discord's anti-abuse
+      // mechanism to auto-reset all bot tokens.
+      if (consecutiveAuthFailures > 0) {
+        const backoffMs = computeAuthBackoffMs(consecutiveAuthFailures);
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(resolve, backoffMs);
+          timeout.unref?.();
+        });
+        if (shouldStop()) {
+          return;
+        }
+      }
+
       await disconnectGatewaySocketWithoutAutoReconnect();
       if (shouldStop()) {
         return;
@@ -306,12 +341,25 @@ export function createDiscordGatewayReconnectController(params: {
       if (params.gateway?.isConnected) {
         resetHelloStallCounter();
       }
+      const closeCode = parseGatewayCloseCode(message);
+      if (isAuthFailureCloseCode(closeCode)) {
+        consecutiveAuthFailures += 1;
+        const backoffMs = computeAuthBackoffMs(consecutiveAuthFailures);
+        params.runtime.error?.(
+          danger(
+            `discord: gateway closed with authentication failure (code ${closeCode}). ` +
+              `Check that your bot token is valid and has not been revoked. ` +
+              `Reconnect delayed ${Math.round(backoffMs / 1000)}s ` +
+              `(attempt ${consecutiveAuthFailures}).`,
+          ),
+        );
+      }
       reconnectStallWatchdog.arm(at);
       params.pushStatus({
         connected: false,
         lastDisconnect: {
           at,
-          status: parseGatewayCloseCode(message),
+          status: closeCode,
         },
       });
       clearHelloWatch();
