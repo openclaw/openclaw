@@ -82,6 +82,7 @@ export type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
   PluginLogger,
+  PluginResetSessionResult,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethod,
