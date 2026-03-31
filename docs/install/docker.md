@@ -394,3 +394,11 @@ scripts/sandbox-setup.sh
 
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [Install Overview](/install) — all installation methods
+- [Podman](/install/podman) — Podman alternative to Docker
+- [ClawDock](/install/clawdock) — Docker Compose community setup
+- [Updating](/install/updating) — keeping OpenClaw up to date
+- [Configuration](/gateway/configuration) — gateway configuration after install
