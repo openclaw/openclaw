@@ -15,7 +15,7 @@ import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
@@ -327,7 +327,7 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? createSlackWebClient(token);
+  const client = opts.client ?? createSlackWriteClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient, {
     accountId: account.accountId,
