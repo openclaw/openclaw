@@ -553,7 +553,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
-      const rejectIfRateLimited = (): boolean => {
+      const rejectIfGlobalRateLimited = (): boolean => {
         updateRateLimiterSizeMetric();
         if (globalRateLimiter.isRateLimited("global")) {
           metrics.emit("rate_limit.global");
@@ -561,6 +561,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           updateRateLimiterSizeMetric();
           return true;
         }
+        updateRateLimiterSizeMetric();
+        return false;
+      };
+
+      const rejectIfVerifiedSenderRateLimited = (): boolean => {
+        updateRateLimiterSizeMetric();
         if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
           metrics.emit("rate_limit.per_sender");
           metrics.emit("event.rejected.rate_limited");
@@ -577,10 +583,14 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       };
 
       if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
-        if (rejectIfRateLimited()) {
+        if (rejectIfGlobalRateLimited()) {
           return;
         }
         metrics.emit("event.rejected.oversized_ciphertext");
+        return;
+      }
+
+      if (rejectIfGlobalRateLimited()) {
         return;
       }
 
@@ -588,6 +598,10 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       if (!verifyEvent(event)) {
         metrics.emit("event.rejected.invalid_signature");
         onError?.(new Error("Invalid signature"), `event ${event.id}`);
+        return;
+      }
+
+      if (rejectIfVerifiedSenderRateLimited()) {
         return;
       }
 
@@ -600,10 +614,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           markSeen();
           return;
         }
-      }
-
-      if (rejectIfRateLimited()) {
-        return;
       }
 
       // Mark seen AFTER verify (don't cache invalid IDs)

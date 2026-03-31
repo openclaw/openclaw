@@ -168,7 +168,7 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
-  it("does not spend rate-limit buckets on blocked senders before authorization", async () => {
+  it("does not let a blocked sender starve a different verified sender", async () => {
     const onMessage = vi.fn(async () => {});
     const authorizeSender = vi.fn(async ({ senderPubkey }: { senderPubkey: string }) =>
       senderPubkey.startsWith("blocked") ? ("block" as const) : ("allow" as const),
@@ -181,7 +181,7 @@ describe("startNostrBus inbound guards", () => {
       guardPolicy: {
         rateLimit: {
           windowMs: 60_000,
-          maxGlobalPerWindow: 1,
+          maxGlobalPerWindow: 2,
           maxPerSenderPerWindow: 1,
           maxTrackedSenderKeys: 32,
         },
@@ -253,7 +253,7 @@ describe("startNostrBus inbound guards", () => {
       guardPolicy: {
         rateLimit: {
           windowMs: 60_000,
-          maxGlobalPerWindow: 1,
+          maxGlobalPerWindow: 2,
           maxPerSenderPerWindow: 1,
           maxTrackedSenderKeys: 32,
         },
@@ -279,6 +279,36 @@ describe("startNostrBus inbound guards", () => {
     expect(mockState.decrypt).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(bus.getMetrics().eventsRejected.rateLimited).toBe(0);
+
+    bus.close();
+  });
+
+  it("rate limits repeated invalid signatures before authorization work fans out", async () => {
+    mockState.verifyEvent.mockReturnValue(false);
+    const onMessage = vi.fn(async () => {});
+    const authorizeSender = vi.fn(async () => "allow" as const);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      authorizeSender,
+      onMetric: () => {},
+      guardPolicy: {
+        rateLimit: {
+          windowMs: 60_000,
+          maxGlobalPerWindow: 1,
+          maxPerSenderPerWindow: 10,
+          maxTrackedSenderKeys: 32,
+        },
+      },
+    });
+
+    await emitEvent(createEvent({ id: "invalid-1" }));
+    await emitEvent(createEvent({ id: "invalid-2" }));
+
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(authorizeSender).not.toHaveBeenCalled();
+    expect(bus.getMetrics().eventsRejected.invalidSignature).toBe(1);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(1);
 
     bus.close();
   });
@@ -324,7 +354,7 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
-  it("counts oversized ciphertext toward the per-sender inbound rate limit", async () => {
+  it("does not spend per-sender buckets on oversized ciphertext before verification", async () => {
     const onMessage = vi.fn(async () => {});
     const bus = await startNostrBus({
       privateKey: TEST_HEX_PRIVATE_KEY,
@@ -353,12 +383,18 @@ describe("startNostrBus inbound guards", () => {
         content: "ciphertext-too-large",
       }),
     );
+    await emitEvent(
+      createEvent({
+        id: "allowed-after-oversized",
+        content: "ok",
+      }),
+    );
 
-    expect(bus.getMetrics().eventsRejected.oversizedCiphertext).toBe(1);
-    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(1);
-    expect(mockState.verifyEvent).not.toHaveBeenCalled();
-    expect(mockState.decrypt).not.toHaveBeenCalled();
-    expect(onMessage).not.toHaveBeenCalled();
+    expect(bus.getMetrics().eventsRejected.oversizedCiphertext).toBe(2);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(0);
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
     bus.close();
   });
