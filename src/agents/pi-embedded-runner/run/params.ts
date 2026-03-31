@@ -135,6 +135,12 @@ export type RunEmbeddedPiAgentParams = {
    */
   allowTransientCooldownProbe?: boolean;
   /**
+   * When true, skip prompt-based image detection (detectAndLoadPromptImages).
+   * Used on cross-provider fallback retries to prevent local images referenced
+   * in the prompt from being loaded and sent to a different provider.
+   */
+  suppressPromptImageDetection?: boolean;
+  /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must
    * exit promptly after emitting the final JSON result.
