@@ -699,14 +699,16 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          conversationId: "channel:group-dm-1",
-          senderId: "123456789",
+    await vi.waitFor(() => {
+      expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({
+            conversationId: "channel:group-dm-1",
+            senderId: "123456789",
+          }),
         }),
-      }),
-    );
+      );
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
