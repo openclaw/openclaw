@@ -1,16 +1,19 @@
-import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Writable } from "node:stream";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
+const DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS = 120_000;
+const MAX_MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MARKETPLACE_MANIFEST_CANDIDATES = [
   path.join(".claude-plugin", "marketplace.json"),
   "marketplace.json",
@@ -579,7 +582,138 @@ async function loadMarketplace(params: {
   };
 }
 
-async function downloadUrlToTempFile(url: string): Promise<
+function resolveSafeMarketplaceDownloadFileName(url: string, fallback: string): string {
+  const pathname = new URL(url).pathname;
+  const fileName = path.basename(pathname).trim() || fallback;
+  if (
+    fileName === "." ||
+    fileName === ".." ||
+    /^[a-zA-Z]:/.test(fileName) ||
+    path.isAbsolute(fileName) ||
+    fileName.includes("/") ||
+    fileName.includes("\\")
+  ) {
+    throw new Error("invalid download filename");
+  }
+  return fileName;
+}
+
+function resolveMarketplaceDownloadTimeoutMs(timeoutMs?: number): number {
+  const resolvedTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? timeoutMs
+      : DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS;
+  return Math.max(1_000, Math.floor(resolvedTimeoutMs));
+}
+
+function formatMarketplaceDownloadError(url: string, detail: string): string {
+  return (
+    `failed to download ${sanitizeForLog(redactSensitiveUrlLikeString(url))}: ` +
+    sanitizeForLog(detail)
+  );
+}
+
+function hasStreamingResponseBody(
+  response: Response,
+): response is Response & { body: ReadableStream<Uint8Array> } {
+  return Boolean(
+    response.body && typeof (response.body as { getReader?: unknown }).getReader === "function",
+  );
+}
+
+async function readMarketplaceChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  chunkTimeoutMs: number,
+): Promise<Awaited<ReturnType<typeof reader.read>>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  return await new Promise((resolve, reject) => {
+    const clear = () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      clear();
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`download timed out after ${chunkTimeoutMs}ms`));
+    }, chunkTimeoutMs);
+
+    void reader.read().then(
+      (result) => {
+        clear();
+        if (!timedOut) {
+          resolve(result);
+        }
+      },
+      (err) => {
+        clear();
+        if (!timedOut) {
+          reject(err);
+        }
+      },
+    );
+  });
+}
+
+async function writeMarketplaceChunk(
+  fileHandle: Awaited<ReturnType<typeof fs.open>>,
+  chunk: Uint8Array,
+): Promise<void> {
+  let offset = 0;
+  while (offset < chunk.length) {
+    const { bytesWritten } = await fileHandle.write(chunk, offset, chunk.length - offset);
+    if (bytesWritten <= 0) {
+      throw new Error("failed to write download chunk");
+    }
+    offset += bytesWritten;
+  }
+}
+
+async function streamMarketplaceResponseToFile(params: {
+  response: Response & { body: ReadableStream<Uint8Array> };
+  targetPath: string;
+  maxBytes: number;
+  chunkTimeoutMs: number;
+}): Promise<void> {
+  const reader = params.response.body.getReader();
+  const fileHandle = await fs.open(params.targetPath, "wx");
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await readMarketplaceChunkWithTimeout(reader, params.chunkTimeoutMs);
+      if (done) {
+        return;
+      }
+      if (!value?.length) {
+        continue;
+      }
+
+      const nextTotal = total + value.length;
+      if (nextTotal > params.maxBytes) {
+        throw new Error(`download too large: ${nextTotal} bytes (limit: ${params.maxBytes} bytes)`);
+      }
+
+      await writeMarketplaceChunk(fileHandle, value);
+      total = nextTotal;
+    }
+  } finally {
+    await fileHandle.close().catch(() => undefined);
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+}
+
+async function downloadUrlToTempFile(
+  url: string,
+  timeoutMs?: number,
+): Promise<
   | {
       ok: true;
       path: string;
@@ -590,33 +724,80 @@ async function downloadUrlToTempFile(url: string): Promise<
       error: string;
     }
 > {
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    auditContext: "marketplace-plugin-download",
-  });
+  let sourceFileName = "plugin.tgz";
+  let tmpDir: string | undefined;
   try {
-    if (!response.ok) {
-      return { ok: false, error: `failed to download ${url}: HTTP ${response.status}` };
-    }
-    if (!response.body) {
-      return { ok: false, error: `failed to download ${url}: empty response body` };
-    }
+    sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
+    const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
+    const { response, finalUrl, release } = await fetchWithSsrFGuard({
+      url,
+      timeoutMs: downloadTimeoutMs,
+      auditContext: "marketplace-plugin-download",
+    });
+    try {
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: formatMarketplaceDownloadError(url, `HTTP ${response.status}`),
+        };
+      }
+      if (!response.body) {
+        return {
+          ok: false,
+          error: formatMarketplaceDownloadError(url, "empty response body"),
+        };
+      }
+      // Fail closed unless we can stream and enforce the archive size bound incrementally.
+      if (!hasStreamingResponseBody(response)) {
+        return {
+          ok: false,
+          error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
+        };
+      }
 
-    const pathname = new URL(url).pathname;
-    const fileName = path.basename(pathname) || "plugin.tgz";
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
-    const targetPath = path.join(tmpDir, fileName);
-    const fileStream = createWriteStream(targetPath);
-    await response.body.pipeTo(Writable.toWeb(fileStream));
+      const contentLength = response.headers.get("content-length");
+      if (contentLength) {
+        const size = Number(contentLength);
+        if (Number.isFinite(size) && size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+          throw new Error(
+            `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
+          );
+        }
+      }
+
+      const finalFileName = resolveSafeMarketplaceDownloadFileName(finalUrl, sourceFileName);
+      const fileName = resolveArchiveKind(finalFileName) ? finalFileName : sourceFileName;
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
+      const createdTmpDir = tmpDir;
+      const targetPath = path.resolve(createdTmpDir, fileName);
+      const relativeTargetPath = path.relative(createdTmpDir, targetPath);
+      if (relativeTargetPath === ".." || relativeTargetPath.startsWith(`..${path.sep}`)) {
+        throw new Error("invalid download filename");
+      }
+      await streamMarketplaceResponseToFile({
+        response,
+        targetPath,
+        maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
+        chunkTimeoutMs: downloadTimeoutMs,
+      });
+      return {
+        ok: true,
+        path: targetPath,
+        cleanup: async () => {
+          await fs.rm(createdTmpDir, { recursive: true, force: true }).catch(() => undefined);
+        },
+      };
+    } finally {
+      await release().catch(() => undefined);
+    }
+  } catch (error) {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
     return {
-      ok: true,
-      path: targetPath,
-      cleanup: async () => {
-        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-      },
+      ok: false,
+      error: formatMarketplaceDownloadError(url, formatErrorMessage(error)),
     };
-  } finally {
-    await release();
   }
 }
 
@@ -704,7 +885,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   if (params.source.kind === "path") {
     if (isHttpUrl(params.source.path)) {
       if (resolveArchiveKind(params.source.path)) {
-        return await downloadUrlToTempFile(params.source.path);
+        return await downloadUrlToTempFile(params.source.path, params.timeoutMs);
       }
       return {
         ok: false,
@@ -754,7 +935,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   }
 
   if (resolveArchiveKind(params.source.url)) {
-    return await downloadUrlToTempFile(params.source.url);
+    return await downloadUrlToTempFile(params.source.url, params.timeoutMs);
   }
 
   if (!normalizeGitCloneSource(params.source.url)) {
