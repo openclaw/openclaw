@@ -363,6 +363,27 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("still uses env proxy when allowed hostnames do not match the target", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      policy: { allowedHostnames: ["operator.example"] },
+      mode: GUARDED_FETCH_MODE.STRICT,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
   it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {
     await runProxyModeDispatcherTest({
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,

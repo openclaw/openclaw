@@ -1,6 +1,7 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
+import { normalizeHostname } from "./hostname.js";
 import { hasEnvHttpProxyConfigured, hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
@@ -91,11 +92,15 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
   return GUARDED_FETCH_MODE.STRICT;
 }
 
-function keepsTrustedHostOnDirectPath(policy?: SsrFPolicy): boolean {
+function keepsTrustedHostOnDirectPath(hostname: string, policy?: SsrFPolicy): boolean {
+  const normalizedHostname = normalizeHostname(hostname);
   return (
     policy?.allowPrivateNetwork === true ||
     policy?.dangerouslyAllowPrivateNetwork === true ||
-    (policy?.allowedHostnames?.length ?? 0) > 0
+    (normalizedHostname !== "" &&
+      (policy?.allowedHostnames ?? []).some(
+        (allowedHostname) => normalizeHostname(allowedHostname) === normalizedHostname,
+      ))
   );
 }
 
@@ -195,7 +200,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         const useEnvProxy =
           hasEnvHttpProxyConfigured(protocol) &&
           !params.dispatcherPolicy?.mode &&
-          !keepsTrustedHostOnDirectPath(params.policy);
+          !keepsTrustedHostOnDirectPath(parsedUrl.hostname, params.policy);
         const dispatcherPolicy: PinnedDispatcherPolicy | undefined = useEnvProxy
           ? Object.assign({}, params.dispatcherPolicy, { mode: "env-proxy" as const })
           : params.dispatcherPolicy;
