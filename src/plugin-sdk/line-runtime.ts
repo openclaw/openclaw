@@ -2,10 +2,7 @@
 import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 type FacadeEntry = PluginSdkFacadeTypeMap["line-runtime"];
 type FacadeModule = FacadeEntry["module"];
-import {
-  createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
@@ -71,9 +68,8 @@ export const deleteRichMenuAlias: FacadeModule["deleteRichMenuAlias"] = ((...arg
   loadFacadeModule()["deleteRichMenuAlias"](...args)) as FacadeModule["deleteRichMenuAlias"];
 export const downloadLineMedia: FacadeModule["downloadLineMedia"] = ((...args) =>
   loadFacadeModule()["downloadLineMedia"](...args)) as FacadeModule["downloadLineMedia"];
-export const firstDefined: FacadeModule["firstDefined"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule()["firstDefined"] as object,
-) as FacadeModule["firstDefined"];
+export const firstDefined: FacadeModule["firstDefined"] = ((...args) =>
+  loadFacadeModule()["firstDefined"](...args)) as FacadeModule["firstDefined"];
 export const getDefaultRichMenuId: FacadeModule["getDefaultRichMenuId"] = ((...args) =>
   loadFacadeModule()["getDefaultRichMenuId"](...args)) as FacadeModule["getDefaultRichMenuId"];
 export const getRichMenu: FacadeModule["getRichMenu"] = ((...args) =>

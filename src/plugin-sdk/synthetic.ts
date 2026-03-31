@@ -31,8 +31,6 @@ export const buildSyntheticProvider: FacadeModule["buildSyntheticProvider"] = ((
   loadFacadeModule()["buildSyntheticProvider"](...args)) as FacadeModule["buildSyntheticProvider"];
 export const SYNTHETIC_BASE_URL: FacadeModule["SYNTHETIC_BASE_URL"] =
   loadFacadeModule()["SYNTHETIC_BASE_URL"];
-export const SYNTHETIC_DEFAULT_MODEL_ID: FacadeModule["SYNTHETIC_DEFAULT_MODEL_ID"] =
-  loadFacadeModule()["SYNTHETIC_DEFAULT_MODEL_ID"];
 export const SYNTHETIC_DEFAULT_MODEL_REF: FacadeModule["SYNTHETIC_DEFAULT_MODEL_REF"] =
   loadFacadeModule()["SYNTHETIC_DEFAULT_MODEL_REF"];
 export const SYNTHETIC_MODEL_CATALOG: FacadeModule["SYNTHETIC_MODEL_CATALOG"] =

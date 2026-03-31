@@ -78,6 +78,7 @@ export type TelegramMessageContext = {
   statusReactionController: StatusReactionController | null;
   accountId: string;
 };
+
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,

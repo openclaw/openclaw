@@ -37,6 +37,7 @@ export type ConfigProps = {
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
   formMode: "form" | "raw";
+  rawAvailable?: boolean;
   showModeToggle?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
@@ -709,7 +710,8 @@ export function renderConfig(props: ConfigProps) {
     unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
   };
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
-  const formMode = showModeToggle ? props.formMode : "form";
+  const rawAvailable = props.rawAvailable ?? true;
+  const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const envSensitiveVisible = cvs.envRevealed;
   const requestUpdate = props.onRequestUpdate ?? (() => props.onRawChange(props.raw));
 
@@ -799,6 +801,10 @@ export function renderConfig(props: ConfigProps) {
                     </button>
                     <button
                       class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
+                      ?disabled=${!rawAvailable}
+                      title=${rawAvailable
+                        ? "Edit raw JSON/JSON5 config"
+                        : "Raw mode unavailable for this snapshot"}
                       @click=${() => props.onFormModeChange("raw")}
                     >
                       Raw
@@ -817,6 +823,13 @@ export function renderConfig(props: ConfigProps) {
               : html` <span class="config-status muted">No changes</span> `}
           </div>
           <div class="config-actions__right">
+            ${!rawAvailable
+              ? html`
+                  <span class="config-status muted"
+                    >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
+                  >
+                `
+              : nothing}
             ${props.onOpenFile
               ? html`
                   <button
@@ -1039,6 +1052,7 @@ export function renderConfig(props: ConfigProps) {
                         schema: analysis.schema,
                         uiHints: props.uiHints,
                         value: props.formValue,
+                        rawAvailable,
                         disabled: props.loading || !props.formValue,
                         unsupportedPaths: analysis.unsupportedPaths,
                         onPatch: props.onFormPatch,

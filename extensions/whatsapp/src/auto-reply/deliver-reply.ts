@@ -1,10 +1,10 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
