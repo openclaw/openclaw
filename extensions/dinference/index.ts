@@ -1,5 +1,4 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { DINFERENCE_BASE_URL } from "./models.js";
 import { applyDinferenceConfig, DINFERENCE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildDinferenceProvider } from "./provider-catalog.js";
 
@@ -30,25 +29,6 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildDinferenceProvider,
-    },
-    augmentModelCatalog: () => {
-      const providerCatalog = buildDinferenceProvider();
-      const modelAllowlist = new Set(providerCatalog.models.map((m) => m.id));
-
-      return providerCatalog.models.map((catalogModel) => ({
-        id: catalogModel.id,
-        name: catalogModel.name,
-        provider: PROVIDER_ID,
-        api: providerCatalog.api,
-        baseUrl: DINFERENCE_BASE_URL,
-        reasoning: catalogModel.reasoning,
-        input: catalogModel.input,
-        cost: catalogModel.cost,
-        contextWindow: catalogModel.contextWindow,
-        maxTokens: catalogModel.maxTokens,
-        compat: catalogModel.compat,
-        modelAllowlist: Array.from(modelAllowlist),
-      }));
     },
   },
 });
