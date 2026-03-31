@@ -187,6 +187,7 @@ export function registerRenderMonitorCommands(api: OpenClawPluginApi): void {
     "deploy_failed",
     "http_unavailable",
     "crash_repeated",
+    "log_error",
     "unknown_error",
   ];
 

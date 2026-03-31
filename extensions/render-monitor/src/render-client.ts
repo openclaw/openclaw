@@ -111,7 +111,38 @@ export class RenderClient {
       status,
       healthCheckState,
       latestDeploy,
+      ownerId: normalizeStringOrNull(raw.ownerId) ?? null,
     };
+  }
+
+  async getErrorLogs(params: {
+    serviceId: string;
+    ownerId: string;
+    sinceIso: string;
+    limit?: number;
+  }): Promise<Array<{ message: string; timestamp: string; level: string }>> {
+    type LogEntry = {
+      message?: string;
+      timestamp?: string;
+      labels?: Array<{ name: string; value: string }>;
+    };
+    type LogsResponse = { logs?: LogEntry[] };
+
+    const result = await this.requestJson<LogsResponse>("/v1/logs", {
+      ownerId: params.ownerId,
+      resource: params.serviceId,
+      level: "error",
+      type: "app",
+      limit: String(params.limit ?? 10),
+      startTime: params.sinceIso,
+      direction: "backward",
+    });
+
+    return (result.logs ?? []).map((entry) => ({
+      message: entry.message ?? "",
+      timestamp: entry.timestamp ?? "",
+      level: entry.labels?.find((l) => l.name === "level")?.value ?? "error",
+    }));
   }
 }
 

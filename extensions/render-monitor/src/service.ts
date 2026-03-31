@@ -132,7 +132,6 @@ export function createRenderMonitorService(api: OpenClawPluginApi): OpenClawPlug
                 updatedAtMs: nowMs,
               };
             }
-            continue;
           }
 
           for (const detected of incidents) {
@@ -219,6 +218,82 @@ export function createRenderMonitorService(api: OpenClawPluginApi): OpenClawPlug
                 text: fullText,
               });
               state = markIncidentAlerted({ state, incidentId, alertedAtMs: nowMs });
+            }
+          }
+
+          // Log error probe: check Render application logs for ERROR-level entries.
+          const ownerId = snapshot.ownerId;
+          if (ownerId && client) {
+            const sinceIso = new Date(nowMs - cfgResolved.pollIntervalMinutes * 60_000).toISOString();
+            try {
+              const errorLogs = await client.getErrorLogs({
+                serviceId: service.serviceId,
+                ownerId,
+                sinceIso,
+                limit: 5,
+              });
+              for (const logEntry of errorLogs) {
+                const { fingerprint: logFp, incidentId: logIncidentId } = computeIncidentFingerprint({
+                  serviceId: service.serviceId,
+                  incidentType: "log_error",
+                  extra: { message: logEntry.message, timestamp: logEntry.timestamp },
+                });
+
+                const existingLog = state.incidentsById[logIncidentId] ?? null;
+                const shouldDedupeLog = shouldDedupeIncident({
+                  state,
+                  incident: {
+                    incidentId: logIncidentId,
+                    fingerprint: logFp,
+                    createdAtMs: existingLog?.createdAtMs ?? nowMs,
+                  },
+                  nowMs,
+                  dedupeTtlMinutes: cfgResolved.dedupeTtlMinutes,
+                });
+                if (shouldDedupeLog) continue;
+
+                const logIncident: StoredRenderIncident = {
+                  id: logIncidentId,
+                  fingerprint: logFp,
+                  serviceId: service.serviceId,
+                  incidentType: "log_error",
+                  createdAtMs: existingLog?.createdAtMs ?? nowMs,
+                  lastDetectedAtMs: nowMs,
+                  acknowledgedAtMs: existingLog?.acknowledgedAtMs ?? null,
+                  lastAlertedAtMs: existingLog?.lastAlertedAtMs ?? null,
+                  lastInvestigation: existingLog?.lastInvestigation ?? null,
+                  summary: logEntry.message.slice(0, 500),
+                  details: { logTimestamp: logEntry.timestamp, level: logEntry.level },
+                };
+                state = upsertIncident({ state, incident: logIncident });
+
+                const logMuted = isServiceMuted({
+                  state,
+                  serviceId: service.serviceId,
+                  incidentType: "log_error",
+                  nowMs,
+                });
+                if (!logMuted && logIncident.acknowledgedAtMs == null) {
+                  const links = resolveRenderDashboardLinks(service.serviceId);
+                  const svcName = service.name ? ` · ${service.name}` : "";
+                  const alertText = truncateForTelegram([
+                    `⚠️ Application error detected in logs`,
+                    `Service: *${service.serviceId}*${svcName}`,
+                    `Incident ID: \`${logIncidentId}\``,
+                    `When: ${logEntry.timestamp}`,
+                    ``,
+                    logEntry.message.slice(0, 800),
+                    ``,
+                    `Logs: ${links.logs}`,
+                  ].join("\n"));
+                  await sendTelegramAlert({ api, chatId: cfgResolved.telegram.chatId, text: alertText });
+                  state = markIncidentAlerted({ state, incidentId: logIncidentId, alertedAtMs: nowMs });
+                }
+              }
+            } catch (err) {
+              api.logger.warn?.(
+                `render-monitor: log probe failed for service=${service.serviceId}: ${String((err as Error)?.message ?? err)}`,
+              );
             }
           }
         }

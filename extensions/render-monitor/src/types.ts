@@ -6,6 +6,7 @@ export type RenderIncidentType =
   | "deploy_failed"
   | "http_unavailable"
   | "crash_repeated"
+  | "log_error"
   | "unknown_error";
 
 export type RenderMonitorTelegramTarget = {
@@ -190,8 +191,8 @@ export type RenderServiceSnapshot = {
   latestDeploy?: {
     id?: string | null;
     status?: string | null;
-    // commit SHA is optional field; keep as unknown so we can store raw.
     commitSha?: string | null;
   } | null;
+  ownerId?: string | null;
 };
 
