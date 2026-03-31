@@ -49,11 +49,19 @@ fun buildGatewayTlsConfig(
       }
 
       override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String, socket: java.net.Socket) {
-        checkClientTrusted(chain, authType)
+        if (defaultTrust is X509ExtendedTrustManager) {
+          (defaultTrust as X509ExtendedTrustManager).checkClientTrusted(chain, authType, socket)
+        } else {
+          checkClientTrusted(chain, authType)
+        }
       }
 
       override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) {
-        checkClientTrusted(chain, authType)
+        if (defaultTrust is X509ExtendedTrustManager) {
+          (defaultTrust as X509ExtendedTrustManager).checkClientTrusted(chain, authType, engine)
+        } else {
+          checkClientTrusted(chain, authType)
+        }
       }
 
       override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
@@ -73,11 +81,19 @@ fun buildGatewayTlsConfig(
       }
 
       override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, socket: java.net.Socket) {
-        checkServerTrusted(chain, authType)
+        if (expected == null && !params.allowTOFU && defaultTrust is X509ExtendedTrustManager) {
+          (defaultTrust as X509ExtendedTrustManager).checkServerTrusted(chain, authType, socket)
+        } else {
+          checkServerTrusted(chain, authType)
+        }
       }
 
       override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) {
-        checkServerTrusted(chain, authType)
+        if (expected == null && !params.allowTOFU && defaultTrust is X509ExtendedTrustManager) {
+          (defaultTrust as X509ExtendedTrustManager).checkServerTrusted(chain, authType, engine)
+        } else {
+          checkServerTrusted(chain, authType)
+        }
       }
 
       override fun getAcceptedIssuers(): Array<X509Certificate> = defaultTrust.acceptedIssuers
