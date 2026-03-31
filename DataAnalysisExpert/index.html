@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw SDK Form Framework Viewer</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --accent: #58a6ff;
+            --green: #3fb950;
+            --orange: #d29922;
+            --purple: #bc8cff;
+            --red: #f85149;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 1.5rem;
+        }
+
+        h1 {
+            color: var(--accent);
+            margin-bottom: .5rem;
+            font-size: 1.6rem;
+        }
+
+        .subtitle {
+            color: #8b949e;
+            margin-bottom: 1.5rem;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: .75rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+        .stat-val {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat-label {
+            font-size: .75rem;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+        }
+
+        .tabs {
+            display: flex;
+            gap: .5rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .tab {
+            padding: .5rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--card);
+            color: var(--text);
+            cursor: pointer;
+            font-size: .85rem;
+        }
+
+        .tab.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: #1c2841;
+        }
+
+        .section {
+            display: none;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        .module-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 1rem;
+        }
+
+        .module-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.25rem;
+        }
+
+        .module-card h3 {
+            color: var(--accent);
+            font-size: 1rem;
+            margin-bottom: .25rem;
+        }
+
+        .module-meta {
+            font-size: .75rem;
+            color: #8b949e;
+            margin-bottom: .75rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: .15rem .5rem;
+            border-radius: 12px;
+            font-size: .7rem;
+            font-weight: 600;
+            margin-right: .25rem;
+        }
+
+        .badge-channel {
+            background: #1a3057;
+            color: var(--accent);
+        }
+
+        .badge-core {
+            background: #1a3d26;
+            color: var(--green);
+        }
+
+        .badge-legacy {
+            background: #3d2f0f;
+            color: var(--orange);
+        }
+
+        .badge-utilities {
+            background: #2e1a3d;
+            color: var(--purple);
+        }
+
+        .badge-provider {
+            background: #3d1a1a;
+            color: var(--red);
+        }
+
+        .badge-runtime {
+            background: #1a3d3d;
+            color: #56d4d4;
+        }
+
+        .field-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .field {
+            padding: .35rem 0;
+            border-bottom: 1px solid #21262d;
+            font-size: .8rem;
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+        }
+
+        .field:last-child {
+            border-bottom: none;
+        }
+
+        .kind-tag {
+            font-size: .65rem;
+            padding: .1rem .4rem;
+            border-radius: 4px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .kind-action {
+            background: #1a3d26;
+            color: var(--green);
+        }
+
+        .kind-type-descriptor {
+            background: #2e1a3d;
+            color: var(--purple);
+        }
+
+        .kind-constant {
+            background: #3d2f0f;
+            color: var(--orange);
+        }
+
+        .field-name {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            color: #e6edf3;
+        }
+
+        .field-source {
+            color: #484f58;
+            font-size: .7rem;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: .85rem;
+        }
+
+        th,
+        td {
+            padding: .6rem .75rem;
+            border: 1px solid var(--border);
+            text-align: left;
+        }
+
+        th {
+            background: var(--card);
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        td {
+            background: #0d1117;
+        }
+
+        .sim-bar {
+            height: 8px;
+            border-radius: 4px;
+            background: var(--border);
+        }
+
+        .sim-fill {
+            height: 100%;
+            border-radius: 4px;
+            background: var(--accent);
+        }
+
+        .route-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: .75rem;
+        }
+
+        .route-path {
+            font-family: monospace;
+            color: var(--green);
+            font-size: .9rem;
+        }
+
+        .endpoint {
+            font-size: .8rem;
+            color: #8b949e;
+            padding: .2rem 0;
+            font-family: monospace;
+        }
+
+        .method {
+            color: var(--orange);
+            font-weight: 700;
+            margin-right: .5rem;
+        }
+
+        input[type="text"] {
+            background: var(--card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: .5rem .75rem;
+            border-radius: 6px;
+            width: 100%;
+            max-width: 400px;
+            margin-bottom: 1rem;
+            font-size: .9rem;
+        }
+
+        input[type="text"]::placeholder {
+            color: #484f58;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>OpenClaw SDK Form Framework</h1>
+    <p class="subtitle">JSON-based web framework derived from the Plugin SDK API baseline — 18 modules as interactive
+        forms</p>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="tabs" id="tabs">
+        <div class="tab active" data-tab="forms">Forms</div>
+        <div class="tab" data-tab="similarity">Similarity</div>
+        <div class="tab" data-tab="routes">Routes</div>
+        <div class="tab" data-tab="shared">Shared Sources</div>
+        <div class="tab" data-tab="raw">Raw JSON</div>
+    </div>
+
+    <input type="text" id="search" placeholder="Filter modules, exports, source files…">
+
+    <div id="forms" class="section active"></div>
+    <div id="similarity" class="section"></div>
+    <div id="routes" class="section"></div>
+    <div id="shared" class="section"></div>
+    <div id="raw" class="section">
+        <pre id="rawJson"
+            style="background:var(--card);padding:1rem;border-radius:8px;overflow:auto;max-height:600px;font-size:.75rem;color:#8b949e;"></pre>
+    </div>
+
+    <script>
+        let FW = null;
+
+        async function load() {
+            const resp = await fetch("sdk-form-framework.json");
+            FW = await resp.json();
+            renderStats();
+            renderForms();
+            renderSimilarity();
+            renderRoutes();
+            renderShared();
+            document.getElementById("rawJson").textContent = JSON.stringify(FW, null, 2);
+        }
+
+        function badgeClass(cat) { return `badge badge-${cat}`; }
+
+        function renderStats() {
+            const a = FW.analysis;
+            const totalExports = FW.forms.reduce((s, f) => s + f.fields.length, 0);
+            const totalActions = FW.forms.reduce((s, f) => s + f.actionCount, 0);
+            const totalTypes = FW.forms.reduce((s, f) => s + f.typeCount, 0);
+            const cats = Object.keys(a.categories).length;
+            const sharedFiles = Object.keys(a.sharedSourceFiles).length;
+            const html = [
+                { val: a.totalModules, label: "Modules / Forms" },
+                { val: totalExports, label: "Total Exports" },
+                { val: totalActions, label: "Actions (POST)" },
+                { val: totalTypes, label: "Type Descriptors" },
+                { val: cats, label: "Categories" },
+                { val: sharedFiles, label: "Shared .ts Files" },
+            ].map(s => `<div class="stat-card"><div class="stat-val">${s.val}</div><div class="stat-label">${s.label}</div></div>`).join("");
+            document.getElementById("stats").innerHTML = html;
+        }
+
+        function renderForms(filter = "") {
+            const fl = filter.toLowerCase();
+            const forms = FW.forms.filter(f =>
+                !fl || f.id.includes(fl) || f.category.includes(fl) || f.importSpecifier.includes(fl) ||
+                f.fields.some(fd => fd.name.toLowerCase().includes(fl) || fd.sourceFile.toLowerCase().includes(fl))
+            );
+            document.getElementById("forms").innerHTML = `<div class="module-grid">${forms.map(f => {
+                const fields = f.fields.filter(fd => !fl || fd.name.toLowerCase().includes(fl) || fd.sourceFile.toLowerCase().includes(fl) || f.id.includes(fl));
+                return `<div class="module-card">
+      <h3>${f.id}</h3>
+      <div class="module-meta"><span class="${badgeClass(f.category)}">${f.category}</span> ${f.importSpecifier} — ${f.fields.length} fields (${f.actionCount} actions, ${f.typeCount} types, ${f.constCount} consts)</div>
+      <div class="field-list">${fields.map(fd => `<div class="field">
+        <span class="kind-tag kind-${fd.kind}">${fd.kind}</span>
+        <span class="field-name">${fd.name}</span>
+        <span class="field-source">${fd.sourceFile}:${fd.sourceLine}</span>
+      </div>`).join("")}</div>
+    </div>`;
+            }).join("")}</div>`;
+        }
+
+        function renderSimilarity() {
+            const pairs = FW.analysis.moduleSimilarity;
+            document.getElementById("similarity").innerHTML = `<table>
+    <tr><th>Module A</th><th>Module B</th><th>Jaccard</th><th>Shared Files</th><th>Similarity</th></tr>
+    ${pairs.map(p => `<tr><td>${p.a}</td><td>${p.b}</td><td>${p.jaccard}</td><td>${p.sharedFiles.length}</td>
+      <td><div class="sim-bar"><div class="sim-fill" style="width:${Math.round(p.jaccard * 100)}%"></div></div></td></tr>`).join("")}
+  </table>`;
+        }
+
+        function renderRoutes() {
+            document.getElementById("routes").innerHTML = FW.routing.map(r => `<div class="route-card">
+    <div class="route-path">GET ${r.path}</div>
+    <div style="font-size:.75rem;color:#8b949e;margin:.25rem 0">${r.importSpecifier}</div>
+    ${r.actionEndpoints.map(e => `<div class="endpoint"><span class="method">${e.method}</span>${e.path}</div>`).join("")}
+  </div>`).join("");
+        }
+
+        function renderShared() {
+            const sf = FW.analysis.sharedSourceFiles;
+            document.getElementById("shared").innerHTML = `<table>
+    <tr><th>.ts Source</th><th>Shared Across</th><th>Export Count</th></tr>
+    ${Object.entries(sf).map(([path, info]) => `<tr><td style="font-family:monospace;font-size:.8rem">${path}</td><td>${info.modules.join(", ")}</td><td>${info.exports.length}</td></tr>`).join("")}
+  </table>`;
+        }
+
+        // Tabs
+        document.getElementById("tabs").addEventListener("click", e => {
+            const tab = e.target.closest(".tab");
+            if (!tab) return;
+            document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+            document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+            tab.classList.add("active");
+            document.getElementById(tab.dataset.tab).classList.add("active");
+        });
+
+        // Search
+        document.getElementById("search").addEventListener("input", e => renderForms(e.target.value));
+
+        load();
+    </script>
+</body>
+
+</html>
