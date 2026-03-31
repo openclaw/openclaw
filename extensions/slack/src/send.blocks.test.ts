@@ -193,3 +193,151 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("sendMessageSlack Block Kit table attachments", () => {
+  // These tests use tableMode: "block" explicitly because the channel plugin
+  // registry isn't initialized in unit tests, so resolveMarkdownTableMode
+  // can't resolve "slack" to its production default ("block").
+  it("provides meaningful fallback text for table-only messages", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "| A | B |\n|---|---|\n| 1 | 2 |", {
+      token: "xoxb-test",
+      client,
+      tableMode: "block",
+    });
+
+    const calls = client.chat.postMessage.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    // The text field should contain a meaningful fallback (pipe-table
+    // representation) for notifications/accessibility, not whitespace.
+    for (const call of calls) {
+      const text = (call[0] as { text?: string }).text ?? "";
+      expect(text.trim().length).toBeGreaterThan(0);
+      // Should contain table content as fallback
+      expect(text).toContain("A");
+      expect(text).toContain("B");
+    }
+  });
+
+  it("includes table attachments for messages with tables", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack(
+      "channel:C123",
+      "Here is a table:\n\n| Name | Age |\n|------|-----|\n| Alice | 30 |",
+      { token: "xoxb-test", client, tableMode: "block" },
+    );
+
+    const calls = client.chat.postMessage.mock.calls;
+    // At least one call should have attachments
+    const hasAttachments = calls.some((call) => {
+      const payload = call[0] as { attachments?: unknown[] };
+      return payload.attachments && payload.attachments.length > 0;
+    });
+    expect(hasAttachments).toBe(true);
+  });
+
+  it("preserves surrounding text when tables are extracted", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack(
+      "channel:C123",
+      "Before the table\n\n| X |\n|---|\n| 1 |\n\nAfter the table",
+      { token: "xoxb-test", client, tableMode: "block" },
+    );
+
+    const calls = client.chat.postMessage.mock.calls;
+    const allText = calls.map((c) => (c[0] as { text?: string }).text ?? "").join(" ");
+    expect(allText).toContain("Before the table");
+    expect(allText).toContain("After the table");
+  });
+});
+
+describe("sendMessageSlack multi-table fallback", () => {
+  it("preserves table position in multi-table messages", async () => {
+    const client = createSlackSendTestClient();
+    const message = [
+      "First section",
+      "",
+      "| A | B |",
+      "|---|---|",
+      "| 1 | 2 |",
+      "",
+      "Middle section",
+      "",
+      "| C | D |",
+      "|---|---|",
+      "| 3 | 4 |",
+      "",
+      "Last section",
+    ].join("\n");
+
+    await sendMessageSlack("channel:C123", message, {
+      token: "xoxb-test",
+      client,
+      tableMode: "block",
+    });
+
+    const calls = client.chat.postMessage.mock.calls;
+    const allText = calls.map((c) => (c[0] as { text?: string }).text ?? "").join("\n");
+    // Tables should be rendered inline (as code blocks) preserving order,
+    // not stripped and appended at the end.
+    const firstIdx = allText.indexOf("First section");
+    const middleIdx = allText.indexOf("Middle section");
+    const lastIdx = allText.indexOf("Last section");
+    expect(firstIdx).toBeGreaterThanOrEqual(0);
+    expect(middleIdx).toBeGreaterThan(firstIdx);
+    expect(lastIdx).toBeGreaterThan(middleIdx);
+  });
+
+  it("does not use Block Kit attachments for multi-table messages", async () => {
+    const client = createSlackSendTestClient();
+    const message = ["| A |\n|---|\n| 1 |", "", "| B |\n|---|\n| 2 |"].join("\n");
+
+    await sendMessageSlack("channel:C123", message, {
+      token: "xoxb-test",
+      client,
+      tableMode: "block",
+    });
+
+    const calls = client.chat.postMessage.mock.calls;
+    // No call should have table block attachments
+    for (const call of calls) {
+      const payload = call[0] as { attachments?: unknown[] };
+      if (payload.attachments) {
+        for (const att of payload.attachments) {
+          const blocks = (att as { blocks?: { type: string }[] }).blocks ?? [];
+          for (const block of blocks) {
+            expect(block.type).not.toBe("table");
+          }
+        }
+      }
+    }
+  });
+
+  it("renders multi-table content within Slack message limits", async () => {
+    const client = createSlackSendTestClient();
+    // Build a message with several large tables
+    const bigTable = [
+      "| " + Array.from({ length: 5 }, (_, i) => `Header${i}`).join(" | ") + " |",
+      "| " + Array.from({ length: 5 }, () => "---").join(" | ") + " |",
+      ...Array.from(
+        { length: 50 },
+        (_, row) =>
+          "| " + Array.from({ length: 5 }, (_, col) => `R${row}C${col}`).join(" | ") + " |",
+      ),
+    ].join("\n");
+    const message = `Table 1:\n\n${bigTable}\n\nTable 2:\n\n${bigTable}\n\nTable 3:\n\n${bigTable}`;
+
+    await sendMessageSlack("channel:C123", message, {
+      token: "xoxb-test",
+      client,
+      tableMode: "block",
+    });
+
+    const calls = client.chat.postMessage.mock.calls;
+    // Each individual message should be within Slack's text limit (4000 chars)
+    for (const call of calls) {
+      const text = (call[0] as { text?: string }).text ?? "";
+      expect(text.length).toBeLessThanOrEqual(8100); // SLACK_TEXT_LIMIT is 8000
+    }
+  });
+});

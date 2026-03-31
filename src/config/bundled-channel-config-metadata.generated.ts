@@ -21,7 +21,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -229,7 +229,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -529,7 +529,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -1737,7 +1737,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -5044,7 +5044,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -5320,7 +5320,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -5820,7 +5820,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -6106,7 +6106,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -6537,7 +6537,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -6547,6 +6547,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         allowPrivateNetwork: {
           type: "boolean",
+        },
+        proxy: {
+          type: "string",
         },
         userId: {
           type: "string",
@@ -7065,7 +7068,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -7346,7 +7349,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -7641,7 +7644,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -8077,7 +8080,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -8408,7 +8411,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -8756,7 +8759,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -9213,7 +9216,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -9525,7 +9528,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -9957,7 +9960,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -10766,7 +10769,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -11647,7 +11650,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -12598,7 +12601,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -13803,7 +13806,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   properties: {
                     tables: {
                       type: "string",
-                      enum: ["off", "bullets", "code"],
+                      enum: ["off", "bullets", "code", "block"],
                     },
                   },
                   additionalProperties: false,
@@ -13890,7 +13893,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   properties: {
                     tables: {
                       type: "string",
-                      enum: ["off", "bullets", "code"],
+                      enum: ["off", "bullets", "code", "block"],
                     },
                   },
                   additionalProperties: false,
@@ -14000,7 +14003,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -14245,7 +14248,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -14555,7 +14558,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -14761,7 +14764,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -14981,7 +14984,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -15098,7 +15101,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,

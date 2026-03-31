@@ -60,13 +60,40 @@ export function markdownTableToSlackTableBlock(table: MarkdownTableData): SlackT
   const makeRow = (cells: string[]): SlackTableCell[] =>
     Array.from({ length: columnCount }, (_, index) => ({
       type: "raw_text",
-      text: cells[index] ?? "",
+      text: cells[index] || " ",
     }));
+
+  // Compute raw column count from ALL rows without capping (handles ragged tables)
+  const cappedRowCount = getCappedRowCount(table.rows);
+  let rawMaxColumns = table.headers.length;
+  for (let i = 0; i < cappedRowCount; i += 1) {
+    const rowLen = table.rows[i]?.length ?? 0;
+    if (rowLen > rawMaxColumns) rawMaxColumns = rowLen;
+  }
+  const truncatedColumns = Math.max(0, rawMaxColumns - SLACK_MAX_TABLE_COLUMNS);
+
+  // Reserve rows for header and truncation indicator so we never exceed SLACK_MAX_TABLE_ROWS
+  const hasHeaders = hasVisibleHeaders(table.headers);
+  const headerCount = hasHeaders ? 1 : 0;
+  const needsTruncation =
+    table.rows.length + headerCount > SLACK_MAX_TABLE_ROWS || truncatedColumns > 0;
+  const indicatorCount = needsTruncation ? 1 : 0;
+  const dataRowLimit = SLACK_MAX_TABLE_ROWS - headerCount - indicatorCount;
+  const truncatedRows = Math.max(0, table.rows.length - dataRowLimit);
 
   const rows = [
     ...(hasVisibleHeaders(table.headers) ? [makeRow(table.headers)] : []),
-    ...table.rows.slice(0, SLACK_MAX_TABLE_ROWS).map(makeRow),
+    ...table.rows.slice(0, dataRowLimit).map(makeRow),
   ].slice(0, SLACK_MAX_TABLE_ROWS);
+
+  if (truncatedRows > 0 || truncatedColumns > 0) {
+    const parts: string[] = [];
+    if (truncatedRows > 0) parts.push(`+${truncatedRows} more rows`);
+    if (truncatedColumns > 0) parts.push(`+${truncatedColumns} more columns`);
+    const indicatorCells = Array.from({ length: columnCount }, () => "");
+    indicatorCells[0] = parts.join(", ");
+    rows.push(makeRow(indicatorCells));
+  }
 
   return {
     type: "table",
@@ -130,5 +157,44 @@ export function renderSlackTableFallbackText(table: MarkdownTableData): string {
     }
   }
 
+  if (lines.length > 0) {
+    const truncatedRows = Math.max(0, table.rows.length - SLACK_MAX_TABLE_ROWS);
+    let rawMaxCols = table.headers.length;
+    for (let i = 0; i < Math.min(table.rows.length, SLACK_MAX_TABLE_ROWS); i += 1) {
+      const rowLen = table.rows[i]?.length ?? 0;
+      if (rowLen > rawMaxCols) rawMaxCols = rowLen;
+    }
+    const truncatedCols = Math.max(0, rawMaxCols - SLACK_MAX_TABLE_COLUMNS);
+    const parts: string[] = [];
+    if (truncatedRows > 0) parts.push(`+${truncatedRows} more rows`);
+    if (truncatedCols > 0) parts.push(`+${truncatedCols} more columns`);
+    if (parts.length > 0) lines.push(parts.join(", "));
+  }
+
   return lines.length > 0 ? lines.join("\n") : "Table";
+}
+
+/**
+ * Build Slack message attachments for one or more tables.
+ * Slack allows at most one table block per message, so when multiple tables
+ * are present this returns `undefined` (caller should fall back to code blocks).
+ */
+export function buildSlackTableAttachments(
+  tables: MarkdownTableData[],
+): Record<string, unknown>[] | undefined {
+  if (tables.length !== 1 || !tables[0]) {
+    return undefined;
+  }
+  return [buildSlackTableAttachment(tables[0])];
+}
+
+/**
+ * Render all tables as aligned pipe-text (code-block friendly).
+ * Used when Block Kit attachments aren't viable (multiple tables, fallback).
+ */
+export function renderSlackTablesFallbackText(tables: MarkdownTableData[]): string {
+  if (tables.length === 0) {
+    return "Table";
+  }
+  return tables.map((t) => renderSlackTableFallbackText(t)).join("\n\n");
 }

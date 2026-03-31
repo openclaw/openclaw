@@ -1,7 +1,9 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   markdownToIR,
+  markdownToIRWithMeta,
   type MarkdownLinkSpan,
+  type MarkdownTableData,
   renderMarkdownIRChunksWithinLimit,
 } from "openclaw/plugin-sdk/text-runtime";
 import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
@@ -155,4 +157,49 @@ export function markdownToSlackMrkdwnChunks(
     renderChunk: (chunk) => renderMarkdownWithMarkers(chunk, renderOptions),
     measureRendered: (rendered) => rendered.length,
   }).map(({ rendered }) => rendered);
+}
+
+export type SlackMrkdwnWithTables = {
+  chunks: string[];
+  tables: MarkdownTableData[];
+};
+
+/**
+ * Like {@link markdownToSlackMrkdwnChunks}, but when `tableMode` is `"block"`,
+ * also returns the extracted table data for Block Kit table rendering.
+ * Non-block modes return an empty `tables` array.
+ */
+export function markdownToSlackMrkdwnWithTables(
+  markdown: string,
+  limit: number,
+  options: SlackMarkdownOptions = {},
+): SlackMrkdwnWithTables {
+  const parseOptions = {
+    linkify: false,
+    autolink: false,
+    headingStyle: "bold" as const,
+    blockquotePrefix: "> ",
+    tableMode: options.tableMode,
+  };
+
+  if (options.tableMode === "block") {
+    const { ir, tables } = markdownToIRWithMeta(markdown ?? "", parseOptions);
+    const renderOptions = buildSlackRenderOptions();
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit,
+      renderChunk: (chunk) => renderMarkdownWithMarkers(chunk, renderOptions),
+      measureRendered: (rendered) => rendered.length,
+    }).map(({ rendered }) => rendered);
+    return {
+      chunks,
+      tables: tables.map((t) => ({ headers: t.headers, rows: t.rows })),
+    };
+  }
+
+  // Non-block modes: no table data to extract
+  return {
+    chunks: markdownToSlackMrkdwnChunks(markdown, limit, options),
+    tables: [],
+  };
 }
