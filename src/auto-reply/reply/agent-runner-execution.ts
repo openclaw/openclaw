@@ -42,7 +42,7 @@ function safeSessionId(id: string): string {
 function safeErrorSummary(msg: string, maxLen = 200): string {
   const truncated = msg.length > maxLen ? msg.slice(0, maxLen) + "…" : msg;
   return sanitizeForLog(truncated).replace(
-    /(api[_\-]?key|token|secret|authorization|bearer)\s*[=:]\s*\S+/gi,
+    /(api[_-]?key|token|secret|authorization|bearer)\s*[=:]\s*\S+/gi,
     "$1=<redacted>",
   );
 }

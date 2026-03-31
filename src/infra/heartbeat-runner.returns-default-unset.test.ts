@@ -1422,4 +1422,58 @@ describe("runHeartbeatOnce", () => {
       replySpy.mockRestore();
     }
   });
+
+  // Regression: non-empty error payloads (e.g. rate-limit fallback messages)
+  // must still be delivered through the normal heartbeat alert path.
+  // The isError guard must only intercept empty error sentinels.
+  // See: https://github.com/openclaw/openclaw/issues/58409
+  it("delivers non-empty error payloads instead of masking them as failed", async () => {
+    const tmpDir = await createCaseDir("hb-nonempty-error");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      // Simulate a non-empty error payload (e.g. rate-limit fallback message)
+      replySpy.mockResolvedValue({ text: "Rate limit exceeded, please retry later.", isError: true });
+      const sendWhatsApp = vi
+        .fn<
+          (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      // Non-empty error payloads must NOT be intercepted — they should be delivered
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
 });

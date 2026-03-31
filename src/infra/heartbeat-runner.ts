@@ -737,12 +737,16 @@ export async function runHeartbeatOnce(opts: {
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
 
-    // Heartbeat failure: the agent layer returned an error payload (e.g. context
-    // overflow, compaction failure, session corruption) but intentionally skipped
-    // a destructive session reset.  Surface this as a proper "failed" event so
-    // monitoring / indicators reflect the real outcome instead of masking it as
-    // "ok-empty".  See: https://github.com/openclaw/openclaw/issues/58409
-    if (replyPayload?.isError) {
+    // Heartbeat failure: the agent layer returned an empty error sentinel
+    // (e.g. context overflow, compaction failure, session corruption) but
+    // intentionally skipped a destructive session reset.  Surface this as a
+    // proper "failed" event so monitoring / indicators reflect the real outcome
+    // instead of masking it as "ok-empty".
+    // Guard is narrowed to empty-text error sentinels so that non-empty error
+    // payloads (e.g. rate-limit/overload fallback messages) still flow through
+    // the normal heartbeat alert delivery path.
+    // See: https://github.com/openclaw/openclaw/issues/58409
+    if (replyPayload?.isError && !hasOutboundReplyContent(replyPayload)) {
       await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
       await pruneHeartbeatTranscript(transcriptState);
       const reason = "heartbeat agent run returned an error payload";
