@@ -236,6 +236,28 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks pinned helper interpreter vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_PINNED_PYTHON=./attacker-python",
+            "OPENCLAW_PINNED_WRITE_PYTHON=./attacker-write-python",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_PINNED_PYTHON;
+        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_PINNED_PYTHON).toBeUndefined();
+        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks bundled trust-root vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
