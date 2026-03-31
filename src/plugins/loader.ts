@@ -14,6 +14,11 @@ import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import {
+  clearCompactionProviders,
+  listRegisteredCompactionProviders,
+  restoreRegisteredCompactionProviders,
+} from "./compaction-provider.js";
+import {
   applyTestPluginDefaults,
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -143,6 +148,7 @@ export class PluginLoadReentryError extends Error {
 type CachedPluginState = {
   registry: PluginRegistry;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
+  compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
@@ -175,6 +181,7 @@ export function clearPluginLoaderCache(): void {
   registryCache.clear();
   inFlightPluginRegistryLoads.clear();
   openAllowlistWarningCache.clear();
+  clearCompactionProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
 }
@@ -1074,6 +1081,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
+      restoreRegisteredCompactionProviders(cached.compactionProviders);
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
         corpusSupplements: cached.memoryCorpusSupplements,
@@ -1667,6 +1675,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         hookPolicy: entry?.hooks,
         registrationMode,
       });
+      const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
       const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
@@ -1686,6 +1695,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
+          restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
             corpusSupplements: previousMemoryCorpusSupplements,
@@ -1698,6 +1708,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
       } catch (err) {
+        restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           corpusSupplements: previousMemoryCorpusSupplements,
@@ -1756,6 +1767,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       setCachedPluginRegistry(cacheKey, {
         memoryCorpusSupplements: listMemoryCorpusSupplements(),
         registry,
+        compactionProviders: listRegisteredCompactionProviders(),
         memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
         memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
         memoryPromptBuilder: getMemoryPromptSectionBuilder(),
