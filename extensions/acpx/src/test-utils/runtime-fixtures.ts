@@ -428,6 +428,8 @@ export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+  delete process.env.MOCK_ACPX_HELP_STDOUT;
+  delete process.env.MOCK_ACPX_HELP_EXIT_CODE;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;
   while (tempDirs.length > 0) {

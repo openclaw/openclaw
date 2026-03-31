@@ -256,7 +256,7 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   getUnhealthyReason(): string | undefined {
-    return this.setupError ?? this.healthError;
+    return this.healthError ?? this.setupError;
   }
 
   private logSpawnResolution(event: SpawnResolutionEvent): void {
@@ -367,6 +367,9 @@ export class AcpxRuntime implements AcpRuntime {
   async probeAvailability(): Promise<void> {
     const result = await this.checkHealth();
     this.healthy = result.ok;
+    if (result.ok) {
+      this.setupError = undefined;
+    }
     this.healthError = result.ok ? undefined : this.resolveHealthFailureMessage(result);
   }
 
@@ -938,6 +941,7 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     this.healthy = true;
+    this.setupError = undefined;
     this.healthError = undefined;
     return {
       ok: true,

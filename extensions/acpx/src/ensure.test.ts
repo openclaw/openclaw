@@ -327,6 +327,31 @@ describe("acpx ensure", () => {
     ).rejects.not.toThrow("Fix: sudo chown -R $(id -u):$(id -g) ~/.npm");
   });
 
+  it("does not add the cache-permission hint for global npm permission failures", async () => {
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "acpx 0.0.9\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr:
+          "npm ERR! code EACCES\nnpm ERR! syscall open\nnpm ERR! path /usr/local/lib/node_modules/npm/lib/foo.js",
+        code: 1,
+        error: null,
+      });
+
+    await expect(
+      ensureAcpx({
+        command: "/plugin/node_modules/.bin/acpx",
+        pluginRoot: "/plugin",
+        expectedVersion: ACPX_PINNED_VERSION,
+      }),
+    ).rejects.not.toThrow("Fix: sudo chown -R $(id -u):$(id -g) ~/.npm");
+  });
+
   it("does not add the unix cache-permission hint on Windows", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     spawnAndCollectMock
