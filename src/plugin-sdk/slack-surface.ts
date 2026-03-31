@@ -2,10 +2,7 @@
 import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 type FacadeEntry = PluginSdkFacadeTypeMap["slack-surface"];
 type FacadeModule = FacadeEntry["module"];
-import {
-  createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
@@ -45,17 +42,18 @@ export const listEnabledSlackAccounts: FacadeModule["listEnabledSlackAccounts"] 
   loadFacadeModule()["listEnabledSlackAccounts"](
     ...args,
   )) as FacadeModule["listEnabledSlackAccounts"];
-export const listSlackAccountIds: FacadeModule["listSlackAccountIds"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule()["listSlackAccountIds"] as object,
-) as FacadeModule["listSlackAccountIds"];
+export const listSlackAccountIds: FacadeModule["listSlackAccountIds"] = ((...args) =>
+  loadFacadeModule()["listSlackAccountIds"](...args)) as FacadeModule["listSlackAccountIds"];
 export const listSlackDirectoryGroupsFromConfig: FacadeModule["listSlackDirectoryGroupsFromConfig"] =
-  createLazyFacadeObjectValue(
-    () => loadFacadeModule()["listSlackDirectoryGroupsFromConfig"] as object,
-  ) as FacadeModule["listSlackDirectoryGroupsFromConfig"];
+  ((...args) =>
+    loadFacadeModule()["listSlackDirectoryGroupsFromConfig"](
+      ...args,
+    )) as FacadeModule["listSlackDirectoryGroupsFromConfig"];
 export const listSlackDirectoryPeersFromConfig: FacadeModule["listSlackDirectoryPeersFromConfig"] =
-  createLazyFacadeObjectValue(
-    () => loadFacadeModule()["listSlackDirectoryPeersFromConfig"] as object,
-  ) as FacadeModule["listSlackDirectoryPeersFromConfig"];
+  ((...args) =>
+    loadFacadeModule()["listSlackDirectoryPeersFromConfig"](
+      ...args,
+    )) as FacadeModule["listSlackDirectoryPeersFromConfig"];
 export const listSlackEmojis: FacadeModule["listSlackEmojis"] = ((...args) =>
   loadFacadeModule()["listSlackEmojis"](...args)) as FacadeModule["listSlackEmojis"];
 export const listSlackMessageActions: FacadeModule["listSlackMessageActions"] = ((...args) =>
@@ -78,10 +76,12 @@ export const recordSlackThreadParticipation: FacadeModule["recordSlackThreadPart
   loadFacadeModule()["recordSlackThreadParticipation"](
     ...args,
   )) as FacadeModule["recordSlackThreadParticipation"];
-export const resolveDefaultSlackAccountId: FacadeModule["resolveDefaultSlackAccountId"] =
-  createLazyFacadeObjectValue(
-    () => loadFacadeModule()["resolveDefaultSlackAccountId"] as object,
-  ) as FacadeModule["resolveDefaultSlackAccountId"];
+export const resolveDefaultSlackAccountId: FacadeModule["resolveDefaultSlackAccountId"] = ((
+  ...args
+) =>
+  loadFacadeModule()["resolveDefaultSlackAccountId"](
+    ...args,
+  )) as FacadeModule["resolveDefaultSlackAccountId"];
 export const resolveSlackAutoThreadId: FacadeModule["resolveSlackAutoThreadId"] = ((...args) =>
   loadFacadeModule()["resolveSlackAutoThreadId"](
     ...args,
@@ -92,10 +92,12 @@ export const resolveSlackGroupRequireMention: FacadeModule["resolveSlackGroupReq
   loadFacadeModule()["resolveSlackGroupRequireMention"](
     ...args,
   )) as FacadeModule["resolveSlackGroupRequireMention"];
-export const resolveSlackRuntimeGroupPolicy: FacadeModule["resolveSlackRuntimeGroupPolicy"] =
-  createLazyFacadeObjectValue(
-    () => loadFacadeModule()["resolveSlackRuntimeGroupPolicy"] as object,
-  ) as FacadeModule["resolveSlackRuntimeGroupPolicy"];
+export const resolveSlackRuntimeGroupPolicy: FacadeModule["resolveSlackRuntimeGroupPolicy"] = ((
+  ...args
+) =>
+  loadFacadeModule()["resolveSlackRuntimeGroupPolicy"](
+    ...args,
+  )) as FacadeModule["resolveSlackRuntimeGroupPolicy"];
 export const resolveSlackGroupToolPolicy: FacadeModule["resolveSlackGroupToolPolicy"] = ((
   ...args
 ) =>
