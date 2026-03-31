@@ -181,7 +181,12 @@ export function wrapReadToolWithSkillModelDetect(
           log.debug(
             `[model-router] skill model override set to ${override.provider}/${override.id} (from ${normalized})`,
           );
+        } else if (path.basename(normalized) === "SKILL.md") {
+          // Reading a SKILL.md that has no model override — reset to session default
+          ctx.activeModel = undefined;
+          log.debug(`[model-router] skill model override cleared (no override for ${normalized})`);
         }
+        // Other file reads leave activeModel unchanged
       }
       // oxlint-disable-next-line typescript/no-explicit-any
       return (tool.execute as (...a: any[]) => unknown)(toolCallId, argsObj, ...rest);

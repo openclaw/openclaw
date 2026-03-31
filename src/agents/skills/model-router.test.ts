@@ -110,7 +110,7 @@ describe("buildSkillModelMap", () => {
   });
 
   it("resolves modelProfile field", () => {
-    const entry = makeSkillEntry("/workspace/skills/quick/SKILL.md", "quick", {
+    const entry = makeSkillEntry("quick", "/workspace/skills/quick/SKILL.md", {
       modelProfile: "fast",
     });
     const map = buildSkillModelMap([entry], registry);
@@ -204,6 +204,28 @@ describe("wrapReadToolWithSkillModelDetect", () => {
       path: "/workspace/skills/other/SKILL.md",
     });
     expect(ctx.activeModel).toBeUndefined();
+  });
+
+  it("resets ctx.activeModel to undefined when reading a SKILL.md NOT in the map", async () => {
+    const skillModelMap = new Map([[skillFilePath, opus]]);
+    const ctx = createActiveSkillModelContext();
+    ctx.activeModel = opus; // simulate skill-A already active
+    const tool = wrapReadToolWithSkillModelDetect(makeReadTool(), skillModelMap, ctx);
+
+    await (tool.execute as unknown as ReadExecute)("call-1", {
+      path: "/workspace/skills/other/SKILL.md",
+    });
+    expect(ctx.activeModel).toBeUndefined();
+  });
+
+  it("does NOT reset ctx.activeModel when reading a non-SKILL.md file", async () => {
+    const skillModelMap = new Map([[skillFilePath, opus]]);
+    const ctx = createActiveSkillModelContext();
+    ctx.activeModel = opus; // simulate skill-A already active
+    const tool = wrapReadToolWithSkillModelDetect(makeReadTool(), skillModelMap, ctx);
+
+    await (tool.execute as unknown as ReadExecute)("call-1", { path: "/workspace/src/foo.ts" });
+    expect(ctx.activeModel).toMatchObject({ id: "claude-opus-4-6" });
   });
 
   it("returns original tool when skillModelMap is empty", () => {
