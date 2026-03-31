@@ -236,10 +236,36 @@ describe("sanitizeHostExecEnv", () => {
         PIP_INDEX_URL: "https://example.invalid/simple",
         PIP_PYPI_URL: "https://example.invalid/simple",
         PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+        PIP_FIND_LINKS: "https://example.invalid/wheels",
+        PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
         UV_INDEX_URL: "https://example.invalid/simple",
         UV_DEFAULT_INDEX: "https://example.invalid/simple",
         UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        DOCKER_HOST: "tcp://example.invalid:2376",
+        DOCKER_TLS_VERIFY: "1",
+        DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
+        DOCKER_CONTEXT: "evil-remote",
+        LIBRARY_PATH: "/tmp/evil-lib",
+        CPATH: "/tmp/evil-headers",
+        C_INCLUDE_PATH: "/tmp/evil-c-headers",
+        CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
+        OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
+        NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
+        SSL_CERT_FILE: "/tmp/evil-cert.pem",
+        SSL_CERT_DIR: "/tmp/evil-cert-dir",
+        REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
+        CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GOPROXY: "https://example.invalid/proxy",
+        GONOSUMCHECK: "example.invalid/*",
+        GONOSUMDB: "example.invalid/*",
+        GONOPROXY: "example.invalid/*",
+        GOPRIVATE: "example.invalid/*",
+        GOENV: "/tmp/evil-goenv",
+        GOPATH: "/tmp/evil-go",
+        PYTHONUSERBASE: "/tmp/evil-python-userbase",
+        VIRTUAL_ENV: "/tmp/evil-venv",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
         CLASSPATH: "/tmp/evil-classpath",
@@ -277,10 +303,36 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.PIP_INDEX_URL).toBeUndefined();
     expect(env.PIP_PYPI_URL).toBeUndefined();
     expect(env.PIP_EXTRA_INDEX_URL).toBeUndefined();
+    expect(env.PIP_CONFIG_FILE).toBeUndefined();
+    expect(env.PIP_FIND_LINKS).toBeUndefined();
+    expect(env.PIP_TRUSTED_HOST).toBeUndefined();
     expect(env.UV_INDEX).toBeUndefined();
     expect(env.UV_INDEX_URL).toBeUndefined();
     expect(env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(env.UV_EXTRA_INDEX_URL).toBeUndefined();
+    expect(env.DOCKER_HOST).toBeUndefined();
+    expect(env.DOCKER_TLS_VERIFY).toBeUndefined();
+    expect(env.DOCKER_CERT_PATH).toBeUndefined();
+    expect(env.DOCKER_CONTEXT).toBeUndefined();
+    expect(env.LIBRARY_PATH).toBeUndefined();
+    expect(env.CPATH).toBeUndefined();
+    expect(env.C_INCLUDE_PATH).toBeUndefined();
+    expect(env.CPLUS_INCLUDE_PATH).toBeUndefined();
+    expect(env.OBJC_INCLUDE_PATH).toBeUndefined();
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(env.SSL_CERT_FILE).toBeUndefined();
+    expect(env.SSL_CERT_DIR).toBeUndefined();
+    expect(env.REQUESTS_CA_BUNDLE).toBeUndefined();
+    expect(env.CURL_CA_BUNDLE).toBeUndefined();
+    expect(env.GOPROXY).toBeUndefined();
+    expect(env.GONOSUMCHECK).toBeUndefined();
+    expect(env.GONOSUMDB).toBeUndefined();
+    expect(env.GONOPROXY).toBeUndefined();
+    expect(env.GOPRIVATE).toBeUndefined();
+    expect(env.GOENV).toBeUndefined();
+    expect(env.GOPATH).toBeUndefined();
+    expect(env.PYTHONUSERBASE).toBeUndefined();
+    expect(env.VIRTUAL_ENV).toBeUndefined();
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/trusted-home");
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
@@ -369,12 +421,29 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("pip_config_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PIP_FIND_LINKS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("pip_trusted_host")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("pip_pypi_url")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_EXTRA_INDEX_URL")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_INDEX")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_INDEX_URL")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("uv_default_index")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_EXTRA_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_HOST")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("docker_context")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("NODE_EXTRA_CA_CERTS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("ssl_cert_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("REQUESTS_CA_BUNDLE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("curl_ca_bundle")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("LIBRARY_PATH")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("c_include_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GOPROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("gonosumdb")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GOPRIVATE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("goenv")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PYTHONUSERBASE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("virtual_env")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CLASSPATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("classpath")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GOFLAGS")).toBe(true);
@@ -404,27 +473,79 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         PIP_INDEX_URL: "https://example.invalid/simple",
         PIP_PYPI_URL: "https://example.invalid/simple",
         PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+        PIP_FIND_LINKS: "https://example.invalid/wheels",
+        PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
         UV_INDEX_URL: "https://example.invalid/simple",
         UV_DEFAULT_INDEX: "https://example.invalid/simple",
         UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        DOCKER_HOST: "tcp://example.invalid:2376",
+        DOCKER_TLS_VERIFY: "1",
+        DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
+        DOCKER_CONTEXT: "evil-remote",
+        LIBRARY_PATH: "/tmp/evil-lib",
+        CPATH: "/tmp/evil-headers",
+        C_INCLUDE_PATH: "/tmp/evil-c-headers",
+        CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
+        OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
+        NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
+        SSL_CERT_FILE: "/tmp/evil-cert.pem",
+        SSL_CERT_DIR: "/tmp/evil-cert-dir",
+        REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
+        CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GOPROXY: "https://example.invalid/proxy",
+        GONOSUMCHECK: "example.invalid/*",
+        GONOSUMDB: "example.invalid/*",
+        GONOPROXY: "example.invalid/*",
+        GOPRIVATE: "example.invalid/*",
+        GOENV: "/tmp/evil-goenv",
+        GOPATH: "/tmp/evil-go",
+        PYTHONUSERBASE: "/tmp/evil-python-userbase",
+        VIRTUAL_ENV: "/tmp/evil-venv",
         SAFE_KEY: "ok",
         "BAD-KEY": "bad",
       },
     });
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "C_INCLUDE_PATH",
       "CLASSPATH",
       "CMAKE_C_COMPILER",
+      "CPATH",
+      "CPLUS_INCLUDE_PATH",
+      "CURL_CA_BUNDLE",
       "CXX",
+      "DOCKER_CERT_PATH",
+      "DOCKER_CONTEXT",
+      "DOCKER_HOST",
+      "DOCKER_TLS_VERIFY",
+      "GOENV",
+      "GONOPROXY",
+      "GONOSUMCHECK",
+      "GONOSUMDB",
+      "GOPATH",
+      "GOPRIVATE",
+      "GOPROXY",
+      "LIBRARY_PATH",
+      "NODE_EXTRA_CA_CERTS",
+      "OBJC_INCLUDE_PATH",
       "PATH",
+      "PIP_CONFIG_FILE",
       "PIP_EXTRA_INDEX_URL",
+      "PIP_FIND_LINKS",
       "PIP_INDEX_URL",
       "PIP_PYPI_URL",
+      "PIP_TRUSTED_HOST",
+      "PYTHONUSERBASE",
+      "REQUESTS_CA_BUNDLE",
+      "SSL_CERT_DIR",
+      "SSL_CERT_FILE",
       "UV_DEFAULT_INDEX",
       "UV_EXTRA_INDEX_URL",
       "UV_INDEX",
       "UV_INDEX_URL",
+      "VIRTUAL_ENV",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env.SAFE_KEY).toBe("ok");
@@ -435,10 +556,36 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.PIP_INDEX_URL).toBeUndefined();
     expect(result.env.PIP_PYPI_URL).toBeUndefined();
     expect(result.env.PIP_EXTRA_INDEX_URL).toBeUndefined();
+    expect(result.env.PIP_CONFIG_FILE).toBeUndefined();
+    expect(result.env.PIP_FIND_LINKS).toBeUndefined();
+    expect(result.env.PIP_TRUSTED_HOST).toBeUndefined();
     expect(result.env.UV_INDEX).toBeUndefined();
     expect(result.env.UV_INDEX_URL).toBeUndefined();
     expect(result.env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(result.env.UV_EXTRA_INDEX_URL).toBeUndefined();
+    expect(result.env.DOCKER_HOST).toBeUndefined();
+    expect(result.env.DOCKER_TLS_VERIFY).toBeUndefined();
+    expect(result.env.DOCKER_CERT_PATH).toBeUndefined();
+    expect(result.env.DOCKER_CONTEXT).toBeUndefined();
+    expect(result.env.LIBRARY_PATH).toBeUndefined();
+    expect(result.env.CPATH).toBeUndefined();
+    expect(result.env.C_INCLUDE_PATH).toBeUndefined();
+    expect(result.env.CPLUS_INCLUDE_PATH).toBeUndefined();
+    expect(result.env.OBJC_INCLUDE_PATH).toBeUndefined();
+    expect(result.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(result.env.SSL_CERT_FILE).toBeUndefined();
+    expect(result.env.SSL_CERT_DIR).toBeUndefined();
+    expect(result.env.REQUESTS_CA_BUNDLE).toBeUndefined();
+    expect(result.env.CURL_CA_BUNDLE).toBeUndefined();
+    expect(result.env.GOPROXY).toBeUndefined();
+    expect(result.env.GONOSUMCHECK).toBeUndefined();
+    expect(result.env.GONOSUMDB).toBeUndefined();
+    expect(result.env.GONOPROXY).toBeUndefined();
+    expect(result.env.GOPRIVATE).toBeUndefined();
+    expect(result.env.GOENV).toBeUndefined();
+    expect(result.env.GOPATH).toBeUndefined();
+    expect(result.env.PYTHONUSERBASE).toBeUndefined();
+    expect(result.env.VIRTUAL_ENV).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
