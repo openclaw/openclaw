@@ -120,6 +120,33 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         )
     }
 
+    @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() {
+        let config = GatewayConnectConfig(
+            url: URL(string: "wss://gateway.example")!,
+            stableID: "test-gateway",
+            tls: nil,
+            token: nil,
+            bootstrapToken: "spent-bootstrap-token",
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil))
+
+        let cleared = NodeAppModel.clearingBootstrapToken(in: config)
+        #expect(cleared?.bootstrapToken == nil)
+        #expect(cleared?.url == config.url)
+        #expect(cleared?.stableID == config.stableID)
+        #expect(cleared?.token == config.token)
+        #expect(cleared?.password == config.password)
+        #expect(cleared?.nodeOptions.role == config.nodeOptions.role)
+    }
+
     @Test @MainActor func handleInvokeRejectsBackgroundCommands() async {
         let appModel = NodeAppModel()
         appModel.setScenePhase(.background)

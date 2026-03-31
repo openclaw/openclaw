@@ -1821,6 +1821,21 @@ private extension NodeAppModel {
         return hasStoredOperatorToken
     }
 
+    static func clearingBootstrapToken(in config: GatewayConnectConfig?) -> GatewayConnectConfig? {
+        guard let config else { return nil }
+        let trimmedBootstrapToken = config.bootstrapToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedBootstrapToken.isEmpty else { return config }
+        return GatewayConnectConfig(
+            url: config.url,
+            stableID: config.stableID,
+            tls: config.tls,
+            token: config.token,
+            bootstrapToken: nil,
+            password: config.password,
+            nodeOptions: config.nodeOptions)
+    }
+
     func currentGatewayReconnectAuth(
         role: String,
         fallbackToken: String?,
@@ -1849,6 +1864,10 @@ private extension NodeAppModel {
     }
 
     func clearPersistedGatewayBootstrapTokenIfNeeded() {
+        // Always drop the in-memory bootstrap token after the first successful
+        // bootstrap connect so reconnect loops cannot reuse a spent token.
+        self.activeGatewayConnectConfig = Self.clearingBootstrapToken(in: self.activeGatewayConnectConfig)
+
         let trimmedInstanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedInstanceId.isEmpty else { return }
@@ -1857,18 +1876,6 @@ private extension NodeAppModel {
         else { return }
 
         GatewaySettingsStore.clearGatewayBootstrapToken(instanceId: trimmedInstanceId)
-        if let cfg = self.activeGatewayConnectConfig,
-           cfg.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        {
-            self.activeGatewayConnectConfig = GatewayConnectConfig(
-                url: cfg.url,
-                stableID: cfg.stableID,
-                tls: cfg.tls,
-                token: cfg.token,
-                bootstrapToken: nil,
-                password: cfg.password,
-                nodeOptions: cfg.nodeOptions)
-        }
     }
 
     func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
