@@ -3,6 +3,9 @@ import { bundledPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
+  deps?: {
+    neverBundle?: string[];
+  };
   entry?: Record<string, string> | string[];
   outDir?: string;
 };
@@ -68,5 +71,12 @@ describe("tsdown config", () => {
           : false,
       ),
     ).toBe(false);
+  });
+
+  it("externalizes staged bundled plugin runtime dependencies", () => {
+    const configs = asConfigArray(tsdownConfig);
+    const unifiedGraph = configs.find((config) => entryKeys(config).includes("index"));
+
+    expect(unifiedGraph?.deps?.neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
   });
 });

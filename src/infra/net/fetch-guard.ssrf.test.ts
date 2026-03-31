@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "./fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  GUARDED_FETCH_MODE,
+  retainSafeHeadersForCrossOriginRedirectHeaders,
+} from "./fetch-guard.js";
 
 function redirectResponse(location: string): Response {
   return new Response(null, {
@@ -242,6 +246,20 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("keeps the exported redirect-header helper functional", () => {
+    const headers = retainSafeHeadersForCrossOriginRedirectHeaders({
+      Authorization: "Bearer secret",
+      Cookie: "session=abc",
+      Accept: "application/json",
+      "User-Agent": "OpenClaw-Test/1.0",
+    });
+
+    expect(headers).toEqual({
+      accept: "application/json",
+      "user-agent": "OpenClaw-Test/1.0",
+    });
+  });
+
   it("keeps headers when redirect stays on same origin", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
@@ -334,54 +352,11 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("routes through env proxy in strict mode via pinned env-proxy dispatcher", async () => {
+  it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {
     await runProxyModeDispatcherTest({
       mode: GUARDED_FETCH_MODE.STRICT,
-      expectEnvProxy: true,
+      expectEnvProxy: false,
     });
-  });
-
-  it("keeps allowed hostnames on the direct pinned path when env proxy is configured", async () => {
-    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
-    const lookupFn = createPublicLookup();
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
-      expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
-      return okResponse();
-    });
-
-    const result = await fetchWithSsrFGuard({
-      url: "https://operator.example/resource",
-      fetchImpl,
-      lookupFn,
-      policy: { allowedHostnames: ["operator.example"] },
-      mode: GUARDED_FETCH_MODE.STRICT,
-    });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    await result.release();
-  });
-
-  it("still uses env proxy when allowed hostnames do not match the target", async () => {
-    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
-    const lookupFn = createPublicLookup();
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
-      return okResponse();
-    });
-
-    const result = await fetchWithSsrFGuard({
-      url: "https://public.example/resource",
-      fetchImpl,
-      lookupFn,
-      policy: { allowedHostnames: ["operator.example"] },
-      mode: GUARDED_FETCH_MODE.STRICT,
-    });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    await result.release();
   });
 
   it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {

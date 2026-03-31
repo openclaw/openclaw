@@ -1,22 +1,97 @@
 #!/usr/bin/env node
-// Runs after `npm i -g` to install runtime deps for bundled extensions
-// that cannot be pre-bundled (e.g. platform-specific binaries like acpx).
-// All other extension deps are already bundled into dist/ JS files.
+// Runs after `npm i -g` to restore bundled extension runtime deps.
+// Installed builds can lazy-load bundled plugin code through root dist chunks,
+// so runtime dependencies declared in dist/extensions/*/package.json must also
+// resolve from the package root node_modules after a global install.
 // This script is a no-op outside of a global npm install context.
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const BUNDLED_PLUGIN_INSTALL_TARGETS = [
-  {
-    pluginId: "acpx",
-    sentinelPath: join("node_modules", "acpx", "package.json"),
-  },
-];
+export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
+const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
+
+function readJson(filePath) {
+  return JSON.parse(readFileSync(filePath, "utf8"));
+}
+
+function dependencySentinelPath(depName) {
+  return join("node_modules", ...depName.split("/"), "package.json");
+}
+
+function collectRuntimeDeps(packageJson) {
+  return {
+    ...packageJson.dependencies,
+    ...packageJson.optionalDependencies,
+  };
+}
+
+export function discoverBundledPluginRuntimeDeps(params = {}) {
+  const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
+  const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
+  const readJsonFile = params.readJson ?? readJson;
+  const deps = new Map(
+    BUNDLED_PLUGIN_INSTALL_TARGETS.map((target) => [
+      target.name,
+      {
+        name: target.name,
+        version: target.version,
+        sentinelPath: dependencySentinelPath(target.name),
+        pluginIds: [...(target.pluginIds ?? [])],
+      },
+    ]),
+  );
+
+  if (!pathExists(extensionsDir)) {
+    return [...deps.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  }
+
+  for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const pluginId = entry.name;
+    const packageJsonPath = join(extensionsDir, pluginId, "package.json");
+    if (!pathExists(packageJsonPath)) {
+      continue;
+    }
+    try {
+      const packageJson = readJsonFile(packageJsonPath);
+      for (const [name, version] of Object.entries(collectRuntimeDeps(packageJson))) {
+        const existing = deps.get(name);
+        if (existing) {
+          if (existing.version !== version) {
+            continue;
+          }
+          if (!existing.pluginIds.includes(pluginId)) {
+            existing.pluginIds.push(pluginId);
+          }
+          continue;
+        }
+        deps.set(name, {
+          name,
+          version,
+          sentinelPath: dependencySentinelPath(name),
+          pluginIds: [pluginId],
+        });
+      }
+    } catch {
+      // Ignore malformed plugin manifests; runtime will surface those separately.
+    }
+  }
+
+  return [...deps.values()]
+    .map((dep) => ({
+      ...dep,
+      pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
+    }))
+    .toSorted((a, b) => a.name.localeCompare(b.name));
+}
 
 export function createNestedNpmInstallEnv(env = process.env) {
   const nextEnv = { ...env };
@@ -31,29 +106,31 @@ export function runBundledPluginPostinstall(params = {}) {
     return;
   }
   const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const exec = params.execSync ?? execSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
+  const runtimeDeps =
+    params.runtimeDeps ??
+    discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
+  const missingSpecs = runtimeDeps
+    .filter((dep) => !pathExists(join(packageRoot, dep.sentinelPath)))
+    .map((dep) => `${dep.name}@${dep.version}`);
 
-  for (const target of BUNDLED_PLUGIN_INSTALL_TARGETS) {
-    const extDir = join(extensionsDir, target.pluginId);
-    if (!pathExists(join(extDir, "package.json"))) {
-      continue;
-    }
-    if (pathExists(join(extDir, target.sentinelPath))) {
-      continue;
-    }
-    try {
-      exec("npm install --omit=dev --no-save --package-lock=false", {
-        cwd: extDir,
-        env: createNestedNpmInstallEnv(env),
-        stdio: "pipe",
-      });
-      log.log(`[postinstall] installed bundled plugin deps: ${target.pluginId}`);
-    } catch (e) {
-      // Non-fatal: gateway will surface the missing dep via doctor.
-      log.warn(`[postinstall] could not install deps for ${target.pluginId}: ${String(e)}`);
-    }
+  if (missingSpecs.length === 0) {
+    return;
+  }
+
+  try {
+    exec(`npm install --omit=dev --no-save --package-lock=false ${missingSpecs.join(" ")}`, {
+      cwd: packageRoot,
+      env: createNestedNpmInstallEnv(env),
+      stdio: "pipe",
+    });
+    log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
+  } catch (e) {
+    // Non-fatal: gateway will surface the missing dep via doctor.
+    log.warn(`[postinstall] could not install bundled plugin deps: ${String(e)}`);
   }
 }
 

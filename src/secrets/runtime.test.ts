@@ -348,6 +348,39 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.config.channels?.matrix?.accessToken).toBe("default-matrix-token");
   });
 
+  it("can skip auth-profile SecretRef resolution when includeAuthStoreRefs is false", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    const loadAuthStore = () =>
+      loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+        },
+      });
+
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({}),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore,
+      }),
+    ).rejects.toThrow(`Environment variable "${missingEnvVar}" is missing or empty.`);
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: {},
+      includeAuthStoreRefs: false,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore,
+    });
+
+    expect(snapshot.authStores).toEqual([]);
+  });
+
   it("ignores Matrix password refs that are shadowed by scoped env access tokens", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -724,8 +757,16 @@ describe("secrets runtime snapshot", () => {
               enabled: true,
               provider: "brave",
               apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
-              grok: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_GROK_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "MISSING_GROK_API_KEY" },
+                },
               },
             },
           },
@@ -739,7 +780,10 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.grok?.apiKey).toEqual({
+    const xaiWebSearchConfig = snapshot.config.plugins?.entries?.xai?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(xaiWebSearchConfig?.webSearch?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_GROK_API_KEY",
@@ -762,8 +806,20 @@ describe("secrets runtime snapshot", () => {
             search: {
               enabled: true,
               apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
               },
             },
           },
@@ -778,7 +834,10 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+    const googleWebSearchConfig = snapshot.config.plugins?.entries?.google?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(googleWebSearchConfig?.webSearch?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "WEB_SEARCH_GEMINI_API_KEY",
@@ -802,9 +861,21 @@ describe("secrets runtime snapshot", () => {
             search: {
               enabled: true,
               provider: "gemini",
-              gemini: {
-                enabled: false,
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  enabled: false,
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
               },
             },
           },
@@ -816,8 +887,10 @@ describe("secrets runtime snapshot", () => {
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
+    const resolvedGoogleWebSearchConfig = snapshot.config.plugins?.entries?.google?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(resolvedGoogleWebSearchConfig?.webSearch?.apiKey).toBe("web-search-gemini-ref");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "plugins.entries.google.config.webSearch.apiKey",
     );
@@ -832,11 +905,19 @@ describe("secrets runtime snapshot", () => {
               search: {
                 enabled: true,
                 provider: "gemini",
-                gemini: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+                    },
                   },
                 },
               },
@@ -857,8 +938,20 @@ describe("secrets runtime snapshot", () => {
           web: {
             search: {
               provider: "gemini",
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
               },
             },
           },
@@ -1021,11 +1114,19 @@ describe("secrets runtime snapshot", () => {
           search: {
             enabled: false,
             apiKey: { source: "env", provider: "default", id: "DISABLED_WEB_SEARCH_API_KEY" },
-            gemini: {
-              apiKey: {
-                source: "env",
-                provider: "default",
-                id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          google: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+                },
               },
             },
           },
@@ -1049,7 +1150,7 @@ describe("secrets runtime snapshot", () => {
       snapshot.warnings.filter(
         (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
       ),
-    ).toHaveLength(10);
+    ).toHaveLength(6);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",

@@ -1,8 +1,8 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { normalizeHostname } from "./hostname.js";
-import { hasEnvHttpProxyConfigured, hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -56,21 +56,6 @@ type GuardedFetchPresetOptions = Omit<
 >;
 
 const DEFAULT_MAX_REDIRECTS = 3;
-const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([
-  "accept",
-  "accept-encoding",
-  "accept-language",
-  "cache-control",
-  "content-language",
-  "content-type",
-  "if-match",
-  "if-modified-since",
-  "if-none-match",
-  "if-unmodified-since",
-  "pragma",
-  "range",
-  "user-agent",
-]);
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -90,18 +75,6 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
     return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
   }
   return GUARDED_FETCH_MODE.STRICT;
-}
-
-function keepsTrustedHostOnDirectPath(hostname: string, policy?: SsrFPolicy): boolean {
-  const normalizedHostname = normalizeHostname(hostname);
-  return (
-    policy?.allowPrivateNetwork === true ||
-    policy?.dangerouslyAllowPrivateNetwork === true ||
-    (normalizedHostname !== "" &&
-      (policy?.allowedHostnames ?? []).some(
-        (allowedHostname) => normalizeHostname(allowedHostname) === normalizedHostname,
-      ))
-  );
 }
 
 function assertExplicitProxySupportsPinnedDns(
@@ -124,18 +97,17 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
+export function retainSafeHeadersForCrossOriginRedirectHeaders(
+  headers?: HeadersInit,
+): Record<string, string> | undefined {
+  return retainSafeRedirectHeaders(headers);
+}
+
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
   if (!init?.headers) {
     return init;
   }
-  const incoming = new Headers(init.headers);
-  const headers = new Headers();
-  for (const [key, value] of incoming.entries()) {
-    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key.toLowerCase())) {
-      headers.set(key, value);
-    }
-  }
-  return { ...init, headers };
+  return { ...init, headers: retainSafeRedirectHeaders(init.headers) };
 }
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
@@ -196,15 +168,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        const protocol = parsedUrl.protocol === "http:" ? "http" : "https";
-        const useEnvProxy =
-          hasEnvHttpProxyConfigured(protocol) &&
-          !params.dispatcherPolicy?.mode &&
-          !keepsTrustedHostOnDirectPath(parsedUrl.hostname, params.policy);
-        const dispatcherPolicy: PinnedDispatcherPolicy | undefined = useEnvProxy
-          ? Object.assign({}, params.dispatcherPolicy, { mode: "env-proxy" as const })
-          : params.dispatcherPolicy;
-        dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, params.policy);
+        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
