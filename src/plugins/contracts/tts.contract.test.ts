@@ -848,9 +848,11 @@ describe("tts", () => {
       if (result.success) {
         throw new Error("expected synthesis failure");
       }
-      expect(result.error).toBe("TTS conversion failed: openai: provider failed");
-      expect(result.error).not.toContain("TTS conversion failed: TTS conversion failed:");
-      expect(result.error.match(/TTS conversion failed:/g)).toHaveLength(1);
+      expect(result.error).toBeDefined();
+      const errorMessage = result.error ?? "";
+      expect(errorMessage).toBe("TTS conversion failed: openai: provider failed");
+      expect(errorMessage).not.toContain("TTS conversion failed: TTS conversion failed:");
+      expect(errorMessage.match(/TTS conversion failed:/g)).toHaveLength(1);
     });
   });
 
