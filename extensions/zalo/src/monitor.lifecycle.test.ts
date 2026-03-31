@@ -29,10 +29,6 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-async function waitForPollingLoopStart(): Promise<void> {
-  await vi.waitFor(() => expect(getUpdatesMock).toHaveBeenCalledTimes(1));
-}
-
 const TEST_ACCOUNT = {
   accountId: "default",
   config: {},
@@ -74,7 +70,7 @@ describe("monitorZaloProvider lifecycle", () => {
       settled = true;
     });
 
-    await waitForPollingLoopStart();
+    await vi.waitFor(() => expect(getUpdatesMock).toHaveBeenCalledTimes(1));
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();
@@ -98,7 +94,7 @@ describe("monitorZaloProvider lifecycle", () => {
 
     const { abort, runtime, run } = await startLifecycleMonitor();
 
-    await waitForPollingLoopStart();
+    await vi.waitFor(() => expect(getUpdatesMock).toHaveBeenCalledTimes(1));
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
@@ -116,7 +112,7 @@ describe("monitorZaloProvider lifecycle", () => {
 
     const { abort, runtime, run } = await startLifecycleMonitor();
 
-    await waitForPollingLoopStart();
+    await vi.waitFor(() => expect(getUpdatesMock).toHaveBeenCalledTimes(1));
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();

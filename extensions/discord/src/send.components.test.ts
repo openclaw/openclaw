@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
@@ -26,14 +26,16 @@ let sendDiscordComponentMessage: typeof import("./send.components.js").sendDisco
 describe("sendDiscordComponentMessage", () => {
   let registerMock: ReturnType<typeof vi.mocked<typeof registerDiscordComponentEntries>>;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
     ({
       editDiscordComponentMessage,
       registerBuiltDiscordComponentMessage,
       sendDiscordComponentMessage,
     } = await import("./send.components.js"));
+  });
+
+  beforeEach(() => {
     registerMock = vi.mocked(registerDiscordComponentEntries);
     vi.clearAllMocks();
   });

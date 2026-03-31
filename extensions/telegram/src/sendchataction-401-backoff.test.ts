@@ -17,7 +17,6 @@ let createTelegramSendChatActionHandler: typeof import("./sendchataction-401-bac
 
 describe("createTelegramSendChatActionHandler", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ createTelegramSendChatActionHandler } = await import("./sendchataction-401-backoff.js"));
   });
 

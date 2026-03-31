@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listEnabledGoogleChatAccounts = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
@@ -31,10 +31,18 @@ vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace,
 }));
 
-describe("googlechat message actions", () => {
-  it("describes send and reaction actions only when enabled accounts exist", async () => {
-    const { googlechatMessageActions } = await import("./actions.js");
+let googlechatMessageActions: typeof import("./actions.js").googlechatMessageActions;
 
+describe("googlechat message actions", () => {
+  beforeAll(async () => {
+    ({ googlechatMessageActions } = await import("./actions.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("describes send and reaction actions only when enabled accounts exist", async () => {
     listEnabledGoogleChatAccounts.mockReturnValueOnce([]);
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
 
@@ -52,8 +60,6 @@ describe("googlechat message actions", () => {
   });
 
   it("sends messages with uploaded media through the resolved space", async () => {
-    const { googlechatMessageActions } = await import("./actions.js");
-
     resolveGoogleChatAccount.mockReturnValue({
       credentialSource: "service-account",
       config: { mediaMaxMb: 5 },
@@ -119,8 +125,6 @@ describe("googlechat message actions", () => {
   });
 
   it("routes upload-file through the same attachment upload path with filename override", async () => {
-    const { googlechatMessageActions } = await import("./actions.js");
-
     resolveGoogleChatAccount.mockReturnValue({
       credentialSource: "service-account",
       config: { mediaMaxMb: 5 },
@@ -190,8 +194,6 @@ describe("googlechat message actions", () => {
   });
 
   it("removes only matching app reactions on react remove", async () => {
-    const { googlechatMessageActions } = await import("./actions.js");
-
     resolveGoogleChatAccount.mockReturnValue({
       credentialSource: "service-account",
       config: { botUser: "users/app-bot" },

@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -46,10 +45,22 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
-setMatrixRuntime(runtimeStub);
-const { sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } =
-  await import("./send.js");
-const { voteMatrixPoll } = await import("./actions/polls.js");
+let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
+let sendSingleTextMessageMatrix: typeof import("./send.js").sendSingleTextMessageMatrix;
+let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
+let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
+let setMatrixRuntime: typeof import("../runtime.js").setMatrixRuntime;
+
+async function primeMatrixSendModules() {
+  ({ setMatrixRuntime } = await import("../runtime.js"));
+  ({ sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } =
+    await import("./send.js"));
+  ({ voteMatrixPoll } = await import("./actions/polls.js"));
+}
+
+function applyMatrixSendRuntimeStub() {
+  setMatrixRuntime(runtimeStub);
+}
 
 function createEncryptedMediaPayload() {
   return {
@@ -113,10 +124,15 @@ function resetMatrixSendRuntimeMocks() {
   resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
   resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
   convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
+  applyMatrixSendRuntimeStub();
 }
 
 describe("sendMessageMatrix media", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    await primeMatrixSendModules();
+  });
+
+  beforeEach(async () => {
     resetMatrixSendRuntimeMocks();
   });
 
@@ -416,7 +432,11 @@ describe("sendSingleTextMessageMatrix", () => {
 });
 
 describe("voteMatrixPoll", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    await primeMatrixSendModules();
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     resetMatrixSendRuntimeMocks();
   });
@@ -554,7 +574,11 @@ describe("voteMatrixPoll", () => {
 });
 
 describe("sendTypingMatrix", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    await primeMatrixSendModules();
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     resetMatrixSendRuntimeMocks();
   });

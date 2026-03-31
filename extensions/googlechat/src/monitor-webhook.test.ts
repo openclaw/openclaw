@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -19,6 +19,7 @@ vi.mock("./auth.js", () => ({
 }));
 
 type ProcessEventFn = (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
+let createGoogleChatWebhookRequestHandler: typeof import("./monitor-webhook.js").createGoogleChatWebhookRequestHandler;
 
 function createRequest(authorization?: string): IncomingMessage {
   return {
@@ -76,7 +77,6 @@ async function runWebhookHandler(options?: {
 }) {
   const processEvent: ProcessEventFn =
     options?.processEvent ?? (vi.fn(async () => {}) as ProcessEventFn);
-  const { createGoogleChatWebhookRequestHandler } = await import("./monitor-webhook.js");
   const handler = createGoogleChatWebhookRequestHandler({
     webhookTargets: new Map(),
     webhookInFlightLimiter: {} as never,
@@ -89,6 +89,14 @@ async function runWebhookHandler(options?: {
 }
 
 describe("googlechat monitor webhook", () => {
+  beforeAll(async () => {
+    ({ createGoogleChatWebhookRequestHandler } = await import("./monitor-webhook.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {
     installSimplePipeline([
       {

@@ -1,11 +1,7 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
-import { useFrozenTime, useRealTime } from "../../../test/helpers/plugins/frozen-time.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
   answerCallbackQuerySpy,
@@ -15,6 +11,7 @@ const {
   getLoadWebMediaMock,
   getChatSpy,
   getLoadConfigMock,
+  getLoadSessionStoreMock,
   getOnHandler,
   getReadChannelAllowFromStoreMock,
   getUpsertChannelPairingRequestMock,
@@ -27,6 +24,7 @@ const {
   sendMessageSpy,
   sendPhotoSpy,
   sequentializeSpy,
+  setSessionStoreEntriesForTest,
   setMessageReactionSpy,
   setMyCommandsSpy,
   telegramBotDepsForTest,
@@ -45,6 +43,7 @@ let createTelegramBot: (
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
 
 const loadConfig = getLoadConfigMock();
+const loadSessionStore = getLoadSessionStoreMock();
 const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
@@ -54,30 +53,6 @@ const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
-
-async function withIsolatedStateDirAsync<T>(fn: () => Promise<T>): Promise<T> {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-state-"));
-  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    try {
-      return await fn();
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-}
-
-async function withConfigPathAsync<T>(cfg: unknown, fn: () => Promise<T>): Promise<T> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-cfg-"));
-  const configPath = path.join(dir, "openclaw.json");
-  fs.writeFileSync(configPath, JSON.stringify(cfg), "utf-8");
-  return await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-    try {
-      return await fn();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-}
 
 describe("createTelegramBot", () => {
   beforeAll(() => {
@@ -488,174 +463,216 @@ describe("createTelegramBot", () => {
       },
     ] as const;
 
-    await withIsolatedStateDirAsync(async () => {
-      for (const [index, testCase] of cases.entries()) {
-        onSpy.mockClear();
-        sendMessageSpy.mockClear();
-        replySpy.mockClear();
-        loadConfig.mockReturnValue({
-          channels: { telegram: { dmPolicy: "pairing" } },
-        });
-        readChannelAllowFromStore.mockResolvedValue([]);
-        upsertChannelPairingRequest.mockClear();
-        let pairingUpsertCall = 0;
-        upsertChannelPairingRequest.mockImplementation(async () => {
-          const result =
-            testCase.pairingUpsertResults[
-              Math.min(pairingUpsertCall, testCase.pairingUpsertResults.length - 1)
-            ];
-          pairingUpsertCall += 1;
-          return result;
-        });
-
-        createTelegramBot({ token: "tok" });
-        const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-        const senderId = Number(`${Date.now()}${index}`.slice(-9));
-        for (const text of testCase.messages) {
-          await handler({
-            message: {
-              chat: { id: 1234, type: "private" },
-              text,
-              date: 1736380800,
-              from: { id: senderId, username: "random" },
-            },
-            me: { username: "openclaw_bot" },
-            getFile: async () => ({ download: async () => new Uint8Array() }),
-          });
-        }
-
-        expect(replySpy, testCase.name).not.toHaveBeenCalled();
-        expect(sendMessageSpy, testCase.name).toHaveBeenCalledTimes(testCase.expectedSendCount);
-        expect(sendMessageSpy.mock.calls[0]?.[0], testCase.name).toBe(1234);
-        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-        expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
-        expect(pairingText, testCase.name).toContain("Pairing code:");
-        expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
-        expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
-          expect.objectContaining({ parse_mode: "HTML" }),
-        );
-      }
-    });
-  });
-
-  it("ignores private self-authored message updates instead of issuing a pairing challenge", async () => {
-    await withIsolatedStateDirAsync(async () => {
+    for (const [index, testCase] of cases.entries()) {
+      onSpy.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
       loadConfig.mockReturnValue({
         channels: { telegram: { dmPolicy: "pairing" } },
       });
       readChannelAllowFromStore.mockResolvedValue([]);
       upsertChannelPairingRequest.mockClear();
-      sendMessageSpy.mockClear();
-      replySpy.mockClear();
+      let pairingUpsertCall = 0;
+      upsertChannelPairingRequest.mockImplementation(async () => {
+        const result =
+          testCase.pairingUpsertResults[
+            Math.min(pairingUpsertCall, testCase.pairingUpsertResults.length - 1)
+          ];
+        pairingUpsertCall += 1;
+        return result;
+      });
 
       createTelegramBot({ token: "tok" });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: 1234, type: "private", first_name: "Harold" },
-          message_id: 1884,
-          date: 1736380800,
-          from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-          pinned_message: {
-            message_id: 1883,
-            date: 1736380799,
-            chat: { id: 1234, type: "private", first_name: "Harold" },
-            from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-            text: "Binding: Review pull request 54118 (openclaw)",
-          },
-        },
-        me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
-
-      expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
-      expect(sendMessageSpy).not.toHaveBeenCalled();
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("ignores group self-authored message updates instead of re-processing bot output", async () => {
-    await withIsolatedStateDirAsync(async () => {
-      loadConfig.mockReturnValue({
-        channels: { telegram: { dmPolicy: "pairing" } },
-      });
-      readChannelAllowFromStore.mockResolvedValue([]);
-      upsertChannelPairingRequest.mockClear();
-      sendMessageSpy.mockClear();
-      replySpy.mockClear();
-
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
-          message_id: 1884,
-          date: 1736380800,
-          from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-          text: "approval card update",
-        },
-        me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
-
-      expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
-      expect(sendMessageSpy).not.toHaveBeenCalled();
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
-    await withIsolatedStateDirAsync(async () => {
-      loadConfig.mockReturnValue({
-        channels: { telegram: { dmPolicy: "pairing" } },
-      });
-      readChannelAllowFromStore.mockResolvedValue([]);
-      upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
-      sendMessageSpy.mockClear();
-      replySpy.mockClear();
-      const senderId = Number(`${Date.now()}01`.slice(-9));
-
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-        async () =>
-          new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
-            status: 200,
-            headers: { "content-type": "image/jpeg" },
-          }),
-      );
-      const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
-
-      try {
-        createTelegramBot({ token: "tok" });
-        const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
+      const senderId = Number(`${Date.now()}${index}`.slice(-9));
+      for (const text of testCase.messages) {
         await handler({
           message: {
             chat: { id: 1234, type: "private" },
-            message_id: 410,
+            text,
             date: 1736380800,
-            photo: [{ file_id: "p1" }],
             from: { id: senderId, username: "random" },
           },
           me: { username: "openclaw_bot" },
-          getFile: getFileSpy,
+          getFile: async () => ({ download: async () => new Uint8Array() }),
         });
-
-        expect(getFileSpy).not.toHaveBeenCalled();
-        expect(fetchSpy).not.toHaveBeenCalled();
-        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-        expect(pairingText).toContain("Pairing code:");
-        expect(pairingText).toContain("<pre><code>");
-        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
-          expect.objectContaining({ parse_mode: "HTML" }),
-        );
-        expect(replySpy).not.toHaveBeenCalled();
-      } finally {
-        fetchSpy.mockRestore();
       }
+
+      expect(replySpy, testCase.name).not.toHaveBeenCalled();
+      expect(sendMessageSpy, testCase.name).toHaveBeenCalledTimes(testCase.expectedSendCount);
+      expect(sendMessageSpy.mock.calls[0]?.[0], testCase.name).toBe(1234);
+      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+      expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
+      expect(pairingText, testCase.name).toContain("Pairing code:");
+      expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
+      expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+    }
+  });
+
+  it("ignores private self-authored message updates instead of issuing a pairing challenge", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
     });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private", first_name: "Harold" },
+        message_id: 1884,
+        date: 1736380800,
+        from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+        pinned_message: {
+          message_id: 1883,
+          date: 1736380799,
+          chat: { id: 1234, type: "private", first_name: "Harold" },
+          from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+          text: "Binding: Review pull request 54118 (openclaw)",
+        },
+      },
+      me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const senderId = Number(`${Date.now()}01`.slice(-9));
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 410,
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: senderId, username: "random" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getFileSpy,
+      });
+
+      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+      expect(pairingText).toContain("Pairing code:");
+      expect(pairingText).toContain("<pre><code>");
+      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("ignores group self-authored message updates instead of re-processing bot output", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
+        message_id: 1884,
+        date: 1736380800,
+        from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+        text: "approval card update",
+      },
+      me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const senderId = Number(`${Date.now()}01`.slice(-9));
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 411,
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: senderId, username: "random" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getFileSpy,
+      });
+
+      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+      expect(pairingText).toContain("Pairing code:");
+      expect(pairingText).toContain("<pre><code>");
+      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
@@ -698,56 +715,54 @@ describe("createTelegramBot", () => {
     }
   });
   it("blocks unauthorized DM media groups before any photo download", async () => {
-    await withIsolatedStateDirAsync(async () => {
-      loadConfig.mockReturnValue({
-        channels: { telegram: { dmPolicy: "pairing" } },
-      });
-      readChannelAllowFromStore.mockResolvedValue([]);
-      upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
-      sendMessageSpy.mockClear();
-      replySpy.mockClear();
-      const senderId = Number(`${Date.now()}02`.slice(-9));
-
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-        async () =>
-          new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
-            status: 200,
-            headers: { "content-type": "image/jpeg" },
-          }),
-      );
-      const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
-
-      try {
-        createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
-        const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-        await handler({
-          message: {
-            chat: { id: 1234, type: "private" },
-            message_id: 412,
-            media_group_id: "dm-album-1",
-            date: 1736380800,
-            photo: [{ file_id: "p1" }],
-            from: { id: senderId, username: "random" },
-          },
-          me: { username: "openclaw_bot" },
-          getFile: getFileSpy,
-        });
-
-        expect(getFileSpy).not.toHaveBeenCalled();
-        expect(fetchSpy).not.toHaveBeenCalled();
-        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-        expect(pairingText).toContain("Pairing code:");
-        expect(pairingText).toContain("<pre><code>");
-        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
-          expect.objectContaining({ parse_mode: "HTML" }),
-        );
-        expect(replySpy).not.toHaveBeenCalled();
-      } finally {
-        fetchSpy.mockRestore();
-      }
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
     });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const senderId = Number(`${Date.now()}02`.slice(-9));
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 412,
+          media_group_id: "dm-album-1",
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: senderId, username: "random" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getFileSpy,
+      });
+
+      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+      expect(pairingText).toContain("Pairing code:");
+      expect(pairingText).toContain("<pre><code>");
+      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
   it("triggers typing cue via onReplyStart", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
@@ -1186,27 +1201,25 @@ describe("createTelegramBot", () => {
     };
     loadConfig.mockReturnValue(config);
 
-    await withConfigPathAsync(config, async () => {
-      createTelegramBot({ token: "tok", accountId: "opie" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    createTelegramBot({ token: "tok", accountId: "opie" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
-      await handler({
-        message: {
-          chat: { id: 123, type: "private" },
-          from: { id: 999, username: "testuser" },
-          text: "hello",
-          date: 1736380800,
-          message_id: 42,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
-
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0];
-      expect(payload.AccountId).toBe("opie");
-      expect(payload.SessionKey).toBe("agent:opie:main");
+    await handler({
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 999, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.AccountId).toBe("opie");
+    expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
   it("reloads DM routing bindings between messages without recreating the bot", async () => {
@@ -1510,28 +1523,26 @@ describe("createTelegramBot", () => {
     ];
 
     for (const testCase of cases) {
-      await withConfigPathAsync(testCase.config, async () => {
-        resetHarnessSpies();
-        loadConfig.mockReturnValue(testCase.config);
-        await dispatchMessage({
-          message: {
-            chat: {
-              id: -1001234567890,
-              type: "supergroup",
-              title: "Forum Group",
-              is_forum: true,
-            },
-            from: { id: 999, username: "testuser" },
-            text: testCase.text,
-            date: 1736380800,
-            message_id: 42,
-            message_thread_id: 99,
+      resetHarnessSpies();
+      loadConfig.mockReturnValue(testCase.config);
+      await dispatchMessage({
+        message: {
+          chat: {
+            id: -1001234567890,
+            type: "supergroup",
+            title: "Forum Group",
+            is_forum: true,
           },
-        });
-        expect(replySpy).toHaveBeenCalledTimes(1);
-        const payload = replySpy.mock.calls[0][0];
-        expect(payload.SessionKey).toContain(testCase.expectedSessionKeyFragment);
+          from: { id: 999, username: "testuser" },
+          text: testCase.text,
+          date: 1736380800,
+          message_id: 42,
+          message_thread_id: 99,
+        },
       });
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.SessionKey).toContain(testCase.expectedSessionKeyFragment);
     }
   });
 
@@ -2273,15 +2284,19 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-"));
-    const storePath = path.join(storeDir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:ops:telegram:group:123": { groupActivation: "always" },
-      }),
-      "utf-8",
-    );
+    const storePath = "/tmp/openclaw-telegram-group-activation.json";
+    const routedGroupEntry = {
+      sessionId: "agent:ops:telegram:group:123",
+      updatedAt: 0,
+      groupActivation: "always",
+      chatType: "group",
+    } as const;
+    setSessionStoreEntriesForTest({
+      "agent:ops:telegram:group:123": routedGroupEntry,
+    });
+    loadSessionStore.mockImplementation(() => ({
+      "agent:ops:telegram:group:123": routedGroupEntry,
+    }));
     const config = {
       channels: {
         telegram: {
@@ -2302,23 +2317,21 @@ describe("createTelegramBot", () => {
     };
     loadConfig.mockReturnValue(config);
 
-    await withConfigPathAsync(config, async () => {
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
-      await handler({
-        message: {
-          chat: { id: 123, type: "group", title: "Routing" },
-          from: { id: 999, username: "ops" },
-          text: "hello",
-          date: 1736380800,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
-
-      expect(replySpy).toHaveBeenCalledTimes(1);
+    await handler({
+      message: {
+        chat: { id: 123, type: "group", title: "Routing" },
+        from: { id: 999, username: "ops" },
+        text: "hello",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("applies topic skill filters and system prompts", async () => {

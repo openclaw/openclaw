@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import type { DiscordGatewayEvent } from "./gateway-supervisor.js";
@@ -61,8 +61,13 @@ vi.mock("./gateway-registry.js", () => ({
 }));
 
 describe("runDiscordGatewayLifecycle", () => {
+  let runDiscordGatewayLifecycle: typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle;
+
+  beforeAll(async () => {
+    ({ runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     attachDiscordGatewayLoggingMock.mockClear();
     getDiscordGatewayEmitterMock.mockClear();
     waitForDiscordGatewayStopMock.mockClear();
@@ -217,7 +222,6 @@ describe("runDiscordGatewayLifecycle", () => {
   }
 
   it("cleans up thread bindings when exec approvals startup fails", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } = createLifecycleHarness({
       start: async () => {
         throw new Error("startup failed");
@@ -236,7 +240,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("cleans up when gateway wait fails after startup", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
     const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } =
       createLifecycleHarness();
@@ -255,7 +258,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("cleans up after successful gateway wait", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } =
       createLifecycleHarness();
 
@@ -271,7 +273,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("pushes connected status when gateway is already connected at lifecycle start", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { emitter, gateway } = createGatewayHarness();
     gateway.isConnected = true;
     getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -296,7 +297,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("forces a fresh reconnect when startup never reaches READY, then recovers", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const { emitter, gateway } = createGatewayHarness();
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       gateway.connect.mockImplementation((_resume?: boolean) => {
@@ -324,7 +324,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("clears resume state and suppresses socket-driven auto-resume during forced startup reconnects", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const pendingGatewayEvents: DiscordGatewayEvent[] = [];
       const socket = new EventEmitter();
       const { emitter, gateway } = createGatewayHarness({
@@ -388,7 +387,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("waits for forced terminate to close the old socket before reconnecting", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const socket = Object.assign(new EventEmitter(), {
         terminate: vi.fn(() => {
           setTimeout(() => {
@@ -430,7 +428,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("fails closed when forced terminate still does not close the old socket", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const socket = Object.assign(new EventEmitter(), {
         terminate: vi.fn(() => {
           setTimeout(() => {
@@ -476,7 +473,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("does not reconnect after lifecycle shutdown begins during socket drain", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const socket = new EventEmitter();
       const { emitter, gateway } = createGatewayHarness({ ws: socket });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -505,7 +501,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("treats drain timeout as a graceful stop after lifecycle abort", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const socket = new EventEmitter();
       const { emitter, gateway } = createGatewayHarness({ ws: socket });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -540,7 +535,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("fails fast when startup never reaches READY after a forced reconnect", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const { emitter, gateway } = createGatewayHarness();
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } =
@@ -569,7 +563,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("handles queued disallowed intents errors without waiting for gateway events", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, runtimeError, gatewaySupervisor } =
       createLifecycleHarness({
         pendingGatewayEvents: [
@@ -593,7 +586,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("logs queued non-fatal startup gateway errors and continues", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, runtimeError, gatewaySupervisor } =
       createLifecycleHarness({
         pendingGatewayEvents: [createGatewayEvent("other", "transient startup error")],
@@ -614,7 +606,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("throws queued non-disallowed fatal gateway errors", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } = createLifecycleHarness({
       pendingGatewayEvents: [createGatewayEvent("fatal", "Fatal Gateway error: 4000")],
     });
@@ -635,7 +626,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("surfaces fatal startup gateway errors while waiting for READY", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const pendingGatewayEvents: DiscordGatewayEvent[] = [];
       const { emitter, gateway } = createGatewayHarness();
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -674,7 +664,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("retries stalled HELLO with resume before forcing fresh identify", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const { emitter, gateway } = createGatewayHarness({
         state: {
           sessionId: "session-1",
@@ -709,7 +698,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("resets HELLO stall counter after a successful reconnect that drops quickly", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const { emitter, gateway } = createGatewayHarness({
         state: {
           sessionId: "session-2",
@@ -755,7 +743,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("force-stops when reconnect stalls after a close event", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const { emitter, gateway } = createGatewayHarness();
       gateway.isConnected = true;
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -781,7 +768,6 @@ describe("runDiscordGatewayLifecycle", () => {
   it("does not force-stop when reconnect resumes before watchdog timeout", async () => {
     vi.useFakeTimers();
     try {
-      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
       const { emitter, gateway } = createGatewayHarness();
       gateway.isConnected = true;
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
@@ -814,7 +800,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("suppresses reconnect-exhausted already queued before shutdown", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const pendingGatewayEvents: DiscordGatewayEvent[] = [];
     const abortController = new AbortController();
 
@@ -856,7 +841,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("rejects reconnect-exhausted queued before startup when shutdown has not begun", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const pendingGatewayEvents: DiscordGatewayEvent[] = [];
 
     const emitter = new EventEmitter();
@@ -887,7 +871,6 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 
   it("does not push connected: true when abortSignal is already aborted", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();
     const gateway: MockGateway = {
       isConnected: true,
