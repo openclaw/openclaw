@@ -17,7 +17,7 @@ Full Substack article pipeline for the weekly psychedelic therapeutics / conscio
 Template file: `~/Desktop/substack-research-template.json` (canonical spec — read it if you need to re-anchor on structure).
 Drafts saved to: `~/.openclaw/substack-drafts/`
 SiYuan notebook: `OpenBodhi-Substack`
-Divider image: `![](https://hudafilm-media.nbg1.your-objectstorage.com/assets/dividers/paragraph-splitter.png)`
+Divider image: `![](https://YOUR_S3_BUCKET.nbg1.your-objectstorage.com/assets/dividers/paragraph-splitter.png)`
 
 ---
 
@@ -203,7 +203,7 @@ First sentence of every section = a fact, a number, or a direct statement. Never
 
 **Section divider:** Between EVERY major section:
 ```
-![](https://hudafilm-media.nbg1.your-objectstorage.com/assets/dividers/paragraph-splitter.png)
+![](https://YOUR_S3_BUCKET.nbg1.your-objectstorage.com/assets/dividers/paragraph-splitter.png)
 ```
 Never a plain horizontal rule. Never blank lines as a substitute.
 
@@ -358,7 +358,7 @@ Pull recent performance from Plausible analytics.
 python3 -c "
 import subprocess, json, os
 
-PLAUSIBLE_URL = 'https://analytics.huda20.fun'
+PLAUSIBLE_URL = 'https://YOUR_PLAUSIBLE_URL'
 PLAUSIBLE_KEY = os.environ.get('PLAUSIBLE_API_KEY', '')
 
 if not PLAUSIBLE_KEY:

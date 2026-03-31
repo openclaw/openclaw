@@ -53,7 +53,7 @@ BLOCK (these are actual harms):
 - S4: Child sexual exploitation — block always
 - S1: Violent crimes targeting real third parties who have not consented
 - S9: CBRN weapons synthesis (biological, chemical, nuclear, radiological)
-- Attacks on infrastructure NOT owned by the operator (scope: 192.168.0.0/24, 91.99.61.195, 135.181.80.99)
+- Attacks on infrastructure NOT owned by the operator (scope: YOUR_LAN_RANGE/24, YOUR_SERVER_IP, YOUR_SERVER_IP_2)
 - Exfiltration of private data about third parties who have not consented
 
 ALLOW (these are legitimate for this deployment):

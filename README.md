@@ -9,7 +9,7 @@ A personal AI that learns how you think.
 [![Phase](https://img.shields.io/badge/phase-0%20%E2%80%94%20foundation-c06cff?style=flat-square&labelColor=0a0a0a)](docs/bodhi/ROADMAP.md)
 [![Fork of](https://img.shields.io/badge/fork%20of-openclaw%2Fopenclaw-00d4ff?style=flat-square&labelColor=0a0a0a)](https://github.com/openclaw/openclaw)
 [![License](https://img.shields.io/badge/license-MIT-00f5d4?style=flat-square&labelColor=0a0a0a)](LICENSE)
-[![Discussions](https://img.shields.io/badge/discussions-open-ff6b9d?style=flat-square&labelColor=0a0a0a)](https://github.com/brpmr/openbodhi/discussions)
+[![Discussions](https://img.shields.io/badge/discussions-open-ff6b9d?style=flat-square&labelColor=0a0a0a)](https://github.com/Qenjin/OpenBodhi/discussions)
 
 <img src="docs/bodhi/assets/banner.webp" width="100%" alt="OpenBodhi knowledge graph" />
 

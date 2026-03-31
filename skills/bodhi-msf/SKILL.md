@@ -12,7 +12,7 @@ triggers:
 
 # bodhi-msf
 
-Metasploit Framework integration for authorized personal security testing. Runs on bodhi1 (192.168.0.247). Targets are hard-scoped to owned infrastructure only.
+Metasploit Framework integration for authorized personal security testing. Runs on bodhi1 (YOUR_BODHI_HOST_IP). Targets are hard-scoped to owned infrastructure only.
 
 **Prerequisite — install once on bodhi1:**
 ```bash
@@ -25,13 +25,13 @@ msfdb init
 ```python
 ALLOWED_TARGETS = {
     # LAN
-    '192.168.0.0/24',
+    'YOUR_LAN_RANGE/24',
     # Tailscale
     '100.64.0.0/10',
     # Hetzner backend
-    '91.99.61.195',
+    'YOUR_SERVER_IP',
     # Hetzner frontend
-    '135.181.80.99',
+    'YOUR_SERVER_IP_2',
 }
 ```
 
@@ -84,10 +84,10 @@ TARGET = os.environ.get('BODHI_TARGET', '').strip()
 
 # Scope validation
 ALLOWED = [
-    ipaddress.ip_network('192.168.0.0/24'),
+    ipaddress.ip_network('YOUR_LAN_RANGE/24'),
     ipaddress.ip_network('100.64.0.0/10'),
-    ipaddress.ip_network('91.99.61.195/32'),
-    ipaddress.ip_network('135.181.80.99/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP_2/32'),
 ]
 
 def in_scope(t):
@@ -123,7 +123,7 @@ print('\n'.join(lines[-50:]) or 'No open ports found.')
 
 Reply format:
 ```
-Scan: 91.99.61.195
+Scan: YOUR_SERVER_IP
 Open: 22/tcp (SSH), 80/tcp (HTTP), 443/tcp (HTTPS)
 Done.
 ```
@@ -144,10 +144,10 @@ from datetime import datetime
 TARGET = os.environ.get('BODHI_TARGET', '').strip()
 
 ALLOWED = [
-    ipaddress.ip_network('192.168.0.0/24'),
+    ipaddress.ip_network('YOUR_LAN_RANGE/24'),
     ipaddress.ip_network('100.64.0.0/10'),
-    ipaddress.ip_network('91.99.61.195/32'),
-    ipaddress.ip_network('135.181.80.99/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP_2/32'),
 ]
 
 def in_scope(t):
@@ -204,7 +204,7 @@ print('\n'.join(all_output) or 'No notable findings.')
 
 Reply format:
 ```
-Vuln scan: 91.99.61.195
+Vuln scan: YOUR_SERVER_IP
 [ssh_version] SSH version detected: OpenSSH_8.9
 [http_version] Apache/2.4.54
 No critical findings.
@@ -286,10 +286,10 @@ if not re.match(r'^[\w/]+$', MODULE):
 
 # Scope check
 ALLOWED = [
-    ipaddress.ip_network('192.168.0.0/24'),
+    ipaddress.ip_network('YOUR_LAN_RANGE/24'),
     ipaddress.ip_network('100.64.0.0/10'),
-    ipaddress.ip_network('91.99.61.195/32'),
-    ipaddress.ip_network('135.181.80.99/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP_2/32'),
 ]
 try:
     addr = ipaddress.ip_address(TARGET.split('/')[0])
@@ -373,10 +373,10 @@ OPTS_RAW = os.environ.get('BODHI_OPTS', '').strip()
 
 # Scope check
 ALLOWED = [
-    ipaddress.ip_network('192.168.0.0/24'),
+    ipaddress.ip_network('YOUR_LAN_RANGE/24'),
     ipaddress.ip_network('100.64.0.0/10'),
-    ipaddress.ip_network('91.99.61.195/32'),
-    ipaddress.ip_network('135.181.80.99/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP/32'),
+    ipaddress.ip_network('YOUR_SERVER_IP_2/32'),
 ]
 try:
     addr = ipaddress.ip_address(TARGET.split('/')[0])
@@ -403,7 +403,7 @@ for pair in OPTS_RAW.split():
 cmds_parts = [
     f'use {MODULE}',
     f'set RHOSTS {TARGET}',
-    'set LHOST 192.168.0.247',   # always bodhi1 as handler
+    'set LHOST YOUR_BODHI_HOST_IP',   # always bodhi1 as handler
 ]
 for k, v in opts.items():
     cmds_parts.append(f'set {k} {v}')
@@ -496,7 +496,7 @@ for line in lines[-10:]:
 - **Scope is absolute.** Any target not in the allowed list: refuse, no exceptions, no overrides.
 - **exploit/ modules always require two-step confirmation.** Never run on first call.
 - **Every run is logged** to `~/.openclaw/msf-audit.jsonl`. No exceptions.
-- **LHOST is always bodhi1** (`192.168.0.247`) for any payload/handler — never an external IP.
+- **LHOST is always bodhi1** (`YOUR_BODHI_HOST_IP`) for any payload/handler — never an external IP.
 - **Output is truncated to 2000 chars.** Raw logs are on bodhi1 if more detail is needed.
 - **Timeout: 120s** for scans, **180s** for module runs, **300s** for exploit attempts.
 - **If msfconsole is not installed:** reply with install instructions, do not attempt to install automatically.
