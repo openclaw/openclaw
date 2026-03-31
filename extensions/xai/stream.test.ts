@@ -173,6 +173,67 @@ describe("xai stream wrappers", () => {
     ]);
   });
 
+  it("replays source-based input_image parts from tool results", () => {
+    const payload: Record<string, unknown> = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [
+            { type: "input_text", text: "Read image" },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "QUJDRA==",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload, {} as Model<"openai-responses">);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4-fast",
+        input: ["text", "image"],
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "Read image",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Attached image(s) from tool result:" },
+          {
+            type: "input_image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "QUJDRA==",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps multiple tool outputs contiguous before replaying collected images", () => {
     const payload: Record<string, unknown> = {
       input: [

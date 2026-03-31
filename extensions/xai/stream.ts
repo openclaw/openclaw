@@ -37,10 +37,47 @@ function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
 
+const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
+
+type ReplayableInputImagePart =
+  | {
+      type: "input_image";
+      source: { type: "url"; url: string } | { type: "base64"; media_type: string; data: string };
+    }
+  | { type: "input_image"; image_url: string; detail?: string };
+
 type NormalizedFunctionCallOutput = {
   normalizedItem: unknown;
   imageParts: Array<Record<string, unknown>>;
 };
+
+function isReplayableInputImagePart(
+  part: Record<string, unknown>,
+): part is ReplayableInputImagePart {
+  if (part.type !== "input_image") {
+    return false;
+  }
+  if (typeof part.image_url === "string") {
+    return true;
+  }
+  if (!part.source || typeof part.source !== "object") {
+    return false;
+  }
+  const source = part.source as {
+    type?: unknown;
+    url?: unknown;
+    media_type?: unknown;
+    data?: unknown;
+  };
+  if (source.type === "url") {
+    return typeof source.url === "string";
+  }
+  return (
+    source.type === "base64" &&
+    typeof source.media_type === "string" &&
+    typeof source.data === "string"
+  );
+}
 
 function normalizeXaiResponsesFunctionCallOutput(
   item: unknown,
@@ -65,9 +102,8 @@ function normalizeXaiResponsesFunctionCallOutput(
     .join("");
 
   const imageParts = includeImages
-    ? outputParts.filter(
-        (part): part is { type: "input_image"; image_url: string; detail?: string } =>
-          part.type === "input_image" && typeof part.image_url === "string",
+    ? outputParts.filter((part): part is ReplayableInputImagePart =>
+        isReplayableInputImagePart(part),
       )
     : [];
   const hadNonTextParts = outputParts.some((part) => part.type !== "input_text");
@@ -104,7 +140,7 @@ function normalizeXaiResponsesToolResultPayload(
       type: "message",
       role: "user",
       content: [
-        { type: "input_text", text: "Attached image(s) from tool result:" },
+        { type: "input_text", text: TOOL_RESULT_IMAGE_REPLAY_TEXT },
         ...collectedImageParts,
       ],
     });
