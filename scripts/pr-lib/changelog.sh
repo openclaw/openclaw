@@ -226,14 +226,12 @@ END {
     release_line = 0
     section_line = 0
     for (i = entry_line; i >= 1; i--) {
-      if (release_line == 0 && changelog[i] ~ /^## /) {
-        release_line = i
-      }
-      if (changelog[i] ~ /^### /) {
+      if (section_line == 0 && changelog[i] ~ /^### /) {
         section_line = i
-        break
+        continue
       }
       if (changelog[i] ~ /^## /) {
+        release_line = i
         break
       }
     }
