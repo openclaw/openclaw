@@ -583,7 +583,16 @@ export async function runHeartbeatOnce(opts: {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  // Only use isolated sessions for periodic (interval) heartbeats.
+  // Event-driven wakes (exec completions, cron events) must run on the base session
+  // so they can drain system events from the correct queue. Isolated sessions create
+  // a `:heartbeat` suffixed key that never sees the events enqueued on the base key.
+  const useIsolatedSession =
+    heartbeat?.isolatedSession === true &&
+    !preflight.isExecEventReason &&
+    !preflight.isCronEventReason &&
+    !preflight.isWakeReason &&
+    !preflight.hasTaggedCronEvents;
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
