@@ -119,6 +119,9 @@ function normalizeAuthToken(raw: string): string {
 function safeEqualAuthToken(aRaw: string, bRaw: string): boolean {
   const a = normalizeAuthToken(aRaw);
   const b = normalizeAuthToken(bRaw);
+  if (!a || !b) {
+    return false;
+  }
   return safeEqualSecret(a, b);
 }
 
