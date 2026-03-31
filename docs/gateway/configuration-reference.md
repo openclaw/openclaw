@@ -3053,6 +3053,7 @@ Notes:
 - `auth_failure` is a config key and maps to runtime recoverable auth reason `auth`.
 - Runtime `auth_permanent` failures are not retryable and use profile disable behavior (`disabledUntil`).
 - `auth.cooldowns.rateLimitBackoffMinutes` and `auth.cooldowns.rateLimitMaxHours` tune rate-limit cooldown windows.
+
 ### `auth.cooldowns`
 
 ```json5

@@ -189,6 +189,11 @@ async function runFallbackCandidate<T>(params: {
     const rateLimitRetryBudget = params.retryConfig?.rate_limit ?? defaultRetryBudget;
     const overloadedRetryBudget = params.retryConfig?.overloaded ?? defaultRetryBudget;
     const authRetryBudget = params.retryConfig?.auth_failure ?? 0;
+    const retryAttemptsByReason: Record<"rate_limit" | "overloaded" | "auth", number> = {
+      rate_limit: 0,
+      overloaded: 0,
+      auth: 0,
+    };
 
     const runFn = async () =>
       params.options
@@ -203,20 +208,23 @@ async function runFallbackCandidate<T>(params: {
     // quickly to other providers without repeated backoff delays.
     const result = shouldRetryCandidate
       ? await retryAsync(runFn, {
-          attempts: 1 + Math.max(rateLimitRetryBudget, overloadedRetryBudget, authRetryBudget),
+          attempts: 1 + rateLimitRetryBudget + overloadedRetryBudget + authRetryBudget,
           minDelayMs: 2000,
           maxDelayMs: 30000,
           jitter: 0.1,
-          shouldRetry: (err, attempt) => {
+          shouldRetry: (err) => {
             const reason = resolveFailoverReasonFromError(err);
             if (reason === "rate_limit") {
-              return attempt <= rateLimitRetryBudget;
+              retryAttemptsByReason.rate_limit += 1;
+              return retryAttemptsByReason.rate_limit <= rateLimitRetryBudget;
             }
             if (reason === "overloaded") {
-              return attempt <= overloadedRetryBudget;
+              retryAttemptsByReason.overloaded += 1;
+              return retryAttemptsByReason.overloaded <= overloadedRetryBudget;
             }
             if (reason === "auth") {
-              return attempt <= authRetryBudget;
+              retryAttemptsByReason.auth += 1;
+              return retryAttemptsByReason.auth <= authRetryBudget;
             }
             return false;
           },

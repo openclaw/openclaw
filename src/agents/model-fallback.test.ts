@@ -244,6 +244,45 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(3);
   });
 
+  it("tracks retry budgets independently per failover reason", async () => {
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce({
+        status: 429,
+        message: OPENAI_RATE_LIMIT_MESSAGE,
+        code: "rate_limit",
+      })
+      .mockRejectedValueOnce({
+        status: 429,
+        message: OPENAI_RATE_LIMIT_MESSAGE,
+        code: "rate_limit",
+      })
+      .mockRejectedValueOnce({ status: 529, message: "Overloaded" })
+      .mockRejectedValueOnce({ status: 529, message: "Overloaded" });
+
+    await expect(
+      runWithModelFallback({
+        cfg: {
+          agents: {
+            defaults: {
+              retries: {
+                rate_limit: 2,
+                overloaded: 1,
+                auth_failure: 0,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run,
+      }),
+    ).rejects.toThrow();
+
+    expect(run).toHaveBeenCalledTimes(4);
+  });
+
   it("retries recoverable auth failures using auth_failure retry budget", async () => {
     const run = vi.fn().mockRejectedValue({ status: 401, message: "Unauthorized" });
 
