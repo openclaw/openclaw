@@ -6,7 +6,8 @@ import {
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
 
-const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+const ABORT_TIMEOUT_RE =
+  /request was aborted|request aborted|stream closed|body stream closed|operation aborted|aborterror/i;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;

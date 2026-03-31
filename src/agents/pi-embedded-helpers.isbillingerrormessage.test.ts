@@ -823,6 +823,10 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(classifyFailoverReason("stream closed")).toBe("timeout");
+    expect(classifyFailoverReason("body stream closed")).toBe("timeout");
+    expect(classifyFailoverReason("request aborted")).toBe("timeout");
+    expect(classifyFailoverReason("AbortError: stream closed")).toBe("timeout");
     expect(classifyFailoverReason("Connection error.")).toBe("timeout");
     expect(classifyFailoverReason("fetch failed")).toBe("timeout");
     expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");

@@ -405,6 +405,19 @@ describe("failover-error", () => {
     expect(isTimeoutError(err)).toBe(true);
   });
 
+  it("treats AbortError stream-closed failures as timeout", () => {
+    const err = Object.assign(new Error("stream closed"), {
+      name: "AbortError",
+    });
+    expect(isTimeoutError(err)).toBe(true);
+    expect(resolveFailoverReasonFromError(err)).toBe("timeout");
+  });
+
+  it("treats body stream closed messages as timeout", () => {
+    expect(resolveFailoverReasonFromError({ message: "body stream closed" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "stream closed" })).toBe("timeout");
+  });
+
   it("classifies abort-wrapped RESOURCE_EXHAUSTED as rate_limit", () => {
     const err = Object.assign(new Error("request aborted"), {
       name: "AbortError",
