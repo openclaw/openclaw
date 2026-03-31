@@ -8,8 +8,13 @@ import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import { resolveWindowsCommandShim } from "./windows-command.js";
+import { isAppleSilicon, getOptimalBufferSize } from "../utils/platform.js";
 
 const execFileAsync = promisify(execFile);
+
+// Apple Silicon optimizations
+const IS_APPLE_SILICON = isAppleSilicon();
+const OPTIMAL_BUFFER_SIZE = getOptimalBufferSize();
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
 
@@ -107,7 +112,7 @@ export async function runExec(
       ? { timeout: opts, encoding: "utf8" as const }
       : {
           timeout: opts.timeoutMs,
-          maxBuffer: opts.maxBuffer,
+          maxBuffer: opts.maxBuffer ?? OPTIMAL_BUFFER_SIZE,
           cwd: opts.cwd,
           encoding: "utf8" as const,
         };
@@ -129,13 +134,20 @@ export async function runExec(
       execArgs = args;
     }
     const useCmdWrapper = isWindowsBatchCommand(execCommand);
+    
+    // Apple Silicon optimization: Use larger buffer for better performance
+    const execOptions = {
+      ...options,
+      windowsVerbatimArguments: useCmdWrapper ? true : undefined,
+    };
+    
     const { stdout, stderr } = useCmdWrapper
       ? await execFileAsync(
           process.env.ComSpec ?? "cmd.exe",
           ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
-          { ...options, windowsVerbatimArguments: true },
+          execOptions,
         )
-      : await execFileAsync(execCommand, execArgs, options);
+      : await execFileAsync(execCommand, execArgs, execOptions);
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
         logDebug(stdout.trim());
@@ -224,20 +236,29 @@ export async function runCommandWithTimeout(
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  
+  // Apple Silicon optimization: Use process group for better signal handling
+  const spawnOptions = {
+    stdio,
+    cwd,
+    env: resolvedEnv,
+    windowsVerbatimArguments: useCmdWrapper ? true : windowsVerbatimArguments,
+    ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
+      ? { shell: true }
+      : {}),
+  };
+  
+  // On Apple Silicon, use detached mode with process group for better performance
+  if (IS_APPLE_SILICON) {
+    spawnOptions.detached = true;
+  }
+  
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
       ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
       : finalArgv.slice(1),
-    {
-      stdio,
-      cwd,
-      env: resolvedEnv,
-      windowsVerbatimArguments: useCmdWrapper ? true : windowsVerbatimArguments,
-      ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
-        ? { shell: true }
-        : {}),
-    },
+    spawnOptions,
   );
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {

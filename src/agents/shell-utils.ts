@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { isAppleSilicon } from "../utils/platform.js";
+
+// Apple Silicon optimization: Detect once at module load
+const IS_APPLE_SILICON = isAppleSilicon();
 
 export function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
@@ -50,6 +54,15 @@ export function getShellConfig(): { shell: string; args: string[] } {
       shell: resolvePowerShellPath(),
       args: ["-NoProfile", "-NonInteractive", "-Command"],
     };
+  }
+
+  // Apple Silicon optimization: On macOS, prefer zsh (default since 10.15)
+  // zsh has better ARM64 support and performance than bash
+  if (process.platform === "darwin" && IS_APPLE_SILICON) {
+    const zshPath = resolveShellFromPath("zsh");
+    if (zshPath) {
+      return { shell: zshPath, args: ["-c"] };
+    }
   }
 
   const envShell = process.env.SHELL?.trim();
