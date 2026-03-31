@@ -900,6 +900,7 @@ export async function sendControlledSubagentMessage(params: {
 
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
+
   try {
     const historyBefore = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
       method: "chat.history",
@@ -926,6 +927,16 @@ export async function sendControlledSubagentMessage(params: {
     const responseRunId = typeof response?.runId === "string" ? response.runId : undefined;
     if (responseRunId) {
       runId = responseRunId;
+    }
+
+    const replaced = replaceSubagentRunAfterSteer({
+      previousRunId: params.entry.runId,
+      nextRunId: runId,
+      fallback: params.entry,
+      runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
+    });
+    if (!replaced) {
+      return { status: "error" as const, runId, error: "failed to replace steered subagent run" };
     }
 
     const waitMs = 30_000;
