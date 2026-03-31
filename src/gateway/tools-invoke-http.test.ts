@@ -7,8 +7,6 @@ type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 
-const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
-
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
   runBeforeToolCallHook: vi.fn(
@@ -50,7 +48,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("./auth.js", () => ({
-  authorizeHttpGatewayConnect: async () => ({ ok: true }),
+  authorizeHttpGatewayConnect: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("../logger.js", () => ({
@@ -115,6 +113,28 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
+      name: "exec",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "exec" }),
+    },
+    {
+      name: "apply_patch",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "apply_patch" }),
+    },
+    {
+      name: "nodes",
+      ownerOnly: true,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "nodes" }),
+    },
+    {
+      name: "owner_only_test",
+      ownerOnly: true,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "owner-only" }),
+    },
+    {
       name: "tools_invoke_test",
       parameters: {
         type: "object",
@@ -175,6 +195,7 @@ vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 
+const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
@@ -186,7 +207,7 @@ beforeAll(async () => {
   sharedServer = createServer((req, res) => {
     void (async () => {
       const handled = await handleToolsInvokeHttpRequest(req, res, {
-        auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
+        auth: { mode: "none", allowTailscale: false },
       });
       if (handled) {
         return;
@@ -238,10 +259,11 @@ beforeEach(() => {
       params: args.params,
     }),
   );
+  vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true });
 });
 
-const resolveGatewayToken = (): string => TEST_GATEWAY_TOKEN;
-const gatewayAuthHeaders = () => ({ authorization: `Bearer ${resolveGatewayToken()}` });
+const gatewayAuthHeaders = () => ({ "x-openclaw-scopes": "operator.write" });
+const gatewayAdminHeaders = () => ({ "x-openclaw-scopes": "operator.admin" });
 
 const allowAgentsListForMain = () => {
   cfg = {
@@ -411,6 +433,36 @@ describe("POST /tools/invoke", () => {
     });
   });
 
+  it("blocks trusted-proxy local-direct token fallback from invoking tools over HTTP", async () => {
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "token",
+    });
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: {
+        authorization: "Bearer secret",
+        "content-type": "application/json",
+      },
+      body: {
+        tool: "agents_list",
+        action: "json",
+        args: {},
+        sessionKey: "main",
+      },
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "gateway bearer auth cannot invoke tools over HTTP",
+      },
+    });
+  });
+
   it("uses before_tool_call adjusted params for HTTP tool execution", async () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockImplementationOnce(async () => ({
@@ -573,16 +625,14 @@ describe("POST /tools/invoke", () => {
   it("allows gateway tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {
     setMainAllowedTools({ allow: ["gateway"], gatewayAllow: ["gateway"] });
 
-    const res = await invokeToolAuthed({
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
       tool: "gateway",
       sessionKey: "main",
     });
 
-    // Ensure we didn't hit the HTTP deny list (404). Invalid args should map to 400.
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.ok).toBe(false);
-    expect(body.error?.type).toBe("tool_error");
+    expect(res.status).toBe(404);
   });
 
   it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
@@ -684,5 +734,101 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result?.observedFormat).toBe("pdf");
     expect(body.result?.observedFileFormat).toBeUndefined();
+  });
+
+  it("requires operator.write scope for HTTP tool invocation", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {},
+      tool: "agents_list",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.write",
+      },
+    });
+  });
+
+  it("blocks trusted-proxy local-direct token fallback from invoking tools over HTTP", async () => {
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "token",
+    });
+
+    const res = await postToolsInvoke({
+      port: sharedPort,
+      headers: {
+        authorization: "Bearer secret",
+        "content-type": "application/json",
+      },
+      body: {
+        tool: "agents_list",
+        action: "json",
+        args: {},
+        sessionKey: "main",
+      },
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "gateway bearer auth cannot invoke tools over HTTP",
+      },
+    });
+  });
+
+  it("applies owner-only tool policy on the HTTP path", async () => {
+    setMainAllowedTools({ allow: ["owner_only_test"] });
+
+    const deniedRes = await invokeToolAuthed({
+      tool: "owner_only_test",
+      sessionKey: "main",
+    });
+    expect(deniedRes.status).toBe(404);
+
+    const allowedRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "owner_only_test",
+      sessionKey: "main",
+    });
+    expect(allowedRes.status).toBe(404);
+  });
+
+  it("extends the HTTP deny list to high-risk execution and file tools", async () => {
+    setMainAllowedTools({ allow: ["exec", "apply_patch", "nodes"] });
+
+    const execRes = await invokeToolAuthed({
+      tool: "exec",
+      sessionKey: "main",
+    });
+    const patchRes = await invokeToolAuthed({
+      tool: "apply_patch",
+      sessionKey: "main",
+    });
+    const nodesRes = await invokeToolAuthed({
+      tool: "nodes",
+      sessionKey: "main",
+    });
+    const nodesAdminRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "nodes",
+      sessionKey: "main",
+    });
+
+    expect(execRes.status).toBe(404);
+    expect(patchRes.status).toBe(404);
+    expect(nodesRes.status).toBe(404);
+    expect(nodesAdminRes.status).toBe(404);
   });
 });

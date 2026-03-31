@@ -1,3 +1,7 @@
+import {
+  isTelegramExecApprovalAuthorizedSender,
+  isTelegramExecApprovalClientEnabled,
+} from "../../../extensions/telegram/api.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
@@ -70,6 +74,17 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
+function isAuthorizedTelegramExecSender(params: Parameters<CommandHandler>[0]): boolean {
+  if (params.command.channel !== "telegram") {
+    return false;
+  }
+  return isTelegramExecApprovalAuthorizedSender({
+    cfg: params.cfg,
+    accountId: params.ctx.AccountId,
+    senderId: params.command.senderId,
+  });
+}
+
 function readErrorCode(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
@@ -112,29 +127,55 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (!parsed) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
+  if (!parsed.ok) {
+    return { shouldContinue: false, reply: { text: parsed.error } };
+  }
+
+  const isPluginId = parsed.id.startsWith("plugin:");
+  const telegramExecAuthorizedSender = isAuthorizedTelegramExecSender(params);
+  const execApprovalAuthorization = resolveApprovalCommandAuthorization({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    accountId: params.ctx.AccountId,
+    senderId: params.command.senderId,
+    kind: "exec",
+  });
+  const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    accountId: params.ctx.AccountId,
+    senderId: params.command.senderId,
+    kind: "plugin",
+  });
+  const hasExplicitApprovalAuthorization =
+    (execApprovalAuthorization.explicit && execApprovalAuthorization.authorized) ||
+    (pluginApprovalAuthorization.explicit && pluginApprovalAuthorization.authorized);
+  if (!params.command.isAuthorizedSender && !hasExplicitApprovalAuthorization) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }
 
-  if (!parsed.ok) {
-    return { shouldContinue: false, reply: { text: parsed.error } };
+  if (
+    params.command.channel === "telegram" &&
+    !isPluginId &&
+    !telegramExecAuthorizedSender &&
+    !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
+  ) {
+    return {
+      shouldContinue: false,
+      reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
+    };
   }
-  const isPluginId = parsed.id.startsWith("plugin:");
-  const approvalAuthorization = resolveApprovalCommandAuthorization({
-    cfg: params.cfg,
-    channel: params.command.channel,
-    accountId: params.ctx.AccountId,
-    senderId: params.command.senderId,
-    kind: isPluginId ? "plugin" : "exec",
-  });
-  if (!approvalAuthorization.authorized) {
+
+  if (isPluginId && !pluginApprovalAuthorization.authorized) {
     return {
       shouldContinue: false,
       reply: {
-        text: approvalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
+        text:
+          pluginApprovalAuthorization.reason ??
+          "❌ You are not authorized to approve this request.",
       },
     };
   }
@@ -160,7 +201,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   };
 
   // Plugin approval IDs are kind-prefixed (`plugin:<uuid>`); route directly when detected.
-  // Unprefixed IDs try exec first, then fall back to plugin for backward compat.
+  // Unprefixed IDs try the authorized path first, then fall back for backward compat.
   if (isPluginId) {
     try {
       await callApprovalMethod("plugin.approval.resolve");
@@ -170,19 +211,12 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
         reply: { text: `❌ Failed to submit approval: ${String(err)}` },
       };
     }
-  } else {
+  } else if (execApprovalAuthorization.authorized) {
     try {
       await callApprovalMethod("exec.approval.resolve");
     } catch (err) {
       if (isApprovalNotFoundError(err)) {
-        const pluginFallbackAuthorization = resolveApprovalCommandAuthorization({
-          cfg: params.cfg,
-          channel: params.command.channel,
-          accountId: params.ctx.AccountId,
-          senderId: params.command.senderId,
-          kind: "plugin",
-        });
-        if (!pluginFallbackAuthorization.authorized) {
+        if (!pluginApprovalAuthorization.authorized) {
           return {
             shouldContinue: false,
             reply: { text: `❌ Failed to submit approval: ${String(err)}` },
@@ -203,6 +237,29 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
         };
       }
     }
+  } else if (pluginApprovalAuthorization.authorized) {
+    try {
+      await callApprovalMethod("plugin.approval.resolve");
+    } catch (err) {
+      if (isApprovalNotFoundError(err)) {
+        return {
+          shouldContinue: false,
+          reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+        };
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+      };
+    }
+  } else {
+    return {
+      shouldContinue: false,
+      reply: {
+        text:
+          execApprovalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
+      },
+    };
   }
 
   return {

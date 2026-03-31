@@ -58,7 +58,7 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
-export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
+export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 export { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./irc-surface.js";
 export {
   readStoreAllowFromForDmPolicy,

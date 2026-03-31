@@ -1,6 +1,10 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
-import { createTaskRecord, updateTaskRecordById } from "../../tasks/task-registry.js";
+import {
+  completeTaskRunByRunId,
+  createRunningTaskRun,
+  failTaskRunByRunId,
+} from "../../tasks/task-executor.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -360,7 +364,7 @@ type PreparedManualRun =
       ok: true;
       ran: true;
       jobId: string;
-      taskId?: string;
+      taskRunId?: string;
       startedAt: number;
       executionJob: CronJob;
     }
@@ -382,27 +386,32 @@ type ManualRunPreflightResult =
 
 let nextManualRunId = 1;
 
-function tryCreateManualTaskRecord(params: {
+function createCronTaskRunId(jobId: string, startedAt: number): string {
+  return `cron:${jobId}:${startedAt}`;
+}
+
+function tryCreateManualTaskRun(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
 }): string | undefined {
+  const runId = createCronTaskRunId(params.job.id, params.startedAt);
   try {
-    return createTaskRecord({
+    createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
       requesterSessionKey: "",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
-      runId: `cron:${params.job.id}:${params.startedAt}`,
+      runId,
       label: params.job.name,
       task: params.job.name || params.job.id,
-      status: "running",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
-    }).taskId;
+    });
+    return runId;
   } catch (error) {
     params.state.deps.log.warn(
       { jobId: params.job.id, error },
@@ -412,25 +421,33 @@ function tryCreateManualTaskRecord(params: {
   }
 }
 
-function tryUpdateManualTaskRecord(
+function tryFinishManualTaskRun(
   state: CronServiceState,
   params: {
-    taskId?: string;
+    taskRunId?: string;
     coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
     endedAt: number;
   },
 ): void {
-  if (!params.taskId) {
+  if (!params.taskRunId) {
     return;
   }
   try {
-    updateTaskRecordById(params.taskId, {
+    if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
+      completeTaskRunByRunId({
+        runId: params.taskRunId,
+        endedAt: params.endedAt,
+        lastEventAt: params.endedAt,
+        terminalSummary: params.coreResult.summary ?? undefined,
+      });
+      return;
+    }
+    failTaskRunByRunId({
+      runId: params.taskRunId,
       status:
-        params.coreResult.status === "ok" || params.coreResult.status === "skipped"
-          ? "succeeded"
-          : normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
-            ? "timed_out"
-            : "failed",
+        normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
+          ? "timed_out"
+          : "failed",
       endedAt: params.endedAt,
       lastEventAt: params.endedAt,
       error:
@@ -441,7 +458,7 @@ function tryUpdateManualTaskRecord(
     });
   } catch (error) {
     state.deps.log.warn(
-      { taskId: params.taskId, jobStatus: params.coreResult.status, error },
+      { runId: params.taskRunId, jobStatus: params.coreResult.status, error },
       "cron: failed to update task ledger record",
     );
   }
@@ -516,7 +533,7 @@ async function prepareManualRun(
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
     emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
-    const taskId = tryCreateManualTaskRecord({
+    const taskRunId = tryCreateManualTaskRun({
       state,
       job,
       startedAt: preflight.now,
@@ -526,7 +543,7 @@ async function prepareManualRun(
       ok: true,
       ran: true,
       jobId: job.id,
-      taskId,
+      taskRunId,
       startedAt: preflight.now,
       executionJob,
     } as const;
@@ -541,7 +558,7 @@ async function finishPreparedManualRun(
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
-  const taskId = prepared.taskId;
+  const taskRunId = prepared.taskRunId;
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
@@ -550,8 +567,8 @@ async function finishPreparedManualRun(
     coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
   }
   const endedAt = state.deps.nowMs();
-  tryUpdateManualTaskRecord(state, {
-    taskId,
+  tryFinishManualTaskRun(state, {
+    taskRunId,
     coreResult,
     endedAt,
   });

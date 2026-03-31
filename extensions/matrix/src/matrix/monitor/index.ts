@@ -41,6 +41,10 @@ export type MonitorMatrixOpts = {
 const DEFAULT_MEDIA_MAX_MB = 20;
 
 export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promise<void> {
+  // Fast-cancel callers should not pay the full Matrix startup/import cost.
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
   if (isBunRuntime()) {
     throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
@@ -164,7 +168,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     }
   };
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy: groupPolicyRaw, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
@@ -197,6 +200,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", account.accountId);
+  const globalGroupChatHistoryLimit = (
+    cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
+  )?.groupChat?.historyLimit;
+  const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const streaming: "partial" | "off" =
@@ -225,7 +232,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds,
-    mentionRegexes,
     groupPolicy,
     replyToMode,
     threadReplies,
@@ -234,6 +240,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     dmPolicy,
     textLimit,
     mediaMaxBytes,
+    historyLimit,
     startupMs,
     startupGraceMs,
     dropPreStartupMessages,

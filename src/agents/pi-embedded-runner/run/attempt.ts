@@ -1025,6 +1025,7 @@ export async function runEmbeddedAttempt(
 
       if (
         params.model.api === "openai-responses" ||
+        params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-codex-responses"
       ) {
         const inner = activeSession.agent.streamFn;
@@ -1510,6 +1511,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
+            imageOrder: params.imageOrder,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,
