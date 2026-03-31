@@ -27,8 +27,7 @@ let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
-let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
-let getCommandLaneSnapshots: CommandQueueModule["getCommandLaneSnapshots"];
+let getLaneCountForTest: CommandQueueModule["getLaneCountForTest"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
@@ -69,8 +68,7 @@ describe("command queue", () => {
       enqueueCommandInLane,
       GatewayDrainingError,
       getActiveTaskCount,
-      getCommandLaneSnapshot,
-      getCommandLaneSnapshots,
+      getLaneCountForTest,
       getQueueSize,
       markGatewayDraining,
       resetAllLanes,
@@ -587,5 +585,86 @@ describe("command queue", () => {
       release();
       commandQueueA.resetAllLanes();
     }
+  });
+
+  it("prunes dynamic lane from Map after its last task completes", async () => {
+    const lane = `session:prune-test-${Date.now()}`;
+    const before = getLaneCountForTest();
+
+    await enqueueCommandInLane(lane, async () => "done");
+
+    // The dynamic lane should have been pruned after the task completed.
+    expect(getLaneCountForTest()).toBe(before);
+  });
+
+  it("does not prune well-known lanes after tasks complete", async () => {
+    await enqueueCommand(async () => "done");
+
+    // The "main" lane should still exist.
+    // setCommandLaneConcurrency in beforeEach creates the main lane,
+    // so it should be at least 1.
+    expect(getLaneCountForTest()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("prunes dynamic lane via clearCommandLane when idle", async () => {
+    const lane = `session:clear-prune-${Date.now()}`;
+
+    // Enqueue and complete a task to create and then prune the lane.
+    await enqueueCommandInLane(lane, async () => "done");
+    const before = getLaneCountForTest();
+
+    // Re-create the lane by setting concurrency (no tasks yet).
+    setCommandLaneConcurrency(lane, 1);
+    expect(getLaneCountForTest()).toBe(before + 1);
+
+    // Clear the lane — it has no active tasks, so it should be pruned.
+    clearCommandLane(lane);
+    expect(getLaneCountForTest()).toBe(before);
+  });
+
+  it("prunes idle dynamic lanes during resetAllLanes", async () => {
+    const lane = `session:reset-prune-${Date.now()}`;
+
+    // Create a lane with setCommandLaneConcurrency (leaves an idle entry).
+    setCommandLaneConcurrency(lane, 1);
+    const before = getLaneCountForTest();
+    expect(before).toBeGreaterThanOrEqual(1);
+
+    resetAllLanes();
+    // The idle dynamic lane should have been pruned.
+    expect(getLaneCountForTest()).toBe(before - 1);
+  });
+
+  it("preserves dynamic lane with custom concurrency after task completion", async () => {
+    const lane = `session:concurrency-preserve-${Date.now()}`;
+    setCommandLaneConcurrency(lane, 3);
+    const before = getLaneCountForTest();
+
+    await enqueueCommandInLane(lane, async () => "done");
+
+    // The lane has maxConcurrent > 1, so it should NOT be pruned.
+    expect(getLaneCountForTest()).toBe(before);
+  });
+
+  it("preserves dynamic lane with custom concurrency via clearCommandLane", async () => {
+    const lane = `session:concurrency-clear-${Date.now()}`;
+    setCommandLaneConcurrency(lane, 2);
+    const before = getLaneCountForTest();
+
+    clearCommandLane(lane);
+
+    // The lane has maxConcurrent > 1, so it should NOT be pruned.
+    expect(getLaneCountForTest()).toBe(before);
+  });
+
+  it("preserves dynamic lane with custom concurrency during resetAllLanes", async () => {
+    const lane = `session:concurrency-reset-${Date.now()}`;
+    setCommandLaneConcurrency(lane, 4);
+    const before = getLaneCountForTest();
+
+    resetAllLanes();
+
+    // The lane has maxConcurrent > 1, so it should NOT be pruned.
+    expect(getLaneCountForTest()).toBe(before);
   });
 });
