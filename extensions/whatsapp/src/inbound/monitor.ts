@@ -69,12 +69,17 @@ export async function monitorWebInbox(options: {
   };
 
   try {
-    await sock.sendPresenceUpdate("available");
+    // Send 'unavailable' instead of 'available' to prevent WhatsApp from suppressing
+    // push notifications on the phone. When a linked device announces itself as available/online,
+    // WhatsApp routes messages silently to the device and stops sending phone notifications.
+    // Marking as unavailable preserves normal phone notification behavior while keeping
+    // the gateway fully functional. See: https://github.com/openclaw/openclaw/issues/30286
+    await sock.sendPresenceUpdate("unavailable");
     if (shouldLogVerbose()) {
-      logVerbose("Sent global 'available' presence on connect");
+      logVerbose("Sent global 'unavailable' presence on connect (preserves phone notifications)");
     }
   } catch (err) {
-    logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
+    logVerbose(`Failed to send 'unavailable' presence on connect: ${String(err)}`);
   }
 
   const self = await readWebSelfIdentity(

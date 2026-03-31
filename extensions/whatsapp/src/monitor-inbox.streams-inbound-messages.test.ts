@@ -93,7 +93,7 @@ describe("web monitor inbox", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("unavailable");
     const messageId = nextMessageId("stream");
     const upsert = buildNotifyMessageUpsert({
       id: messageId,
@@ -117,7 +117,7 @@ describe("web monitor inbox", () => {
         fromMe: false,
       },
     ]);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("unavailable");
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
