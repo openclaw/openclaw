@@ -322,6 +322,11 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
       );
     }
+    if (auth.token) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but a shared token is also configured; remove gateway.auth.token / OPENCLAW_GATEWAY_TOKEN because trusted-proxy and token auth are mutually exclusive",
+      );
+    }
   }
 }
 

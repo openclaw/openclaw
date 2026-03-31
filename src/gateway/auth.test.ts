@@ -685,6 +685,42 @@ describe("trusted-proxy auth", () => {
     expect(res.reason).toBe("trusted_proxy_config_missing");
   });
 
+  it.each([
+    {
+      name: "config token",
+      authConfig: {
+        mode: "trusted-proxy" as const,
+        token: "shared-secret",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      },
+      env: undefined,
+    },
+    {
+      name: "environment token",
+      authConfig: {
+        mode: "trusted-proxy" as const,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "shared-secret",
+      } as NodeJS.ProcessEnv,
+    },
+  ])("rejects trusted-proxy mode when shared token comes from $name", ({ authConfig, env }) => {
+    const auth = resolveGatewayAuth({
+      authConfig,
+      env,
+    });
+
+    expect(auth.mode).toBe("trusted-proxy");
+    expect(auth.token).toBe("shared-secret");
+
+    expect(() => assertGatewayAuthConfigured(auth, authConfig)).toThrow(/mutually exclusive/);
+  });
+
   it("supports Pomerium-style headers", async () => {
     const res = await authorizeTrustedProxy({
       auth: {
