@@ -22,6 +22,18 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "xai", id: "grok-4", name: "Grok 4" },
     { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
   ]),
+  findModelInCatalog: vi.fn((catalog: unknown[], provider: string, modelId: string) => {
+    const normalizedProvider = provider.toLowerCase();
+    const normalizedModelId = modelId.toLowerCase().trim();
+    return (catalog as { provider: string; id: string }[]).find(
+      (entry) =>
+        entry.provider.toLowerCase() === normalizedProvider &&
+        entry.id.toLowerCase() === normalizedModelId,
+    );
+  }),
+  modelSupportsVision: vi.fn((entry: { input?: string[] } | undefined) => {
+    return entry?.input?.includes("image") ?? false;
+  }),
 }));
 
 afterEach(() => {
