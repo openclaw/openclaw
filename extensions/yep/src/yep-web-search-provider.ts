@@ -33,6 +33,7 @@ type YepSearchResult = {
   title?: string;
   description?: string;
   snippet?: string;
+  highlights?: string[];
 };
 
 type YepSearchResponse = {
@@ -66,21 +67,32 @@ async function runYepSearch(params: {
   count: number;
   apiKey: string;
   timeoutSeconds: number;
+  type?: string;
+  searchMode?: string;
   language?: string;
+  contentType?: string;
   safeSearch?: boolean;
   includeDomains?: string;
   excludeDomains?: string;
   dateAfter?: string;
   dateBefore?: string;
+  crawlDateAfter?: string;
+  crawlDateBefore?: string;
 }): Promise<Array<Record<string, unknown>>> {
   const body: Record<string, unknown> = {
     query: params.query,
     limit: params.count,
-    type: "basic",
+    type: params.type ?? "basic",
   };
 
+  if (params.searchMode) {
+    body.search_mode = params.searchMode;
+  }
   if (params.language) {
     body.language = [params.language];
+  }
+  if (params.contentType) {
+    body.content_type = params.contentType;
   }
   if (params.safeSearch != null) {
     body.safe_search = params.safeSearch;
@@ -96,6 +108,12 @@ async function runYepSearch(params: {
   }
   if (params.dateBefore) {
     body.end_published_date = params.dateBefore;
+  }
+  if (params.crawlDateAfter) {
+    body.start_crawl_date = params.crawlDateAfter;
+  }
+  if (params.crawlDateBefore) {
+    body.end_crawl_date = params.crawlDateBefore;
   }
 
   return withTrustedWebSearchEndpoint(
@@ -127,12 +145,19 @@ async function runYepSearch(params: {
         const description = entry.description ?? entry.snippet ?? "";
         const title = entry.title ?? "";
         const url = entry.url ?? "";
-        return {
+        const mapped: Record<string, unknown> = {
           title: title ? wrapWebContent(title, "web_search") : "",
           url,
           description: description ? wrapWebContent(description, "web_search") : "",
           siteName: resolveSiteName(url) || undefined,
         };
+        const highlights = (entry.highlights ?? []).filter(
+          (h) => typeof h === "string" && h.length > 0,
+        );
+        if (highlights.length > 0) {
+          mapped.highlights = highlights.map((h) => wrapWebContent(h, "web_search"));
+        }
+        return mapped;
       });
     },
   );
@@ -148,9 +173,31 @@ function createYepSchema() {
         maximum: MAX_SEARCH_COUNT,
       }),
     ),
+    result_type: Type.Optional(
+      Type.String({
+        description:
+          "Result type: 'basic' (default, returns titles/URLs/descriptions) or 'highlights' (additionally includes relevant text highlights from page content).",
+      }),
+    ),
+    search_mode: Type.Optional(
+      Type.String({
+        description: "Search mode: 'fast' or 'balanced' (default). Balanced combines speed and relevance.",
+      }),
+    ),
     language: Type.Optional(
       Type.String({
         description: "ISO 639-1 language code for results (e.g., 'en', 'de', 'fr').",
+      }),
+    ),
+    content_type: Type.Optional(
+      Type.String({
+        description:
+          "Filter by content type (e.g., 'Article', 'Video', 'Document', 'Listing'). Subtypes supported (e.g., 'Article/Tutorial_or_Guide').",
+      }),
+    ),
+    safe_search: Type.Optional(
+      Type.Boolean({
+        description: "Exclude adult content (default: false).",
       }),
     ),
     include_domains: Type.Optional(
@@ -171,6 +218,16 @@ function createYepSchema() {
     date_before: Type.Optional(
       Type.String({
         description: "Only results published before this date (YYYY-MM-DD).",
+      }),
+    ),
+    crawl_date_after: Type.Optional(
+      Type.String({
+        description: "Only results crawled after this date (YYYY-MM-DD).",
+      }),
+    ),
+    crawl_date_before: Type.Optional(
+      Type.String({
+        description: "Only results crawled before this date (YYYY-MM-DD).",
       }),
     ),
   });
@@ -203,12 +260,34 @@ function createYepToolDefinition(
         readNumberParam(params, "count", { integer: true }) ??
         searchConfig?.maxResults ??
         undefined;
+      const rawType = readStringParam(params, "result_type");
+      if (rawType && rawType !== "basic" && rawType !== "highlights") {
+        return {
+          error: "invalid_result_type",
+          message: "result_type must be 'basic' or 'highlights'.",
+        };
+      }
+      const yepType = rawType as "basic" | "highlights" | undefined;
+      const rawSearchMode = readStringParam(params, "search_mode");
+      if (rawSearchMode && rawSearchMode !== "fast" && rawSearchMode !== "balanced") {
+        return {
+          error: "invalid_search_mode",
+          message: "search_mode must be 'fast' or 'balanced'.",
+        };
+      }
+      const searchMode = rawSearchMode as "fast" | "balanced" | undefined;
       const language = normalizeYepLanguage(readStringParam(params, "language"));
+      const contentType = readStringParam(params, "content_type");
+      const safeSearch =
+        typeof params.safe_search === "boolean" ? params.safe_search : undefined;
       const includeDomains = readStringParam(params, "include_domains");
       const excludeDomains = readStringParam(params, "exclude_domains");
 
       const rawDateAfter = readStringParam(params, "date_after");
       const rawDateBefore = readStringParam(params, "date_before");
+
+      const rawCrawlDateAfter = readStringParam(params, "crawl_date_after");
+      const rawCrawlDateBefore = readStringParam(params, "crawl_date_before");
       const parsedDateRange = parseIsoDateRange({
         rawDateAfter,
         rawDateBefore,
@@ -221,15 +300,33 @@ function createYepToolDefinition(
       }
       const { dateAfter, dateBefore } = parsedDateRange;
 
+      const parsedCrawlDateRange = parseIsoDateRange({
+        rawDateAfter: rawCrawlDateAfter,
+        rawDateBefore: rawCrawlDateBefore,
+        invalidDateAfterMessage: "crawl_date_after must be YYYY-MM-DD format.",
+        invalidDateBeforeMessage: "crawl_date_before must be YYYY-MM-DD format.",
+        invalidDateRangeMessage: "crawl_date_after must be before crawl_date_before.",
+      });
+      if ("error" in parsedCrawlDateRange) {
+        return parsedCrawlDateRange;
+      }
+      const { dateAfter: crawlDateAfter, dateBefore: crawlDateBefore } = parsedCrawlDateRange;
+
       const cacheKey = buildSearchCacheKey([
         "yep",
+        yepType,
+        searchMode,
         query,
         resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         language,
+        contentType,
+        safeSearch,
         includeDomains,
         excludeDomains,
         dateAfter,
         dateBefore,
+        crawlDateAfter,
+        crawlDateBefore,
       ]);
       const cached = readCachedSearchPayload(cacheKey);
       if (cached) {
@@ -242,11 +339,17 @@ function createYepToolDefinition(
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         apiKey,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+        type: yepType,
+        searchMode,
         language,
+        contentType,
+        safeSearch,
         includeDomains,
         excludeDomains,
         dateAfter,
         dateBefore,
+        crawlDateAfter,
+        crawlDateBefore,
       });
 
       const payload = {
