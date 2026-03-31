@@ -16,6 +16,11 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun blocksFinishWhenOnlyNodeIsConnected() {
+    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true))
+  }
+
+  @Test
   fun allowsFinishOnlyWhenOperatorAndNodeAreConnected() {
     assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true))
   }
