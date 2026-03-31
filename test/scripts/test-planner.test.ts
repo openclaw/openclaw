@@ -574,6 +574,8 @@ describe("test planner", () => {
     expect(manifest.jobs.buildArtifacts.enabled).toBe(true);
     expect(manifest.shardCounts.unit).toBe(4);
     expect(manifest.shardCounts.channels).toBe(3);
+    expect(manifest.shardCounts.extensionFast).toBeGreaterThanOrEqual(4);
+    expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(5);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
     expect(manifest.shardCounts.bun).toBe(6);
@@ -581,6 +583,16 @@ describe("test planner", () => {
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
     expect(manifest.jobs.bunChecks.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.checksFast.matrix.include).toHaveLength(
+      manifest.shardCounts.extensionFast + 1,
+    );
+    expect(
+      manifest.jobs.checksFast.matrix.include
+        .filter((entry) => entry.task === "extensions")
+        .every(
+          (entry) => typeof entry.shard_count === "number" && typeof entry.shard_index === "number",
+        ),
+    ).toBe(true);
     expect(manifest.jobs.macosSwift.enabled).toBe(true);
     expect(manifest.requiredCheckNames).toContain("macos-swift");
     expect(manifest.requiredCheckNames).not.toContain("macos-swift-lint");
