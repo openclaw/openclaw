@@ -82,6 +82,7 @@ actor VoiceWakeRuntime {
         let localeID: String?
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
+        let triggersTalkMode: Bool
     }
 
     private struct RecognitionUpdate {
@@ -100,7 +101,8 @@ actor VoiceWakeRuntime {
                 micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
                 localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID,
                 triggerChime: state.voiceWakeTriggerChime,
-                sendChime: state.voiceWakeSendChime)
+                sendChime: state.voiceWakeSendChime,
+                triggersTalkMode: state.voiceWakeTriggersTalkMode)
             return (enabled, config)
         }
 
@@ -630,7 +632,16 @@ actor VoiceWakeRuntime {
 
         let delay: TimeInterval = 0.0
         let sendChime = finalTranscript.isEmpty ? .none : config.sendChime
-        if let token = self.overlayToken {
+
+        if config.triggersTalkMode {
+            // Voice Wake -> Talk Mode: activate Talk Mode instead of forwarding a text message.
+            // Talk Mode handles its own STT, LLM interaction, and TTS playback.
+            self.logger.info("voicewake trigger -> activating Talk Mode")
+            if let token = self.overlayToken {
+                await MainActor.run { VoiceSessionCoordinator.shared.dismiss(token: token) }
+            }
+            await AppStateStore.shared.setTalkEnabled(true)
+        } else if let token = self.overlayToken {
             await MainActor.run {
                 VoiceSessionCoordinator.shared.finalize(
                     token: token,
