@@ -11,7 +11,7 @@ import {
 import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
@@ -371,9 +371,13 @@ export function resolveMemorySearchConfig(
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  if (multimodalActive) {
-    // Ensure built-in providers are registered before validation in CLI/Status flows
-    resolveRuntimePluginRegistry({ config: cfg });
+  if (multimodalActive && !getMemoryEmbeddingProvider(resolved.provider)) {
+    // Ensure built-in providers are registered before validation in CLI/Status flows.
+    // Use agent-specific workspace if available to avoid loading a conflicting registry later.
+    resolveRuntimePluginRegistry({
+      config: cfg,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+    });
   }
   const multimodalProvider =
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
