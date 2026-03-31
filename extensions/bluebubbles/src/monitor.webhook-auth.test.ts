@@ -28,6 +28,10 @@ import {
   type DispatchReplyParams,
 } from "./test-support/monitor-test-support.js";
 
+const { TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS } = vi.hoisted(() => ({
+  TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: 3,
+}));
+
 // Mock dependencies
 vi.mock("./send.js", () => ({
   resolveChatGuidForTarget: vi.fn().mockResolvedValue("iMessage;-;+15551234567"),
@@ -57,6 +61,17 @@ vi.mock("./reactions.js", async () => {
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
+
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+  return {
+    ...actual,
+    WEBHOOK_RATE_LIMIT_DEFAULTS: {
+      ...actual.WEBHOOK_RATE_LIMIT_DEFAULTS,
+      maxRequests: TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
+    },
+  };
+});
 
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
@@ -414,8 +429,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      // Default webhook fixed-window budget is 120 requests/minute, so loop past it.
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({
@@ -453,7 +467,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({
@@ -515,7 +529,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({

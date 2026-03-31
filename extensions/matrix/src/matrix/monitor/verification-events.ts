@@ -1,5 +1,3 @@
-import { inspectMatrixDirectRooms } from "../direct-management.js";
-import { isStrictDirectRoom } from "../direct-room.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -31,6 +29,24 @@ type MatrixVerificationSummaryLike = {
     emoji?: Array<[string, string]>;
   };
 };
+
+type MatrixDirectRoomDeps = {
+  inspectMatrixDirectRooms: typeof import("../direct-management.js").inspectMatrixDirectRooms;
+  isStrictDirectRoom: typeof import("../direct-room.js").isStrictDirectRoom;
+};
+
+let matrixDirectRoomDepsPromise: Promise<MatrixDirectRoomDeps> | undefined;
+
+async function loadMatrixDirectRoomDeps(): Promise<MatrixDirectRoomDeps> {
+  matrixDirectRoomDepsPromise ??= Promise.all([
+    import("../direct-management.js"),
+    import("../direct-room.js"),
+  ]).then(([directManagementModule, directRoomModule]) => ({
+    inspectMatrixDirectRooms: directManagementModule.inspectMatrixDirectRooms,
+    isStrictDirectRoom: directRoomModule.isStrictDirectRoom,
+  }));
+  return await matrixDirectRoomDepsPromise;
+}
 
 function trimMaybeString(input: unknown): string | null {
   if (typeof input !== "string") {
@@ -219,6 +235,7 @@ async function resolveVerificationSummaryForSignal(
   // Only fall back by user inside the active DM with that user. Otherwise a
   // spoofed verification event in an unrelated room can leak the current SAS
   // prompt into that room.
+  const { inspectMatrixDirectRooms, isStrictDirectRoom } = await loadMatrixDirectRoomDeps();
   const inspection = await inspectMatrixDirectRooms({
     client,
     remoteUserId: params.senderId,
@@ -377,6 +394,7 @@ export function createMatrixVerificationEventRouter(params: {
   const verificationUserRooms = new Map<string, string>();
 
   async function resolveActiveDirectRoomId(remoteUserId: string): Promise<string | null> {
+    const { inspectMatrixDirectRooms } = await loadMatrixDirectRoomDeps();
     const inspection = await inspectMatrixDirectRooms({
       client: params.client,
       remoteUserId,
@@ -450,7 +468,9 @@ export function createMatrixVerificationEventRouter(params: {
     }
     if (
       recentRoomId &&
-      (await isStrictDirectRoom({
+      (await (
+        await loadMatrixDirectRoomDeps()
+      ).isStrictDirectRoom({
         client: params.client,
         roomId: recentRoomId,
         remoteUserId,
@@ -467,7 +487,9 @@ export function createMatrixVerificationEventRouter(params: {
       return;
     }
     if (
-      !(await isStrictDirectRoom({
+      !(await (
+        await loadMatrixDirectRoomDeps()
+      ).isStrictDirectRoom({
         client: params.client,
         roomId,
         remoteUserId: summary.otherUserId,
@@ -527,7 +549,9 @@ export function createMatrixVerificationEventRouter(params: {
       const flowId = signal.flowId;
       const sourceEventId = trimMaybeString(event?.event_id);
       const sourceFingerprint = sourceEventId ?? `${senderId}:${event.type}:${flowId ?? "none"}`;
-      const shouldRouteInRoom = await isStrictDirectRoom({
+      const shouldRouteInRoom = await (
+        await loadMatrixDirectRoomDeps()
+      ).isStrictDirectRoom({
         client: params.client,
         roomId,
         remoteUserId: senderId,

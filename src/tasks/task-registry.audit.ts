@@ -1,29 +1,12 @@
+import {
+  createEmptyTaskAuditSummary,
+  type TaskAuditCode,
+  type TaskAuditFinding,
+  type TaskAuditSeverity,
+  type TaskAuditSummary,
+} from "./task-registry.audit.shared.js";
 import { reconcileInspectableTasks } from "./task-registry.reconcile.js";
 import type { TaskRecord } from "./task-registry.types.js";
-
-export type TaskAuditSeverity = "warn" | "error";
-export type TaskAuditCode =
-  | "stale_queued"
-  | "stale_running"
-  | "lost"
-  | "delivery_failed"
-  | "missing_cleanup"
-  | "inconsistent_timestamps";
-
-export type TaskAuditFinding = {
-  severity: TaskAuditSeverity;
-  code: TaskAuditCode;
-  task: TaskRecord;
-  ageMs?: number;
-  detail: string;
-};
-
-export type TaskAuditSummary = {
-  total: number;
-  warnings: number;
-  errors: number;
-  byCode: Record<TaskAuditCode, number>;
-};
 
 export type TaskAuditOptions = {
   now?: number;
@@ -34,22 +17,8 @@ export type TaskAuditOptions = {
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
-
-function createEmptyTaskAuditSummary(): TaskAuditSummary {
-  return {
-    total: 0,
-    warnings: 0,
-    errors: 0,
-    byCode: {
-      stale_queued: 0,
-      stale_running: 0,
-      lost: 0,
-      delivery_failed: 0,
-      missing_cleanup: 0,
-      inconsistent_timestamps: 0,
-    },
-  };
-}
+export { createEmptyTaskAuditSummary };
+export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
 function createFinding(params: {
   severity: TaskAuditSeverity;

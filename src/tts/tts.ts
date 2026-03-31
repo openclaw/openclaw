@@ -1,4 +1,4 @@
-import * as speechRuntime from "../plugin-sdk/speech-runtime.js";
+import * as speechRuntime from "../../extensions/speech-core/runtime-api.js";
 
 export const buildTtsSystemPromptHint = speechRuntime.buildTtsSystemPromptHint;
 export const getLastTtsAttempt = speechRuntime.getLastTtsAttempt;

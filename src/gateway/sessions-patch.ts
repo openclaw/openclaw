@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
@@ -20,6 +19,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,

@@ -219,6 +219,7 @@ Then run:
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
   - `allowProvider` defaults to `false` (provider switching is opt-in).
 - `providers.<id>`: provider-owned settings keyed by speech provider id.
+- Legacy direct provider blocks (`messages.tts.openai`, `messages.tts.elevenlabs`, `messages.tts.microsoft`, `messages.tts.edge`) are auto-migrated to `messages.tts.providers.<id>` on load.
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
@@ -391,6 +392,11 @@ Notes:
 - `off|always|inbound|tagged` are per‑session toggles (`/tts on` is an alias for `/tts always`).
 - `limit` and `summary` are stored in local prefs, not the main config.
 - `/tts audio` generates a one-off audio reply (does not toggle TTS on).
+- `/tts status` includes fallback visibility for the latest attempt:
+  - success fallback: `Fallback: <primary> -> <used>` plus `Attempts: ...`
+  - failure: `Error: ...` plus `Attempts: ...`
+  - detailed diagnostics: `Attempt details: provider:outcome(reasonCode) latency`
+- OpenAI and ElevenLabs API failures now include parsed provider error detail and request id (when returned by the provider), which is surfaced in TTS errors/logs.
 
 ## Agent tool
 

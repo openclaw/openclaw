@@ -43,10 +43,10 @@ describe("enqueueKeyedTask", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(order).toContain("a1:start");
-      expect(order).toContain("b1:start");
-    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toContain("a1:start");
+    expect(order).toContain("b1:start");
     expect(order).not.toContain("a2:start");
 
     gate.resolve();

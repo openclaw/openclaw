@@ -38,6 +38,8 @@ export default definePluginEntry({
         store,
         logger: api.logger,
         allowRemoteViewer: security.allowRemoteViewer,
+        trustedProxies: api.config.gateway?.trustedProxies,
+        allowRealIpFallback: api.config.gateway?.allowRealIpFallback === true,
       }),
     });
     api.on("before_prompt_build", async () => ({

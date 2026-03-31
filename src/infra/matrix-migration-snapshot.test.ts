@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix.js";
+import { resolveMatrixAccountStorageRoot } from "./matrix-config-helpers.js";
 import { detectLegacyMatrixCrypto } from "./matrix-legacy-crypto.js";
 import {
   hasActionableMatrixMigration,

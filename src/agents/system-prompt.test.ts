@@ -149,6 +149,16 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("tells the agent not to execute /approve through exec", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
+    );
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
