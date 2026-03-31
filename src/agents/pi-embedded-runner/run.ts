@@ -8,6 +8,7 @@ import {
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
@@ -1198,33 +1199,35 @@ export async function runEmbeddedPiAgent(
               }
             }
 
-            const rotated = await advanceAuthProfile();
-            if (rotated) {
-              // For overloaded errors, cap profile rotations: overloaded is a
-              // provider-level capacity issue, not an auth-profile issue.
-              // Rotating more profiles just wastes time with backoff delays.
-              // See: https://github.com/openclaw/openclaw/issues/58348
-              if (assistantFailoverReason === "overloaded") {
-                overloadProfileRotations += 1;
-                if (
-                  overloadProfileRotations > MAX_OVERLOAD_PROFILE_ROTATIONS &&
-                  fallbackConfigured
-                ) {
-                  logAssistantFailoverDecision("rotate_profile");
-                  const message = lastAssistant?.errorMessage?.trim() || "Provider is overloaded.";
-                  const status = resolveFailoverStatus("overloaded");
-                  log.warn(
-                    `overload profile rotation cap reached for ${provider}/${modelId} after ${overloadProfileRotations} rotations; escalating to model fallback`,
-                  );
-                  throw new FailoverError(message, {
+            // For overloaded errors, check the rotation cap *before* calling
+            // advanceAuthProfile() to avoid a wasted auth-profile setup cycle.
+            // advanceAuthProfile() runs applyApiKeyInfo() which initialises the
+            // next profile — costly work that is pointless when we already know
+            // we will escalate to cross-provider fallback.
+            // See: https://github.com/openclaw/openclaw/issues/58348
+            if (assistantFailoverReason === "overloaded") {
+              overloadProfileRotations += 1;
+              if (overloadProfileRotations > MAX_OVERLOAD_PROFILE_ROTATIONS && fallbackConfigured) {
+                const status = resolveFailoverStatus("overloaded");
+                log.warn(
+                  `overload profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
+                );
+                logAssistantFailoverDecision("fallback_model", { status });
+                throw new FailoverError(
+                  "The AI service is temporarily overloaded. Please try again in a moment.",
+                  {
                     reason: "overloaded",
                     provider: activeErrorContext.provider,
                     model: activeErrorContext.model,
                     profileId: lastProfileId,
                     status,
-                  });
-                }
+                  },
+                );
               }
+            }
+
+            const rotated = await advanceAuthProfile();
+            if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;

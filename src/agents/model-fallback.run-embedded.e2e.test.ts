@@ -560,7 +560,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
         (call) => (call[0] as { provider?: string })?.provider === "groq",
       );
-      expect(openaiAttempts.length).toBeLessThanOrEqual(2);
+      expect(openaiAttempts.length).toBe(2);
       expect(groqAttempts.length).toBe(1);
     });
   });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
+import { MAX_LIVE_SWITCH_RETRIES } from "./agent-runner-execution.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -391,8 +392,8 @@ describe("runAgentTurnWithFallback", () => {
     // After MAX_LIVE_SWITCH_RETRIES (2) the loop must break instead of continuing
     // forever. The result should be a final error, not an infinite hang.
     expect(result.kind).toBe("final");
-    // 1 initial + 2 retries = 3 total invocations at most
-    expect(switchCallCount).toBeLessThanOrEqual(3);
+    // 1 initial + MAX_LIVE_SWITCH_RETRIES retries = exact total invocations
+    expect(switchCallCount).toBe(1 + MAX_LIVE_SWITCH_RETRIES);
   });
 
   it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
