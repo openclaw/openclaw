@@ -10,6 +10,7 @@ import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -193,6 +194,12 @@ class ConnectionManagerTest {
       )
 
     assertNull(params)
+  }
+
+  @Test
+  fun isLoopbackGatewayHost_onlyTreatsEmulatorBridgeAsLocalWhenAllowed() {
+    assertTrue(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = true))
+    assertFalse(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = false))
   }
 
   @Test

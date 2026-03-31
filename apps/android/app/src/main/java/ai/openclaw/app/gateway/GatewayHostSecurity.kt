@@ -1,9 +1,13 @@
 package ai.openclaw.app.gateway
 
+import android.os.Build
 import java.net.InetAddress
 import java.util.Locale
 
-internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
+internal fun isLoopbackGatewayHost(
+  rawHost: String?,
+  allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
+): Boolean {
   var host =
     rawHost
       ?.trim()
@@ -19,7 +23,7 @@ internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
   }
   if (host.isEmpty()) return false
   if (host == "localhost") return true
-  if (host == "10.0.2.2") return true
+  if (allowEmulatorBridgeAlias && host == "10.0.2.2") return true
 
   parseIpv4Address(host)?.let { ipv4 ->
     return ipv4.first() == 127.toByte()
@@ -40,6 +44,25 @@ internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
       address[10] == 0xFF.toByte() &&
       address[11] == 0xFF.toByte()
   return isMappedIpv4 && address[12] == 127.toByte()
+}
+
+private fun isAndroidEmulatorRuntime(): Boolean {
+  val fingerprint = Build.FINGERPRINT?.lowercase(Locale.US).orEmpty()
+  val model = Build.MODEL?.lowercase(Locale.US).orEmpty()
+  val manufacturer = Build.MANUFACTURER?.lowercase(Locale.US).orEmpty()
+  val brand = Build.BRAND?.lowercase(Locale.US).orEmpty()
+  val device = Build.DEVICE?.lowercase(Locale.US).orEmpty()
+  val product = Build.PRODUCT?.lowercase(Locale.US).orEmpty()
+
+  return fingerprint.contains("generic") ||
+    fingerprint.contains("robolectric") ||
+    model.contains("emulator") ||
+    model.contains("sdk_gphone") ||
+    manufacturer.contains("genymotion") ||
+    (brand.contains("generic") && device.contains("generic")) ||
+    product.contains("sdk_gphone") ||
+    product.contains("emulator") ||
+    product.contains("simulator")
 }
 
 private fun parseIpv4Address(host: String): ByteArray? {
