@@ -458,7 +458,8 @@ export class VoiceCallWebhookServer {
   private isRealtimeWebSocketUpgrade(req: http.IncomingMessage): boolean {
     try {
       const pathname = buildRequestUrl(req.url, req.headers.host).pathname;
-      return pathname.startsWith("/voice/stream/realtime");
+      const pattern = this.realtimeHandler?.getStreamPathPattern() ?? "/voice/stream/realtime";
+      return pathname.startsWith(pattern);
     } catch {
       return false;
     }

@@ -45,10 +45,15 @@ export class RealtimeCallHandler {
     { expiry: number; from?: string; to?: string; direction?: "inbound" | "outbound" }
   >();
 
-  /** Public origin (scheme + host) used for the WebSocket URL in TwiML responses.
+  /** Public origin (host) used for the WebSocket URL in TwiML responses.
    * Set via setPublicUrl() once the tunnel/proxy URL is resolved at startup.
    * Falls back to req.headers.host when not set. */
   private publicOrigin: string | null = null;
+
+  /** Path prefix prepended to stream URLs when deployed behind a path-prefixed
+   * proxy (e.g. "/api" when publicUrl is "https://host/api/voice/webhook").
+   * Empty string when serving at the root. */
+  private publicPathPrefix: string = "";
 
   constructor(
     private config: VoiceCallRealtimeConfig,
@@ -57,17 +62,40 @@ export class RealtimeCallHandler {
     private coreConfig: CoreConfig | null,
     /** Pre-resolved OpenAI API key (falls back to OPENAI_API_KEY env at call time) */
     private openaiApiKey?: string,
+    /** Local webhook serve path (from config.serve.path) used to derive the path
+     * prefix when the public URL is behind a path-prefixed proxy. */
+    private servePath: string = "/voice/webhook",
   ) {}
 
   /** Set the canonical public URL so TwiML stream URLs use the correct host
-   * even when the local Host header is an internal address. */
+   * and path prefix even when the local Host header is an internal address.
+   *
+   * Also derives the path prefix: if the public URL contains a path segment
+   * before the configured serve path (e.g. "https://host/api/voice/webhook"),
+   * that prefix ("/api") is prepended to the stream URL in TwiML responses.
+   * This ensures WebSocket connections from Twilio target the correct endpoint
+   * when OpenClaw is exposed through a path-prefixed reverse proxy.
+   */
   setPublicUrl(url: string): void {
     try {
       const parsed = new URL(url);
       this.publicOrigin = parsed.host;
+      // Derive prefix: the portion of the public URL path before the serve path.
+      // Non-empty only when a path-prefixed proxy is in front (e.g. /api).
+      const idx = parsed.pathname.indexOf(this.servePath);
+      this.publicPathPrefix = idx > 0 ? parsed.pathname.slice(0, idx) : "";
     } catch {
-      // malformed URL — fall back to req.headers.host
+      // malformed URL — fall back to req.headers.host with no prefix
     }
+  }
+
+  /**
+   * Returns the WebSocket upgrade path pattern for this handler, including any
+   * path prefix derived from the configured public URL.
+   * Used by VoiceCallWebhookServer to route upgrade requests correctly.
+   */
+  getStreamPathPattern(): string {
+    return `${this.publicPathPrefix}/voice/stream/realtime`;
   }
 
   /**
@@ -144,15 +172,16 @@ export class RealtimeCallHandler {
    */
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
     const host = this.publicOrigin || req.headers.host || "localhost:8443";
+    const prefix = this.publicPathPrefix;
     const rawDirection = params?.get("Direction");
     const token = this.issueStreamToken({
       from: params?.get("From") ?? undefined,
       to: params?.get("To") ?? undefined,
       direction: rawDirection === "outbound-api" ? "outbound" : "inbound",
     });
-    const wsUrl = `wss://${host}/voice/stream/realtime/${token}`;
+    const wsUrl = `wss://${host}${prefix}/voice/stream/realtime/${token}`;
     console.log(
-      `[voice-call] Returning realtime TwiML with WebSocket: wss://${host}/voice/stream/realtime`,
+      `[voice-call] Returning realtime TwiML with WebSocket: wss://${host}${prefix}/voice/stream/realtime`,
     );
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -349,7 +378,10 @@ export class RealtimeCallHandler {
             .hangupCall({ callId, providerCallId: callSid, reason: "error" })
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
-              console.warn(`[voice-call] Failed to hang up call ${callSid} after bridge close:`, msg);
+              console.warn(
+                `[voice-call] Failed to hang up call ${callSid} after bridge close:`,
+                msg,
+              );
             });
         }
         // On "completed", Twilio's terminal status webhook (CallStatus=completed)
@@ -423,11 +455,7 @@ export class RealtimeCallHandler {
     return callRecord.callId;
   }
 
-  private endCallInManager(
-    callSid: string,
-    callId: string,
-    reason: "completed" | "error",
-  ): void {
+  private endCallInManager(callSid: string, callId: string, reason: "completed" | "error"): void {
     this.manager.processEvent({
       id: `realtime-ended-${callSid}-${Date.now()}`,
       type: "call.ended",

@@ -191,12 +191,24 @@ export async function createVoiceCallRuntime(params: {
           `Set realtime.enabled to false or switch to the twilio provider.`,
       );
     }
+    // Validate OpenAI API key at startup. Without it every inbound call would be
+    // intercepted by the realtime webhook short-circuit, return <Connect><Stream>,
+    // and then immediately dropped with a 1011 close — turning every call into a
+    // failed answered call instead of a clear configuration error.
+    const resolvedApiKey = config.streaming.openaiApiKey ?? process.env.OPENAI_API_KEY;
+    if (!resolvedApiKey) {
+      throw new Error(
+        "[voice-call] realtime.enabled requires an OpenAI API key. " +
+          "Set streaming.openaiApiKey in the plugin config or the OPENAI_API_KEY environment variable.",
+      );
+    }
     realtimeHandler = new RealtimeCallHandler(
       config.realtime,
       manager,
       provider,
       coreConfig,
       config.streaming.openaiApiKey,
+      config.serve.path,
     );
     webhookServer.setRealtimeHandler(realtimeHandler);
     log.info("[voice-call] Realtime voice handler initialized");
