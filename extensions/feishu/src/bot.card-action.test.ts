@@ -26,10 +26,12 @@ vi.mock("./bot.js", () => ({
 
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const updateCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
+  updateCardFeishu: updateCardFeishuMock,
 }));
 
 import { handleFeishuMessage } from "./bot.js";
@@ -395,5 +397,58 @@ describe("Feishu Card Action Handler", () => {
     resolveDispatch?.();
     await first;
     vi.useRealTimers();
+  });
+});
+
+describe("Card Update Flow", () => {
+  const cfg: ClawdbotConfig = {};
+  const runtime: RuntimeEnv = createRuntimeEnv();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetProcessedFeishuCardActionTokensForTests();
+    // Ensure handleFeishuMessage mock returns a resolved promise
+    vi.mocked(handleFeishuMessage).mockResolvedValue(undefined as never);
+  });
+
+  it("immediately updates card and dispatches for 'update' kind actions", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok_update_1",
+      action: {
+        value: createFeishuCardInteractionEnvelope({
+          k: "update",
+          a: "feishu.card.update.generate",
+          m: {
+            messageId: "msg_original_123",
+            prompt: "Generate a report",
+          },
+          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
+        }),
+        tag: "button",
+      },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
+
+    // Should immediately update original card to processing state
+    expect(updateCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg_original_123",
+        card: expect.objectContaining({
+          header: expect.objectContaining({
+            title: expect.objectContaining({ content: "Processing..." }),
+          }),
+        }),
+        accountId: "main",
+      }),
+    );
+
+    // Should dispatch to agent with update context
+    expect(handleFeishuMessage).toHaveBeenCalled();
+    const dispatchCall = (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const messageContent = JSON.parse(dispatchCall.event.message.content);
+    expect(messageContent.text).toContain("updateId:");
   });
 });

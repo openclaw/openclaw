@@ -32,6 +32,7 @@ import {
   toMessageResourceType,
 } from "./bot-content.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
+import { getPendingCardUpdate } from "./card-update.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
@@ -952,6 +953,24 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+    const updateIdMatch =
+      typeof messageBody === "string"
+        ? messageBody.match(/(?:^|\n)updateId:\s*(cu_[A-Za-z0-9_]+)/)
+        : null;
+    const pendingCardUpdate = updateIdMatch ? getPendingCardUpdate(updateIdMatch[1]) : null;
+    const cardUpdateContext = pendingCardUpdate
+      ? {
+          updateId: updateIdMatch![1],
+          messageId: pendingCardUpdate.messageId,
+          accountId: pendingCardUpdate.accountId,
+        }
+      : null;
+    if (cardUpdateContext) {
+      log(
+        `feishu[${account.accountId}]: resolved pending card update ${cardUpdateContext.updateId} -> ${cardUpdateContext.messageId}`,
+      );
+    }
+
     const replyTargetMessageId =
       isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
@@ -1117,6 +1136,7 @@ export async function handleFeishuMessage(params: {
         accountId: account.accountId,
         identity,
         messageCreateTimeMs,
+        cardUpdate: cardUpdateContext,
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);

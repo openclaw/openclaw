@@ -4,4 +4,11 @@ export * from "./src/setup-surface.js";
 export * from "./src/thread-bindings.js";
 export { __testing as feishuThreadBindingTesting } from "./src/thread-bindings.js";
 
+export {
+  registerPendingCardUpdate,
+  getPendingCardUpdate,
+  completeCardUpdate,
+  type PendingCardUpdate,
+} from "./src/card-update.js";
+
 export const feishuSessionBindingAdapterChannels = ["feishu"] as const;

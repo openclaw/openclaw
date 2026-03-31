@@ -13,12 +13,18 @@ import {
   type RuntimeEnv,
 } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { completeCardUpdate } from "./card-update.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
+import {
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  updateCardFeishu,
+  type CardHeaderConfig,
+} from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -87,6 +93,11 @@ export type CreateFeishuReplyDispatcherParams = {
   mentionTargets?: MentionTarget[];
   accountId?: string;
   identity?: OutboundIdentity;
+  cardUpdate?: {
+    updateId: string;
+    messageId: string;
+    accountId: string;
+  } | null;
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -106,6 +117,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     mentionTargets,
     accountId,
     identity,
+    cardUpdate,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
@@ -196,6 +208,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let cardUpdateCompleted = false;
+  const buildCardUpdateResultCard = (text: string) => ({
+    schema: "2.0",
+    header: {
+      title: { content: "Done", tag: "plain_text" },
+      template: "green",
+    },
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content: text || "Done",
+        },
+      ],
+    },
+  });
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatReasoningPrefix = (thinking: string): string => {
@@ -370,6 +398,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
         if (!shouldDeliverText && !hasMedia) {
+          return;
+        }
+
+        if (cardUpdate && info?.kind === "final" && shouldDeliverText && !cardUpdateCompleted) {
+          await updateCardFeishu({
+            cfg,
+            messageId: cardUpdate.messageId,
+            card: buildCardUpdateResultCard(text),
+            accountId: cardUpdate.accountId,
+          });
+          completeCardUpdate(cardUpdate.updateId);
+          cardUpdateCompleted = true;
+          deliveredFinalTexts.add(text);
+          if (hasMedia) {
+            await sendMediaReplies(payload);
+          }
           return;
         }
 

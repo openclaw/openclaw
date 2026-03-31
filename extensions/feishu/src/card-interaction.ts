@@ -1,6 +1,6 @@
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";
 
-export type FeishuCardInteractionKind = "button" | "quick" | "meta";
+export type FeishuCardInteractionKind = "button" | "quick" | "meta" | "update";
 export type FeishuCardInteractionReason =
   | "malformed"
   | "stale"
@@ -58,7 +58,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isInteractionKind(value: unknown): value is FeishuCardInteractionKind {
-  return value === "button" || value === "quick" || value === "meta";
+  return value === "button" || value === "quick" || value === "meta" || value === "update";
 }
 
 function isMetadataValue(value: unknown): value is string | number | boolean | null | undefined {

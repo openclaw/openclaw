@@ -2,13 +2,14 @@ import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
+import { registerPendingCardUpdate } from "./card-update.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+import { sendCardFeishu, sendMessageFeishu, updateCardFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -166,6 +167,31 @@ async function sendInvalidInteractionNotice(params: {
   });
 }
 
+function buildProcessingCard(params: { prompt?: string }): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = [
+    {
+      tag: "markdown",
+      content: "Processing your request...",
+    },
+  ];
+
+  if (params.prompt) {
+    elements.push({
+      tag: "markdown",
+      content: `**Request:** ${params.prompt}`,
+    });
+  }
+
+  return {
+    schema: "2.0",
+    header: {
+      title: { content: "Processing...", tag: "plain_text" },
+      template: "yellow",
+    },
+    body: { elements },
+  };
+}
+
 export async function handleFeishuCardAction(params: {
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
@@ -274,6 +300,70 @@ export async function handleFeishuCardAction(params: {
           accountId,
           chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
         });
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        return;
+      }
+
+      // Handle update kind - immediate card update + async dispatch
+      if (envelope.k === "update") {
+        const metadata = envelope.m ?? {};
+        const messageId = typeof metadata.messageId === "string" ? metadata.messageId : "";
+        const prompt = typeof metadata.prompt === "string" ? metadata.prompt : "";
+        const command = typeof metadata.command === "string" ? metadata.command : "";
+
+        if (!messageId) {
+          log(`feishu[${account.accountId}]: update action missing messageId`);
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+          return;
+        }
+
+        // Register the pending update first
+        const updateId = registerPendingCardUpdate({
+          accountId: account.accountId,
+          messageId,
+          chatId: event.context.chat_id || event.operator.open_id,
+          originalEnvelope: envelope,
+        });
+
+        log(
+          `feishu[${account.accountId}]: handling card update ${updateId} for message ${messageId}`,
+        );
+
+        // Update the original card in place to show processing state
+        await updateCardFeishu({
+          cfg,
+          messageId,
+          card: buildProcessingCard({ prompt: prompt || command }),
+          accountId,
+        });
+
+        // Build synthetic message with update context
+        const content = [
+          "[Card Update Request]",
+          `updateId: ${updateId}`,
+          prompt ? `prompt: ${prompt}` : "",
+          command ? `command: ${command}` : "",
+          `action: ${envelope.a}`,
+        ]
+          .filter(Boolean)
+          .join("\n");
+
+        await dispatchSyntheticCommand({
+          cfg,
+          event,
+          command: content,
+          botOpenId: params.botOpenId,
+          runtime,
+          accountId,
+          chatType: envelope.c?.t ?? (event.context.chat_id ? "group" : "p2p"),
+        });
+
         completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
         return;
       }
