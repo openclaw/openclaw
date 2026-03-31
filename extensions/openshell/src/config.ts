@@ -156,6 +156,8 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
 
 export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellPluginConfig {
   if (value === undefined) {
+    // The built-in defaults are managed OpenShell roots, so they do not need to
+    // flow back through normalizeOpenShellRemotePath.
     return {
       mode: DEFAULT_MODE,
       command: DEFAULT_COMMAND,
