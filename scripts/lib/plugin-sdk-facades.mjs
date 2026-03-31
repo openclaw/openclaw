@@ -936,6 +936,13 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "slack-surface",
     source: pluginSource("slack", "api.js"),
+    functionExports: [
+      "listSlackAccountIds",
+      "listSlackDirectoryGroupsFromConfig",
+      "listSlackDirectoryPeersFromConfig",
+      "resolveDefaultSlackAccountId",
+      "resolveSlackRuntimeGroupPolicy",
+    ],
     exports: [
       "buildSlackThreadingToolContext",
       "createSlackWebClient",
@@ -1375,6 +1382,7 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
   const sourceExportKinds = params.repoRoot
     ? resolveFacadeSourceExportKinds(params.repoRoot, entry.source)
     : new Map();
+  const explicitFunctionExports = new Set(entry.functionExports ?? []);
   const exportNames = entry.exportAll
     ? Array.from(sourceExportKinds.keys()).toSorted((left, right) => left.localeCompare(right))
     : entry.runtimeApiPreExportsPath
@@ -1459,11 +1467,12 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
     );
     for (const exportName of valueExports) {
       const kind = sourceExportKinds.get(exportName);
+      const isExplicitFunctionExport = explicitFunctionExports.has(exportName);
       const sourcePath = entry.exportSources?.[exportName] ?? entry.source;
       const sourceIndex = sourceIndexByPath.get(sourcePath) ?? 0;
       const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
       const moduleTypeName = sourceIndex === 0 ? "FacadeModule" : `FacadeModule${sourceIndex + 1}`;
-      if (kind?.functionLike || kind?.callable) {
+      if (isExplicitFunctionExport || kind?.functionLike || kind?.callable) {
         lines.push(
           `export const ${exportName}: ${moduleTypeName}[${JSON.stringify(exportName)}] = ((...args) =>`,
         );
