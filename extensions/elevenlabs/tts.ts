@@ -3,6 +3,7 @@ import {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
+  readResponseTextLimited,
   requireInRange,
   trimToUndefined,
   truncateErrorDetail,
@@ -50,7 +51,7 @@ function formatElevenLabsErrorPayload(payload: unknown): string | undefined {
 }
 
 async function extractElevenLabsErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await response.text());
+  const rawBody = trimToUndefined(await readResponseTextLimited(response));
   if (!rawBody) {
     return undefined;
   }

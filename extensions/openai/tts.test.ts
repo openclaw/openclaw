@@ -80,6 +80,29 @@ describe("openai tts", () => {
   });
 
   describe("openaiTTS diagnostics", () => {
+    function createStreamingErrorResponse(params: {
+      status: number;
+      chunkCount: number;
+      chunkSize: number;
+      byte: number;
+    }): { response: Response; getReadCount: () => number } {
+      let reads = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (reads >= params.chunkCount) {
+            controller.close();
+            return;
+          }
+          reads += 1;
+          controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+        },
+      });
+      return {
+        response: new Response(stream, { status: params.status }),
+        getReadCount: () => reads,
+      };
+    }
+
     it("includes parsed provider detail and request id for JSON API errors", async () => {
       const fetchMock = vi.fn(
         async () =>
@@ -134,6 +157,31 @@ describe("openai tts", () => {
           timeoutMs: 5_000,
         }),
       ).rejects.toThrow("OpenAI TTS API error (503): temporary upstream outage");
+    });
+
+    it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
+      const streamed = createStreamingErrorResponse({
+        status: 503,
+        chunkCount: 200,
+        chunkSize: 1024,
+        byte: 120,
+      });
+      const fetchMock = vi.fn(async () => streamed.response);
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("OpenAI TTS API error (503)");
+
+      expect(streamed.getReadCount()).toBeLessThan(200);
     });
   });
 });

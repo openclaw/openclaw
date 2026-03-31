@@ -1,4 +1,9 @@
-import { asObject, trimToUndefined, truncateErrorDetail } from "openclaw/plugin-sdk/speech";
+import {
+  asObject,
+  readResponseTextLimited,
+  trimToUndefined,
+  truncateErrorDetail,
+} from "openclaw/plugin-sdk/speech";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -88,7 +93,7 @@ function formatOpenAiErrorPayload(payload: unknown): string | undefined {
 }
 
 async function extractOpenAiErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await response.text());
+  const rawBody = trimToUndefined(await readResponseTextLimited(response));
   if (!rawBody) {
     return undefined;
   }
