@@ -116,7 +116,7 @@ async function inheritModelsJsonFromMainAgent(params: {
   }
 
   await fs.mkdir(params.agentDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(params.targetPath, sourceRaw, { mode: 0o600 });
+  await writeModelsFileAtomic(params.targetPath, sourceRaw);
   return true;
 }
 
