@@ -32,6 +32,7 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -446,10 +447,12 @@ export async function initSessionState(params: {
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
+  const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
   const lastChannelRaw = resolveLastChannelRaw({
     originatingChannelRaw,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
+    isInterSession,
   });
   const lastToRaw = resolveLastToRaw({
     originatingChannelRaw,
@@ -458,6 +461,7 @@ export async function initSessionState(params: {
     persistedLastTo: baseEntry?.lastTo,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
+    isInterSession,
   });
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
