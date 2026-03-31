@@ -385,8 +385,8 @@ async function emulateRemoteShell(params: {
     }
 
     if (params.script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'")) {
-      await applyMutation(params.args, params.stdin);
-      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+      const stdout = (await applyMutation(params.args, params.stdin)) ?? Buffer.alloc(0);
+      return { stdout, stderr: Buffer.alloc(0), code: 0 };
     }
 
     throw new Error(`unsupported remote shell script: ${params.script}`);
@@ -444,8 +444,12 @@ async function isSymlink(target: string) {
   }
 }
 
-async function applyMutation(args: string[], stdin?: Buffer) {
+async function applyMutation(args: string[], stdin?: Buffer): Promise<Buffer | void> {
   const operation = args[0];
+  if (operation === "read") {
+    const [root, relativeParent, basename] = args.slice(1);
+    return await fs.readFile(path.join(root ?? "", relativeParent ?? "", basename ?? ""));
+  }
   if (operation === "write") {
     const [root, relativeParent, basename, mkdir] = args.slice(1);
     const parent = path.join(root ?? "", relativeParent ?? "");
