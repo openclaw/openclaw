@@ -1195,6 +1195,77 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
+  it("does not implicitly stream when thread context is recovered from the requester session key", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+        agentChannel: "feishu",
+        agentAccountId: "default",
+        agentTo: "chat:oc_chat_123",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves sender-scoped Feishu topic ids for ACP thread bindings", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      channels: {
+        ...hoisted.state.cfg.channels,
+        feishu: {
+          threadBindings: {
+            enabled: true,
+          },
+        },
+      },
+    });
+    registerSessionBindingAdapter({
+      channel: "feishu",
+      accountId: "default",
+      capabilities: createSessionBindingCapabilities(),
+      bind: async (input) => await hoisted.sessionBindingBindMock(input),
+      listBySession: (targetSessionKey) =>
+        hoisted.sessionBindingListBySessionMock(targetSessionKey),
+      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+        agentChannel: "feishu",
+        agentAccountId: "default",
+        agentTo: "chat:oc_chat_123",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "om_x100abc123",
+        }),
+      }),
+    );
+  });
+
   it("does not implicitly stream for thread-bound subagent requester sessions", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((targetSessionKey: string) => {
       if (targetSessionKey === "agent:main:subagent:thread-bound") {

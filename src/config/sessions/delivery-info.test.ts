@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
@@ -19,6 +19,7 @@ vi.mock("./store.js", () => ({
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
 let parseSessionThreadInfo: typeof import("./delivery-info.js").parseSessionThreadInfo;
+let resolveSessionThreadIdForRouting: typeof import("./delivery-info.js").resolveSessionThreadIdForRouting;
 
 const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
   sessionId: "session-1",
@@ -26,8 +27,11 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
   deliveryContext,
 });
 
-beforeAll(async () => {
-  ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
+beforeEach(async () => {
+  vi.resetModules();
+  storeState.store = {};
+  ({ extractDeliveryInfo, parseSessionThreadInfo, resolveSessionThreadIdForRouting } =
+    await import("./delivery-info.js"));
 });
 
 beforeEach(() => {
@@ -39,6 +43,14 @@ describe("extractDeliveryInfo", () => {
     expect(parseSessionThreadInfo("agent:main:telegram:group:1:topic:55")).toEqual({
       baseSessionKey: "agent:main:telegram:group:1",
       threadId: "55",
+    });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+      ),
+    ).toEqual({
+      baseSessionKey: "agent:main:feishu:group:oc_chat_123",
+      threadId: "om_x100abc123",
     });
     expect(parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
       baseSessionKey: "agent:main:slack:channel:C1",
@@ -122,5 +134,18 @@ describe("extractDeliveryInfo", () => {
       },
       threadId: "55",
     });
+  });
+
+  it("filters false-positive DM :thread: suffixes when resolving routing thread ids", () => {
+    expect(
+      resolveSessionThreadIdForRouting("agent:main:telegram:dm:user:thread:abc"),
+    ).toBeUndefined();
+    expect(
+      resolveSessionThreadIdForRouting("agent:main:slack:dm:C0123ABC:thread:1234567890.123456"),
+    ).toBe("1234567890.123456");
+    expect(resolveSessionThreadIdForRouting("agent:main:telegram:group:1:topic:55")).toBe("55");
+    expect(
+      resolveSessionThreadIdForRouting("agent:main:mattermost:default:chan-1:thread:post-123"),
+    ).toBe("post-123");
   });
 });

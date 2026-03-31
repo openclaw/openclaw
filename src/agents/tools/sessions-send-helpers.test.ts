@@ -120,6 +120,18 @@ describe("resolveAnnounceTargetFromKey", () => {
     });
   });
 
+  it("extracts Feishu topic ids even when sender suffix is present", () => {
+    expect(
+      resolveAnnounceTargetFromKey(
+        "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+      ),
+    ).toEqual({
+      channel: "feishu",
+      to: "oc_chat_123",
+      threadId: "om_x100abc123",
+    });
+  });
+
   it("preserves decimal thread ids for Slack-style session keys", () => {
     expect(
       resolveAnnounceTargetFromKey("agent:main:slack:channel:general:thread:1699999999.0001"),

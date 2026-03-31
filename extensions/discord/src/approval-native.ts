@@ -1,4 +1,7 @@
-import { createApproverRestrictedNativeApprovalAdapter, resolveExecApprovalSessionTarget } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  createApproverRestrictedNativeApprovalAdapter,
+  resolveExecApprovalSessionTarget,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   ExecApprovalRequest,

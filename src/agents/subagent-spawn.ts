@@ -4,6 +4,7 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinkin
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
+import { resolveSessionThreadIdForRouting } from "../config/sessions/delivery-info.js";
 import { callGateway } from "../gateway/call.js";
 import {
   pruneLegacyStoreKeys,
@@ -272,6 +273,26 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function resolveRequesterSessionThreadId(params: {
+  sessionKey: string | undefined;
+  explicitThreadId: string | number | undefined;
+  channel: string | undefined;
+}): string | number | undefined {
+  if (params.explicitThreadId != null) {
+    return params.explicitThreadId;
+  }
+  const normalizedChannel = params.channel?.trim().toLowerCase();
+  const sessionKey = params.sessionKey?.trim();
+  const isFeishuSenderScopedTopicSession =
+    normalizedChannel === "feishu" &&
+    sessionKey?.includes(":topic:") &&
+    sessionKey?.includes(":sender:");
+  if (isFeishuSenderScopedTopicSession) {
+    return undefined;
+  }
+  return resolveSessionThreadIdForRouting(sessionKey);
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
@@ -376,7 +397,11 @@ export async function spawnSubagentDirect(
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
+    threadId: resolveRequesterSessionThreadId({
+      sessionKey: ctx.agentSessionKey,
+      explicitThreadId: ctx.agentThreadId,
+      channel: ctx.agentChannel,
+    }),
   });
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();

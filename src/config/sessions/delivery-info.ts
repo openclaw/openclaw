@@ -21,8 +21,20 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
   const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
   const threadIdRaw =
     markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
-  const threadId = threadIdRaw?.trim() || undefined;
+  const threadId = threadIdRaw?.split(":sender:")[0]?.trim() || undefined;
   return { baseSessionKey, threadId };
+}
+
+export function resolveSessionThreadIdForRouting(
+  sessionKey: string | undefined,
+): string | undefined {
+  const info = parseSessionThreadInfo(sessionKey);
+  const isTelegramDmThreadSuffix =
+    info.baseSessionKey?.includes(":telegram:dm:") && sessionKey?.includes(":thread:");
+  if (isTelegramDmThreadSuffix && !sessionKey?.includes(":topic:")) {
+    return undefined;
+  }
+  return info.threadId;
 }
 
 export function extractDeliveryInfo(sessionKey: string | undefined): {

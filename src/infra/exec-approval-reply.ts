@@ -148,7 +148,8 @@ export function parseExecApprovalCommandText(
   const rawDecision = match[2].toLowerCase();
   return {
     approvalId: match[1],
-    decision: rawDecision === "always" ? "allow-always" : (rawDecision as ExecApprovalReplyDecision),
+    decision:
+      rawDecision === "always" ? "allow-always" : (rawDecision as ExecApprovalReplyDecision),
   };
 }
 
