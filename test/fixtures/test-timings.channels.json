@@ -73,7 +73,7 @@
       "durationMs": 2900
     },
     "extensions/slack/src/monitor/slash.test.ts": {
-      "durationMs": 2800
+      "durationMs": 12500
     },
     "extensions/whatsapp/src/send.test.ts": {
       "durationMs": 2700
