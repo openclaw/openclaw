@@ -489,6 +489,7 @@ describe("readSessionTitleFieldsFromTranscriptAsync", () => {
 
     const openSyncSpy = vi.spyOn(fs, "openSync");
     const readSyncSpy = vi.spyOn(fs, "readSync");
+    const existsSyncSpy = vi.spyOn(fs, "existsSync");
 
     const result = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
 
@@ -498,9 +499,11 @@ describe("readSessionTitleFieldsFromTranscriptAsync", () => {
     });
     expect(openSyncSpy).not.toHaveBeenCalled();
     expect(readSyncSpy).not.toHaveBeenCalled();
+    expect(existsSyncSpy).not.toHaveBeenCalled();
 
     openSyncSpy.mockRestore();
     readSyncSpy.mockRestore();
+    existsSyncSpy.mockRestore();
   });
 
   test("returns cached values without opening the transcript when unchanged", async () => {
@@ -1062,6 +1065,7 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
     ]);
 
     const readFileSpy = vi.spyOn(fs.promises, "readFile");
+    const existsSyncSpy = vi.spyOn(fs, "existsSync");
 
     const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
 
@@ -1076,11 +1080,13 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
     });
     expect(snapshot?.costUsd).toBeCloseTo(0.0063, 8);
     expect(readFileSpy).not.toHaveBeenCalled();
+    expect(existsSyncSpy).not.toHaveBeenCalled();
 
     readFileSpy.mockRestore();
+    existsSyncSpy.mockRestore();
   });
 
-  test("checks transcript metadata from the opened file handle instead of path stat", async () => {
+  test("checks transcript metadata asynchronously before streaming", async () => {
     const sessionId = "usage-async-filehandle-stat";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
@@ -1095,10 +1101,13 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
     ]);
 
     const statSpy = vi.spyOn(fs.promises, "stat");
+    const statSyncSpy = vi.spyOn(fs, "statSync");
     const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
     expect(snapshot).toMatchObject({ inputTokens: 100, outputTokens: 50 });
-    expect(statSpy).not.toHaveBeenCalled();
+    expect(statSpy).toHaveBeenCalled();
+    expect(statSyncSpy).not.toHaveBeenCalled();
     statSpy.mockRestore();
+    statSyncSpy.mockRestore();
   });
 
   test("bounds async transcript streaming to the size checked from the open file handle", async () => {
@@ -1151,6 +1160,26 @@ describe("readLatestSessionUsageFromTranscriptAsync", () => {
     );
 
     openSpy.mockRestore();
+  });
+
+  test("returns null when an async usage line grows beyond the safety cap", async () => {
+    const sessionId = "usage-async-line-cap";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedLine = JSON.stringify({
+      message: {
+        role: "user",
+        content: "x".repeat(1024 * 1024 + 128),
+      },
+    });
+    fs.writeFileSync(
+      transcriptPath,
+      [JSON.stringify({ type: "session", version: 1, id: sessionId }), oversizedLine].join("\n"),
+      "utf-8",
+    );
+
+    const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+
+    expect(snapshot).toBeNull();
   });
 });
 

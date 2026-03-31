@@ -266,6 +266,20 @@ export function readSessionTitleFieldsFromTranscript(
   }
 }
 
+async function statFirstExistingTranscriptFile(
+  candidates: string[],
+): Promise<{ filePath: string; stat: fs.Stats } | null> {
+  for (const filePath of candidates) {
+    try {
+      const stat = await fs.promises.stat(filePath);
+      return { filePath, stat };
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
 export async function readSessionTitleFieldsFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -274,37 +288,26 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   opts?: { includeInterSession?: boolean },
 ): Promise<SessionTitleFields> {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
+  const existing = await statFirstExistingTranscriptFile(candidates);
+  if (!existing) {
     return { firstUserMessage: null, lastMessagePreview: null };
   }
+  const { filePath, stat } = existing;
 
   const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
-  let pathStat: fs.Stats;
-  try {
-    pathStat = await fs.promises.stat(filePath);
-  } catch {
-    return { firstUserMessage: null, lastMessagePreview: null };
-  }
-  const cached = getCachedSessionTitleFields(cacheKey, pathStat);
+  const cached = getCachedSessionTitleFields(cacheKey, stat);
   if (cached) {
     return cached;
   }
-  if (pathStat.size === 0) {
+  if (stat.size === 0) {
     const empty = { firstUserMessage: null, lastMessagePreview: null };
-    setCachedSessionTitleFields(cacheKey, pathStat, empty);
+    setCachedSessionTitleFields(cacheKey, stat, empty);
     return empty;
   }
 
   let fileHandle: fs.promises.FileHandle | null = null;
   try {
     fileHandle = await fs.promises.open(filePath, "r");
-    const stat = await fileHandle.stat();
-    if (stat.size === 0) {
-      const empty = { firstUserMessage: null, lastMessagePreview: null };
-      setCachedSessionTitleFields(cacheKey, stat, empty);
-      return empty;
-    }
     const size = stat.size;
 
     let firstUserMessage: string | null = null;
@@ -846,6 +849,7 @@ async function readLatestSessionUsageFromStream(params: {
   const { stream } = params;
   const state = createTranscriptUsageAccumulator();
   let pending = "";
+  const maxPendingChars = 1024 * 1024;
   try {
     for await (const chunk of stream) {
       pending += chunk;
@@ -858,6 +862,9 @@ async function readLatestSessionUsageFromStream(params: {
         }
         accumulateTranscriptUsageLine(state, line);
         newlineIndex = pending.indexOf("\n");
+      }
+      if (pending.length > maxPendingChars) {
+        throw new Error(`transcript usage line exceeds ${maxPendingChars} characters`);
       }
     }
 
@@ -880,23 +887,25 @@ export async function readLatestSessionUsageFromTranscriptAsync(
   sessionFile?: string,
   agentId?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const existing = await statFirstExistingTranscriptFile(candidates);
+  if (!existing) {
+    return null;
+  }
+  const { filePath, stat } = existing;
+
+  const cached = getCachedSessionUsage(filePath, stat);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (stat.size === 0) {
+    setCachedSessionUsage(filePath, stat, null);
     return null;
   }
 
   let fileHandle: fs.promises.FileHandle | null = null;
   try {
     fileHandle = await fs.promises.open(filePath, "r");
-    const stat = await fileHandle.stat();
-    const cached = getCachedSessionUsage(filePath, stat);
-    if (cached !== undefined) {
-      return cached;
-    }
-    if (stat.size === 0) {
-      setCachedSessionUsage(filePath, stat, null);
-      return null;
-    }
     const stream = fileHandle.createReadStream({
       encoding: "utf-8",
       start: 0,
