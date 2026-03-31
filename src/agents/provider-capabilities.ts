@@ -231,5 +231,17 @@ export function resolveTranscriptToolCallIdMode(
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
     return "strict9";
   }
+  // When a proxy provider (e.g. OpenRouter, Together) routes to a model that
+  // requires strict9 sanitization, the proxy's own capabilities won't include
+  // the strict9 hints. Fall back to checking all known provider fallback
+  // entries so cross-provider routing is handled transparently.
+  for (const fallback of Object.values(PLUGIN_CAPABILITIES_FALLBACKS)) {
+    if (
+      fallback.transcriptToolCallIdMode === "strict9" &&
+      modelIncludesAnyHint(modelId, fallback.transcriptToolCallIdModelHints ?? [])
+    ) {
+      return "strict9";
+    }
+  }
   return undefined;
 }

@@ -203,6 +203,14 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
+  it("activates strict9 for Mistral models routed through proxy providers", () => {
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistral-large-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "mistralai/mistral-7b")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "codestral-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("openrouter", "gpt-4o")).toBeUndefined();
+    expect(resolveTranscriptToolCallIdMode("together", "mistral-large-latest")).toBe("strict9");
+  });
+
   it("treats kimi aliases as native anthropic tool payload providers", () => {
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
