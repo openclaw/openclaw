@@ -209,6 +209,24 @@ describe("browser config", () => {
     expect(profile?.attachOnly).toBe(true);
   });
 
+  it("preserves profile host when dropping stale devtools WS path", () => {
+    const resolved = resolveBrowserConfig({
+      cdpUrl: "http://devbox.local:9000",
+      profiles: {
+        "chrome-local": {
+          cdpPort: 9222,
+          cdpUrl: "ws://10.0.0.42:9222/devtools/browser/stale-id",
+          color: "#0066CC",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "chrome-local");
+    // Host comes from the profile WS URL, not the global cdpUrl.
+    expect(profile?.cdpUrl).toBe("http://10.0.0.42:9222");
+    expect(profile?.cdpHost).toBe("10.0.0.42");
+    expect(profile?.cdpIsLoopback).toBe(false);
+  });
+
   it("rejects unsupported protocols", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
       "must be http(s) or ws(s)",

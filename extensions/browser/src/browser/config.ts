@@ -349,7 +349,9 @@ export function resolveProfile(
     /\/devtools\/browser\//i.test(rawProfileUrl);
 
   if (hasStaleWsPath) {
-    cdpUrl = `${resolved.cdpProtocol}://${resolved.cdpHost}:${cdpPort}`;
+    const parsed = new URL(rawProfileUrl);
+    cdpHost = parsed.hostname;
+    cdpUrl = `${resolved.cdpProtocol}://${cdpHost}:${cdpPort}`;
   } else if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
