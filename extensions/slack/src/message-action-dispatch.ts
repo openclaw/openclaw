@@ -181,6 +181,16 @@ export async function handleSlackMessageAction(params: {
     return await invoke({ action: "emojiList", limit, accountId }, cfg);
   }
 
+  if (action === "channel-list") {
+    return await invoke({ action: "channelList", accountId }, cfg);
+  }
+
+  if (action === "search") {
+    const query = readStringParam(actionParams, "query", { required: true });
+    const limit = readNumberParam(actionParams, "limit", { integer: true });
+    return await invoke({ action: "search", query, limit, accountId }, cfg);
+  }
+
   if (action === "download-file") {
     const fileId = readStringParam(actionParams, "fileId", { required: true });
     const channelId =

@@ -903,6 +903,7 @@ export const SlackAccountSchema = z
         permissions: z.boolean().optional(),
         memberInfo: z.boolean().optional(),
         channelInfo: z.boolean().optional(),
+        channelList: z.boolean().optional(),
         emojiList: z.boolean().optional(),
       })
       .strict()

@@ -5,6 +5,7 @@ import {
   downloadSlackFile,
   editSlackMessage,
   getSlackMemberInfo,
+  listSlackChannels,
   listSlackEmojis,
   listSlackPins,
   listSlackReactions,
@@ -13,6 +14,7 @@ import {
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
+  searchSlackMessages,
   sendSlackMessage,
   unpinSlackMessage,
 } from "./actions.js";
@@ -47,6 +49,7 @@ export const slackActionRuntime = {
   downloadSlackFile,
   editSlackMessage,
   getSlackMemberInfo,
+  listSlackChannels,
   listSlackEmojis,
   listSlackPins,
   listSlackReactions,
@@ -57,6 +60,7 @@ export const slackActionRuntime = {
   recordSlackThreadParticipation,
   removeOwnSlackReactions,
   removeSlackReaction,
+  searchSlackMessages,
   sendSlackMessage,
   unpinSlackMessage,
 };
@@ -463,6 +467,31 @@ export async function handleSlackAction(
       }
     }
     return jsonResult({ ok: true, emojis: result });
+  }
+
+  if (action === "channelList") {
+    if (!isActionEnabled("channelList")) {
+      throw new Error("Slack channel list is disabled.");
+    }
+    const result = readOpts
+      ? await slackActionRuntime.listSlackChannels(readOpts)
+      : await slackActionRuntime.listSlackChannels();
+    return jsonResult({ ok: true, channels: result.channels });
+  }
+
+  if (action === "search") {
+    if (!isActionEnabled("search")) {
+      throw new Error("Slack search is disabled.");
+    }
+    const query = readStringParam(params, "query", { required: true });
+    const limit = readNumberParam(params, "limit", { integer: true });
+    const result = readOpts
+      ? await slackActionRuntime.searchSlackMessages(query, {
+          ...readOpts,
+          limit: limit ?? undefined,
+        })
+      : await slackActionRuntime.searchSlackMessages(query, { limit: limit ?? undefined });
+    return jsonResult({ ok: true, messages: result.messages, total: result.total });
   }
 
   throw new Error(`Unknown action: ${action}`);

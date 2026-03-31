@@ -47,6 +47,21 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
   if (isActionEnabled("emojiList")) {
     actions.add("emoji-list");
   }
+  if (isActionEnabled("channelList")) {
+    actions.add("channel-list");
+  }
+  // search requires a user token with search:read scope; gate only when at least one account
+  // has both a userToken AND search enabled simultaneously (not just one or the other).
+  const hasSearchCapableAccount = accounts.some((account) => {
+    const hasUserToken = Boolean(account.userToken?.trim());
+    const gate = createActionGate(
+      (account.actions ?? cfg.channels?.slack?.actions) as Record<string, boolean | undefined>,
+    );
+    return hasUserToken && gate("search");
+  });
+  if (hasSearchCapableAccount) {
+    actions.add("search");
+  }
   return Array.from(actions);
 }
 
