@@ -381,8 +381,8 @@ function unwrapPnpmDlxInvocation(argv: string[]): string[] | null {
       continue;
     }
     if (token === "--") {
-      idx += 1;
-      continue;
+      const tail = argv.slice(idx + 1);
+      return tail.length > 0 ? tail : null;
     }
     if (!token.startsWith("-")) {
       // Once dlx-specific flags are stripped, the first positional token is the
@@ -820,7 +820,7 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   if (params.shellCommand !== null) {
     return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
   }
-  if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv)) {
+  if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
     return true;
   }
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
@@ -834,7 +834,7 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   return isMutableScriptRunner(executable);
 }
 
-function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[]): boolean {
+function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | undefined): boolean {
   if (normalizePackageManagerExecToken(argv[0] ?? "") !== "pnpm") {
     return false;
   }
@@ -847,14 +847,13 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[]): boolean {
       continue;
     }
     if (token === "--") {
-      idx += 1;
-      continue;
+      return false;
     }
     if (!token.startsWith("-")) {
       if (token !== "dlx") {
         return false;
       }
-      return pnpmDlxTailNeedsFailClosedBinding(argv.slice(idx + 1));
+      return pnpmDlxTailNeedsFailClosedBinding(argv.slice(idx + 1), cwd);
     }
     const [flag] = token.toLowerCase().split("=", 2);
     if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
@@ -865,13 +864,13 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[]): boolean {
       idx += 1;
       continue;
     }
-    return false;
+    return pnpmDlxTailMayNeedStableBinding(argv.slice(idx + 1), cwd);
   }
 
   return false;
 }
 
-function pnpmDlxTailNeedsFailClosedBinding(argv: string[]): boolean {
+function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefined): boolean {
   let idx = 0;
   while (idx < argv.length) {
     const token = argv[idx]?.trim() ?? "";
@@ -880,12 +879,10 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[]): boolean {
       continue;
     }
     if (token === "--") {
-      idx += 1;
-      continue;
+      return pnpmDlxTailMayNeedStableBinding(argv.slice(idx + 1), cwd);
     }
     if (!token.startsWith("-")) {
-      // A concrete dlx command should either bind cleanly or fail closed.
-      return true;
+      return pnpmDlxTailMayNeedStableBinding(argv.slice(idx), cwd);
     }
     const [flag] = token.toLowerCase().split("=", 2);
     if (flag === "-c" || flag === "--shell-mode") {
@@ -899,10 +896,32 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[]): boolean {
       idx += 1;
       continue;
     }
-    return true;
+    return pnpmDlxTailMayNeedStableBinding(argv.slice(idx + 1), cwd);
   }
 
   return true;
+}
+
+function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined): boolean {
+  for (let idx = 0; idx < argv.length; idx += 1) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token || token === "--") {
+      continue;
+    }
+    const candidateArgv = argv.slice(idx);
+    const snapshot = resolveMutableFileOperandSnapshotSync({
+      argv: candidateArgv,
+      cwd,
+      shellCommand: null,
+    });
+    if (!snapshot.ok || snapshot.snapshot) {
+      return true;
+    }
+    if (resolvesToExistingFileSync(candidateArgv[0] ?? "", cwd)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resolveMutableFileOperandSnapshotSync(params: {

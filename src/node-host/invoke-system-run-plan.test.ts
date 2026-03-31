@@ -174,6 +174,15 @@ function expectRuntimeApprovalDenied(command: string[], cwd: string) {
   expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
 }
 
+function expectApprovalPlanWithoutMutableOperand(command: string[], cwd: string) {
+  const prepared = buildSystemRunApprovalPlan({ command, cwd });
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) {
+    throw new Error("unreachable");
+  }
+  expect(prepared.plan.mutableFileOperand).toBeUndefined();
+}
+
 const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects bun package script names that do not bind a concrete file",
@@ -262,6 +271,15 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     binName: "pnpm",
     tmpPrefix: "openclaw-pnpm-dlx-unknown-flag-",
     command: ["pnpm", "dlx", "--future-flag", "tsx", "./run.ts"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
+    },
+  },
+  {
+    name: "rejects pnpm dlx invocations with unrecognized global flags before dlx when they hide a mutable script",
+    binName: "pnpm",
+    tmpPrefix: "openclaw-pnpm-dlx-unknown-prefix-",
+    command: ["pnpm", "--future-flag", "dlx", "tsx", "./run.ts"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
     },
@@ -716,6 +734,43 @@ describe("hardenApprovedExecutionPaths", () => {
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }
+      },
+    });
+  });
+
+  it("allows pnpm dlx package binaries that do not bind a mutable local file", () => {
+    withFakeRuntimeBin({
+      binName: "pnpm",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-bin-"));
+        try {
+          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "hello"], tmp);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("treats -- as the end of pnpm dlx option parsing", () => {
+    withFakeRuntimeBins({
+      binNames: ["pnpm", "tsx"],
+      run: () => {
+        withScriptOperandPlanFixture(
+          {
+            tmpPrefix: "openclaw-pnpm-dlx-double-dash-",
+            fixture: {
+              name: "pnpm dlx double dash",
+              argv: ["pnpm", "dlx", "--", "tsx", "./run.ts"],
+              scriptName: "run.ts",
+              initialBody: 'console.log("SAFE");\n',
+              expectedArgvIndex: 4,
+            },
+          },
+          (fixture, tmp) => {
+            expectMutableFileOperandApprovalPlan(fixture, tmp);
+          },
+        );
       },
     });
   });
