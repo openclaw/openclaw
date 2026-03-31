@@ -209,6 +209,7 @@ Dry-run behavior:
 - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
 - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
 - Policy validation also runs for known unsupported SecretRef target surfaces.
+- Policy checks evaluate the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
 - Exec SecretRef checks are skipped by default during dry-run to avoid command side effects.
 - Use `--allow-exec` with `--dry-run` to opt in to exec SecretRef checks (this may execute provider commands).
 - `--allow-exec` is dry-run only and errors if used without `--dry-run`.
