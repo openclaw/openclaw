@@ -162,6 +162,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
+  includeAuthStoreRefs?: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
@@ -185,20 +186,22 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     loadablePluginOrigins,
   });
 
+  const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
+  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
-
-  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  for (const agentDir of candidateDirs) {
-    const store = structuredClone(loadAuthStore(agentDir));
-    collectAuthStoreAssignments({
-      store,
-      context,
-      agentDir,
-    });
-    authStores.push({ agentDir, store });
+  if (includeAuthStoreRefs) {
+    for (const agentDir of candidateDirs) {
+      const store = structuredClone(loadAuthStore(agentDir));
+      collectAuthStoreAssignments({
+        store,
+        context,
+        agentDir,
+      });
+      authStores.push({ agentDir, store });
+    }
   }
 
   if (context.assignments.length > 0) {

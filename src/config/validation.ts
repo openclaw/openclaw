@@ -10,6 +10,8 @@ import {
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { hasKind } from "../plugins/slots.js";
+import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -30,6 +32,7 @@ import {
 import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
@@ -44,6 +47,7 @@ type AllowedValuesCollection = {
 type JsonSchemaLike = Record<string, unknown>;
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
+const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
     (entry) => [entry.channelId, entry.schema] as const,
@@ -255,6 +259,94 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+function isObjectSecretRefCandidate(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return coerceSecretRef(value) !== null;
+}
+
+function formatUnsupportedMutableSecretRefMessage(path: string): string {
+  return [
+    `SecretRef objects are not supported at ${path}.`,
+    "This credential is runtime-mutable or runtime-managed and must stay a plain string value.",
+    'Use a plain string (env template strings like "${MY_VAR}" are allowed).',
+    `See ${SECRETREF_POLICY_DOC_URL}.`,
+  ].join(" ");
+}
+
+function pushUnsupportedMutableSecretRefIssue(
+  issues: ConfigValidationIssue[],
+  path: string,
+  value: unknown,
+): void {
+  if (!isObjectSecretRefCandidate(value)) {
+    return;
+  }
+  issues.push({
+    path,
+    message: formatUnsupportedMutableSecretRefMessage(path),
+  });
+}
+
+function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  for (const candidate of collectUnsupportedSecretRefConfigCandidates(raw)) {
+    pushUnsupportedMutableSecretRefIssue(issues, candidate.path, candidate.value);
+  }
+
+  return issues;
+}
+
+function isUnsupportedMutableSecretRefSchemaIssue(params: {
+  issue: ConfigValidationIssue;
+  policyIssue: ConfigValidationIssue;
+}): boolean {
+  const { issue, policyIssue } = params;
+  if (issue.path === policyIssue.path) {
+    return /expected string, received object/i.test(issue.message);
+  }
+
+  if (!issue.path || !policyIssue.path || !policyIssue.path.startsWith(`${issue.path}.`)) {
+    return false;
+  }
+
+  const remainder = policyIssue.path.slice(issue.path.length + 1);
+  const childKey = remainder.split(".")[0];
+  if (!childKey) {
+    return false;
+  }
+
+  if (!/Unrecognized key/i.test(issue.message)) {
+    return false;
+  }
+  const unrecognizedKeys = [...issue.message.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  if (unrecognizedKeys.length === 0) {
+    return false;
+  }
+  return unrecognizedKeys.length === 1 && unrecognizedKeys[0] === childKey;
+}
+
+function mergeUnsupportedMutableSecretRefIssues(
+  policyIssues: ConfigValidationIssue[],
+  schemaIssues: ConfigValidationIssue[],
+): ConfigValidationIssue[] {
+  if (policyIssues.length === 0) {
+    return schemaIssues;
+  }
+  const filteredSchemaIssues = schemaIssues.filter(
+    (issue) =>
+      !policyIssues.some((policyIssue) =>
+        isUnsupportedMutableSecretRefSchemaIssue({ issue, policyIssue }),
+      ),
+  );
+  return [...policyIssues, ...filteredSchemaIssues];
+}
+
+export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
+  return collectUnsupportedMutableSecretRefIssues(raw);
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
@@ -364,6 +456,7 @@ export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const legacyIssues = findLegacyConfigIssues(normalizedRaw);
   if (legacyIssues.length > 0) {
     return {
@@ -376,10 +469,14 @@ export function validateConfigObjectRaw(
   }
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
+    const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
       ok: false,
-      issues: validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue)),
+      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
+  }
+  if (policyIssues.length > 0) {
+    return { ok: false, issues: policyIssues };
   }
   const validatedConfig = validated.data as OpenClawConfig;
   const duplicates = findDuplicateAgentDirs(validatedConfig);
@@ -847,7 +944,7 @@ function validateConfigObjectWithPluginsBase(
         enabled = false;
         reason = memoryDecision.reason;
       }
-      if (memoryDecision.selected && record.kind === "memory") {
+      if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = pluginId;
       }
     }

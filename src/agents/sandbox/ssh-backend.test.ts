@@ -135,6 +135,8 @@ async function expectBackendCreationToReject(params: {
 }
 
 describe("ssh sandbox backend", () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(async () => {
     vi.clearAllMocks();
     sshMocks.createSshSandboxSessionFromSettings.mockResolvedValue(createSession());
@@ -157,6 +159,12 @@ describe("ssh sandbox backend", () => {
   });
 
   afterEach(() => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
     vi.restoreAllMocks();
   });
 
@@ -314,6 +322,29 @@ describe("ssh sandbox backend", () => {
       token: execSpec.finalizeToken,
     });
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalled();
+  });
+
+  it("filters blocked secrets from exec subprocess env", async () => {
+    process.env.OPENAI_API_KEY = "sk-test-secret";
+    process.env.LANG = "en_US.UTF-8";
+    const backend = await createSshSandboxBackend({
+      sessionKey: "agent:worker:task",
+      scopeKey: "agent:worker",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/agent",
+      cfg: createBackendSandboxConfig({
+        target: "peter@example.com:2222",
+      }),
+    });
+
+    const execSpec = await backend.buildExecSpec({
+      command: "pwd",
+      env: {},
+      usePty: false,
+    });
+
+    expect(execSpec.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(execSpec.env?.LANG).toBe("en_US.UTF-8");
   });
 
   it("rejects docker binds and missing ssh target", async () => {

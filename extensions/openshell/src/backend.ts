@@ -17,6 +17,7 @@ import {
   disposeSshSandboxSession,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
+  sanitizeEnvVars,
 } from "openclaw/plugin-sdk/sandbox";
 import {
   buildExecRemoteCommand,
@@ -40,6 +41,10 @@ type CreateOpenShellSandboxBackendFactoryParams = {
 type PendingExec = {
   sshSession: SshSandboxSession;
 };
+
+export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
+  return sanitizeEnvVars(process.env).allowed;
+}
 
 export type OpenShellSandboxBackend = SandboxBackendHandle &
   RemoteShellSandboxHandle & {
@@ -123,7 +128,7 @@ async function createOpenShellSandboxBackend(params: {
       const pending = await impl.prepareExec({ command, workdir, env, usePty });
       return {
         argv: pending.argv,
-        env: process.env,
+        env: buildOpenShellSshExecEnv(),
         stdinMode: "pipe-open",
         finalizeToken: pending.token,
       };
@@ -180,7 +185,7 @@ class OpenShellSandboxBackendImpl {
         const pending = await self.prepareExec({ command, workdir, env, usePty });
         return {
           argv: pending.argv,
-          env: process.env,
+          env: buildOpenShellSshExecEnv(),
           stdinMode: "pipe-open",
           finalizeToken: pending.token,
         };

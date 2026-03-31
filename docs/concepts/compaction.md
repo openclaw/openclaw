@@ -84,3 +84,10 @@ survive.
 For advanced configuration (reserve tokens, identifier preservation, custom
 context engines, OpenAI server-side compaction), see the
 [Session Management Deep Dive](/reference/session-management-compaction).
+
+## Related
+
+- [Session](/concepts/session) — session management and lifecycle
+- [Session Pruning](/concepts/session-pruning) — trimming tool results
+- [Context](/concepts/context) — how context is built for agent turns
+- [Hooks](/automation/hooks) — compaction lifecycle hooks (before_compaction, after_compaction)
