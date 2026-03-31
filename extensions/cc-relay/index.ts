@@ -64,8 +64,8 @@ const plugin = {
         );
       }
 
-      const channel = ctx.messageChannel ?? "";
-      const target = ctx.deliveryContext?.target ?? "";
+      const channel = ctx.messageChannel ?? ctx.deliveryContext?.channel ?? "";
+      const target = ctx.deliveryContext?.to ?? "";
       return createCcDispatchTool(() => dispatcher, channel, target);
     }) as OpenClawPluginToolFactory);
 
@@ -119,7 +119,13 @@ function createFileSender(
     try {
       const adapter = await api.runtime.channel.outbound.loadAdapter(channel);
       if (adapter?.sendMedia) {
-        await adapter.sendMedia({ cfg: api.config, to: target, mediaPath: filePath, text: fileName });
+        await adapter.sendMedia({
+          cfg: api.config,
+          to: target,
+          text: fileName,
+          mediaUrl: `file://${filePath}`,
+          mediaLocalRoots: [filePath.replace(/[/\\][^/\\]*$/, "")],
+        });
       } else if (adapter?.sendText) {
         await adapter.sendText({ cfg: api.config, to: target, text: `[File: ${fileName}]` });
       }

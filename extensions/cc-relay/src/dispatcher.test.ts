@@ -14,6 +14,7 @@ vi.mock("./worker.js", () => ({
 
 describe("CcRelayDispatcher", () => {
   const baseConfig: CcRelayConfig = {
+    mode: "hybrid",
     claudeBin: "claude",
     workdir: "/tmp/test-workspace",
     runAsUser: "",
