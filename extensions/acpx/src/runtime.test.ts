@@ -1073,6 +1073,100 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).not.toContain("--settings");
   });
 
+  it("passes --settings to sessions-ensure when computerUse is enabled", async () => {
+    const { config, logPath } = await createMockRuntimeFixture();
+    const runtime = new AcpxRuntime(
+      {
+        ...config,
+        computerUse: true,
+      },
+      { logger: NOOP_LOGGER },
+    );
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:cu-ensure",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensure = logs.find(
+      (entry) =>
+        entry.kind === "ensure" && String(entry.sessionName ?? "") === "agent:codex:acp:cu-ensure",
+    );
+    expect(ensure).toBeDefined();
+    const ensureArgs = (ensure?.args as string[]) ?? [];
+    const settingsIndex = ensureArgs.indexOf("--settings");
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    const settingsValue = JSON.parse(ensureArgs[settingsIndex + 1]);
+    expect(settingsValue).toEqual({
+      enableBuiltinMcpServers: ["computer-use"],
+    });
+  });
+
+  it("passes --settings to sessions-new when computerUse is enabled", async () => {
+    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
+    try {
+      const { config, logPath } = await createMockRuntimeFixture();
+      const runtime = new AcpxRuntime(
+        {
+          ...config,
+          computerUse: true,
+        },
+        { logger: NOOP_LOGGER },
+      );
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:cu-new",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const newEntry = logs.find(
+        (entry) =>
+          entry.kind === "new" && String(entry.sessionName ?? "") === "agent:codex:acp:cu-new",
+      );
+      expect(newEntry).toBeDefined();
+      const newArgs = (newEntry?.args as string[]) ?? [];
+      const settingsIndex = newArgs.indexOf("--settings");
+      expect(settingsIndex).toBeGreaterThanOrEqual(0);
+      const settingsValue = JSON.parse(newArgs[settingsIndex + 1]);
+      expect(settingsValue).toEqual({
+        enableBuiltinMcpServers: ["computer-use"],
+      });
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+    }
+  });
+
+  it("does not pass --settings to session creation when computerUse is disabled", async () => {
+    const { config, logPath } = await createMockRuntimeFixture();
+    const runtime = new AcpxRuntime(
+      {
+        ...config,
+        computerUse: false,
+      },
+      { logger: NOOP_LOGGER },
+    );
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:no-cu-ensure",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensure = logs.find(
+      (entry) =>
+        entry.kind === "ensure" &&
+        String(entry.sessionName ?? "") === "agent:codex:acp:no-cu-ensure",
+    );
+    expect(ensure).toBeDefined();
+    const ensureArgs = (ensure?.args as string[]) ?? [];
+    expect(ensureArgs).not.toContain("--settings");
+  });
+
   it("includes platform warning in doctor report when computerUse is enabled on non-macOS", async () => {
     const { config } = await createMockRuntimeFixture();
     const runtime = new AcpxRuntime(
