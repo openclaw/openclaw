@@ -1,4 +1,7 @@
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  buildPluginApprovalPendingReplyPayload,
+  matchesApprovalRequestFilters,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createExecApprovalChannelRuntime,
@@ -17,10 +20,9 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { parseAgentSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { telegramNativeApprovalAdapter } from "./approval-native.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
@@ -130,29 +132,15 @@ function matchesFilters(params: {
   if (approvers.length === 0) {
     return false;
   }
-  if (config.agentFilter?.length) {
-    const agentId =
-      params.request.request.agentId ??
-      parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
-    if (!agentId || !config.agentFilter.includes(agentId)) {
-      return false;
-    }
-  }
-  if (config.sessionFilter?.length) {
-    const sessionKey = params.request.request.sessionKey;
-    if (!sessionKey) {
-      return false;
-    }
-    const matches = config.sessionFilter.some((pattern) => {
-      if (sessionKey.includes(pattern)) {
-        return true;
-      }
-      const regex = compileSafeRegex(pattern);
-      return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
-    });
-    if (!matches) {
-      return false;
-    }
+  if (
+    !matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: config.agentFilter,
+      sessionFilter: config.sessionFilter,
+      fallbackAgentIdFromSessionKey: true,
+    })
+  ) {
+    return false;
   }
   const boundAccountId = resolveBoundTelegramAccountId({
     cfg: params.cfg,

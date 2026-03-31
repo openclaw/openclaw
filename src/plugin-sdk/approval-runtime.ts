@@ -38,6 +38,11 @@ export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers
 export { createApproverRestrictedNativeApprovalAdapter } from "./approval-delivery-helpers.js";
 export { resolveApprovalApprovers } from "./approval-approvers.js";
 export {
+  matchesApprovalRequestFilters,
+  matchesApprovalRequestSessionFilter,
+  type ApprovalRequestFilterInput,
+} from "../infra/approval-request-filters.js";
+export {
   buildApprovalPendingReplyPayload,
   buildApprovalResolvedReplyPayload,
   buildPluginApprovalPendingReplyPayload,

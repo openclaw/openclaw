@@ -10,6 +10,7 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
+import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -30,7 +31,6 @@ import type {
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordNativeApprovalAdapter } from "../approval-native.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
@@ -188,14 +188,6 @@ class ExecApprovalActionRow extends Row<Button> {
       ),
     ]);
   }
-}
-
-function resolveApprovalAgentId(request: ApprovalRequest): string | null {
-  return request.request.agentId?.trim() || null;
-}
-
-function resolveApprovalSessionKey(request: ApprovalRequest): string | null {
-  return request.request.sessionKey?.trim() || null;
 }
 
 function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
@@ -491,36 +483,11 @@ export class DiscordExecApprovalHandler {
       return false;
     }
 
-    // Check agent filter
-    if (config.agentFilter?.length) {
-      const agentId = resolveApprovalAgentId(request);
-      if (!agentId) {
-        return false;
-      }
-      if (!config.agentFilter.includes(agentId)) {
-        return false;
-      }
-    }
-
-    // Check session filter (substring match)
-    if (config.sessionFilter?.length) {
-      const session = resolveApprovalSessionKey(request);
-      if (!session) {
-        return false;
-      }
-      const matches = config.sessionFilter.some((p) => {
-        if (session.includes(p)) {
-          return true;
-        }
-        const regex = compileSafeRegex(p);
-        return regex ? testRegexWithBoundedInput(regex, session) : false;
-      });
-      if (!matches) {
-        return false;
-      }
-    }
-
-    return true;
+    return matchesApprovalRequestFilters({
+      request: request.request,
+      agentFilter: config.agentFilter,
+      sessionFilter: config.sessionFilter,
+    });
   }
 
   async start(): Promise<void> {
