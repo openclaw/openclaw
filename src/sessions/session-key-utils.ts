@@ -4,6 +4,10 @@ export type ParsedAgentSessionKey = {
 };
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
+export type ParsedThreadSessionSuffix = {
+  baseSessionKey: string | undefined;
+  threadId: string | undefined;
+};
 
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
@@ -107,26 +111,55 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
 
-const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
+function normalizeThreadSuffixChannelHint(value: string | undefined | null): string | undefined {
+  const trimmed = (value ?? "").trim().toLowerCase();
+  return trimmed || undefined;
+}
+
+function inferThreadSuffixChannelHint(sessionKey: string): string | undefined {
+  const parts = sessionKey.split(":").filter(Boolean);
+  if (parts.length === 0) {
+    return undefined;
+  }
+  if ((parts[0] ?? "").trim().toLowerCase() === "agent") {
+    return normalizeThreadSuffixChannelHint(parts[2]);
+  }
+  return normalizeThreadSuffixChannelHint(parts[0]);
+}
+
+export function parseThreadSessionSuffix(
+  sessionKey: string | undefined | null,
+  options?: { channelHint?: string | null },
+): ParsedThreadSessionSuffix {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return { baseSessionKey: undefined, threadId: undefined };
+  }
+
+  const channelHint =
+    normalizeThreadSuffixChannelHint(options?.channelHint) ?? inferThreadSuffixChannelHint(raw);
+  const topicIndex = channelHint === "telegram" ? raw.lastIndexOf(":topic:") : -1;
+  const threadIndex = raw.lastIndexOf(":thread:");
+  const markerIndex = Math.max(topicIndex, threadIndex);
+  const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
+
+  const baseSessionKey = markerIndex === -1 ? raw : raw.slice(0, markerIndex);
+  const threadIdRaw = markerIndex === -1 ? undefined : raw.slice(markerIndex + marker.length);
+  const threadId = threadIdRaw?.trim() || undefined;
+
+  return { baseSessionKey, threadId };
+}
 
 export function resolveThreadParentSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {
-  const raw = (sessionKey ?? "").trim();
-  if (!raw) {
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(sessionKey);
+  if (!threadId) {
     return null;
   }
-  const normalized = raw.toLowerCase();
-  let idx = -1;
-  for (const marker of THREAD_SESSION_MARKERS) {
-    const candidate = normalized.lastIndexOf(marker);
-    if (candidate > idx) {
-      idx = candidate;
-    }
-  }
-  if (idx <= 0) {
+  const parent = baseSessionKey?.trim();
+  if (!parent) {
     return null;
   }
-  const parent = raw.slice(0, idx).trim();
-  return parent ? parent : null;
+  return parent;
 }

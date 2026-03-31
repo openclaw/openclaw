@@ -4,7 +4,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -30,7 +30,9 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
 
   const restJoined = rest.join(":");
-  const { baseSessionKey, threadId } = parseSessionThreadInfo(restJoined);
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(restJoined, {
+    channelHint: channelRaw,
+  });
   const id = (baseSessionKey ?? restJoined).trim();
 
   if (!id) {

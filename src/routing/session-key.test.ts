@@ -3,6 +3,8 @@ import {
   deriveSessionChatType,
   getSubagentDepth,
   isCronSessionKey,
+  parseThreadSessionSuffix,
+  resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
   classifySessionKeyShape,
@@ -81,6 +83,35 @@ describe("deriveSessionChatType", () => {
     { key: "", expected: "unknown" },
   ] as const)("derives chat type for %j => $expected", ({ key, expected }) => {
     expect(deriveSessionChatType(key)).toBe(expected);
+  });
+});
+
+describe("thread session suffix parsing", () => {
+  it("preserves feishu conversation ids that embed :topic: in the base id", () => {
+    expect(
+      parseThreadSessionSuffix(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toEqual({
+      baseSessionKey:
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      threadId: undefined,
+    });
+    expect(
+      resolveThreadParentSessionKey(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toBeNull();
+  });
+
+  it("still parses telegram topic session suffixes", () => {
+    expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:topic:77")).toEqual({
+      baseSessionKey: "agent:main:telegram:group:-100123",
+      threadId: "77",
+    });
+    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBe(
+      "agent:main:telegram:group:-100123",
+    );
   });
 });
 
