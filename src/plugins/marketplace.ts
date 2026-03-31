@@ -589,6 +589,7 @@ function resolveSafeMarketplaceDownloadFileName(url: string, fallback: string): 
   if (
     fileName === "." ||
     fileName === ".." ||
+    /^[a-zA-Z]:/.test(fileName) ||
     path.isAbsolute(fileName) ||
     fileName.includes("/") ||
     fileName.includes("\\")

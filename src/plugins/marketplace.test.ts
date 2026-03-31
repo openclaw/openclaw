@@ -368,6 +368,38 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("rejects Windows drive-relative archive filenames from redirects", async () => {
+    await withTempDir(async (rootDir) => {
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: new Response(new Blob([Buffer.from("tgz-bytes")]), {
+          status: 200,
+        }),
+        finalUrl: "https://cdn.example.com/C:plugin.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "failed to download https://example.com/frontend-design.tgz: invalid download filename",
+      });
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("falls back to the default archive timeout when the caller passes NaN", async () => {
     await withTempDir(async (rootDir) => {
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
