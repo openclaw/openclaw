@@ -54,6 +54,7 @@ export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
   sourceId?: string;
+  requesterSessionKey: string;
   ownerKey: string;
   scopeKind: TaskScopeKind;
   childSessionKey?: string;
