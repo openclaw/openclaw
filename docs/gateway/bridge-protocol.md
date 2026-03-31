@@ -9,14 +9,9 @@ title: "Bridge Protocol"
 
 # Bridge protocol (legacy node transport)
 
-The Bridge protocol is a **legacy** node transport (TCP JSONL). New node clients
-should use the unified Gateway WebSocket protocol instead.
-
-If you are building an operator or node client, use the
-[Gateway protocol](/gateway/protocol).
-
-**Note:** Current OpenClaw builds no longer ship the TCP bridge listener; this document is kept for historical reference.
-Legacy `bridge.*` config keys are no longer part of the config schema.
+<Warning>
+The TCP bridge has been **removed**. Current OpenClaw builds do not ship the bridge listener and `bridge.*` config keys are no longer in the schema. This page is kept for historical reference only. Use the [Gateway Protocol](/gateway/protocol) for all node/operator clients.
+</Warning>
 
 ## Why we have both
 
