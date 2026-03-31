@@ -76,11 +76,12 @@ export const recordSlackThreadParticipation: FacadeModule["recordSlackThreadPart
   loadFacadeModule()["recordSlackThreadParticipation"](
     ...args,
   )) as FacadeModule["recordSlackThreadParticipation"];
-export const resolveDefaultSlackAccountId: FacadeModule["resolveDefaultSlackAccountId"] =
-  ((...args) =>
-    loadFacadeModule()["resolveDefaultSlackAccountId"](
-      ...args,
-    )) as FacadeModule["resolveDefaultSlackAccountId"];
+export const resolveDefaultSlackAccountId: FacadeModule["resolveDefaultSlackAccountId"] = ((
+  ...args
+) =>
+  loadFacadeModule()["resolveDefaultSlackAccountId"](
+    ...args,
+  )) as FacadeModule["resolveDefaultSlackAccountId"];
 export const resolveSlackAutoThreadId: FacadeModule["resolveSlackAutoThreadId"] = ((...args) =>
   loadFacadeModule()["resolveSlackAutoThreadId"](
     ...args,
@@ -91,11 +92,12 @@ export const resolveSlackGroupRequireMention: FacadeModule["resolveSlackGroupReq
   loadFacadeModule()["resolveSlackGroupRequireMention"](
     ...args,
   )) as FacadeModule["resolveSlackGroupRequireMention"];
-export const resolveSlackRuntimeGroupPolicy: FacadeModule["resolveSlackRuntimeGroupPolicy"] =
-  ((...args) =>
-    loadFacadeModule()["resolveSlackRuntimeGroupPolicy"](
-      ...args,
-    )) as FacadeModule["resolveSlackRuntimeGroupPolicy"];
+export const resolveSlackRuntimeGroupPolicy: FacadeModule["resolveSlackRuntimeGroupPolicy"] = ((
+  ...args
+) =>
+  loadFacadeModule()["resolveSlackRuntimeGroupPolicy"](
+    ...args,
+  )) as FacadeModule["resolveSlackRuntimeGroupPolicy"];
 export const resolveSlackGroupToolPolicy: FacadeModule["resolveSlackGroupToolPolicy"] = ((
   ...args
 ) =>

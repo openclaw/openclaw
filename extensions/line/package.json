@@ -1,14 +1,11 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.3.31-beta.1",
+  "version": "2026.3.31",
   "private": true,
   "description": "OpenClaw LINE channel plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "peerDependencies": {
-    "openclaw": ">=2026.3.31-beta.1"
+    "openclaw": ">=2026.3.31"
   },
   "peerDependenciesMeta": {
     "openclaw": {

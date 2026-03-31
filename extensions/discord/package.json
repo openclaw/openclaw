@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.3.31-beta.1",
+  "version": "2026.3.31",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
@@ -10,11 +10,8 @@
     "https-proxy-agent": "^8.0.0",
     "opusscript": "^0.1.1"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "peerDependencies": {
-    "openclaw": ">=2026.3.31-beta.1"
+    "openclaw": ">=2026.3.31"
   },
   "peerDependenciesMeta": {
     "openclaw": {

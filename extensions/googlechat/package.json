@@ -1,17 +1,14 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.3.31-beta.1",
+  "version": "2026.3.31",
   "private": true,
   "description": "OpenClaw Google Chat channel plugin",
   "type": "module",
   "dependencies": {
     "google-auth-library": "^10.6.2"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "peerDependencies": {
-    "openclaw": ">=2026.3.31-beta.1"
+    "openclaw": ">=2026.3.31"
   },
   "peerDependenciesMeta": {
     "openclaw": {

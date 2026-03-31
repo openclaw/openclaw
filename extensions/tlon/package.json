@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.3.31-beta.1",
+  "version": "2026.3.31",
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
@@ -9,11 +9,8 @@
     "@tloncorp/tlon-skill": "0.3.1",
     "@urbit/aura": "^3.0.0"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "peerDependencies": {
-    "openclaw": ">=2026.3.31-beta.1"
+    "openclaw": ">=2026.3.31"
   },
   "peerDependenciesMeta": {
     "openclaw": {
