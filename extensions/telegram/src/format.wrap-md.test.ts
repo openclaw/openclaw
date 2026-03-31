@@ -196,9 +196,9 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     expect(chunks.map((chunk) => chunk.text).join("")).toBe("alpha <<");
     expect(chunks[0]?.text).toBe("alpha ");
     expect(chunks.every((chunk) => chunk.html.length <= 13)).toBe(true);
-    expect(chunks.every((chunk) => chunk.html.startsWith("<b>") && chunk.html.endsWith("</b>"))).toBe(
-      true,
-    );
+    expect(
+      chunks.every((chunk) => chunk.html.startsWith("<b>") && chunk.html.endsWith("</b>")),
+    ).toBe(true);
   });
 
   it("does not rely on monotonic html length for sliced file refs", () => {

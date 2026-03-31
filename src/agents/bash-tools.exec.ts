@@ -1,12 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import {
-  type ExecHost,
-  loadExecApprovals,
-  maxAsk,
-  minSecurity,
-} from "../infra/exec-approvals.js";
+import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
+import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -15,6 +11,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -175,6 +172,261 @@ async function validateScriptFileForShellBleed(params: {
           `This looks like a shell command, not JavaScript.`,
       );
     }
+  }
+}
+
+type ParsedExecApprovalCommand = {
+  approvalId: string;
+  decision: "allow-once" | "allow-always" | "deny";
+};
+
+function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
+  const normalized = raw.trimStart();
+  const match = normalized.match(
+    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
+  );
+  if (!match) {
+    return null;
+  }
+  return {
+    approvalId: match[1],
+    decision:
+      match[2].toLowerCase() === "always"
+        ? "allow-always"
+        : (match[2].toLowerCase() as ParsedExecApprovalCommand["decision"]),
+  };
+}
+
+function rejectExecApprovalShellCommand(command: string): void {
+  const isEnvAssignmentToken = (token: string): boolean =>
+    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
+  const shellWrappers = new Set(["bash", "dash", "fish", "ksh", "sh", "zsh"]);
+  const commandStandaloneOptions = new Set(["-p", "-v", "-V"]);
+  const envOptionsWithValues = new Set([
+    "-C",
+    "-S",
+    "-u",
+    "--argv0",
+    "--block-signal",
+    "--chdir",
+    "--default-signal",
+    "--ignore-signal",
+    "--split-string",
+    "--unset",
+  ]);
+  const execOptionsWithValues = new Set(["-a"]);
+  const execStandaloneOptions = new Set(["-c", "-l"]);
+  const sudoOptionsWithValues = new Set([
+    "-C",
+    "-D",
+    "-g",
+    "-p",
+    "-R",
+    "-T",
+    "-U",
+    "-u",
+    "--chdir",
+    "--close-from",
+    "--group",
+    "--host",
+    "--other-user",
+    "--prompt",
+    "--role",
+    "--type",
+    "--user",
+  ]);
+  const sudoStandaloneOptions = new Set(["-A", "-E", "--askpass", "--preserve-env"]);
+  const extractEnvSplitStringPayload = (argv: string[]): string[] => {
+    const remaining = [...argv];
+    while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
+      remaining.shift();
+    }
+    if (remaining[0] !== "env") {
+      return [];
+    }
+    remaining.shift();
+    const payloads: string[] = [];
+    while (remaining.length > 0) {
+      while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
+        remaining.shift();
+      }
+      const token: string | undefined = remaining[0];
+      if (!token) {
+        break;
+      }
+      if (token === "--") {
+        remaining.shift();
+        continue;
+      }
+      if (!token.startsWith("-") || token === "-") {
+        break;
+      }
+      const option = remaining.shift()!;
+      const normalized = option.split("=", 1)[0];
+      if (normalized === "-S" || normalized === "--split-string") {
+        const value = option.includes("=")
+          ? option.slice(option.indexOf("=") + 1)
+          : remaining.shift();
+        if (value?.trim()) {
+          payloads.push(value);
+        }
+        continue;
+      }
+      if (envOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
+        remaining.shift();
+      }
+    }
+    return payloads;
+  };
+  const stripApprovalCommandPrefixes = (argv: string[]): string[] => {
+    const remaining = [...argv];
+    while (remaining.length > 0) {
+      while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
+        remaining.shift();
+      }
+
+      const token = remaining[0];
+      if (!token) {
+        break;
+      }
+      if (token === "--") {
+        remaining.shift();
+        continue;
+      }
+      if (token === "env") {
+        remaining.shift();
+        while (remaining.length > 0) {
+          while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
+            remaining.shift();
+          }
+          const envToken = remaining[0];
+          if (!envToken) {
+            break;
+          }
+          if (envToken === "--") {
+            remaining.shift();
+            continue;
+          }
+          if (!envToken.startsWith("-") || envToken === "-") {
+            break;
+          }
+          const option = remaining.shift()!;
+          const normalized = option.split("=", 1)[0];
+          if (envOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
+            remaining.shift();
+          }
+        }
+        continue;
+      }
+      if (token === "command" || token === "builtin") {
+        remaining.shift();
+        while (remaining[0]?.startsWith("-")) {
+          const option = remaining.shift()!;
+          if (option === "--") {
+            break;
+          }
+          if (!commandStandaloneOptions.has(option.split("=", 1)[0])) {
+            continue;
+          }
+        }
+        continue;
+      }
+      if (token === "exec") {
+        remaining.shift();
+        while (remaining[0]?.startsWith("-")) {
+          const option = remaining.shift()!;
+          if (option === "--") {
+            break;
+          }
+          const normalized = option.split("=", 1)[0];
+          if (execStandaloneOptions.has(normalized)) {
+            continue;
+          }
+          if (execOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
+            remaining.shift();
+          }
+        }
+        continue;
+      }
+      if (token === "sudo") {
+        remaining.shift();
+        while (remaining[0]?.startsWith("-")) {
+          const option = remaining.shift()!;
+          if (option === "--") {
+            break;
+          }
+          const normalized = option.split("=", 1)[0];
+          if (sudoStandaloneOptions.has(normalized)) {
+            continue;
+          }
+          if (sudoOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
+            remaining.shift();
+          }
+        }
+        continue;
+      }
+      break;
+    }
+    return remaining;
+  };
+  const extractShellWrapperPayload = (argv: string[]): string[] => {
+    const [commandName, ...rest] = argv;
+    if (!commandName || !shellWrappers.has(path.basename(commandName))) {
+      return [];
+    }
+    for (let i = 0; i < rest.length; i += 1) {
+      const token = rest[i];
+      if (!token) {
+        continue;
+      }
+      if (token === "-c" || token === "-lc" || token === "-ic" || token === "-xc") {
+        return rest[i + 1] ? [rest[i + 1]] : [];
+      }
+      if (/^-[^-]*c[^-]*$/u.test(token)) {
+        return rest[i + 1] ? [rest[i + 1]] : [];
+      }
+    }
+    return [];
+  };
+  const buildCandidates = (argv: string[]): string[] => {
+    const envSplitCandidates = extractEnvSplitStringPayload(argv).flatMap((payload) => {
+      const innerArgv = splitShellArgs(payload);
+      return innerArgv ? buildCandidates(innerArgv) : [payload];
+    });
+    const stripped = stripApprovalCommandPrefixes(argv);
+    const shellWrapperCandidates = extractShellWrapperPayload(stripped).flatMap((payload) => {
+      const innerArgv = splitShellArgs(payload);
+      return innerArgv ? buildCandidates(innerArgv) : [payload];
+    });
+    return [
+      ...(stripped.length > 0 ? [stripped.join(" ")] : []),
+      ...envSplitCandidates,
+      ...shellWrapperCandidates,
+    ];
+  };
+
+  const rawCommand = command.trim();
+  const analysis = analyzeShellCommand({ command: rawCommand });
+  const candidates = analysis.ok
+    ? analysis.segments.flatMap((segment) => buildCandidates(segment.argv))
+    : rawCommand
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .flatMap((line) => {
+          const argv = splitShellArgs(line);
+          return argv ? buildCandidates(argv) : [line];
+        });
+  for (const candidate of candidates) {
+    if (!parseExecApprovalShellCommand(candidate)) {
+      continue;
+    }
+    throw new Error(
+      [
+        "exec cannot run /approve commands.",
+        "Show the /approve command to the user as chat text, or route it through the approval command handler instead of shell execution.",
+      ].join(" "),
+    );
   }
 }
 
@@ -383,6 +635,7 @@ export function createExecTool(
         // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
+      rejectExecApprovalShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =
