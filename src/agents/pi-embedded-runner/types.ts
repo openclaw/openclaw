@@ -40,6 +40,7 @@ export type EmbeddedPiRunMeta = {
     kind:
       | "context_overflow"
       | "compaction_failure"
+      | "plugin_blocked"
       | "role_ordering"
       | "image_size"
       | "retry_limit";
