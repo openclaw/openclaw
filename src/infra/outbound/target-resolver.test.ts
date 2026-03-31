@@ -244,11 +244,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     mocks.getActivePluginRegistry.mockReturnValue({
       channels: [{ plugin: { id: "discord" } }],
     } as unknown as ReturnType<typeof mocks.getActivePluginRegistry>);
-    mocks.getChannelPlugin
-      .mockReturnValueOnce(undefined)
-      .mockReturnValue(plugin)
-      .mockReturnValue(plugin)
-      .mockReturnValue(plugin);
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined).mockReturnValue(plugin);
     mocks.listGroups.mockResolvedValue([]);
     mocks.listGroupsLive.mockResolvedValue([entry]);
 

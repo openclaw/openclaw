@@ -392,13 +392,15 @@ export async function resolveMessagingTarget(params: {
     return { ok: false, error: new Error("Target is required") };
   }
   // Ensure the requested channel plugin is bootstrapped before any
-  // getChannelPlugin calls in this resolution path.  When the active plugin
-  // registry is non-empty but missing the requested channel,
-  // resolveOutboundChannelPlugin triggers the same bootstrap path used by the
-  // outbound send flow, preventing "Unknown channel" / "Unknown target" errors.
+  // provider-specific normalization or getChannelPlugin calls in this
+  // resolution path. When the active plugin registry is non-empty but missing
+  // the requested channel, resolveOutboundChannelPlugin triggers the same
+  // bootstrap path used by the outbound send flow, preventing "Unknown
+  // channel" / "Unknown target" errors.
   // See: https://github.com/openclaw/openclaw/issues/55338
-  resolveOutboundChannelPlugin({ channel: params.channel, cfg: params.cfg });
-  const plugin = getChannelPlugin(params.channel);
+  const plugin =
+    resolveOutboundChannelPlugin({ channel: params.channel, cfg: params.cfg }) ??
+    getChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind);
@@ -520,10 +522,10 @@ export async function lookupDirectoryDisplay(params: {
   accountId?: string | null;
   runtime?: RuntimeEnv;
 }): Promise<string | undefined> {
-  const normalized = normalizeTargetForProvider(params.channel, params.targetId) ?? params.targetId;
-
   // Ensure the channel plugin is available before directory lookups.
   resolveOutboundChannelPlugin({ channel: params.channel, cfg: params.cfg });
+
+  const normalized = normalizeTargetForProvider(params.channel, params.targetId) ?? params.targetId;
 
   // Targets can resolve to either peers (DMs) or groups. Try both.
   const [groups, users] = await Promise.all([
