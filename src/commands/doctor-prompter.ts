@@ -16,6 +16,8 @@ export type DoctorOptions = {
   repair?: boolean;
   force?: boolean;
   generateGatewayToken?: boolean;
+  watch?: boolean;
+  intervalMs?: number;
 };
 
 export type DoctorPrompter = {
