@@ -169,7 +169,7 @@ function describeUnknownAllowlistSuffix(params: {
   hasOtherEntries: boolean;
 }): string {
   const preface = params.strippedAllowlist
-    ? "Ignoring allowlist so core tools remain available."
+    ? "Allowlist contains only plugin entries; core tools will not be available."
     : "";
   const detail =
     params.hasGatedCoreEntries && params.hasOtherEntries

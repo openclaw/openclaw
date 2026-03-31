@@ -10,8 +10,11 @@ function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
   if (!Array.isArray(extra) || extra.length === 0) {
     return base;
   }
-  if (!Array.isArray(base) || base.length === 0) {
+  if (!Array.isArray(base)) {
     return Array.from(new Set(extra));
+  }
+  if (base.length === 0) {
+    return base;
   }
   return Array.from(new Set([...base, ...extra]));
 }
