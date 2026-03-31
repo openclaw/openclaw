@@ -87,6 +87,8 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
+  agentGroupId?: string;
   sandboxed?: boolean;
 };
 
@@ -360,7 +362,39 @@ function resolveConversationIdForThreadBinding(params: {
   channel?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): string | undefined {
+  const channel = params.channel?.trim().toLowerCase();
+  const normalizedThreadId =
+    params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
+  if (channel === "telegram") {
+    const rawChatId = (params.groupId ?? params.to ?? "").trim();
+    let chatId = rawChatId;
+    while (true) {
+      const next = (() => {
+        if (/^(telegram|tg):/i.test(chatId)) {
+          return chatId.replace(/^(telegram|tg):/i, "").trim();
+        }
+        if (/^(group|channel):/i.test(chatId)) {
+          return chatId.replace(/^(group|channel):/i, "").trim();
+        }
+        return chatId;
+      })();
+      if (next === chatId) {
+        break;
+      }
+      chatId = next;
+    }
+    chatId = chatId
+      .replace(/:topic:\d+$/i, "")
+      .replace(/:\d+$/i, "")
+      .trim();
+    if (/^-?\d+$/.test(chatId)) {
+      return normalizedThreadId ? `${chatId}:topic:${normalizedThreadId}` : chatId;
+    }
+    return undefined;
+  }
+
   const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
@@ -368,8 +402,6 @@ function resolveConversationIdForThreadBinding(params: {
   if (genericConversationId) {
     return genericConversationId;
   }
-
-  const channel = params.channel?.trim().toLowerCase();
   const target = params.to?.trim() || "";
   if (channel === "line") {
     const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
@@ -390,6 +422,7 @@ function prepareAcpThreadBinding(params: {
   accountId?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
   const channel = params.channel?.trim().toLowerCase();
   if (!channel) {
@@ -444,12 +477,13 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
-  const conversationId = resolveConversationIdForThreadBinding({
+  const conversationIdRaw = resolveConversationIdForThreadBinding({
     channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
+    groupId: params.groupId,
   });
-  if (!conversationId) {
+  if (!conversationIdRaw) {
     return {
       ok: false,
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
@@ -462,7 +496,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       placement,
-      conversationId,
+      conversationId: conversationIdRaw,
     },
   };
 }
@@ -752,7 +786,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requestThreadBinding = params.thread === true;
+  let requestThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -819,6 +853,7 @@ export async function spawnAcpDirect(
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,
       threadId: ctx.agentThreadId,
+      groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {
       return {

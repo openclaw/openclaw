@@ -1260,7 +1260,7 @@ describe("spawnAcpDirect", () => {
     expect(notifyOrder[0] > agentCallOrder).toBe(true);
   });
 
-  it("keeps inline delivery for thread-bound ACP session mode", async () => {
+  it("binds Telegram forum-topic ACP sessions to the current topic", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
       channels: {
@@ -1296,11 +1296,22 @@ describe("spawnAcpDirect", () => {
         agentAccountId: "default",
         agentTo: "telegram:-1003342490704",
         agentThreadId: "2",
+        agentGroupId: "-1003342490704",
       },
     );
 
     expect(result.status).toBe("accepted");
     expect(result.mode).toBe("session");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1003342490704:topic:2",
+        }),
+      }),
+    );
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
