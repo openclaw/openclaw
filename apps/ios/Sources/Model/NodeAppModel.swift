@@ -852,10 +852,7 @@ final class NodeAppModel {
                 self.screen.showDefaultCanvas()
             } else {
                 let trustedA2UIURL = await self.resolveA2UIHostURL()
-                // Raw string equality is intentional: resolveA2UIHostURL() always returns a
-                // canonically lower-cased URL via URL.absoluteString, so this is consistent
-                // with the normalised comparison used downstream in isTrustedCanvasUIURL.
-                self.screen.navigate(to: url, trustA2UIActions: trustedA2UIURL == url)
+                self.screen.navigate(to: url, trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(url))
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
@@ -864,8 +861,7 @@ final class NodeAppModel {
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
             let trustedA2UIURL = await self.resolveA2UIHostURL()
-            // Raw string equality is intentional: see canvas.present comment above.
-            self.screen.navigate(to: params.url, trustA2UIActions: trustedA2UIURL == params.url)
+            self.screen.navigate(to: params.url, trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(params.url))
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)

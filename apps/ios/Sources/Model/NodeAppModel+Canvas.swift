@@ -33,6 +33,19 @@ extension NodeAppModel {
         return base.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=ios"
     }
 
+    /// Normalize a URL string for trust comparison: lowercase scheme/host and strip fragment.
+    /// This matches the normalization applied by ScreenController.isTrustedCanvasUIURL so that
+    /// SPA hash-routing fragments and scheme/host casing do not silently prevent trust being set.
+    static func normalizeURLForTrustComparison(_ raw: String) -> String {
+        guard let url = URL(string: raw),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return raw }
+        components.fragment = nil
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        return components.url?.absoluteString ?? raw
+    }
+
     func showA2UIOnConnectIfNeeded() async {
         await MainActor.run {
             // Keep the bundled home canvas as the default connected view.
