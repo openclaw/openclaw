@@ -273,9 +273,20 @@ vi.mock("./startup-verification.js", () => ({
   ensureMatrixStartupVerification: vi.fn(),
 }));
 
+const { monitorMatrixProvider } = await import("./index.js");
+
 describe("monitorMatrixProvider", () => {
+  async function startMonitorAndAbortAfterStartup(): Promise<void> {
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+    });
+    abortController.abort();
+    await monitorPromise;
+  }
+
   beforeEach(() => {
-    vi.resetModules();
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
@@ -296,11 +307,7 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("registers Matrix thread bindings before starting the client", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
-    const abortController = new AbortController();
-    abortController.abort();
-
-    await monitorMatrixProvider({ abortSignal: abortController.signal });
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.callOrder).toEqual([
       "prepare-client",
@@ -312,11 +319,7 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("resolves text chunk limit for the effective Matrix account", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
-    const abortController = new AbortController();
-    abortController.abort();
-
-    await monitorMatrixProvider({ abortSignal: abortController.signal });
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.resolveTextChunkLimit).toHaveBeenCalledWith(
       expect.anything(),
@@ -326,7 +329,6 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("cleans up thread bindings and shared clients when startup fails", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
     hoisted.state.startClientError = new Error("start failed");
 
     await expect(monitorMatrixProvider()).rejects.toThrow("start failed");
@@ -340,11 +342,7 @@ describe("monitorMatrixProvider", () => {
 
   it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
     hoisted.client.hasPersistedSyncState.mockReturnValue(true);
-    const { monitorMatrixProvider } = await import("./index.js");
-    const abortController = new AbortController();
-    abortController.abort();
-
-    await monitorMatrixProvider({ abortSignal: abortController.signal });
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.createMatrixRoomMessageHandler).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -354,7 +352,6 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("stops sync, drains decryptions, then waits for in-flight handlers before persisting", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
     const abortController = new AbortController();
     let resolveHandler: (() => void) | null = null;
 
