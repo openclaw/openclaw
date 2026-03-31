@@ -217,11 +217,22 @@ export async function getReplyFromConfig(
           // Model not in allowlist, try fallbacks before skipping
           fallbackAppliedForImageModel = false;
           if (opts?.modelOverrideFallbacks?.length) {
+            // Determine provider context for resolving providerless fallbacks.
+            // When modelOverride has explicit provider (e.g., "openai/gpt-4o"),
+            // providerless fallbacks should resolve against that provider, not defaultProvider.
+            // This matches the allowlist check logic in chat.ts.
+            const overrideProvider = modelRef.ref.provider;
+            const providerContext = overrideProvider ?? defaultProvider;
+            // Rebuild alias index with the correct provider context
+            const fallbackAliasIndex =
+              overrideProvider && overrideProvider !== defaultProvider
+                ? buildModelAliasIndex({ cfg, defaultProvider: providerContext })
+                : aliasIndex;
             for (const fallbackRaw of opts.modelOverrideFallbacks) {
               const fallbackRef = resolveModelRefFromString({
                 raw: fallbackRaw.trim(),
-                defaultProvider,
-                aliasIndex,
+                defaultProvider: providerContext,
+                aliasIndex: fallbackAliasIndex,
               });
               if (fallbackRef) {
                 const fallbackKeyStr = modelKey(fallbackRef.ref.provider, fallbackRef.ref.model);
