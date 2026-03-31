@@ -47,7 +47,9 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
       // ignore
     }
     const info = { name, nameResolved };
-    rememberBounded(roomNameCache, roomId, info, MAX_TRACKED_ROOM_INFO);
+    if (nameResolved) {
+      rememberBounded(roomNameCache, roomId, info, MAX_TRACKED_ROOM_INFO);
+    }
     return info;
   };
 
@@ -75,7 +77,9 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
       // ignore
     }
     const info = { canonicalAlias, altAliases, aliasesResolved };
-    rememberBounded(roomAliasCache, roomId, info, MAX_TRACKED_ROOM_INFO);
+    if (aliasesResolved) {
+      rememberBounded(roomAliasCache, roomId, info, MAX_TRACKED_ROOM_INFO);
+    }
     return info;
   };
 
