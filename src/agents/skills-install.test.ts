@@ -172,5 +172,4 @@ describe("installSkill code safety scanning", () => {
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
-
 });
