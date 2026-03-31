@@ -169,7 +169,7 @@
       "durationMs": 1000
     },
     "extensions/telegram/src/bot-message-context.audio-transcript.test.ts": {
-      "durationMs": 17310
+      "durationMs": 20350
     },
     "extensions/whatsapp/src/monitor-inbox.append-upsert.test.ts": {
       "durationMs": 999
@@ -523,7 +523,7 @@
       "durationMs": 11
     },
     "extensions/telegram/src/bot-message-context.sender-prefix.test.ts": {
-      "durationMs": 19410
+      "durationMs": 20090
     },
     "extensions/whatsapp/src/active-listener.test.ts": {
       "durationMs": 11
