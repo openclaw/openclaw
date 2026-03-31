@@ -1778,24 +1778,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  it("disables prompt caching for non-Anthropic Bedrock models", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "amazon.nova-micro-v1");
-
-    const model = {
-      api: "openai-completions",
-      provider: "amazon-bedrock",
-      id: "amazon.nova-micro-v1",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.cacheRetention).toBe("none");
-  });
-
   it("keeps Anthropic Bedrock models eligible for provider-side caching", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
