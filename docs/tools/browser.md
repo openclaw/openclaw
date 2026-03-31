@@ -454,6 +454,7 @@ Then in the matching browser:
 3. Keep the browser running and approve the connection prompt when OpenClaw attaches.
 
 Common inspect pages:
+
 - CLI: `openclaw browser --browser-profile chrome-relay tabs`
 - Agent tool: `browser` with `profile="chrome-relay"`
 
