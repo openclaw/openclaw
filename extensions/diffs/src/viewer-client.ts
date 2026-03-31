@@ -106,10 +106,48 @@ function createToolbarButton(params: {
   return button;
 }
 
+function applyToolbarStyles(toolbar: HTMLElement): void {
+  toolbar.style.display = "inline-flex";
+  toolbar.style.alignItems = "center";
+  toolbar.style.gap = "6px";
+  toolbar.style.marginInlineStart = "6px";
+  toolbar.style.flex = "0 0 auto";
+}
+
 function applyToolbarButtonStyles(button: HTMLButtonElement, active: boolean): void {
+  button.style.display = "inline-flex";
+  button.style.alignItems = "center";
+  button.style.justifyContent = "center";
+  button.style.width = "24px";
+  button.style.height = "24px";
+  button.style.padding = "0";
+  button.style.margin = "0";
+  button.style.border = "0";
+  button.style.borderRadius = "0";
+  button.style.background = "transparent";
+  button.style.boxShadow = "none";
+  button.style.lineHeight = "0";
+  button.style.cursor = "pointer";
+  button.style.overflow = "visible";
+  button.style.flex = "0 0 auto";
+  button.style.opacity = active ? "0.92" : "0.6";
   button.style.color =
     viewerState.theme === "dark" ? "rgba(226, 232, 240, 0.74)" : "rgba(15, 23, 42, 0.52)";
   button.dataset.active = String(active);
+  const icon = button.querySelector("svg");
+  if (!icon) {
+    return;
+  }
+  icon.style.display = "block";
+  icon.style.width = "16px";
+  icon.style.height = "16px";
+  icon.style.minWidth = "16px";
+  icon.style.minHeight = "16px";
+  icon.style.overflow = "visible";
+  icon.style.flex = "0 0 auto";
+  icon.style.color = "inherit";
+  icon.style.fill = "currentColor";
+  icon.style.pointerEvents = "none";
 }
 
 function splitIcon(): string {
@@ -164,6 +202,7 @@ function themeIcon(theme: DiffTheme): string {
 function createToolbar(): HTMLElement {
   const toolbar = document.createElement("div");
   toolbar.className = "oc-diff-toolbar";
+  applyToolbarStyles(toolbar);
 
   toolbar.append(
     createToolbarButton({
