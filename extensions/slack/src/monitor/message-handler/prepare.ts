@@ -669,6 +669,8 @@ export async function prepareSlackMessage(params: {
     roomLabel,
     storePath,
     sessionKey,
+    allowFromLower,
+    allowNameMatching: ctx.allowNameMatching,
     envelopeOptions,
     effectiveDirectMedia,
   });
