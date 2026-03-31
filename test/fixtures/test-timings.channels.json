@@ -226,7 +226,7 @@
       "durationMs": 701
     },
     "extensions/telegram/src/bot-message-context.thread-binding.test.ts": {
-      "durationMs": 17700
+      "durationMs": 19150
     },
     "src/browser/pw-tools-core.waits-next-download-saves-it.test.ts": {
       "durationMs": 677
