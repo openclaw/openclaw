@@ -11,6 +11,7 @@ type TaskRegistryRow = {
   runtime: TaskRecord["runtime"];
   source_id: string | null;
   requester_session_key: string;
+  parent_flow_id: string | null;
   child_session_key: string | null;
   parent_task_id: string | null;
   agent_id: string | null;
@@ -40,7 +41,7 @@ type TaskDeliveryStateRow = {
 type TaskRegistryStatements = {
   selectAll: StatementSync;
   selectAllDeliveryStates: StatementSync;
-  replaceRow: StatementSync;
+  upsertRow: StatementSync;
   replaceDeliveryState: StatementSync;
   deleteRow: StatementSync;
   deleteDeliveryState: StatementSync;
@@ -91,6 +92,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     runtime: row.runtime,
     ...(row.source_id ? { sourceId: row.source_id } : {}),
     requesterSessionKey: row.requester_session_key,
+    ...(row.parent_flow_id ? { parentFlowId: row.parent_flow_id } : {}),
     ...(row.child_session_key ? { childSessionKey: row.child_session_key } : {}),
     ...(row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
@@ -128,6 +130,7 @@ function bindTaskRecord(record: TaskRecord) {
     runtime: record.runtime,
     source_id: record.sourceId ?? null,
     requester_session_key: record.requesterSessionKey,
+    parent_flow_id: record.parentFlowId ?? null,
     child_session_key: record.childSessionKey ?? null,
     parent_task_id: record.parentTaskId ?? null,
     agent_id: record.agentId ?? null,
@@ -165,6 +168,7 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         runtime,
         source_id,
         requester_session_key,
+        parent_flow_id,
         child_session_key,
         parent_task_id,
         agent_id,
@@ -194,12 +198,13 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       FROM task_delivery_state
       ORDER BY task_id ASC
     `),
-    replaceRow: db.prepare(`
-      INSERT OR REPLACE INTO task_runs (
+    upsertRow: db.prepare(`
+      INSERT INTO task_runs (
         task_id,
         runtime,
         source_id,
         requester_session_key,
+        parent_flow_id,
         child_session_key,
         parent_task_id,
         agent_id,
@@ -223,6 +228,7 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         @runtime,
         @source_id,
         @requester_session_key,
+        @parent_flow_id,
         @child_session_key,
         @parent_task_id,
         @agent_id,
@@ -242,6 +248,29 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         @terminal_summary,
         @terminal_outcome
       )
+      ON CONFLICT(task_id) DO UPDATE SET
+        runtime = excluded.runtime,
+        source_id = excluded.source_id,
+        requester_session_key = excluded.requester_session_key,
+        parent_flow_id = excluded.parent_flow_id,
+        child_session_key = excluded.child_session_key,
+        parent_task_id = excluded.parent_task_id,
+        agent_id = excluded.agent_id,
+        run_id = excluded.run_id,
+        label = excluded.label,
+        task = excluded.task,
+        status = excluded.status,
+        delivery_status = excluded.delivery_status,
+        notify_policy = excluded.notify_policy,
+        created_at = excluded.created_at,
+        started_at = excluded.started_at,
+        ended_at = excluded.ended_at,
+        last_event_at = excluded.last_event_at,
+        cleanup_after = excluded.cleanup_after,
+        error = excluded.error,
+        progress_summary = excluded.progress_summary,
+        terminal_summary = excluded.terminal_summary,
+        terminal_outcome = excluded.terminal_outcome
     `),
     replaceDeliveryState: db.prepare(`
       INSERT OR REPLACE INTO task_delivery_state (
@@ -268,6 +297,7 @@ function ensureSchema(db: DatabaseSync) {
       runtime TEXT NOT NULL,
       source_id TEXT,
       requester_session_key TEXT NOT NULL,
+      parent_flow_id TEXT,
       child_session_key TEXT,
       parent_task_id TEXT,
       agent_id TEXT,
@@ -296,13 +326,28 @@ function ensureSchema(db: DatabaseSync) {
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);`);
+  ensureColumn(db, "task_runs", "parent_flow_id", "TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_status ON task_runs(runtime, status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_cleanup_after ON task_runs(cleanup_after);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_at);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);`);
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);`,
   );
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string,
+) {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: string }>;
+  if (rows.some((row) => row.name === columnName)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition};`);
 }
 
 function ensureTaskRegistryPermissions(pathname: string) {
@@ -371,7 +416,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
     statements.clearDeliveryStates.run();
     statements.clearRows.run();
     for (const task of snapshot.tasks.values()) {
-      statements.replaceRow.run(bindTaskRecord(task));
+      statements.upsertRow.run(bindTaskRecord(task));
     }
     for (const state of snapshot.deliveryStates.values()) {
       statements.replaceDeliveryState.run(bindTaskDeliveryState(state));
@@ -381,7 +426,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   const store = openTaskRegistryDatabase();
-  store.statements.replaceRow.run(bindTaskRecord(task));
+  store.statements.upsertRow.run(bindTaskRecord(task));
   ensureTaskRegistryPermissions(store.path);
 }
 

@@ -577,6 +577,15 @@ Current behavior:
 - `reactionNotifications: "off"` disables reaction system events.
 - Reaction removals are still not synthesized into system events because Matrix surfaces those as redactions, not as standalone `m.reaction` removals.
 
+## History context
+
+- `channels.matrix.historyLimit` controls how many recent room messages are included as `InboundHistory` when a Matrix room message triggers the agent.
+- It falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- Matrix room history is room-only. DMs keep using normal session history.
+- Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
+- The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
+- Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.
+
 ## DM and room policy example
 
 ```json5
@@ -679,6 +688,25 @@ openclaw matrix account add \
 This opt-in only allows trusted private/internal targets. Public cleartext homeservers such as
 `http://matrix.example.org:8008` remain blocked. Prefer `https://` whenever possible.
 
+## Proxying Matrix traffic
+
+If your Matrix deployment needs an explicit outbound HTTP(S) proxy, set `channels.matrix.proxy`:
+
+```json5
+{
+  channels: {
+    matrix: {
+      homeserver: "https://matrix.example.org",
+      accessToken: "syt_bot_xxx",
+      proxy: "http://127.0.0.1:7890",
+    },
+  },
+}
+```
+
+Named accounts can override the top-level default with `channels.matrix.accounts.<id>.proxy`.
+OpenClaw uses the same proxy setting for runtime Matrix traffic and account status probes.
+
 ## Target resolution
 
 Matrix accepts these target forms anywhere OpenClaw asks you for a room or user target:
@@ -700,6 +728,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `defaultAccount`: preferred account ID when multiple Matrix accounts are configured.
 - `homeserver`: homeserver URL, for example `https://matrix.example.org`.
 - `allowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
+- `proxy`: optional HTTP(S) proxy URL for Matrix traffic. Named accounts can override the top-level default with their own `proxy`.
 - `userId`: full Matrix user ID, for example `@bot:example.org`.
 - `accessToken`: access token for token-based auth. Plaintext values and SecretRef values are supported for `channels.matrix.accessToken` and `channels.matrix.accounts.<id>.accessToken` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
 - `password`: password for password-based login. Plaintext values and SecretRef values are supported.
@@ -712,6 +741,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `groupPolicy`: `open`, `allowlist`, or `disabled`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
+- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
 - `streaming`: `off` (default) or `partial`. `partial` enables single-message draft previews with edit-in-place updates.
 - `threadReplies`: `off`, `inbound`, or `always`.
@@ -733,3 +763,11 @@ Live directory lookup uses the logged-in Matrix account:
 - `groups`: per-room policy map. Prefer room IDs or aliases; unresolved room names are ignored at runtime. Session/group identity uses the stable room ID after resolution, while human-readable labels still come from room names.
 - `rooms`: legacy alias for `groups`.
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

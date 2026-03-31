@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.js";
+import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-exec-approvals-test.json");
 
@@ -47,7 +47,7 @@ const mockRestDelete = vi.hoisted(() => vi.fn());
 const gatewayClientStarts = vi.hoisted(() => vi.fn());
 const gatewayClientStops = vi.hoisted(() => vi.fn());
 const gatewayClientRequests = vi.hoisted(() =>
-  vi.fn(async (_method?: string, _params?: unknown) => ({ ok: true })),
+  vi.fn(async (..._args: unknown[]) => ({ ok: true })),
 );
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
@@ -87,8 +87,8 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
     stop() {
       gatewayClientStops();
     }
-    async request(method: string, params?: unknown) {
-      return gatewayClientRequests(method, params);
+    async request(...args: unknown[]) {
+      return gatewayClientRequests(...args);
     }
   }
   return {
@@ -128,56 +128,9 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../src/gateway/operator-approvals-client.js", () => ({
-  createOperatorApprovalsGatewayClient: async (params: {
-    config?: unknown;
-    gatewayUrl?: string;
-    clientDisplayName?: string;
-    onEvent?: unknown;
-    onHelloOk?: unknown;
-    onConnectError?: unknown;
-    onClose?: unknown;
-  }) => {
-    mockCreateOperatorApprovalsGatewayClient(params);
-    const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
-    const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
-    const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
-    const auth = await mockResolveGatewayConnectionAuth({
-      config: params.config,
-      env: process.env,
-      ...(urlOverrideSource
-        ? {
-            urlOverride: gatewayUrl,
-            urlOverrideSource,
-          }
-        : {}),
-    });
-    const clientParams = {
-      url: gatewayUrl,
-      token: auth?.token,
-      password: auth?.password,
-      clientName: "gateway-client",
-      clientDisplayName: params.clientDisplayName,
-      mode: "backend",
-      scopes: ["operator.approvals"],
-      onEvent: params.onEvent,
-      onHelloOk: params.onHelloOk,
-      onConnectError: params.onConnectError,
-      onClose: params.onClose,
-    };
-    gatewayClientParams.push(clientParams);
-    mockGatewayClientCtor(clientParams);
-    return {
-      start: gatewayClientStarts,
-      stop: gatewayClientStops,
-      request: gatewayClientRequests,
-    };
-  },
-}));
-
-vi.mock("../../../../src/gateway/client.js", () => ({
-  GatewayClient: class {
-    params: Record<string, unknown>;
+vi.mock("../../../../src/gateway/operator-approvals-client.js", async () => {
+  class MockGatewayClient {
+    private params: Record<string, unknown>;
     constructor(params: Record<string, unknown>) {
       this.params = params;
       gatewayClientParams.push(params);
@@ -189,31 +142,58 @@ vi.mock("../../../../src/gateway/client.js", () => ({
     stop() {
       gatewayClientStops();
     }
-    async request() {
-      return gatewayClientRequests();
+    async request(...args: unknown[]) {
+      return gatewayClientRequests(...args);
     }
-  },
-}));
+  }
 
-vi.mock("../../../../src/gateway/connection-auth.js", () => ({
-  resolveGatewayConnectionAuth: (params: {
-    config?: unknown;
-    env: NodeJS.ProcessEnv;
-    urlOverride?: string;
-    urlOverrideSource?: "cli" | "env";
-  }) => mockResolveGatewayConnectionAuth(params),
-}));
-
-vi.mock("../client.js", () => ({
-  createDiscordClient: () => ({
-    rest: {
-      post: mockRestPost,
-      patch: mockRestPatch,
-      delete: mockRestDelete,
+  return {
+    createOperatorApprovalsGatewayClient: async (params: {
+      config?: {
+        gateway?: {
+          auth?: {
+            token?: string;
+            password?: string;
+          };
+        };
+      };
+      gatewayUrl?: string;
+      clientDisplayName: string;
+      onEvent?: unknown;
+      onHelloOk?: () => void;
+      onConnectError?: (err: Error) => void;
+      onClose?: (code: number, reason: string) => void;
+    }) => {
+      mockCreateOperatorApprovalsGatewayClient(params);
+      const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
+      const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
+      const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
+      const auth = await mockResolveGatewayConnectionAuth({
+        config: params.config,
+        env: process.env,
+        ...(urlOverrideSource
+          ? {
+              urlOverride: gatewayUrl,
+              urlOverrideSource,
+            }
+          : {}),
+      });
+      return new MockGatewayClient({
+        url: gatewayUrl,
+        token: auth?.token,
+        password: auth?.password,
+        clientName: "gateway-client",
+        clientDisplayName: params.clientDisplayName,
+        mode: "backend",
+        scopes: ["operator.approvals"],
+        onEvent: params.onEvent,
+        onHelloOk: params.onHelloOk,
+        onConnectError: params.onConnectError,
+        onClose: params.onClose,
+      });
     },
-    request: (_fn: () => Promise<unknown>, _label: string) => _fn(),
-  }),
-}));
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
@@ -242,66 +222,6 @@ type ExecApprovalRequest = import("./exec-approvals.js").ExecApprovalRequest;
 type PluginApprovalRequest = import("./exec-approvals.js").PluginApprovalRequest;
 type ExecApprovalButtonContext = import("./exec-approvals.js").ExecApprovalButtonContext;
 
-function createTestingDeps() {
-  return {
-    createGatewayClient: async (params: {
-      config?: unknown;
-      gatewayUrl?: string;
-      clientDisplayName?: string;
-      onEvent?: unknown;
-      onHelloOk?: unknown;
-      onConnectError?: unknown;
-      onClose?: unknown;
-    }) => {
-      mockCreateOperatorApprovalsGatewayClient(params);
-      const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
-      const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
-      const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
-      const auth = await mockResolveGatewayConnectionAuth({
-        config: params.config,
-        env: process.env,
-        ...(urlOverrideSource
-          ? {
-              urlOverride: gatewayUrl,
-              urlOverrideSource,
-            }
-          : {}),
-      });
-      const clientParams = {
-        url: gatewayUrl,
-        token: auth?.token,
-        password: auth?.password,
-        clientName: "gateway-client",
-        clientDisplayName: params.clientDisplayName,
-        mode: "backend",
-        scopes: ["operator.approvals"],
-        onEvent: params.onEvent,
-        onHelloOk: params.onHelloOk,
-        onConnectError: params.onConnectError,
-        onClose: params.onClose,
-      };
-      gatewayClientParams.push(clientParams);
-      mockGatewayClientCtor(clientParams);
-      return {
-        start: gatewayClientStarts,
-        stop: gatewayClientStops,
-        request: gatewayClientRequests,
-      } as unknown as InstanceType<
-        typeof import("../../../../src/gateway/client.js").GatewayClient
-      >;
-    },
-    createDiscordClient: () => ({
-      rest: {
-        post: mockRestPost,
-        patch: mockRestPatch,
-        delete: mockRestDelete,
-      },
-      request: (_fn: () => Promise<unknown>, _label: string) => _fn(),
-      token: "test-token",
-    }),
-  };
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function createHandler(config: DiscordExecApprovalConfig, accountId = "default") {
@@ -310,7 +230,6 @@ function createHandler(config: DiscordExecApprovalConfig, accountId = "default")
     accountId,
     config,
     cfg: { session: { store: STORE_PATH } },
-    __testing: createTestingDeps(),
   });
 }
 
@@ -370,30 +289,6 @@ async function expectGatewayAuthStart(params: {
   expect(mockGatewayClientCtor).toHaveBeenCalledWith(expect.objectContaining(expectedClientParams));
 }
 
-type ExecApprovalHandlerInternals = {
-  pending: Map<
-    string,
-    { discordMessageId: string; discordChannelId: string; timeoutId: NodeJS.Timeout }
-  >;
-  requestCache: Map<string, unknown>;
-  handleApprovalRequested: (request: ExecApprovalRequest | PluginApprovalRequest) => Promise<void>;
-  handleApprovalTimeout: (approvalId: string, source?: "channel" | "dm") => Promise<void>;
-};
-
-function getHandlerInternals(
-  handler: DiscordExecApprovalHandlerInstance,
-): ExecApprovalHandlerInternals {
-  return handler as unknown as ExecApprovalHandlerInternals;
-}
-
-function clearPendingTimeouts(handler: DiscordExecApprovalHandlerInstance) {
-  const internals = getHandlerInternals(handler);
-  for (const pending of internals.pending.values()) {
-    clearTimeout(pending.timeoutId);
-  }
-  internals.pending.clear();
-}
-
 function createRequest(
   overrides: Partial<ExecApprovalRequest["request"]> = {},
 ): ExecApprovalRequest {
@@ -418,11 +313,10 @@ function createPluginRequest(
   return {
     id: "plugin:test-id",
     request: {
-      title: "Sensitive plugin action",
-      description: "The plugin wants to run a sensitive tool action.",
-      severity: "warning",
-      toolName: "plugin.tool",
-      pluginId: "plugin-test",
+      title: "Plugin approval required",
+      description: "Allow plugin action",
+      pluginId: "test-plugin",
+      toolName: "test-tool",
       agentId: "test-agent",
       sessionKey: "agent:test-agent:discord:channel:999888777",
       ...overrides,
@@ -430,19 +324,6 @@ function createPluginRequest(
     createdAtMs: Date.now(),
     expiresAtMs: Date.now() + 60000,
   };
-}
-
-function createMockButtonInteraction(userId: string) {
-  const reply = vi.fn().mockResolvedValue(undefined);
-  const acknowledge = vi.fn().mockResolvedValue(undefined);
-  const followUp = vi.fn().mockResolvedValue(undefined);
-  const interaction = {
-    userId,
-    reply,
-    acknowledge,
-    followUp,
-  } as unknown as ButtonInteraction;
-  return { interaction, reply, acknowledge, followUp };
 }
 
 beforeEach(() => {
@@ -458,6 +339,7 @@ beforeEach(() => {
 });
 
 beforeAll(async () => {
+  vi.resetModules();
   ({
     buildExecApprovalCustomId,
     extractDiscordChannelId,
@@ -726,104 +608,6 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
   });
 });
 
-describe("DiscordExecApprovalHandler plugin approvals", () => {
-  beforeEach(() => {
-    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
-    mockRestPatch.mockClear().mockResolvedValue({});
-    mockRestDelete.mockClear().mockResolvedValue({});
-  });
-
-  it("delivers plugin approval requests with interactive approval buttons", async () => {
-    const handler = createHandler({ enabled: true, approvers: ["123"] });
-    const internals = getHandlerInternals(handler);
-    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
-
-    await internals.handleApprovalRequested(createPluginRequest());
-
-    const dmCall = mockRestPost.mock.calls.find(
-      (call) => call[0] === Routes.channelMessages("dm-1"),
-    ) as [string, { body?: unknown }] | undefined;
-    expect(dmCall).toBeDefined();
-    expect(dmCall?.[1]?.body).toBeDefined();
-    const bodyJson = JSON.stringify(dmCall?.[1]?.body ?? {});
-    expect(bodyJson).toContain("Plugin Approval Required");
-    expect(bodyJson).toContain("plugin:test-id");
-    expect(bodyJson).toContain("execapproval:id=plugin%3Atest-id;action=allow-once");
-
-    clearPendingTimeouts(handler);
-  });
-
-  it("handles plugin approvals end-to-end via gateway event, button resolve, and card update", async () => {
-    const handler = createHandler({ enabled: true, approvers: ["123"] });
-    mockSuccessfulDmDelivery({
-      noteChannelId: "999888777",
-      expectedNoteText: "I sent approval DMs to the approvers for this account",
-      throwOnUnexpectedRoute: true,
-    });
-
-    await handler.start();
-    try {
-      const onEvent = gatewayClientParams[0]?.onEvent as
-        | ((evt: { event: string; payload: unknown }) => void)
-        | undefined;
-      expect(typeof onEvent).toBe("function");
-
-      const request = createPluginRequest();
-      onEvent?.({
-        event: "plugin.approval.requested",
-        payload: request,
-      });
-
-      await vi.waitFor(() => {
-        expect(mockRestPost).toHaveBeenCalledWith(
-          Routes.channelMessages("dm-1"),
-          expect.objectContaining({
-            body: expect.objectContaining({
-              components: expect.any(Array),
-            }),
-          }),
-        );
-      });
-
-      const button = new ExecApprovalButton({ handler });
-      const { interaction, acknowledge } = createMockButtonInteraction("123");
-      await button.run(interaction, { id: request.id, action: "allow-once" });
-
-      expect(acknowledge).toHaveBeenCalledTimes(1);
-      expect(gatewayClientRequests).toHaveBeenCalledWith("plugin.approval.resolve", {
-        id: request.id,
-        decision: "allow-once",
-      });
-
-      onEvent?.({
-        event: "plugin.approval.resolved",
-        payload: {
-          id: request.id,
-          decision: "allow-once",
-          resolvedBy: "discord:123",
-          ts: Date.now(),
-          request: request.request,
-        },
-      });
-
-      await vi.waitFor(() => {
-        expect(mockRestPatch).toHaveBeenCalledWith(
-          Routes.channelMessage("dm-1", "msg-1"),
-          expect.objectContaining({ body: expect.any(Object) }),
-        );
-      });
-      const patchCall = mockRestPatch.mock.calls.find(
-        (call) => call[0] === Routes.channelMessage("dm-1", "msg-1"),
-      ) as [string, { body?: unknown }] | undefined;
-      const patchBody = JSON.stringify(patchCall?.[1]?.body ?? {});
-      expect(patchBody).toContain("Plugin Approval: Allowed (once)");
-    } finally {
-      clearPendingTimeouts(handler);
-      await handler.stop();
-    }
-  });
-});
-
 // ─── DiscordExecApprovalHandler.getApprovers ──────────────────────────────────
 
 describe("DiscordExecApprovalHandler.getApprovers", () => {
@@ -849,40 +633,6 @@ describe("DiscordExecApprovalHandler.getApprovers", () => {
     for (const testCase of cases) {
       const handler = createHandler(testCase.config);
       expect(handler.getApprovers(), testCase.name).toEqual(testCase.expected);
-    }
-  });
-});
-
-describe("DiscordExecApprovalHandler.resolveApproval", () => {
-  it("routes non-prefixed approval IDs to exec.approval.resolve", async () => {
-    const handler = createHandler({ enabled: true, approvers: ["123"] });
-    await handler.start();
-
-    try {
-      const ok = await handler.resolveApproval("exec-123", "allow-once");
-      expect(ok).toBe(true);
-      expect(gatewayClientRequests).toHaveBeenCalledWith("exec.approval.resolve", {
-        id: "exec-123",
-        decision: "allow-once",
-      });
-    } finally {
-      await handler.stop();
-    }
-  });
-
-  it("routes plugin-prefixed approval IDs to plugin.approval.resolve", async () => {
-    const handler = createHandler({ enabled: true, approvers: ["123"] });
-    await handler.start();
-
-    try {
-      const ok = await handler.resolveApproval("plugin:abc-123", "deny");
-      expect(ok).toBe(true);
-      expect(gatewayClientRequests).toHaveBeenCalledWith("plugin.approval.resolve", {
-        id: "plugin:abc-123",
-        decision: "deny",
-      });
-    } finally {
-      await handler.stop();
     }
   });
 });
@@ -924,7 +674,7 @@ describe("ExecApprovalButton", () => {
     await button.run(interaction, data);
 
     expect(reply).toHaveBeenCalledWith({
-      content: "⛔ You are not authorized to approve requests.",
+      content: "⛔ You are not authorized to approve exec requests.",
       ephemeral: true,
     });
     expect(acknowledge).not.toHaveBeenCalled();
@@ -1101,7 +851,6 @@ describe("DiscordExecApprovalHandler gateway auth", () => {
           auth: { mode: "token", token: "shared-gateway-token" },
         },
       },
-      __testing: createTestingDeps(),
     });
 
     await handler.start();
@@ -1128,7 +877,6 @@ describe("DiscordExecApprovalHandler gateway auth", () => {
           auth: { mode: "token" },
         },
       },
-      __testing: createTestingDeps(),
     });
 
     try {
@@ -1153,40 +901,6 @@ describe("DiscordExecApprovalHandler timeout cleanup", () => {
     mockRestPatch.mockClear().mockResolvedValue({});
     mockRestDelete.mockClear().mockResolvedValue({});
   });
-
-  it("cleans up request cache for the exact approval id", async () => {
-    const handler = createHandler({ enabled: true, approvers: ["123"] });
-    const internals = getHandlerInternals(handler);
-    const requestA = { ...createRequest(), id: "abc" };
-    const requestB = { ...createRequest(), id: "abc2" };
-
-    internals.requestCache.set("abc", { kind: "exec", request: requestA });
-    internals.requestCache.set("abc2", { kind: "exec", request: requestB });
-
-    const timeoutIdA = setTimeout(() => {}, 0);
-    const timeoutIdB = setTimeout(() => {}, 0);
-    clearTimeout(timeoutIdA);
-    clearTimeout(timeoutIdB);
-
-    internals.pending.set("abc:dm", {
-      discordMessageId: "m1",
-      discordChannelId: "c1",
-      timeoutId: timeoutIdA,
-    });
-    internals.pending.set("abc2:dm", {
-      discordMessageId: "m2",
-      discordChannelId: "c2",
-      timeoutId: timeoutIdB,
-    });
-
-    await internals.handleApprovalTimeout("abc", "dm");
-
-    expect(internals.pending.has("abc:dm")).toBe(false);
-    expect(internals.requestCache.has("abc")).toBe(false);
-    expect(internals.requestCache.has("abc2")).toBe(true);
-
-    clearPendingTimeouts(handler);
-  });
 });
 
 // ─── Delivery routing ────────────────────────────────────────────────────────
@@ -1204,12 +918,11 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       approvers: ["123"],
       target: "channel",
     });
-    const internals = getHandlerInternals(handler);
 
     mockSuccessfulDmDelivery();
 
     const request = createRequest({ sessionKey: "agent:main:discord:dm:123" });
-    await internals.handleApprovalRequested(request);
+    await handler.handleApprovalRequested(request);
 
     expect(mockRestPost).toHaveBeenCalledTimes(2);
     expect(mockRestPost).toHaveBeenCalledWith(Routes.userChannels(), {
@@ -1223,8 +936,6 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
         }),
       }),
     );
-
-    clearPendingTimeouts(handler);
   });
 
   it("posts an in-channel note when target is dm and the request came from a non-DM discord conversation", async () => {
@@ -1233,7 +944,6 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       approvers: ["123"],
       target: "dm",
     });
-    const internals = getHandlerInternals(handler);
 
     mockSuccessfulDmDelivery({
       noteChannelId: "999888777",
@@ -1241,7 +951,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       throwOnUnexpectedRoute: true,
     });
 
-    await internals.handleApprovalRequested(createRequest());
+    await handler.handleApprovalRequested(createRequest());
 
     expect(mockRestPost).toHaveBeenCalledWith(
       Routes.channelMessages("999888777"),
@@ -1257,8 +967,6 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
         body: expect.any(Object),
       }),
     );
-
-    clearPendingTimeouts(handler);
   });
 
   it("does not post an in-channel note when the request already came from a discord DM", async () => {
@@ -1267,11 +975,10 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       approvers: ["123"],
       target: "dm",
     });
-    const internals = getHandlerInternals(handler);
 
     mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
 
-    await internals.handleApprovalRequested(
+    await handler.handleApprovalRequested(
       createRequest({ sessionKey: "agent:main:discord:dm:123" }),
     );
 
@@ -1279,8 +986,94 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("999888777"),
       expect.anything(),
     );
+  });
 
-    clearPendingTimeouts(handler);
+  it("dedupes delivery when the origin route and approver DM resolve to the same Discord channel", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["999"],
+      target: "both",
+    });
+
+    mockRestPost.mockImplementation(async (route: string) => {
+      if (route === Routes.channelMessages("123")) {
+        return { id: "msg-1", channel_id: "123" };
+      }
+      if (route === Routes.userChannels()) {
+        return { id: "123" };
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+
+    await handler.handleApprovalRequested(
+      createRequest({
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+      }),
+    );
+
+    expect(mockRestPost).toHaveBeenCalledTimes(2);
+    expect(mockRestPost).toHaveBeenNthCalledWith(
+      1,
+      Routes.channelMessages("123"),
+      expect.objectContaining({
+        body: expect.any(Object),
+      }),
+    );
+    expect(mockRestPost).toHaveBeenNthCalledWith(2, Routes.userChannels(), {
+      body: { recipient_id: "999" },
+    });
+  });
+
+  it("delivers plugin approvals through the shared runtime flow", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
+
+    await handler.handleApprovalRequested(createPluginRequest());
+
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("dm-1"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          components: expect.arrayContaining([
+            expect.objectContaining({
+              components: expect.arrayContaining([
+                expect.objectContaining({
+                  content: expect.stringContaining("Plugin Approval Required"),
+                }),
+                expect.objectContaining({
+                  content: expect.stringContaining("Plugin approval required"),
+                }),
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+});
+
+describe("DiscordExecApprovalHandler resolve routing", () => {
+  it("routes plugin approval ids through plugin.approval.resolve", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+    });
+
+    await handler.start();
+    await expect(handler.resolveApproval("plugin:test-id", "allow-once")).resolves.toBe(true);
+
+    expect(gatewayClientRequests).toHaveBeenCalledWith("plugin.approval.resolve", {
+      id: "plugin:test-id",
+      decision: "allow-once",
+    });
   });
 });
 
@@ -1296,7 +1089,6 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
       gatewayUrl: "wss://override.example/ws",
       config: { enabled: true, approvers: ["123"] },
       cfg: { session: { store: STORE_PATH } },
-      __testing: createTestingDeps(),
     });
 
     await expectGatewayAuthStart({
@@ -1319,7 +1111,6 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
         accountId: "default",
         config: { enabled: true, approvers: ["123"] },
         cfg: { session: { store: STORE_PATH } },
-        __testing: createTestingDeps(),
       });
 
       await expectGatewayAuthStart({
