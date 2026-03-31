@@ -102,11 +102,13 @@ export type AttachmentMediaPolicy =
   | {
       mode: "host";
       localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
     };
 
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }): AttachmentMediaPolicy {
   const sandboxRoot = params.sandboxRoot?.trim();
   if (sandboxRoot) {
@@ -118,6 +120,7 @@ export function resolveAttachmentMediaPolicy(params: {
   return {
     mode: "host",
     localRoots: params.mediaLocalRoots,
+    readFile: params.mediaReadFile,
   };
 }
 
@@ -132,7 +135,9 @@ function buildAttachmentMediaLoadOptions(params: {
     }
   | {
       maxBytes?: number;
-      localRoots?: readonly string[];
+      localRoots?: readonly string[] | "any";
+      readFile?: (filePath: string) => Promise<Buffer>;
+      hostReadCapability?: boolean;
     } {
   if (params.policy.mode === "sandbox") {
     const readSandboxFile = createRootScopedReadFile({
@@ -146,7 +151,13 @@ function buildAttachmentMediaLoadOptions(params: {
   }
   return {
     maxBytes: params.maxBytes,
-    localRoots: params.policy.localRoots,
+    ...(params.policy.readFile
+      ? {
+          localRoots: "any" as const,
+          readFile: params.policy.readFile,
+          hostReadCapability: true,
+        }
+      : { localRoots: params.policy.localRoots }),
   };
 }
 

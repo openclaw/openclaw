@@ -14,6 +14,7 @@ export type SignalSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
@@ -129,6 +130,7 @@ export async function sendMessageSignal(
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
+      readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
     const kind = kindFromMime(resolved.contentType ?? undefined);

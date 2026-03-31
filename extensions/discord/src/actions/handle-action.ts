@@ -26,12 +26,14 @@ export async function handleDiscordMessageAction(
     | "requesterSenderId"
     | "toolContext"
     | "mediaLocalRoots"
+    | "mediaReadFile"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
   const actionOptions = {
     mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
   } as const;
 
   const resolveChannelId = () =>

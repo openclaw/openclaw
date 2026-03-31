@@ -52,6 +52,7 @@ type SlackSendOpts = {
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
   threadTs?: string;
   identity?: SlackSendIdentity;
@@ -233,6 +234,7 @@ async function uploadSlackFile(params: {
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
@@ -240,6 +242,8 @@ async function uploadSlackFile(params: {
   const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
+    readFile: params.mediaReadFile,
+    hostReadCapability: Boolean(params.mediaReadFile),
   });
   const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
   const uploadTitle = params.uploadTitle ?? uploadFileName;
@@ -372,6 +376,7 @@ export async function sendMessageSlack(
       uploadFileName: opts.uploadFileName,
       uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,

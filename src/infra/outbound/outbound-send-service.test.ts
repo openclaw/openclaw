@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
   getAgentScopedMediaLocalRootsForSources: vi.fn(() => ["/tmp/agent-roots"]),
+  createAgentScopedHostMediaReadFile: vi.fn(() => async () => Buffer.from("capability")),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
@@ -17,6 +18,10 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
 vi.mock("./message.js", () => ({
   sendMessage: mocks.sendMessage,
   sendPoll: mocks.sendPoll,
+}));
+
+vi.mock("../../media/read-capability.js", () => ({
+  createAgentScopedHostMediaReadFile: mocks.createAgentScopedHostMediaReadFile,
 }));
 
 vi.mock("../../media/local-roots.js", async (importOriginal) => {
@@ -99,6 +104,7 @@ describe("executeSendAction", () => {
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
+    mocks.createAgentScopedHostMediaReadFile.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
@@ -204,6 +210,7 @@ describe("executeSendAction", () => {
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
+        mediaReadFile: mocks.createAgentScopedHostMediaReadFile.mock.results[0]?.value,
       }),
     );
   });

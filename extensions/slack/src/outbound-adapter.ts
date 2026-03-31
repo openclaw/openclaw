@@ -83,6 +83,7 @@ async function sendSlackOutboundMessage(params: {
   text: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
   accountId?: string | null;
   deps?: { [channelId: string]: unknown } | null;
@@ -115,7 +116,11 @@ async function sendSlackOutboundMessage(params: {
     threadTs,
     accountId: params.accountId ?? undefined,
     ...(params.mediaUrl
-      ? { mediaUrl: params.mediaUrl, mediaLocalRoots: params.mediaLocalRoots }
+      ? {
+          mediaUrl: params.mediaUrl,
+          mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+        }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
@@ -184,6 +189,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
             text,
             mediaUrl,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             accountId: ctx.accountId,
             deps: ctx.deps,
             replyToId: ctx.replyToId,
@@ -196,6 +202,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
             to: ctx.to,
             text: payload.text ?? "",
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             blocks,
             accountId: ctx.accountId,
             deps: ctx.deps,
@@ -225,6 +232,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       replyToId,
@@ -237,6 +245,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         text,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         deps,
         replyToId,

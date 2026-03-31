@@ -214,6 +214,7 @@ export async function handleTelegramAction(
   cfg: OpenClawConfig,
   options?: {
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -365,6 +366,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
+      mediaReadFile: options?.mediaReadFile,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,

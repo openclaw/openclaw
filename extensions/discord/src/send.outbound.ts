@@ -50,6 +50,7 @@ type DiscordSendOpts = {
   mediaUrl?: string;
   filename?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
@@ -217,6 +218,7 @@ export async function sendMessageDiscord(
           opts.mediaUrl,
           opts.filename,
           opts.mediaLocalRoots,
+          opts.mediaReadFile,
           mediaMaxBytes,
           undefined,
           request,
@@ -279,6 +281,7 @@ export async function sendMessageDiscord(
         opts.mediaUrl,
         opts.filename,
         opts.mediaLocalRoots,
+        opts.mediaReadFile,
         mediaMaxBytes,
         opts.replyTo,
         request,

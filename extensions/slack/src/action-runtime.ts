@@ -72,6 +72,7 @@ export type SlackActionContext = {
   hasRepliedRef?: { value: boolean };
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 /**
@@ -232,6 +233,7 @@ export async function handleSlackAction(
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
+          mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
           blocks,
         });
@@ -276,6 +278,7 @@ export async function handleSlackAction(
           ...writeOpts,
           mediaUrl: filePath,
           mediaLocalRoots: context?.mediaLocalRoots,
+          mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
           ...(filename ? { uploadFileName: filename } : {}),
           ...(title ? { uploadTitle: title } : {}),

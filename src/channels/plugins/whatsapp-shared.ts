@@ -30,6 +30,7 @@ type WhatsAppSendMessage = (
     cfg?: OpenClawConfig;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
     accountId?: string;
   },
@@ -99,6 +100,7 @@ export function createWhatsAppOutboundBase({
         text,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         deps,
         gifPlayback,
@@ -110,6 +112,7 @@ export function createWhatsAppOutboundBase({
           cfg,
           mediaUrl,
           mediaLocalRoots,
+          mediaReadFile,
           accountId: accountId ?? undefined,
           gifPlayback,
         });

@@ -495,6 +495,7 @@ export type ChannelMessageActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
   /**
    * Trusted sender id from inbound context. This is server-injected and must

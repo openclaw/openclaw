@@ -17,6 +17,7 @@ type DirectSendOptions = {
   replyToId?: string | null;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
 };
 
@@ -80,6 +81,7 @@ export function createDirectTextMediaOutbound<
     replyToId?: string | null;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     buildOptions: (params: DirectSendOptions) => TOpts;
   }) => {
     const send = params.resolveSender(sendParams.deps);
@@ -94,6 +96,7 @@ export function createDirectTextMediaOutbound<
         cfg: sendParams.cfg,
         mediaUrl: sendParams.mediaUrl,
         mediaLocalRoots: sendParams.mediaLocalRoots,
+        mediaReadFile: sendParams.mediaReadFile,
         accountId: sendParams.accountId,
         replyToId: sendParams.replyToId,
         maxBytes,
@@ -120,13 +123,24 @@ export function createDirectTextMediaOutbound<
         buildOptions: params.buildTextOptions,
       });
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      mediaReadFile,
+      accountId,
+      deps,
+      replyToId,
+    }) => {
       return await sendDirect({
         cfg,
         to,
         text,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         deps,
         replyToId,

@@ -33,6 +33,7 @@ export type SendMSTeamsMessageParams = {
   /** Optional filename override for uploaded media/files */
   filename?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 export type SendMSTeamsMessageResult = {
@@ -98,7 +99,7 @@ export type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots } = params;
+  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -129,6 +130,7 @@ export async function sendMessageMSTeams(
     const media = await loadOutboundMediaFromUrl(mediaUrl, {
       maxBytes: mediaMaxBytes,
       mediaLocalRoots,
+      mediaReadFile,
     });
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
