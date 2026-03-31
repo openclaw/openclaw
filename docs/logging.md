@@ -350,3 +350,8 @@ Queues + sessions:
 - **Logs empty?** Check that the Gateway is running and writing to the file path
   in `logging.file`.
 - **Need more detail?** Set `logging.level` to `debug` or `trace` and retry.
+
+## Related
+
+- [Gateway Logging Internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
+- [Diagnostics](/gateway/configuration-reference#diagnostics) — OpenTelemetry export and cache trace config
