@@ -1,4 +1,3 @@
-import { resetTaskRegistryForTests } from "openclaw/plugin-sdk/tasks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
@@ -19,6 +18,7 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {

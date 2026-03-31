@@ -1,8 +1,6 @@
-import { defaultTaskOperationsRuntime } from "../../packages/tasks-host-sdk/src/runtime-core.js";
-import { startTaskRegistryMaintenance } from "../../packages/tasks-host-sdk/src/runtime-core.js";
 import type { OpenClawPluginService } from "../plugins/types.js";
-
-export * from "../../packages/tasks-host-sdk/src/runtime-core.js";
+import { defaultTaskOperationsRuntime } from "../tasks/operations-runtime.js";
+import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
 
 export const defaultOperationsRuntime = defaultTaskOperationsRuntime;
 

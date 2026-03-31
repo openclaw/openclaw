@@ -12,11 +12,17 @@ const mocks = vi.hoisted(() => ({
   loadConfigMock: vi.fn(() => ({ loaded: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/tasks", () => ({
+vi.mock("../tasks/flow-registry.js", () => ({
   listFlowRecords: (...args: unknown[]) => mocks.listFlowRecordsMock(...args),
   resolveFlowForLookupToken: (...args: unknown[]) => mocks.resolveFlowForLookupTokenMock(...args),
   getFlowById: (...args: unknown[]) => mocks.getFlowByIdMock(...args),
+}));
+
+vi.mock("../tasks/task-registry.js", () => ({
   listTasksForFlowId: (...args: unknown[]) => mocks.listTasksForFlowIdMock(...args),
+}));
+
+vi.mock("../tasks/task-executor.js", () => ({
   getFlowTaskSummary: (...args: unknown[]) => mocks.getFlowTaskSummaryMock(...args),
   cancelFlowById: (...args: unknown[]) => mocks.cancelFlowByIdMock(...args),
 }));

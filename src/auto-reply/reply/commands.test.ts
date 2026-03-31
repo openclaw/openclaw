@@ -249,7 +249,8 @@ const { parseConfigCommand } = await import("./config-commands.js");
 const { parseDebugCommand } = await import("./debug-commands.js");
 const { parseInlineDirectives } = await import("./directive-handling.js");
 const { buildCommandContext, handleCommands } = await import("./commands.js");
-const { createTaskRecord, resetTaskRegistryForTests } = await import("openclaw/plugin-sdk/tasks");
+const { createTaskRecord, resetTaskRegistryForTests } =
+  await import("../../tasks/task-registry.js");
 
 let testWorkspaceDir = os.tmpdir();
 

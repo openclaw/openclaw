@@ -1,14 +1,14 @@
 import crypto from "node:crypto";
-import { getAcpSessionManager } from "../../../src/acp/control-plane/manager.js";
-import { killSubagentRunAdmin } from "../../../src/agents/subagent-control.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { onAgentEvent } from "../../../src/infra/agent-events.js";
-import { requestHeartbeatNow } from "../../../src/infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../../../src/infra/system-events.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import { normalizeDeliveryContext } from "../../../src/utils/delivery-context.js";
-import { isDeliverableMessageChannel } from "../../../src/utils/message-channel.js";
+import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { killSubagentRunAdmin } from "../agents/subagent-control.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { onAgentEvent } from "../infra/agent-events.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { getFlowById, syncFlowFromTask } from "./flow-registry.js";
 import {
   formatTaskBlockedFollowupMessage,

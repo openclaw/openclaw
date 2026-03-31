@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { createRunningTaskRun } from "openclaw/plugin-sdk/tasks";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
   cleanupFailedAcpSpawn,
@@ -45,6 +44,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
