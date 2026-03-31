@@ -17,6 +17,7 @@ import {
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -151,6 +152,12 @@ export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+    shouldSuppressLocalSlackExecApprovalPrompt({
+      cfg,
+      accountId,
+      payload,
+    }),
   sendPayload: async (ctx) => {
     const payload = {
       ...ctx.payload,
