@@ -24,6 +24,7 @@ export type ChannelDefaultsConfig = {
 };
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
+export type ChannelThinkingByChannelConfig = Record<string, Record<string, string>>;
 
 /**
  * Base type for extension channel config sections.
@@ -47,6 +48,8 @@ export interface ChannelsConfig {
   defaults?: ChannelDefaultsConfig;
   /** Map provider -> channel id -> model override. */
   modelByChannel?: ChannelModelByChannelConfig;
+  /** Map provider -> channel id -> thinking level override. */
+  thinkingByChannel?: ChannelThinkingByChannelConfig;
   /** Channel sections are plugin-owned; concrete channel files augment this interface. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;

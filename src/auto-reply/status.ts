@@ -16,6 +16,7 @@ import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { resolveChannelThinkingOverride } from "../channels/thinking-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -693,9 +694,30 @@ export function buildStatusMessage(args: StatusArgs): string {
     provider: activeProvider,
     model: activeModel,
   });
+  const channelThinkNote = (() => {
+    if (!args.config || !entry) {
+      return undefined;
+    }
+    if (args.resolvedThink || entry.thinkingLevel) {
+      return undefined;
+    }
+    const channelThinkOverride = resolveChannelThinkingOverride({
+      cfg: args.config,
+      channel: entry.channel ?? entry.origin?.provider,
+      groupId: entry.groupId,
+      groupChannel: entry.groupChannel,
+      groupSubject: entry.subject,
+      parentSessionKey: args.parentSessionKey,
+    });
+    if (!channelThinkOverride) {
+      return undefined;
+    }
+    return "channel override";
+  })();
+  const thinkNote = channelThinkNote ? ` (${channelThinkNote})` : "";
   const optionParts = [
     `Runtime: ${runtime.label}`,
-    `Think: ${thinkLevel}`,
+    `Think: ${thinkLevel}${thinkNote}`,
     fastMode ? "Fast: on" : null,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
