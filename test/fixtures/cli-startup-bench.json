@@ -1,0 +1,404 @@
+{
+  "node": "v25.6.1",
+  "runs": 1,
+  "warmup": 0,
+  "timeoutMs": 30000,
+  "cpuProfDir": null,
+  "heapProfDir": null,
+  "primary": {
+    "entry": "openclaw.mjs",
+    "cases": [
+      {
+        "id": "version",
+        "name": "--version",
+        "args": ["--version"],
+        "samples": [
+          {
+            "ms": 104.257833,
+            "maxRssMb": 62.234375,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 104.257833,
+            "p50": 104.257833,
+            "p95": 104.257833,
+            "min": 104.257833,
+            "max": 104.257833
+          },
+          "maxRssMb": {
+            "avg": 62.234375,
+            "p50": 62.234375,
+            "p95": 62.234375,
+            "min": 62.234375,
+            "max": 62.234375
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "help",
+        "name": "--help",
+        "args": ["--help"],
+        "samples": [
+          {
+            "ms": 54.998708,
+            "maxRssMb": 45.65625,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 54.998708,
+            "p50": 54.998708,
+            "p95": 54.998708,
+            "min": 54.998708,
+            "max": 54.998708
+          },
+          "maxRssMb": {
+            "avg": 45.65625,
+            "p50": 45.65625,
+            "p95": 45.65625,
+            "min": 45.65625,
+            "max": 45.65625
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "health",
+        "name": "health",
+        "args": ["health"],
+        "samples": [
+          {
+            "ms": 9588.71375,
+            "maxRssMb": 61.09375,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 9588.71375,
+            "p50": 9588.71375,
+            "p95": 9588.71375,
+            "min": 9588.71375,
+            "max": 9588.71375
+          },
+          "maxRssMb": {
+            "avg": 61.09375,
+            "p50": 61.09375,
+            "p95": 61.09375,
+            "min": 61.09375,
+            "max": 61.09375
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "healthJson",
+        "name": "health --json",
+        "args": ["health", "--json"],
+        "samples": [
+          {
+            "ms": 919.712041,
+            "maxRssMb": 61.296875,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 919.712041,
+            "p50": 919.712041,
+            "p95": 919.712041,
+            "min": 919.712041,
+            "max": 919.712041
+          },
+          "maxRssMb": {
+            "avg": 61.296875,
+            "p50": 61.296875,
+            "p95": 61.296875,
+            "min": 61.296875,
+            "max": 61.296875
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "statusJson",
+        "name": "status --json",
+        "args": ["status", "--json"],
+        "samples": [
+          {
+            "ms": 10498.266167,
+            "maxRssMb": 61.28125,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 10498.266167,
+            "p50": 10498.266167,
+            "p95": 10498.266167,
+            "min": 10498.266167,
+            "max": 10498.266167
+          },
+          "maxRssMb": {
+            "avg": 61.28125,
+            "p50": 61.28125,
+            "p95": 61.28125,
+            "min": 61.28125,
+            "max": 61.28125
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "status",
+        "name": "status",
+        "args": ["status"],
+        "samples": [
+          {
+            "ms": 14638.190375,
+            "maxRssMb": 61.421875,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 14638.190375,
+            "p50": 14638.190375,
+            "p95": 14638.190375,
+            "min": 14638.190375,
+            "max": 14638.190375
+          },
+          "maxRssMb": {
+            "avg": 61.421875,
+            "p50": 61.421875,
+            "p95": 61.421875,
+            "min": 61.421875,
+            "max": 61.421875
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "sessions",
+        "name": "sessions",
+        "args": ["sessions"],
+        "samples": [
+          {
+            "ms": 5588.652417,
+            "maxRssMb": 61.96875,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 5588.652417,
+            "p50": 5588.652417,
+            "p95": 5588.652417,
+            "min": 5588.652417,
+            "max": 5588.652417
+          },
+          "maxRssMb": {
+            "avg": 61.96875,
+            "p50": 61.96875,
+            "p95": 61.96875,
+            "min": 61.96875,
+            "max": 61.96875
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "sessionsJson",
+        "name": "sessions --json",
+        "args": ["sessions", "--json"],
+        "samples": [
+          {
+            "ms": 5412.4965,
+            "maxRssMb": 61.671875,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 5412.4965,
+            "p50": 5412.4965,
+            "p95": 5412.4965,
+            "min": 5412.4965,
+            "max": 5412.4965
+          },
+          "maxRssMb": {
+            "avg": 61.671875,
+            "p50": 61.671875,
+            "p95": 61.671875,
+            "min": 61.671875,
+            "max": 61.671875
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "agentsListJson",
+        "name": "agents list --json",
+        "args": ["agents", "list", "--json"],
+        "samples": [
+          {
+            "ms": 972.918667,
+            "maxRssMb": 60.53125,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 972.918667,
+            "p50": 972.918667,
+            "p95": 972.918667,
+            "min": 972.918667,
+            "max": 972.918667
+          },
+          "maxRssMb": {
+            "avg": 60.53125,
+            "p50": 60.53125,
+            "p95": 60.53125,
+            "min": 60.53125,
+            "max": 60.53125
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "gatewayStatus",
+        "name": "gateway status",
+        "args": ["gateway", "status"],
+        "samples": [
+          {
+            "ms": 1120.672042,
+            "maxRssMb": 61.59375,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 1120.672042,
+            "p50": 1120.672042,
+            "p95": 1120.672042,
+            "min": 1120.672042,
+            "max": 1120.672042
+          },
+          "maxRssMb": {
+            "avg": 61.59375,
+            "p50": 61.59375,
+            "p95": 61.59375,
+            "min": 61.59375,
+            "max": 61.59375
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "gatewayStatusJson",
+        "name": "gateway status --json",
+        "args": ["gateway", "status", "--json"],
+        "samples": [
+          {
+            "ms": 1181.198541,
+            "maxRssMb": 61.953125,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 1181.198541,
+            "p50": 1181.198541,
+            "p95": 1181.198541,
+            "min": 1181.198541,
+            "max": 1181.198541
+          },
+          "maxRssMb": {
+            "avg": 61.953125,
+            "p50": 61.953125,
+            "p95": 61.953125,
+            "min": 61.953125,
+            "max": 61.953125
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "gatewayHealthJson",
+        "name": "gateway health --json",
+        "args": ["gateway", "health", "--json"],
+        "samples": [
+          {
+            "ms": 5285.964,
+            "maxRssMb": 60.484375,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 5285.964,
+            "p50": 5285.964,
+            "p95": 5285.964,
+            "min": 5285.964,
+            "max": 5285.964
+          },
+          "maxRssMb": {
+            "avg": 60.484375,
+            "p50": 60.484375,
+            "p95": 60.484375,
+            "min": 60.484375,
+            "max": 60.484375
+          },
+          "exitSummary": "code:0x1"
+        }
+      },
+      {
+        "id": "configGetGatewayPort",
+        "name": "config get gateway.port",
+        "args": ["config", "get", "gateway.port"],
+        "samples": [
+          {
+            "ms": 582.064875,
+            "maxRssMb": 61.09375,
+            "exitCode": 0,
+            "signal": null
+          }
+        ],
+        "summary": {
+          "durationMs": {
+            "avg": 582.064875,
+            "p50": 582.064875,
+            "p95": 582.064875,
+            "min": 582.064875,
+            "max": 582.064875
+          },
+          "maxRssMb": {
+            "avg": 61.09375,
+            "p50": 61.09375,
+            "p95": 61.09375,
+            "min": 61.09375,
+            "max": 61.09375
+          },
+          "exitSummary": "code:0x1"
+        }
+      }
+    ]
+  },
+  "secondary": null
+}
