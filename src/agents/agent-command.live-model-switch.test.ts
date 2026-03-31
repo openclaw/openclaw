@@ -415,4 +415,49 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
   });
+
+  it("propagates authProfileId from the switch error to the retried session entry", async () => {
+    let invocation = 0;
+    let capturedAuthProfileProvider: string | undefined;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation += 1;
+      if (invocation === 1) {
+        // First invocation: switch includes an auth profile change.
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "profile-openai-prod",
+          authProfileIdSource: "user",
+        });
+      }
+      // Second invocation: succeed with the switched model.
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+
+    state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
+      const attemptParams = args[0] as { authProfileProvider?: string } | undefined;
+      capturedAuthProfileProvider = attemptParams?.authProfileProvider;
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    const agentCommand = await getAgentCommand();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+    });
+
+    // The retried attempt must receive the switched provider for auth profile
+    // validation, not the original default provider.
+    expect(capturedAuthProfileProvider).toBe("openai");
+
+    // runWithModelFallback should have been called twice.
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+  });
 });

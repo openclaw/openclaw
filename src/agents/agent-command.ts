@@ -629,7 +629,7 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
-    const providerForAuthProfileValidation = provider;
+    let providerForAuthProfileValidation = provider;
     if (hasExplicitRunOverride) {
       const explicitRef = explicitModelOverride
         ? explicitProviderOverride
@@ -836,6 +836,17 @@ async function agentCommandInternal(
           model = err.model;
           fallbackProvider = err.provider;
           fallbackModel = err.model;
+          // Keep auth-profile validation in sync so the next attempt resolves
+          // the correct session-level auth profile for the new provider.
+          providerForAuthProfileValidation = err.provider;
+          // Forward auth-profile fields carried by the switch request so the
+          // retried run uses the right credentials (mirrors the main runner).
+          if (sessionEntry) {
+            sessionEntry.authProfileOverride = err.authProfileId;
+            sessionEntry.authProfileOverrideSource = err.authProfileId
+              ? err.authProfileIdSource
+              : undefined;
+          }
           // Reset lifecycle tracking for the retry iteration.
           lifecycleEnded = false;
           log.info(
