@@ -35,6 +35,11 @@ const CASES: GuidanceCase[] = [
     required: ["OPENCLAW_CONFIG_PATH"],
   },
   {
+    file: "skills/sokosumi/SKILL.md",
+    required: ["OPENCLAW_CONFIG_PATH"],
+    forbidden: ["cat ~/.openclaw/openclaw.json"],
+  },
+  {
     file: "skills/sherpa-onnx-tts/SKILL.md",
     required: [
       "OPENCLAW_STATE_DIR",
