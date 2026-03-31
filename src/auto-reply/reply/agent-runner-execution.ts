@@ -592,22 +592,44 @@ export async function runAgentTurnWithFallback(params: {
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
+      // Heartbeat runs must never reset the user's session — the heartbeat should
+      // fail gracefully instead of silently destroying conversation history.
+      // See: https://github.com/openclaw/openclaw/issues/58409
       const embeddedError = runResult.meta?.error;
       if (
         embeddedError &&
         isContextOverflowError(embeddedError.message) &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(embeddedError.message))
+        !didResetAfterCompactionFailure
       ) {
-        didResetAfterCompactionFailure = true;
-        return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
-          },
-        };
+        if (params.isHeartbeat) {
+          defaultRuntime.error(
+            `Heartbeat run hit context overflow — skipping session reset to preserve conversation history (${embeddedError.message})`,
+          );
+          return {
+            kind: "final",
+            payload: { text: "" },
+          };
+        }
+        if (await params.resetSessionAfterCompactionFailure(embeddedError.message)) {
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            },
+          };
+        }
       }
       if (embeddedError?.kind === "role_ordering") {
+        if (params.isHeartbeat) {
+          defaultRuntime.error(
+            `Heartbeat run hit role ordering conflict — skipping session reset to preserve conversation history (${embeddedError.message})`,
+          );
+          return {
+            kind: "final",
+            payload: { text: "" },
+          };
+        }
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
         if (didReset) {
           return {
@@ -664,20 +686,39 @@ export async function runAgentTurnWithFallback(params: {
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
-      if (
-        isCompactionFailure &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(message))
-      ) {
-        didResetAfterCompactionFailure = true;
-        return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
-          },
-        };
+      // Heartbeat runs must never reset the user's session — the heartbeat
+      // should fail gracefully instead of silently destroying conversation
+      // history. See: https://github.com/openclaw/openclaw/issues/58409
+      if (isCompactionFailure && !didResetAfterCompactionFailure) {
+        if (params.isHeartbeat) {
+          defaultRuntime.error(
+            `Heartbeat run hit compaction failure — skipping session reset to preserve conversation history (${message})`,
+          );
+          return {
+            kind: "final",
+            payload: { text: "" },
+          };
+        }
+        if (await params.resetSessionAfterCompactionFailure(message)) {
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            },
+          };
+        }
       }
       if (isRoleOrderingError) {
+        if (params.isHeartbeat) {
+          defaultRuntime.error(
+            `Heartbeat run hit role ordering error — skipping session reset to preserve conversation history (${message})`,
+          );
+          return {
+            kind: "final",
+            payload: { text: "" },
+          };
+        }
         const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
         if (didReset) {
           return {
@@ -689,13 +730,23 @@ export async function runAgentTurnWithFallback(params: {
         }
       }
 
-      // Auto-recover from Gemini session corruption by resetting the session
+      // Auto-recover from Gemini session corruption by resetting the session.
+      // Heartbeat runs skip this destructive path to avoid silent data loss.
       if (
         isSessionCorruption &&
         params.sessionKey &&
         params.activeSessionStore &&
         params.storePath
       ) {
+        if (params.isHeartbeat) {
+          defaultRuntime.error(
+            `Heartbeat run hit Gemini session corruption — skipping session reset to preserve conversation history (${params.sessionKey})`,
+          );
+          return {
+            kind: "final",
+            payload: { text: "" },
+          };
+        }
         const sessionKey = params.sessionKey;
         const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
         defaultRuntime.error(

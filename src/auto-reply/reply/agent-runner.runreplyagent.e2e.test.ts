@@ -1694,6 +1694,121 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  // Regression: heartbeat runs must never reset the user's session.
+  // See: https://github.com/openclaw/openclaw/issues/58409
+  it("does not reset session on compaction failure during heartbeat run", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-heartbeat-compaction";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+      };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "important-conversation-data", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        );
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      // Session must NOT have been reset
+      expect(sessionStore.main.sessionId).toBe(sessionId);
+      // Transcript must still exist on disk
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionId);
+    });
+  });
+
+  it("does not reset session on Gemini corruption during heartbeat run", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { storePath, sessionEntry, sessionStore, transcriptPath } =
+        await writeCorruptGeminiSessionFixture({
+          stateDir,
+          sessionId: "session-heartbeat-corrupt",
+          persistStore: true,
+        });
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "function call turn comes immediately after a user turn or after a function response turn",
+        );
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      // Session entry must still be present (not deleted)
+      expect(sessionStore.main).toBeDefined();
+      expect(sessionStore.main.sessionId).toBe("session-heartbeat-corrupt");
+      // Transcript must still exist on disk
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main).toBeDefined();
+    });
+  });
+
+  it("does not reset session on role ordering error during heartbeat run", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-heartbeat-role";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+      };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "important-conversation-data", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error("400 Incorrect role information");
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      // Session must NOT have been reset
+      expect(sessionStore.main.sessionId).toBe(sessionId);
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionId);
+    });
+  });
+
   it("rewrites Bun socket errors into friendly text", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [
