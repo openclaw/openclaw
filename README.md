@@ -1,186 +1,166 @@
-# SafeClaw — The Safe Version of OpenClaw
+# SafeClaw — Run OpenClaw Safely
 
-> **This is a fork of [OpenClaw](https://github.com/openclaw/openclaw) (332K+ stars) with safety and accountability built in.** Everything OpenClaw does, SafeClaw does — with every LLM call tracked, every threat blocked, and every action receipted. See the [original OpenClaw README](OPENCLAW-README.md) for full OpenClaw documentation.
+> **OpenClaw is powerful. It has access to your email, your files, your credentials. SafeClaw puts it in a container where it can't touch any of that — and blocks dangerous actions before they execute.**
 
-Same agent. Same capabilities. With safety and accountability built in.
+## The Problem
 
-SafeClaw wraps [OpenClaw](https://github.com/openclaw/openclaw) with the [AEP safety proxy](https://github.com/aceteam-ai/aceteam-aep). Every LLM call gets cost tracking, PII detection, agent threat blocking, and a real-time dashboard. Zero code changes to OpenClaw.
+OpenClaw runs on your laptop with full access to everything you're logged into. The community knows this is a risk:
 
-## Why SafeClaw?
+- **"How safe is it to install on my laptop?"** — The #1 question at every OpenClaw workshop.
+- **"If you're logged into Gmail, it can send email to your entire contact list"** — Real scenario discussed by workshop organizers.
+- **"A dependency had a vulnerability that gave access to whatever you're logged into"** — Actually happened.
+- **"People are buying Mac Minis just to run it safely"** — $600 for hardware isolation.
 
-OpenClaw is powerful. It has 332K+ GitHub stars. But deploying it safely is the #1 concern holding back adoption:
-
-- **Cost blowups.** A founder woke up to a $135K API bill. No visibility into what happened.
-- **No safety enforcement.** Agents can leak PII, execute exploits, or take unauthorized actions.
-- **Enterprise blockers.** CISOs won't approve agent deployment without accountability.
-
-SafeClaw solves this by routing all LLM traffic through the AEP safety proxy. The proxy inspects every request and response, blocks threats before they reach the LLM, and produces receipts for every action.
-
-## Quick Start
-
-### Option 1: Docker (recommended)
-
-```bash
-git clone https://github.com/aceteam-ai/safeclaw.git
-cd safeclaw
-cp .env.example .env
-# Add your OPENAI_API_KEY to .env
-
-# Start with safety
-docker compose -f docker-compose.yml -f docker-compose.safe.yml up
-```
-
-Dashboard: **http://localhost:8899/aep/**
-
-### Option 2: Wrap any existing OpenClaw install
-
-```bash
-pip install aceteam-aep[all]
-aceteam-aep wrap -- openclaw run "your task here"
-```
-
-### Option 3: Proxy mode (any install method)
-
-```bash
-pip install aceteam-aep[all]
-aceteam-aep proxy --port 8899
-
-# In OpenClaw settings, set the model provider base URL to:
-# http://localhost:8899/v1
-```
-
-## What Gets Blocked?
-
-| Threat                   | Example                                | AEP Action              |
-| ------------------------ | -------------------------------------- | ----------------------- |
-| **Port scanning**        | `socket.connect()` on localhost        | BLOCK (HTTP 400)        |
-| **Subprocess execution** | `subprocess.run()` exploit payloads    | BLOCK                   |
-| **Credential access**    | Reading `/etc/passwd` or `/etc/shadow` | BLOCK                   |
-| **PII in responses**     | SSN, credit card numbers in LLM output | BLOCK                   |
-| **Cost anomalies**       | 5x average cost spike                  | FLAG                    |
-| **Normal calls**         | Regular agent tasks                    | PASS (receipt recorded) |
-
-Blocked calls never reach the LLM. $0 cost. The agent receives an error, not the dangerous response.
-
-## What You See on the Dashboard
-
-Open **http://localhost:8899/aep/** while your agent runs:
-
-- Real-time cost counter
-- Safety status: green (PASS), yellow (FLAG), red (BLOCK)
-- Every LLM call with model, tokens, duration
-- Safety signals: PII detected, threats blocked, anomalies flagged
-- Governance context (if using X-AEP-\* headers)
+SafeClaw solves this for $0.
 
 ## How It Works
 
 ```
-OpenClaw Agent → AEP Safety Proxy → LLM API (OpenAI, Anthropic, etc.)
-                      ↓
-              Dashboard + Receipts
+Your laptop (safe)          Docker container (sandboxed)
+┌─────────────────┐        ┌──────────────────────────────┐
+│ Your files      │        │ OpenClaw Agent               │
+│ Your email      │   ──── │ AEP Safety Proxy             │
+│ Your bank       │  port  │   ↓ blocks threats           │
+│ Your credentials│  8899  │   ↓ tracks cost              │
+│ Everything else │  only  │   ↓ signs every verdict      │
+└─────────────────┘        └──────────────────────────────┘
+                                    ↓
+                              LLM API (OpenAI, etc.)
 ```
 
-The AEP proxy is a reverse proxy. It reads every request and response. Safe calls pass through with receipts. Dangerous calls are blocked before they reach the LLM.
+The agent runs inside a Docker container. It **cannot** access your files, email, browser cookies, or credentials. The only thing exposed is port 8899 — the safety dashboard.
 
-## Four Pillars of Accountability
-
-| Pillar                 | How SafeClaw Enables It                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------------------- |
-| **Cost Tracking**      | AEP proxy counts tokens per call, per model. Dashboard shows cumulative spend.                    |
-| **Safety Enforcement** | PASS/FLAG/BLOCK on every call. PII, toxicity, agent threats blocked before reaching the LLM.      |
-| **Provenance**         | Set `AEP_TRACE_ID` to correlate calls across agent workflows. Citation chains track data sources. |
-| **Governance**         | Set `AEP_ENTITY` and `AEP_CLASSIFICATION` to tag calls with org identity and data sensitivity.    |
-
-### Enable Governance Headers
+## Quick Start
 
 ```bash
-# In your .env or shell:
-export AEP_ENTITY="org:your-company"
-export AEP_CLASSIFICATION="confidential"
-export AEP_TRACE_ID="workflow-$(date +%s)"
+# One command. No Node. No Python. Just Docker.
+docker run -p 8899:8899 -e OPENAI_API_KEY=$OPENAI_API_KEY ghcr.io/aceteam-ai/aep-proxy
 ```
 
-These headers are injected into every LLM call. The AEP proxy parses them, strips them before forwarding to the LLM provider, and includes them in the dashboard and audit trail.
+Dashboard: **http://localhost:8899/aep/**
 
-## Configurable Enforcement Policy
+That's it. Every LLM call is tracked. Every threat is blocked. Every verdict is signed.
 
-Customize what gets blocked, flagged, or passed per detector:
+## What Gets Blocked
+
+| Threat                                     | What happens                      | Cost    |
+| ------------------------------------------ | --------------------------------- | ------- |
+| Agent tries to scan your ports             | **BLOCKED.** HTTP 400.            | $0      |
+| Agent tries to run subprocess exploits     | **BLOCKED.** Never reaches LLM.   | $0      |
+| Agent tries to read /etc/passwd            | **BLOCKED.**                      | $0      |
+| Agent response contains SSN or credit card | **BLOCKED.** Agent never sees it. | $0      |
+| Agent cost spikes 5x average               | **FLAGGED.** Alert raised.        | Tracked |
+| Normal agent task                          | **PASS.** Receipt recorded.       | Tracked |
+
+## Three Enforcement Actions
+
+Every call gets exactly one verdict:
+
+- **PASS** — Safe. Receipt recorded. Response delivered.
+- **FLAG** — Suspicious. Alert raised. Response delivered with warning.
+- **BLOCK** — Dangerous. Request rejected. $0 cost. Agent gets an error, not the dangerous response.
+
+## Signed Verdicts (Cryptographic Proof)
+
+Every verdict is Ed25519 signed and Merkle chained. Like a blockchain for agent safety.
+
+```
+V0 ──→ V1 ──→ V2 ──→ V3 ──→ ...
+Each links to the previous. Change one, the chain breaks.
+```
+
+This answers: **"How do we know the safety checks actually ran?"**
+
+```bash
+# Generate signing keys
+aceteam-aep keygen
+
+# Run with signed verdicts
+docker run -p 8899:8899 \
+  -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  -v ./aep.key:/app/aep.key:ro \
+  ghcr.io/aceteam-ai/aep-proxy \
+  proxy --port 8899 --host 0.0.0.0 --sign-key /app/aep.key
+```
+
+## Your Rules, Your Agents
+
+Every company defines what "safe" means:
 
 ```yaml
-# aep-policy.yaml
-default_action: flag
+# Healthcare
 detectors:
-  pii:
-    action: block
-    threshold: 0.8
-  agent_threat:
-    action: block
-  cost_anomaly:
-    action: pass
-    multiplier: 10
-  content_safety:
-    action: flag
-    threshold: 0.85
+  hipaa_compliance: { action: block }
+  pii: { action: block }
+  medication_check: { action: flag }
+
+# Finance
+detectors:
+  sox_compliance: { action: block }
+  trading_auth: { action: block }
+
+# Startup
+detectors:
+  pii: { action: flag }
+  agent_threat: { action: block }
+  cost_anomaly: { action: flag, multiplier: 10 }
 ```
 
-Set `AEP_POLICY=aep-policy.yaml` in your `.env` to apply. Enterprises can define their own safety policies without changing code.
+One YAML file. Different industries, different rules, same enforcement engine.
 
-## Custom Safety Detectors
+## Dashboard
 
-Add your own detectors alongside the built-in ones:
+Open **http://localhost:8899/aep/** while your agent runs:
 
-```python
-# my_detector.py
-from aceteam_aep.safety.base import SafetySignal
+- Real-time cost counter
+- PASS / FLAG / BLOCK badges per call
+- Safety signals: PII, threats, anomalies
+- Merkle chain: signed verdicts with chain height
+- Governance context: entity, classification, trace ID
 
-class ComplianceDetector:
-    name = "compliance"
+## Works With Everything
 
-    def check(self, *, input_text, output_text, call_id, **kwargs):
-        # Your detection logic here
-        return []
-```
+| Framework                             | How                       | Verified |
+| ------------------------------------- | ------------------------- | -------- |
+| OpenClaw                              | Docker compose overlay    | Yes      |
+| NemoClaw (NVIDIA OpenShell)           | Gateway routing           | Yes      |
+| NanoClaw, CrewAI, DeerFlow, LangChain | `OPENAI_BASE_URL` env var | Yes      |
+| Claude Code, Codex, OpenCode          | Proxy or MCP skill        | Yes      |
+| Any OpenAI-compatible client          | Point at proxy            | Yes      |
 
-Load it via the proxy CLI: `aceteam-aep proxy --detector my_detector:ComplianceDetector`
+## Install Options
 
-## Attestation (Roadmap)
-
-AEP is building cryptographic proof that safety claims are genuine, not just stated:
-
-- **Level 1 — Signed Verdicts.** Each PASS/FLAG/BLOCK decision is Ed25519-signed by the proxy. Verifiable by anyone. Post-quantum hybrid signing (ML-DSA-65) ensures long-term auditability.
-- **Level 2 — Detector Attestation.** Each safety detector independently signs its output. Verifiers can confirm N detectors ran and weren't tampered with.
-- **Level 3 — Third-Party Verification.** External certification that the proxy runs approved detectors with valid keys. The SOC 2 model for agent safety.
-
-Non-AEP agents get low-confidence annotations. AEP-attested agents get verified trust scores. This creates structural preference for safety-enabled agents.
-
-See the [AEP protocol spec](https://github.com/aceteam-ai/aceteam-aep) for the full attestation architecture.
-
-## Tested With
-
-| Agent/Framework | Integration | Verified |
-|----------------|------------|----------|
-| OpenClaw (this repo) | Docker compose overlay | Yes |
-| NemoClaw (NVIDIA OpenShell) | Gateway inference routing | Yes — [demo script](https://github.com/aceteam-ai/aep-quickstart/blob/main/scripts/demo-nemoclaw.sh) |
-| NanoClaw | `OPENAI_BASE_URL` env var | Yes |
-| CrewAI, DeerFlow, LangChain | `OPENAI_BASE_URL` env var | Yes |
-| Any OpenAI-compatible client | Proxy or wrap() | Yes |
-
-## Upstream
-
-SafeClaw tracks [openclaw/openclaw](https://github.com/openclaw/openclaw) main branch. The only additions are the safety proxy configuration. To sync with upstream:
+**Docker (recommended — sandboxed, no file access):**
 
 ```bash
-git fetch upstream
-git merge upstream/main
+docker run -p 8899:8899 -e OPENAI_API_KEY=$OPENAI_API_KEY ghcr.io/aceteam-ai/aep-proxy
 ```
 
-## Learn More
+**pip (developer mode — runs on host):**
 
-| Resource | What |
-|----------|------|
-| [AEP Protocol Spec](https://aceteam.ai/docs/aep-overview) | Four pillars: cost, provenance, governance, safety |
-| [AEP Package (PyPI)](https://pypi.org/project/aceteam-aep/) | `pip install aceteam-aep[all]` |
-| [AEP Source](https://github.com/aceteam-ai/aceteam-aep) | Proxy, SDK, detectors, dashboard |
-| [AEP Quickstart](https://github.com/aceteam-ai/aep-quickstart) | Examples, NemoClaw demo, sidecar pattern |
-| [Safety Docs](https://aceteam.ai/docs/safety-proxy) | Detectors, enforcement, headers |
-| [AceTeam](https://aceteam.ai) | The team behind AEP |
+```bash
+pip install aceteam-aep[all]
+aceteam-aep proxy --port 8899
+```
+
+**Wrap any script:**
+
+```bash
+pip install aceteam-aep[all]
+aceteam-aep wrap -- python my_agent.py
+```
+
+## Links
+
+|                 |                                                                                                    |
+| --------------- | -------------------------------------------------------------------------------------------------- |
+| **Workshop**    | [SafeClaw Bootcamp](https://github.com/aceteam-ai/aep-quickstart/blob/main/workshop/bootcamp.html) |
+| **AEP Package** | [pypi.org/project/aceteam-aep](https://pypi.org/project/aceteam-aep/)                              |
+| **AEP Source**  | [github.com/aceteam-ai/aceteam-aep](https://github.com/aceteam-ai/aceteam-aep)                     |
+| **Examples**    | [github.com/aceteam-ai/aep-quickstart](https://github.com/aceteam-ai/aep-quickstart)               |
+| **AceTeam**     | [aceteam.ai](https://aceteam.ai)                                                                   |
+| **Contact**     | jason@aceteam.ai                                                                                   |
+
+---
+
+_OpenClaw gives agents power. SafeClaw makes them accountable._
