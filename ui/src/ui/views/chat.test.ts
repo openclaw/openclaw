@@ -18,6 +18,36 @@ import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
+const DELETE_CONFIRM_STORAGE_KEY = "openclaw:skipDeleteConfirm";
+
+function readDeleteConfirmPreference(): string | null {
+  try {
+    return getSafeLocalStorage()?.getItem(DELETE_CONFIRM_STORAGE_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDeleteConfirmPreference(): void {
+  try {
+    getSafeLocalStorage()?.removeItem(DELETE_CONFIRM_STORAGE_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
+function restoreDeleteConfirmPreference(value: string | null): void {
+  try {
+    if (value === null) {
+      getSafeLocalStorage()?.removeItem(DELETE_CONFIRM_STORAGE_KEY);
+      return;
+    }
+    getSafeLocalStorage()?.setItem(DELETE_CONFIRM_STORAGE_KEY, value);
+  } catch {
+    /* noop */
+  }
+}
+
 function createSessions(): SessionsListResult {
   return {
     ts: 0,
@@ -717,71 +747,122 @@ describe("chat view", () => {
   });
 
   it("opens delete confirm on the left for user messages", () => {
-    try {
-      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-    } catch {
-      /* noop */
-    }
+    const originalPreference = readDeleteConfirmPreference();
+    clearDeleteConfirmPreference();
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "user",
-              content: "hello from user",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
+    try {
+      render(
+        renderChat(
+          createProps({
+            messages: [
+              {
+                role: "user",
+                content: "hello from user",
+                timestamp: 1000,
+              },
+            ],
+          }),
+        ),
+        container,
+      );
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      ".chat-group.user .chat-group-delete",
-    );
-    expect(deleteButton).not.toBeNull();
-    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const deleteButton = container.querySelector<HTMLButtonElement>(
+        ".chat-group.user .chat-group-delete",
+      );
+      expect(deleteButton).not.toBeNull();
+      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
-    expect(confirm).not.toBeNull();
-    expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
+      const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
+      expect(confirm).not.toBeNull();
+      expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
+    } finally {
+      restoreDeleteConfirmPreference(originalPreference);
+    }
   });
 
   it("opens delete confirm on the right for assistant messages", () => {
-    try {
-      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-    } catch {
-      /* noop */
-    }
+    const originalPreference = readDeleteConfirmPreference();
+    clearDeleteConfirmPreference();
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "assistant",
-              content: "hello from assistant",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
+    try {
+      render(
+        renderChat(
+          createProps({
+            messages: [
+              {
+                role: "assistant",
+                content: "hello from assistant",
+                timestamp: 1000,
+              },
+            ],
+          }),
+        ),
+        container,
+      );
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      ".chat-group.assistant .chat-group-delete",
-    );
-    expect(deleteButton).not.toBeNull();
-    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const deleteButton = container.querySelector<HTMLButtonElement>(
+        ".chat-group.assistant .chat-group-delete",
+      );
+      expect(deleteButton).not.toBeNull();
+      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const confirm = container.querySelector<HTMLElement>(
-      ".chat-group.assistant .chat-delete-confirm",
-    );
-    expect(confirm).not.toBeNull();
-    expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+      const confirm = container.querySelector<HTMLElement>(
+        ".chat-group.assistant .chat-delete-confirm",
+      );
+      expect(confirm).not.toBeNull();
+      expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+    } finally {
+      restoreDeleteConfirmPreference(originalPreference);
+    }
+  });
+
+  it("renders delete confirm with the expected safe structure", () => {
+    const originalPreference = readDeleteConfirmPreference();
+    clearDeleteConfirmPreference();
+    const container = document.createElement("div");
+    try {
+      render(
+        renderChat(
+          createProps({
+            messages: [
+              {
+                role: "assistant",
+                content: "hello from assistant",
+                timestamp: 1000,
+              },
+            ],
+          }),
+        ),
+        container,
+      );
+
+      const deleteButton = container.querySelector<HTMLButtonElement>(
+        ".chat-group.assistant .chat-group-delete",
+      );
+      expect(deleteButton).not.toBeNull();
+      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      const confirm = container.querySelector<HTMLElement>(
+        ".chat-group.assistant .chat-delete-confirm",
+      );
+      expect(confirm?.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+        "Delete this message?",
+      );
+      expect(confirm?.querySelector(".chat-delete-confirm__remember span")?.textContent).toBe(
+        "Don't ask again",
+      );
+      expect(confirm?.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel")?.type).toBe(
+        "button",
+      );
+      expect(confirm?.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")?.type).toBe(
+        "button",
+      );
+      expect(confirm?.querySelector<HTMLInputElement>(".chat-delete-confirm__check")?.type).toBe(
+        "checkbox",
+      );
+    } finally {
+      restoreDeleteConfirmPreference(originalPreference);
+    }
   });
 
   it("patches the current session model from the chat header picker", async () => {
