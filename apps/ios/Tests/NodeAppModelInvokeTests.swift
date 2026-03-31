@@ -96,28 +96,69 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
     }
 
-    @Test func operatorReconnectIgnoresBootstrapTokenWhenStoredOperatorTokenExists() {
+    @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {
         #expect(
-            NodeAppModel._test_shouldIgnoreBootstrapTokenForOperatorReconnect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
                 token: nil,
                 bootstrapToken: "fresh-bootstrap-token",
                 password: nil,
                 hasStoredOperatorToken: true)
         )
         #expect(
-            !NodeAppModel._test_shouldIgnoreBootstrapTokenForOperatorReconnect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
                 token: nil,
-                bootstrapToken: "fresh-bootstrap-token",
+                bootstrapToken: nil,
                 password: nil,
                 hasStoredOperatorToken: false)
         )
         #expect(
-            !NodeAppModel._test_shouldIgnoreBootstrapTokenForOperatorReconnect(
-                token: "shared-token",
-                bootstrapToken: "fresh-bootstrap-token",
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
                 password: nil,
                 hasStoredOperatorToken: true)
         )
+        #expect(
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: "shared-token",
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+    }
+
+    @Test @MainActor func allowsLegacyUnscopedTokenFallbackOnlyForLastGateway() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            GatewaySettingsStore.clearLastGatewayConnection()
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let identity = DeviceIdentityStore.loadOrCreate()
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "legacy-operator-token")
+        GatewaySettingsStore.saveLastGatewayConnectionDiscovered(
+            stableID: "gateway-a",
+            useTLS: true)
+
+        let appModel = NodeAppModel()
+        #expect(appModel._test_shouldAllowLegacyUnscopedDeviceTokenFallback(
+            role: "operator",
+            stableID: "gateway-a"))
+        #expect(!appModel._test_shouldAllowLegacyUnscopedDeviceTokenFallback(
+            role: "operator",
+            stableID: "gateway-b"))
     }
 
     @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() {

@@ -1688,6 +1688,13 @@ extension NodeAppModel {
         let effectiveStableID = stableID.isEmpty ? url.absoluteString : stableID
         let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
 
+        var scopedConnectOptions = connectOptions
+        scopedConnectOptions.gatewayStableID = effectiveStableID
+        scopedConnectOptions.allowLegacyUnscopedDeviceTokenFallback =
+            self.shouldAllowLegacyUnscopedDeviceTokenFallback(
+                role: connectOptions.role,
+                stableID: effectiveStableID)
+
         self.activeGatewayConnectConfig = GatewayConnectConfig(
             url: url,
             stableID: stableID,
@@ -1695,18 +1702,24 @@ extension NodeAppModel {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            nodeOptions: connectOptions)
+            nodeOptions: scopedConnectOptions)
         self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
-        if self.shouldStartOperatorGatewayLoop(token: token, password: password) {
+        if self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            stableID: effectiveStableID)
+        {
             self.startOperatorGatewayLoop(
                 url: url,
                 stableID: effectiveStableID,
                 token: token,
                 bootstrapToken: bootstrapToken,
                 password: password,
-                nodeOptions: connectOptions,
+                nodeOptions: scopedConnectOptions,
                 sessionBox: sessionBox)
         } else {
+            self.operatorGatewayTask = nil
             Task { await self.operatorGateway.disconnect() }
         }
         self.startNodeGatewayLoop(
@@ -1715,7 +1728,7 @@ extension NodeAppModel {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            nodeOptions: connectOptions,
+            nodeOptions: scopedConnectOptions,
             sessionBox: sessionBox)
     }
 
@@ -1789,7 +1802,57 @@ private extension NodeAppModel {
         self.apnsLastRegisteredTokenHex = nil
     }
 
-    func shouldStartOperatorGatewayLoop(token: String?, password: String?) -> Bool {
+    func shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        stableID: String) -> Bool
+    {
+        Self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            hasStoredOperatorToken: self.hasStoredGatewayRoleToken("operator", stableID: stableID))
+    }
+
+    func hasStoredGatewayRoleToken(_ role: String, stableID: String? = nil) -> Bool {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        if DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: role,
+            gatewayStableID: stableID) != nil
+        {
+            return true
+        }
+        guard let stableID else { return false }
+        return self.shouldAllowLegacyUnscopedDeviceTokenFallback(role: role, stableID: stableID)
+    }
+
+    func shouldAllowLegacyUnscopedDeviceTokenFallback(role: String, stableID: String) -> Bool {
+        let trimmedStableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedStableID.isEmpty else { return false }
+        guard GatewaySettingsStore.loadLastGatewayConnection()?.stableID == trimmedStableID else {
+            return false
+        }
+        let identity = DeviceIdentityStore.loadOrCreate()
+        guard DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: role,
+            gatewayStableID: trimmedStableID) == nil
+        else {
+            return false
+        }
+        return DeviceAuthStore.loadLegacyUnscopedToken(
+            deviceId: identity.deviceId,
+            role: role) != nil
+    }
+
+    static func shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        hasStoredOperatorToken: Bool) -> Bool
+    {
         let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedToken.isEmpty {
             return true
@@ -1798,26 +1861,10 @@ private extension NodeAppModel {
         if !trimmedPassword.isEmpty {
             return true
         }
-        return self.hasStoredGatewayRoleToken("operator")
-    }
-
-    func hasStoredGatewayRoleToken(_ role: String) -> Bool {
-        let identity = DeviceIdentityStore.loadOrCreate()
-        return DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role) != nil
-    }
-
-    static func shouldIgnoreBootstrapTokenForOperatorReconnect(
-        token: String?,
-        bootstrapToken: String?,
-        password: String?,
-        hasStoredOperatorToken: Bool) -> Bool
-    {
         let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmedBootstrapToken.isEmpty else { return false }
-        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard trimmedToken.isEmpty else { return false }
-        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard trimmedPassword.isEmpty else { return false }
+        if !trimmedBootstrapToken.isEmpty {
+            return false
+        }
         return hasStoredOperatorToken
     }
 
@@ -1837,30 +1884,14 @@ private extension NodeAppModel {
     }
 
     func currentGatewayReconnectAuth(
-        role: String,
         fallbackToken: String?,
         fallbackBootstrapToken: String?,
         fallbackPassword: String?) -> (token: String?, bootstrapToken: String?, password: String?)
     {
-        let resolvedAuth: (token: String?, bootstrapToken: String?, password: String?)
         if let cfg = self.activeGatewayConnectConfig {
-            resolvedAuth = (cfg.token, cfg.bootstrapToken, cfg.password)
-        } else {
-            resolvedAuth = (fallbackToken, fallbackBootstrapToken, fallbackPassword)
+            return (cfg.token, cfg.bootstrapToken, cfg.password)
         }
-
-        // Setup-code bootstrap auth is node-only. If this device already has an operator
-        // device token, keep the operator loop on device-token auth instead of presenting
-        // the bootstrap token and triggering an expected bootstrap_token_invalid failure.
-        if role == "operator" && Self.shouldIgnoreBootstrapTokenForOperatorReconnect(
-            token: resolvedAuth.token,
-            bootstrapToken: resolvedAuth.bootstrapToken,
-            password: resolvedAuth.password,
-            hasStoredOperatorToken: self.hasStoredGatewayRoleToken("operator"))
-        {
-            return (resolvedAuth.token, nil, resolvedAuth.password)
-        }
-        return resolvedAuth
+        return (fallbackToken, fallbackBootstrapToken, fallbackPassword)
     }
 
     func clearPersistedGatewayBootstrapTokenIfNeeded() {
@@ -1929,13 +1960,13 @@ private extension NodeAppModel {
 
                 let effectiveClientId =
                     GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) ?? nodeOptions.clientId
-                let operatorOptions = self.makeOperatorConnectOptions(
+                var operatorOptions = self.makeOperatorConnectOptions(
                     clientId: effectiveClientId,
                     displayName: nodeOptions.clientDisplayName)
+                operatorOptions.gatewayStableID = stableID
 
                 do {
                     let reconnectAuth = self.currentGatewayReconnectAuth(
-                        role: "operator",
                         fallbackToken: token,
                         fallbackBootstrapToken: bootstrapToken,
                         fallbackPassword: password)
@@ -2047,7 +2078,6 @@ private extension NodeAppModel {
                 do {
                     let epochMs = Int(Date().timeIntervalSince1970 * 1000)
                     let reconnectAuth = self.currentGatewayReconnectAuth(
-                        role: "node",
                         fallbackToken: token,
                         fallbackBootstrapToken: bootstrapToken,
                         fallbackPassword: password)
@@ -2069,10 +2099,28 @@ private extension NodeAppModel {
                                 UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
                             }
                             let usedBootstrapToken =
+                                reconnectAuth.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                                 reconnectAuth.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
                                     .isEmpty == false
                             if usedBootstrapToken {
-                                await MainActor.run { self.clearPersistedGatewayBootstrapTokenIfNeeded() }
+                                await MainActor.run {
+                                    self.clearPersistedGatewayBootstrapTokenIfNeeded()
+                                    if self.operatorGatewayTask == nil && self.shouldStartOperatorGatewayLoop(
+                                        token: reconnectAuth.token,
+                                        bootstrapToken: nil,
+                                        password: reconnectAuth.password,
+                                        stableID: stableID)
+                                    {
+                                        self.startOperatorGatewayLoop(
+                                            url: url,
+                                            stableID: stableID,
+                                            token: reconnectAuth.token,
+                                            bootstrapToken: nil,
+                                            password: reconnectAuth.password,
+                                            nodeOptions: currentOptions,
+                                            sessionBox: sessionBox)
+                                    }
+                                }
                             }
                             let relayData = await MainActor.run {
                                 (
@@ -3125,17 +3173,21 @@ extension NodeAppModel {
         self.expectedDeepLinkKey()
     }
 
-    static func _test_shouldIgnoreBootstrapTokenForOperatorReconnect(
+    static func _test_shouldStartOperatorGatewayLoop(
         token: String?,
         bootstrapToken: String?,
         password: String?,
         hasStoredOperatorToken: Bool) -> Bool
     {
-        self.shouldIgnoreBootstrapTokenForOperatorReconnect(
+        self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
             hasStoredOperatorToken: hasStoredOperatorToken)
+    }
+
+    func _test_shouldAllowLegacyUnscopedDeviceTokenFallback(role: String, stableID: String) -> Bool {
+        self.shouldAllowLegacyUnscopedDeviceTokenFallback(role: role, stableID: stableID)
     }
 }
 #endif
