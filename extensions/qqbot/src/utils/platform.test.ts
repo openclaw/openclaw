@@ -107,6 +107,28 @@ describe("qqbot local media path remapping", () => {
     expect(resolveQQBotPayloadLocalFilePath(mediaFile)).toBe(mediaFile);
   });
 
+  it("blocks structured payload files inside the QQ Bot data directory", () => {
+    const actualHome = getHomeDir();
+    const openclawDir = path.join(actualHome, ".openclaw");
+    fs.mkdirSync(openclawDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
+    createdPaths.push(testRoot);
+
+    const dataFile = path.join(
+      actualHome,
+      ".openclaw",
+      "qqbot",
+      "sessions",
+      path.basename(testRoot),
+      "session.json",
+    );
+    fs.mkdirSync(path.dirname(dataFile), { recursive: true });
+    fs.writeFileSync(dataFile, "{}", "utf8");
+    createdPaths.push(path.dirname(dataFile));
+
+    expect(resolveQQBotPayloadLocalFilePath(dataFile)).toBeNull();
+  });
+
   it("allows legacy workspace paths when they remap into QQ Bot media storage", () => {
     const actualHome = getHomeDir();
     const openclawDir = path.join(actualHome, ".openclaw");

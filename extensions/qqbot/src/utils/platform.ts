@@ -168,8 +168,7 @@ export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
   const canonicalCandidate = fs.existsSync(resolvedCandidate)
     ? fs.realpathSync(resolvedCandidate)
     : resolvedCandidate;
-  const workspaceRoot = path.join(getHomeDir(), ".openclaw", "workspace", "qqbot");
-  const allowedRoots = [getQQBotMediaDir(), getQQBotDataDir(), workspaceRoot];
+  const allowedRoots = [getQQBotMediaDir()];
 
   for (const root of allowedRoots) {
     const resolvedRoot = path.resolve(root);

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { textToSpeech as globalTextToSpeech } from "openclaw/plugin-sdk/speech-runtime";
@@ -25,12 +26,7 @@ import {
   audioFileToSilkBase64,
   formatDuration,
 } from "./utils/audio-convert.js";
-import {
-  checkFileSize,
-  readFileAsync,
-  fileExistsAsync,
-  formatFileSize,
-} from "./utils/file-utils.js";
+import { MAX_UPLOAD_SIZE, formatFileSize } from "./utils/file-utils.js";
 import {
   parseQQBotPayload,
   encodePayloadForCron,
@@ -206,13 +202,55 @@ function validateStructuredPayloadLocalPath(
   }
 
   ctx.log?.error(
-    `[qqbot:${ctx.account.accountId}] Blocked ${mediaType} payload local path outside QQ Bot storage: ${payloadPath}`,
+    `[qqbot:${ctx.account.accountId}] Blocked ${mediaType} payload local path outside QQ Bot media storage: ${sanitizeForLog(payloadPath)}`,
   );
   return null;
 }
 
 function isRemoteHttpUrl(p: string): boolean {
   return p.startsWith("http://") || p.startsWith("https://");
+}
+
+function sanitizeForLog(value: string, maxLen = 200): string {
+  return value.replace(/[\r\n\t\0]/g, " ").slice(0, maxLen);
+}
+
+function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): string {
+  if (!isHttpUrl) {
+    const name = path.basename(pathValue);
+    return name ? sanitizeForLog(name) : "<local-file>";
+  }
+
+  try {
+    const url = new URL(pathValue);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return sanitizeForLog(`${url.protocol}//${url.host}${url.pathname}`);
+  } catch {
+    return "<invalid-url>";
+  }
+}
+
+async function readStructuredPayloadLocalFile(filePath: string): Promise<Buffer> {
+  const openFlags =
+    fs.constants.O_RDONLY | ("O_NOFOLLOW" in fs.constants ? fs.constants.O_NOFOLLOW : 0);
+  const handle = await fs.promises.open(filePath, openFlags);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("Path is not a regular file");
+    }
+    if (stat.size > MAX_UPLOAD_SIZE) {
+      throw new Error(
+        `File is too large (${formatFileSize(stat.size)}); QQ Bot API limit is ${formatFileSize(MAX_UPLOAD_SIZE)}`,
+      );
+    }
+    return handle.readFile();
+  } finally {
+    await handle.close();
+  }
 }
 
 async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
@@ -224,7 +262,9 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
   } else if (isRemoteHttpUrl(normalizedPath)) {
     imageUrl = normalizedPath;
   } else {
-    log?.error(`[qqbot:${account.accountId}] Image payload URL must use http(s): ${payload.path}`);
+    log?.error(
+      `[qqbot:${account.accountId}] Image payload URL must use http(s): ${sanitizeForLog(payload.path)}`,
+    );
     return;
   }
   if (!imageUrl) {
@@ -234,16 +274,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
 
   if (payload.source === "file") {
     try {
-      if (!(await fileExistsAsync(imageUrl))) {
-        log?.error(`[qqbot:${account.accountId}] Image not found: ${imageUrl}`);
-        return;
-      }
-      const imgSzCheck = checkFileSize(imageUrl);
-      if (!imgSzCheck.ok) {
-        log?.error(`[qqbot:${account.accountId}] Image size check failed: ${imgSzCheck.error}`);
-        return;
-      }
-      const fileBuffer = await readFileAsync(imageUrl);
+      const fileBuffer = await readStructuredPayloadLocalFile(imageUrl);
       const base64Data = fileBuffer.toString("base64");
       const ext = path.extname(imageUrl).toLowerCase();
       const mimeTypes: Record<string, string> = {
@@ -452,7 +483,9 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       return;
     }
 
-    log?.info(`[qqbot:${account.accountId}] Video send: "${videoPath.slice(0, 60)}..."`);
+    log?.info(
+      `[qqbot:${account.accountId}] Video send: ${describeMediaTargetForLog(videoPath, isHttpUrl)}`,
+    );
 
     await sendWithTokenRetry(
       account.appId,
@@ -483,17 +516,10 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
             log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
           }
         } else {
-          if (!(await fileExistsAsync(videoPath))) {
-            throw new Error(`Video file does not exist: ${videoPath}`);
-          }
-          const vPaySzCheck = checkFileSize(videoPath);
-          if (!vPaySzCheck.ok) {
-            throw new Error(vPaySzCheck.error!);
-          }
-          const fileBuffer = await readFileAsync(videoPath);
+          const fileBuffer = await readStructuredPayloadLocalFile(videoPath);
           const videoBase64 = fileBuffer.toString("base64");
           log?.info(
-            `[qqbot:${account.accountId}] Read local video (${formatFileSize(fileBuffer.length)}): ${videoPath}`,
+            `[qqbot:${account.accountId}] Read local video (${formatFileSize(fileBuffer.length)}): ${describeMediaTargetForLog(videoPath, false)}`,
           );
 
           if (target.type === "c2c") {
@@ -555,7 +581,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
 
     const fileName = sanitizeFileName(path.basename(filePath));
     log?.info(
-      `[qqbot:${account.accountId}] File send: "${filePath.slice(0, 60)}..." (${isHttpUrl ? "URL" : "local"})`,
+      `[qqbot:${account.accountId}] File send: ${describeMediaTargetForLog(filePath, isHttpUrl)} (${isHttpUrl ? "URL" : "local"})`,
     );
 
     await sendWithTokenRetry(
@@ -589,14 +615,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
             log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
           }
         } else {
-          if (!(await fileExistsAsync(filePath))) {
-            throw new Error(`File does not exist: ${filePath}`);
-          }
-          const fPaySzCheck = checkFileSize(filePath);
-          if (!fPaySzCheck.ok) {
-            throw new Error(fPaySzCheck.error!);
-          }
-          const fileBuffer = await readFileAsync(filePath);
+          const fileBuffer = await readStructuredPayloadLocalFile(filePath);
           const fileBase64 = fileBuffer.toString("base64");
           if (target.type === "c2c") {
             await sendC2CFileMessage(
