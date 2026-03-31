@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import java.util.Base64
 import java.util.Locale
 import java.net.URI
@@ -111,6 +112,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "wss", "https" -> true
       else -> true
     }
+  if (!tls && !isLoopbackGatewayHost(host)) return null
   val defaultPort =
     when (scheme) {
       "wss", "https" -> 443

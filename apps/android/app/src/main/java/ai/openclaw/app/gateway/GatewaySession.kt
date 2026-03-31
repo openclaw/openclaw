@@ -795,12 +795,7 @@ class GatewaySession(
   }
 
   private fun isLoopbackHost(raw: String?): Boolean {
-    val host = raw?.trim()?.lowercase().orEmpty()
-    if (host.isEmpty()) return false
-    if (host == "localhost") return true
-    if (host == "::1") return true
-    if (host == "0.0.0.0" || host == "::") return true
-    return host.startsWith("127.")
+    return isLoopbackGatewayHost(raw)
   }
 
   private fun selectConnectAuth(
