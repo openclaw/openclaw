@@ -259,6 +259,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
     await fs.mkdir(path.dirname(actualFile), { recursive: true });
     await fs.writeFile(actualFile, "vault memory", "utf-8");
 
+    const { manager } = await createManager({ cfg });
+
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
@@ -278,7 +280,6 @@ describe("QmdMemoryManager slugified path resolution", () => {
       return createMockChild();
     });
 
-    const { manager } = await createManager({ cfg });
     installIndexedPathStub({
       manager,
       collection: "vault-main",
