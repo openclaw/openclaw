@@ -59,7 +59,20 @@ export async function doctorCommand(
     sourceConfigValid: configResult.sourceConfigValid ?? true,
     configPath: configResult.path ?? CONFIG_PATH,
   };
-  await runDoctorHealthContributions(ctx);
+
+  // Watch mode loop
+  const watchOptions = {
+    ...options,
+    nonInteractive: options.watch ? true : options.nonInteractive,
+  };
+  const loopCtx = { ...ctx, options: watchOptions };
+
+  do {
+    await runDoctorHealthContributions(loopCtx);
+    if (options.watch) {
+      await new Promise((r) => setTimeout(r, options.intervalMs ?? 60000));
+    }
+  } while (options.watch);
 
   outro("Doctor complete.");
 }
