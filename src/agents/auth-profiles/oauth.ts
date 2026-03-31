@@ -17,6 +17,7 @@ import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
+import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -339,6 +340,12 @@ export async function resolveApiKeyForProfile(
   const refResolveCache: SecretRefResolveCache = {};
   const configForRefResolution = cfg ?? loadConfig();
   const refDefaults = configForRefResolution.secrets?.defaults;
+  assertNoOAuthSecretRefPolicyViolations({
+    store,
+    cfg: configForRefResolution,
+    profileIds: [profileId],
+    context: `auth profile ${profileId}`,
+  });
 
   if (cred.type === "api_key") {
     const key = await resolveProfileSecretString({

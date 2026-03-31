@@ -8828,6 +8828,301 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     },
   },
   {
+    pluginId: "qqbot",
+    channelId: "qqbot",
+    label: "QQ Bot",
+    description:
+      "connect to QQ via official QQ Bot API with group chat and direct message support.",
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+        },
+        name: {
+          type: "string",
+        },
+        appId: {
+          type: "string",
+        },
+        clientSecret: {
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
+        },
+        clientSecretFile: {
+          type: "string",
+        },
+        allowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        systemPrompt: {
+          type: "string",
+        },
+        markdownSupport: {
+          type: "boolean",
+        },
+        voiceDirectUploadFormats: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        audioFormatPolicy: {
+          type: "object",
+          properties: {
+            sttDirectFormats: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            uploadDirectFormats: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            transcodeEnabled: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
+        urlDirectUpload: {
+          type: "boolean",
+        },
+        upgradeUrl: {
+          type: "string",
+        },
+        upgradeMode: {
+          type: "string",
+          enum: ["doc", "hot-reload"],
+        },
+        accounts: {
+          type: "object",
+          properties: {},
+          additionalProperties: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              name: {
+                type: "string",
+              },
+              appId: {
+                type: "string",
+              },
+              clientSecret: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              clientSecretFile: {
+                type: "string",
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              systemPrompt: {
+                type: "string",
+              },
+              markdownSupport: {
+                type: "boolean",
+              },
+              voiceDirectUploadFormats: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              audioFormatPolicy: {
+                type: "object",
+                properties: {
+                  sttDirectFormats: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  uploadDirectFormats: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  transcodeEnabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              urlDirectUpload: {
+                type: "boolean",
+              },
+              upgradeUrl: {
+                type: "string",
+              },
+              upgradeMode: {
+                type: "string",
+                enum: ["doc", "hot-reload"],
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        defaultAccount: {
+          type: "string",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     pluginId: "signal",
     channelId: "signal",
     label: "Signal",
@@ -13215,7 +13510,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       "execApprovals.approvers": {
         label: "Telegram Exec Approval Approvers",
-        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
+        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from channels.telegram.allowFrom and direct-message defaultTo when possible.",
       },
       "execApprovals.agentFilter": {
         label: "Telegram Exec Approval Agent Filter",

@@ -9,13 +9,17 @@ import type { FlowRecord } from "./flow-registry.types.js";
 function createStoredFlow(): FlowRecord {
   return {
     flowId: "flow-restored",
+    shape: "linear",
     ownerSessionKey: "agent:main:main",
-    status: "running",
+    status: "blocked",
     notifyPolicy: "done_only",
     goal: "Restored flow",
     currentStep: "spawn_task",
+    blockedTaskId: "task-restored",
+    blockedSummary: "Writable session required.",
     createdAt: 100,
     updatedAt: 100,
+    endedAt: 120,
   };
 }
 
@@ -58,7 +62,10 @@ describe("flow-registry store runtime", () => {
 
     expect(getFlowById("flow-restored")).toMatchObject({
       flowId: "flow-restored",
+      shape: "linear",
       goal: "Restored flow",
+      blockedTaskId: "task-restored",
+      blockedSummary: "Writable session required.",
     });
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
@@ -93,6 +100,7 @@ describe("flow-registry store runtime", () => {
 
       expect(getFlowById(created.flowId)).toMatchObject({
         flowId: created.flowId,
+        shape: "linear",
         status: "waiting",
         currentStep: "ask_user",
       });
@@ -110,7 +118,9 @@ describe("flow-registry store runtime", () => {
       createFlowRecord({
         ownerSessionKey: "agent:main:main",
         goal: "Secured flow",
-        status: "queued",
+        status: "blocked",
+        blockedTaskId: "task-secured",
+        blockedSummary: "Need auth.",
       });
 
       const registryDir = resolveFlowRegistryDir(process.env);
