@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expandHomePrefix } from "../../../../src/infra/home-dir.js";
 import { detectMime } from "../../../../src/media/mime.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
 import { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
@@ -66,6 +67,7 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   const resolved = extraPaths
     .map((value) => value.trim())
     .filter(Boolean)
+    .map((value) => expandHomePrefix(value))
     .map((value) =>
       path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
     );

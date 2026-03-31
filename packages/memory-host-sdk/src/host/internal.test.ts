@@ -39,6 +39,15 @@ describe("normalizeExtraMemoryPaths", () => {
     ]);
     expect(result).toEqual([path.resolve(workspaceDir, "notes"), absPath]);
   });
+
+  it("expands home-prefixed paths before resolving them", () => {
+    const workspaceDir = path.join(os.tmpdir(), "memory-test-workspace");
+    const expected = path.join(os.homedir(), "OneDrive", "MyVault");
+
+    const result = normalizeExtraMemoryPaths(workspaceDir, ["~/OneDrive/MyVault"]);
+
+    expect(result).toEqual([expected]);
+  });
 });
 
 describe("listMemoryFiles", () => {
