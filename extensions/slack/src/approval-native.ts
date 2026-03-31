@@ -10,9 +10,9 @@ import type {
 } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { listSlackAccountIds } from "./accounts.js";
+import { isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {
   getSlackExecApprovalApprovers,
-  isSlackExecApprovalApprover,
   isSlackExecApprovalAuthorizedSender,
   isSlackExecApprovalClientEnabled,
   resolveSlackExecApprovalTarget,
@@ -197,7 +197,7 @@ export const slackNativeApprovalAdapter = createApproverRestrictedNativeApproval
   isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
     isSlackExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
   isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isSlackExecApprovalApprover({ cfg, accountId, senderId }),
+    isSlackApprovalAuthorizedSender({ cfg, accountId, senderId }),
   isNativeDeliveryEnabled: ({ cfg, accountId }) =>
     isSlackExecApprovalClientEnabled({ cfg, accountId }),
   resolveNativeDeliveryMode: ({ cfg, accountId }) =>
