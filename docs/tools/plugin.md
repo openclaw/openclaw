@@ -224,6 +224,11 @@ positives from the built-in dangerous-code scanner. It allows installs to
 continue past built-in `critical` findings, but it still does not bypass plugin
 `before_install` policy blocks or scan-failure blocking.
 
+This CLI flag applies to plugin installs only. Gateway-backed skill dependency
+installs use the matching `dangerouslyForceUnsafeInstall` request override
+instead, while `openclaw skills install` remains the separate ClawHub skill
+download/install flow.
+
 See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 
 ## Plugin API overview

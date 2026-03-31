@@ -558,12 +558,16 @@ extension GatewayConnection {
     func skillsInstall(
         name: String,
         installId: String,
+        dangerouslyForceUnsafeInstall: Bool? = nil,
         timeoutMs: Int? = nil) async throws -> SkillInstallResult
     {
         var params: [String: AnyCodable] = [
             "name": AnyCodable(name),
             "installId": AnyCodable(installId),
         ]
+        if let dangerouslyForceUnsafeInstall {
+            params["dangerouslyForceUnsafeInstall"] = AnyCodable(dangerouslyForceUnsafeInstall)
+        }
         if let timeoutMs {
             params["timeoutMs"] = AnyCodable(timeoutMs)
         }

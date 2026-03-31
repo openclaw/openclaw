@@ -525,6 +525,11 @@ If the gateway is unavailable or does not support plugin approvals, the tool cal
 
 Runs after the built-in install security scan and before installation continues. OpenClaw fires this hook for interactive skill installs as well as plugin bundle, package, and single-file installs.
 
+Default behavior differs by target type:
+
+- Plugin installs fail closed on built-in scan `critical` findings and scan errors unless the operator explicitly uses `openclaw plugins install --dangerously-force-unsafe-install`.
+- Skill installs still surface built-in scan findings and scan errors as warnings and continue by default.
+
 Return fields:
 
 - **`findings`**: Additional scan findings to surface as warnings

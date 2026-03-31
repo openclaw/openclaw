@@ -10,6 +10,7 @@ import {
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
@@ -230,8 +231,7 @@ function buildBlockedInstallResult(params: {
   };
 }
 
-type PackageInstallCommonParams = {
-  dangerouslyForceUnsafeInstall?: boolean;
+type PackageInstallCommonParams = InstallSafetyOverrides & {
   extensionsDir?: string;
   timeoutMs?: number;
   logger?: PluginInstallLogger;
@@ -794,18 +794,19 @@ export async function installPluginFromFile(params: {
   return buildFileInstallResult(pluginId, targetFile);
 }
 
-export async function installPluginFromNpmSpec(params: {
-  dangerouslyForceUnsafeInstall?: boolean;
-  spec: string;
-  extensionsDir?: string;
-  timeoutMs?: number;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-  expectedIntegrity?: string;
-  onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-}): Promise<InstallPluginResult> {
+export async function installPluginFromNpmSpec(
+  params: InstallSafetyOverrides & {
+    spec: string;
+    extensionsDir?: string;
+    timeoutMs?: number;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+    expectedIntegrity?: string;
+    onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+  },
+): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,

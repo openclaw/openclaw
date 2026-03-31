@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "../plugins/install-policy-context.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
@@ -19,7 +20,7 @@ import {
 } from "./skills.js";
 import { resolveSkillSource } from "./skills/source.js";
 
-export type SkillInstallRequest = {
+export type SkillInstallRequest = InstallSafetyOverrides & {
   workspaceDir: string;
   skillName: string;
   installId: string;
@@ -81,6 +82,13 @@ type SkillScanResult = {
   builtinScan: SkillBuiltinScan;
 };
 
+function buildCriticalFindingDetails(rootDir: string, findings: SkillScanFinding[]): string {
+  return findings
+    .filter((finding) => finding.severity === "critical")
+    .map((finding) => formatScanFindingDetail(rootDir, finding))
+    .join("; ");
+}
+
 async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<SkillScanResult> {
   const warnings: string[] = [];
   const skillName = entry.skill.name;
@@ -97,10 +105,7 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<Skill
       findings: summary.findings,
     };
     if (summary.critical > 0) {
-      const criticalDetails = summary.findings
-        .filter((finding) => finding.severity === "critical")
-        .map((finding) => formatScanFindingDetail(skillDir, finding))
-        .join("; ");
+      const criticalDetails = buildCriticalFindingDetails(skillDir, summary.findings);
       warnings.push(
         `WARNING: Skill "${skillName}" contains dangerous code patterns: ${criticalDetails}`,
       );
@@ -127,6 +132,37 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<Skill
       },
     };
   }
+}
+
+function resolveBuiltinSkillScanDecision(params: {
+  builtinScan: SkillBuiltinScan;
+  dangerouslyForceUnsafeInstall?: boolean;
+  skillDir: string;
+  skillName: string;
+  warnings: string[];
+}): SkillInstallResult | undefined {
+  if (params.builtinScan.status !== "ok" || params.builtinScan.critical === 0) {
+    return undefined;
+  }
+
+  const criticalDetails = buildCriticalFindingDetails(params.skillDir, params.builtinScan.findings);
+  if (params.dangerouslyForceUnsafeInstall) {
+    params.warnings.push(
+      `WARNING: Skill "${params.skillName}" forced despite dangerous code patterns via dangerouslyForceUnsafeInstall: ${criticalDetails}`,
+    );
+    return undefined;
+  }
+
+  return {
+    ok: false,
+    message: [
+      `Skill "${params.skillName}" installation blocked by dangerous code patterns: ${criticalDetails}.`,
+      "Retry only if you trust this skill and set dangerouslyForceUnsafeInstall (CLI flag: --dangerously-force-unsafe-install).",
+    ].join(" "),
+    stdout: "",
+    stderr: "",
+    code: null,
+  };
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -504,6 +540,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const spec = findInstallSpec(entry, params.installId);
   const scanResult = await collectSkillInstallScanWarnings(entry);
   const warnings = scanResult.warnings;
+  const skillDir = path.resolve(entry.skill.baseDir);
   const skillSource = resolveSkillSource(entry.skill);
 
   // Run before_install so external scanners can augment findings or block installs.
@@ -559,6 +596,16 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     warnings.push(
       `WARNING: Skill "${params.skillName}" install triggered from non-bundled source "${skillSource}". Verify the install recipe is trusted.`,
     );
+  }
+  const builtinBlocked = resolveBuiltinSkillScanDecision({
+    builtinScan: scanResult.builtinScan,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    skillDir,
+    skillName: params.skillName,
+    warnings,
+  });
+  if (builtinBlocked) {
+    return withWarnings(builtinBlocked, warnings);
   }
   if (!spec) {
     return withWarnings(
