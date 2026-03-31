@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
+  parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -184,8 +185,19 @@ function createBaiduToolDefinition(
         };
       }
       const query = readStringParam(params, "query", { required: true });
-      const dateAfter = readStringParam(params, "date_after");
-      const dateBefore = readStringParam(params, "date_before");
+      const rawDateAfter = readStringParam(params, "date_after");
+      const rawDateBefore = readStringParam(params, "date_before");
+      const parsedDateRange = parseIsoDateRange({
+        rawDateAfter,
+        rawDateBefore,
+        invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
+        invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
+        invalidDateRangeMessage: "date_after must be before date_before.",
+      });
+      if ("error" in parsedDateRange) {
+        return parsedDateRange;
+      }
+      const { dateAfter, dateBefore } = parsedDateRange;
       const count =
         readNumberParam(params, "count", { integer: true }) ??
         searchConfig?.maxResults ??

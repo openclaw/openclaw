@@ -47,6 +47,7 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
     expectedResolvedValue: "string",
     ...(entry.when?.type ? { authProfileType: entry.when.type } : {}),
   }));
+
 }
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();

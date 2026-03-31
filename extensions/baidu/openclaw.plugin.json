@@ -11,6 +11,9 @@
       "placeholder": "bce-..."
     }
   },
+  "contracts": {
+    "webSearchProviders": ["baidu"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
