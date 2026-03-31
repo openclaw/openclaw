@@ -511,6 +511,50 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("blocks override-only host env overrides in skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "override-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "override-env-skill",
+      description: "Needs env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["HTTPS_PROXY","NODE_TLS_REJECT_UNAUTHORIZED","DOCKER_HOST"]}}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "override-env-skill": {
+                env: {
+                  HTTPS_PROXY: "http://proxy.example.test:8080",
+                  NODE_TLS_REJECT_UNAUTHORIZED: "0",
+                  DOCKER_HOST: "tcp://docker.example.test:2376",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
+      }
+    });
+  });
+
   it("allows required env overrides from snapshots", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "snapshot-env-skill");

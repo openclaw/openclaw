@@ -228,6 +228,22 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
   });
 
+  it("blocks proxy and TLS override env vars on host execution", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call1", {
+        command: "echo ok",
+        env: {
+          HTTPS_PROXY: "http://proxy.example.test:8080",
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        },
+      }),
+    ).rejects.toThrow(
+      /Security Violation: blocked override keys: HTTPS_PROXY, NODE_TLS_REJECT_UNAUTHORIZED\./,
+    );
+  });
+
   it("strips dangerous inherited env vars from host execution", async () => {
     if (isWin) {
       return;

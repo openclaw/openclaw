@@ -174,6 +174,21 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("https_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("HTTP_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("http_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("ALL_PROXY")).toBe(false);
+    expect(isDangerousHostEnvVarName("no_proxy")).toBe(false);
+    expect(isDangerousHostEnvVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(false);
+    expect(isDangerousHostEnvVarName("node_extra_ca_certs")).toBe(false);
+    expect(isDangerousHostEnvVarName("SSL_CERT_FILE")).toBe(false);
+    expect(isDangerousHostEnvVarName("SSL_CERT_DIR")).toBe(false);
+    expect(isDangerousHostEnvVarName("requests_ca_bundle")).toBe(false);
+    expect(isDangerousHostEnvVarName("CURL_CA_BUNDLE")).toBe(false);
+    expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(false);
+    expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(false);
+    expect(isDangerousHostEnvVarName("DOCKER_TLS_VERIFY")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
@@ -257,6 +272,9 @@ describe("sanitizeHostExecEnv", () => {
         SSL_CERT_DIR: "/tmp/evil-cert-dir",
         REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
         CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GIT_SSL_NO_VERIFY: "1",
+        GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
+        GIT_SSL_CAPATH: "/tmp/evil-git-ca-dir",
         GOPROXY: "https://example.invalid/proxy",
         GONOSUMCHECK: "example.invalid/*",
         GONOSUMDB: "example.invalid/*",
@@ -336,6 +354,54 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/trusted-home");
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
+  });
+
+  it("keeps trusted inherited proxy, TLS, and Docker env while blocking overrides", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        HTTP_PROXY: "http://trusted-proxy.example.test:8080",
+        HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        SSL_CERT_DIR: "/etc/ssl/certs",
+        CURL_CA_BUNDLE: "/etc/ssl/cert.pem",
+        DOCKER_TLS_VERIFY: "1",
+      },
+      overrides: {
+        HTTP_PROXY: "http://evil-proxy.example.test:8080",
+        NODE_TLS_REJECT_UNAUTHORIZED: "1",
+        DOCKER_TLS_VERIFY: "0",
+      },
+    });
+
+    expect(env).toEqual({
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      PATH: "/usr/bin:/bin",
+      HTTP_PROXY: "http://trusted-proxy.example.test:8080",
+      HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      SSL_CERT_DIR: "/etc/ssl/certs",
+      CURL_CA_BUNDLE: "/etc/ssl/cert.pem",
+      DOCKER_TLS_VERIFY: "1",
+    });
+  });
+
+  it("blocks proxy, TLS, and Docker override values explicitly", () => {
+    expect(isDangerousHostEnvOverrideVarName("HTTPS_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("https_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("HTTP_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("http_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("ALL_PROXY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("no_proxy")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("NODE_TLS_REJECT_UNAUTHORIZED")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("node_extra_ca_certs")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("SSL_CERT_FILE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("SSL_CERT_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("requests_ca_bundle")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CURL_CA_BUNDLE")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_HOST")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("docker_cert_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("DOCKER_TLS_VERIFY")).toBe(true);
   });
 
   it("drops dangerous inherited shell trace keys", () => {
@@ -503,6 +569,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GOPATH: "/tmp/evil-go",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
         VIRTUAL_ENV: "/tmp/evil-venv",
+        HTTPS_PROXY: "http://proxy.example.test:8080",
+        GIT_SSL_NO_VERIFY: "1",
+        GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
+        GIT_SSL_CAPATH: "/tmp/evil-git-capath",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
         SAFE_KEY: "ok",
         "BAD-KEY": "bad",
       },
@@ -520,6 +591,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "DOCKER_CONTEXT",
       "DOCKER_HOST",
       "DOCKER_TLS_VERIFY",
+      "GIT_SSL_CAINFO",
+      "GIT_SSL_CAPATH",
+      "GIT_SSL_NO_VERIFY",
       "GOENV",
       "GONOPROXY",
       "GONOSUMCHECK",
@@ -527,8 +601,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "GOPATH",
       "GOPRIVATE",
       "GOPROXY",
+      "HTTPS_PROXY",
       "LIBRARY_PATH",
       "NODE_EXTRA_CA_CERTS",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
       "OBJC_INCLUDE_PATH",
       "PATH",
       "PIP_CONFIG_FILE",
@@ -563,6 +639,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.UV_INDEX_URL).toBeUndefined();
     expect(result.env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(result.env.UV_EXTRA_INDEX_URL).toBeUndefined();
+    expect(result.env.GIT_SSL_NO_VERIFY).toBeUndefined();
+    expect(result.env.GIT_SSL_CAINFO).toBeUndefined();
+    expect(result.env.GIT_SSL_CAPATH).toBeUndefined();
     expect(result.env.DOCKER_HOST).toBeUndefined();
     expect(result.env.DOCKER_TLS_VERIFY).toBeUndefined();
     expect(result.env.DOCKER_CERT_PATH).toBeUndefined();
@@ -584,6 +663,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GOPRIVATE).toBeUndefined();
     expect(result.env.GOENV).toBeUndefined();
     expect(result.env.GOPATH).toBeUndefined();
+    expect(result.env.HTTPS_PROXY).toBeUndefined();
+    expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
   });
