@@ -222,12 +222,12 @@ describe("DiffArtifactStore", () => {
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
 
-    const realReaddir = fs.readdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    const realReaddir = fs.readdir.bind(fs) as (...args: unknown[]) => Promise<any>;
     let releaseFirstReaddir: (() => void) | undefined;
     const readdirSpy = vi.spyOn(fs, "readdir");
     readdirSpy.mockImplementation((...args: unknown[]) => {
       if (!releaseFirstReaddir) {
-        return new Promise((resolve, reject) => {
+        return new Promise<any>((resolve, reject) => {
           releaseFirstReaddir = () => {
             void realReaddir(...args).then(resolve, reject);
           };
