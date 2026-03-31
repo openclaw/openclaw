@@ -61,6 +61,25 @@ describe("session conversation routing", () => {
     });
   });
 
+  it("keeps bundled Feishu parent fallbacks available before registry bootstrap", () => {
+    resetPluginRuntimeStateForTest();
+
+    expect(
+      resolveSessionConversationRef(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toEqual({
+      channel: "feishu",
+      kind: "group",
+      rawId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      threadId: undefined,
+      baseSessionKey:
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
+    });
+  });
+
   it("lets Feishu own parent fallback candidates", () => {
     expect(
       resolveSessionConversationRef(

@@ -1,4 +1,7 @@
-import { parseTelegramTopicConversation } from "../../acp/conversation-id.js";
+import { fileURLToPath } from "node:url";
+import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
+import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
+import { resolveBundledPluginPublicSurfacePath } from "../../plugins/bundled-plugin-metadata.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -29,6 +32,20 @@ type SessionConversationHookResult = {
   threadId?: string | null;
   parentConversationCandidates?: string[];
 };
+
+type SessionConversationResolverParams = {
+  kind: "group" | "channel";
+  rawId: string;
+};
+
+type BundledSessionKeyModule = {
+  resolveSessionConversation?: (
+    params: SessionConversationResolverParams,
+  ) => SessionConversationHookResult | null;
+};
+
+const OPENCLAW_PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
   hasExplicitParentConversationCandidates: boolean;
@@ -111,23 +128,36 @@ function normalizeSessionConversationResolution(
 
 function resolveBundledSessionConversationFallback(params: {
   channel: string;
+  kind: "group" | "channel";
   rawId: string;
 }): NormalizedSessionConversationResolution | null {
-  if (normalizeResolvedChannel(params.channel) !== "telegram") {
+  const dirName = normalizeResolvedChannel(params.channel);
+  if (
+    !resolveBundledPluginPublicSurfacePath({
+      rootDir: OPENCLAW_PACKAGE_ROOT,
+      bundledPluginsDir: resolveBundledPluginsDir(),
+      dirName,
+      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+    })
+  ) {
     return null;
   }
 
-  const parsed = parseTelegramTopicConversation({ conversationId: params.rawId });
-  if (!parsed) {
+  const resolveSessionConversation =
+    loadBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+      dirName,
+      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+    }).resolveSessionConversation;
+  if (typeof resolveSessionConversation !== "function") {
     return null;
   }
 
-  return {
-    id: parsed.chatId,
-    threadId: parsed.topicId,
-    parentConversationCandidates: [parsed.chatId],
-    hasExplicitParentConversationCandidates: true,
-  };
+  return normalizeSessionConversationResolution(
+    resolveSessionConversation({
+      kind: params.kind,
+      rawId: params.rawId,
+    }),
+  );
 }
 
 function resolveSessionConversationResolution(params: {
@@ -151,6 +181,7 @@ function resolveSessionConversationResolution(params: {
     pluginResolved ??
     resolveBundledSessionConversationFallback({
       channel: params.channel,
+      kind: params.kind,
       rawId,
     }) ??
     buildGenericConversationResolution(rawId);

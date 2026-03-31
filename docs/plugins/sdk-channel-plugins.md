@@ -40,6 +40,11 @@ in the plugin with `messaging.resolveSessionConversation(...)`. That is the
 canonical hook for mapping `rawId` to the base conversation id, optional thread
 id, and any `parentConversationCandidates`.
 
+Bundled plugins that need the same parsing before the channel registry boots
+can also expose a top-level `session-key-api.ts` file with a matching
+`resolveSessionConversation(...)` export. Core uses that bootstrap-safe surface
+only when the runtime plugin registry is not available yet.
+
 `messaging.resolveParentConversationCandidates(...)` remains available as a
 legacy compatibility fallback when a plugin only needs parent fallbacks on top
 of the generic/raw id. If both hooks exist, core uses

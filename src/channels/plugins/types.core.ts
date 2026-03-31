@@ -403,6 +403,8 @@ export type ChannelMessagingAdapter = {
    * inside `rawId` (for example Telegram topics or Feishu sender scopes).
    * Return `parentConversationCandidates` here when you can so parsing and
    * inheritance stay in one place.
+   * Bundled plugins that need the same grammar before runtime bootstrap can
+   * mirror this contract through a top-level `session-key-api.ts` surface.
    */
   resolveSessionConversation?: (params: { kind: "group" | "channel"; rawId: string }) => {
     id: string;
