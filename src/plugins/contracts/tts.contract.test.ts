@@ -81,6 +81,8 @@ const {
   resolveModelOverridePolicy,
   summarizeText,
   getResolvedSpeechProviderConfig,
+  formatTtsProviderError,
+  sanitizeTtsErrorForLog,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -652,6 +654,29 @@ describe("tts", () => {
 
       expect(config.provider).toBe("microsoft");
       expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
+    });
+  });
+
+  describe("provider error redaction", () => {
+    it("redacts sensitive tokens in provider errors", () => {
+      const result = formatTtsProviderError(
+        "openai",
+        new Error("Authorization: Bearer sk-super-secret-token-1234567890"),
+      );
+
+      expect(result).toContain("openai:");
+      expect(result).toContain("Authorization: Bearer");
+      expect(result).not.toContain("sk-super-secret-token-1234567890");
+    });
+
+    it("escapes control characters in verbose fallback error logs", () => {
+      const result = sanitizeTtsErrorForLog(
+        new Error("failed\nAuthorization: Bearer sk-super-secret-token-1234567890\tboom"),
+      );
+
+      expect(result).toContain("\\n");
+      expect(result).toContain("\\t");
+      expect(result).not.toContain("sk-super-secret-token-1234567890");
     });
   });
 
