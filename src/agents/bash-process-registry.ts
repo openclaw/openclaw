@@ -131,7 +131,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
   session.tail = tail(session.aggregated, 2000);
-  syncFinishedSessionSnapshot(session);
+  if (session.backgrounded) {
+    syncFinishedSessionSnapshot(session);
+  }
 }
 
 export function drainSession(session: ProcessSession) {
@@ -216,13 +218,12 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
 }
 
 function syncFinishedSessionSnapshot(session: ProcessSession) {
-  if (!session.backgrounded) {
-    return;
-  }
   const finished = finishedSessions.get(session.id);
   if (!finished) {
     return;
   }
+  // Late pipe/PTY chunks can still arrive after exit. Keep only the output snapshot
+  // in sync here; exit metadata is finalized by markExited()/moveToFinished().
   finished.aggregated = session.aggregated;
   finished.tail = session.tail;
   finished.truncated = session.truncated;
