@@ -9,10 +9,7 @@ const ALLOWED_IMPORTERS = new Set([
   "agents/tools/session-status-tool.ts",
   "auto-reply/reply/commands-acp/runtime-options.ts",
   "auto-reply/reply/commands-subagents/action-info.ts",
-  "commands/doctor-workspace-status.ts",
-  "commands/flows.ts",
   "commands/tasks.ts",
-  "tasks/flow-runtime.ts",
   "tasks/task-executor.ts",
   "tasks/task-registry.maintenance.ts",
 ]);

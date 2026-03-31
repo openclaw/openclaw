@@ -9,7 +9,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { getFlowById, syncFlowFromTask } from "./flow-registry.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -57,7 +56,6 @@ let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runt
 type TaskDeliveryOwner = {
   sessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  flowId?: string;
 };
 
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
@@ -374,7 +372,6 @@ function mergeExistingTaskForCreate(
   params: {
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
-    parentFlowId?: string;
     parentTaskId?: string;
     agentId?: string;
     label?: string;
@@ -396,9 +393,6 @@ function mergeExistingTaskForCreate(
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
-  }
-  if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
-    patch.parentFlowId = params.parentFlowId.trim();
   }
   if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
     patch.parentTaskId = params.parentTaskId.trim();
@@ -440,36 +434,22 @@ function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
   return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
 }
 
-function flowTerminalDeliveryIdempotencyKey(flowId: string, task: TaskRecord): string {
-  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
-  return `flow-terminal:${flowId}:${task.taskId}:${task.status}:${outcome}`;
-}
-
 function resolveTaskStateChangeIdempotencyKey(params: {
   task: TaskRecord;
   latestEvent: TaskEventRecord;
   owner: TaskDeliveryOwner;
 }): string {
-  if (params.owner.flowId) {
-    return `flow-event:${params.owner.flowId}:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
-  }
   return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
 }
 
-function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDeliveryOwner): string {
-  return owner.flowId
-    ? flowTerminalDeliveryIdempotencyKey(owner.flowId, task)
-    : taskTerminalDeliveryIdempotencyKey(task);
+function resolveTaskTerminalIdempotencyKey(task: TaskRecord): string {
+  return taskTerminalDeliveryIdempotencyKey(task);
 }
 
 function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
-  const flow = task.parentFlowId?.trim() ? getFlowById(task.parentFlowId) : undefined;
   return {
-    sessionKey: flow?.ownerSessionKey?.trim() || task.requesterSessionKey.trim(),
-    requesterOrigin: normalizeDeliveryContext(
-      flow?.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
-    ),
-    ...(flow ? { flowId: flow.flowId } : {}),
+    sessionKey: task.requesterSessionKey.trim(),
+    requesterOrigin: normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin),
   };
 }
 
@@ -529,15 +509,6 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     addSessionKeyIndex(taskId, next);
   }
   persistTaskUpsert(next);
-  try {
-    syncFlowFromTask(next);
-  } catch (error) {
-    log.warn("Failed to sync parent flow from task update", {
-      taskId,
-      flowId: next.parentFlowId,
-      error,
-    });
-  }
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
@@ -585,7 +556,7 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
   }
   enqueueSystemEvent(text, {
     sessionKey: requesterSessionKey,
-    contextKey: owner.flowId ? `flow:${owner.flowId}` : `task:${task.taskId}`,
+    contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
   });
   requestHeartbeatNow({
@@ -607,9 +578,7 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
   }
   enqueueSystemEvent(followupText, {
     sessionKey: requesterSessionKey,
-    contextKey: owner.flowId
-      ? `flow:${owner.flowId}:blocked-followup`
-      : `task:${task.taskId}:blocked-followup`,
+    contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: owner.requesterOrigin,
   });
   requestHeartbeatNow({
@@ -678,7 +647,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     try {
       const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
       const requesterAgentId = parseAgentSessionKey(owner.sessionKey)?.agentId;
-      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest, owner);
+      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
       await sendMessage({
         channel: owner.requesterOrigin?.channel,
         to: owner.requesterOrigin?.to ?? "",
@@ -973,7 +942,6 @@ export function createTaskRecord(params: {
   sourceId?: string;
   requesterSessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  parentFlowId?: string;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
@@ -1011,7 +979,6 @@ export function createTaskRecord(params: {
     runtime: params.runtime,
     sourceId: params.sourceId?.trim() || undefined,
     requesterSessionKey: params.requesterSessionKey,
-    parentFlowId: params.parentFlowId?.trim() || undefined,
     childSessionKey: params.childSessionKey,
     parentTaskId: params.parentTaskId?.trim() || undefined,
     agentId: params.agentId?.trim() || undefined,
@@ -1048,17 +1015,6 @@ export function createTaskRecord(params: {
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
-  if (record.parentFlowId?.trim()) {
-    try {
-      syncFlowFromTask(record);
-    } catch (error) {
-      log.warn("Failed to sync parent flow from task create", {
-        taskId: record.taskId,
-        flowId: record.parentFlowId,
-        error,
-      });
-    }
-  }
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);
   }
@@ -1228,24 +1184,6 @@ export function updateTaskNotifyPolicyById(params: {
   });
 }
 
-export function linkTaskToFlowById(params: { taskId: string; flowId: string }): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const flowId = params.flowId.trim();
-  if (!flowId) {
-    return null;
-  }
-  const current = tasks.get(params.taskId);
-  if (!current) {
-    return null;
-  }
-  if (current.parentFlowId?.trim()) {
-    return cloneTaskRecord(current);
-  }
-  return updateTask(params.taskId, {
-    parentFlowId: flowId,
-  });
-}
-
 export async function cancelTaskById(params: {
   cfg: OpenClawConfig;
   taskId: string;
@@ -1364,34 +1302,6 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
 
 export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
   const task = listTasksForSessionKey(sessionKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
-}
-
-export function listTasksForFlowId(flowId: string): TaskRecord[] {
-  ensureTaskRegistryReady();
-  const normalizedFlowId = flowId.trim();
-  if (!normalizedFlowId) {
-    return [];
-  }
-  return [...tasks.values()]
-    .map((task, insertionIndex) =>
-      task.parentFlowId?.trim() === normalizedFlowId
-        ? { ...cloneTaskRecord(task), insertionIndex }
-        : null,
-    )
-    .filter(
-      (
-        task,
-      ): task is TaskRecord & {
-        insertionIndex: number;
-      } => Boolean(task),
-    )
-    .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _, ...task }) => task);
-}
-
-export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
-  const task = listTasksForFlowId(flowId)[0];
   return task ? cloneTaskRecord(task) : undefined;
 }
 
