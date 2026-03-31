@@ -24,6 +24,7 @@ type GatewayPluginBootstrapParams = {
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
   logDiagnostics?: boolean;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
@@ -68,6 +69,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,
     baseMethods: params.baseMethods,
+    pluginIds: params.pluginIds,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);

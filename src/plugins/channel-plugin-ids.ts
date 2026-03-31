@@ -331,14 +331,10 @@ export function resolveGatewayStartupPluginIds(params: {
       if (!enabled) {
         return false;
       }
-      if (plugin.origin !== "bundled") {
-        return true;
-      }
       return (
         pluginsConfig.allow.includes(plugin.id) ||
         pluginsConfig.entries[plugin.id]?.enabled === true ||
-        pluginsConfig.slots.memory === plugin.id ||
-        plugin.enabledByDefault === true
+        pluginsConfig.slots.memory === plugin.id
       );
     })
     .map((plugin) => plugin.id);
