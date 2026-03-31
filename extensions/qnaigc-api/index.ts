@@ -1,9 +1,11 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 
 const PROVIDER_ID = "qnaigc-api";
 const QNAIGC_BASE_URL = "https://anthropic.qnaigc.com";
+const QNAIGCAPI_DEFAULT_MODEL_REF = "qnaigc-api/deepseek/deepseek-v3.2-251201";
 
 type QnaigcCatalogEntry = {
   id: string;
@@ -129,6 +131,13 @@ export default definePluginEntry({
           flagName: "--qnaigc-api-key",
           envVar: "QNAIGC_API_KEY",
           promptMessage: "Enter your QNAIGC API key",
+          defaultModel: QNAIGCAPI_DEFAULT_MODEL_REF,
+          expectedProviders: ["qnaigc-api"],
+          applyConfig: (cfg) =>
+            ensureModelAllowlistEntry({
+              cfg,
+              modelRef: QNAIGCAPI_DEFAULT_MODEL_REF,
+            }),
           wizard: {
             choiceId: "qnaigc-api-key",
             choiceLabel: "QNAIGC API key",
@@ -136,7 +145,6 @@ export default definePluginEntry({
             groupLabel: "QNAIGC",
             groupHint: "API key",
           },
-          defaultModel: "qnaigc-api/deepseek/deepseek-v3.2-251201",
         }),
       ],
       catalog: {
