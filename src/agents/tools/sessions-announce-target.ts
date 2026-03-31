@@ -4,20 +4,66 @@ import { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
+export type AnnounceTargetDecision =
+  | { kind: "external_target"; target: AnnounceTarget }
+  | { kind: "no_external_target" }
+  | { kind: "unknown"; reason: "miss" | "partial" | "missing_delivery" | "error" };
+
+function prefersSessionLookupForChannel(channel?: string) {
+  const normalized = normalizeChannelId(channel);
+  return Boolean(
+    normalized && getChannelPlugin(normalized)?.meta?.preferSessionLookupForAnnounceTarget,
+  );
+}
+
+function prefersSessionLookupForAnnounceTarget(sessionKey: string, match?: SessionListRow) {
+  const parsed = resolveAnnounceTargetFromKey(sessionKey);
+  if (parsed && prefersSessionLookupForChannel(parsed.channel)) {
+    return true;
+  }
+  if (!match || typeof match !== "object") {
+    return false;
+  }
+
+  const deliveryContext =
+    match.deliveryContext && typeof match.deliveryContext === "object"
+      ? (match.deliveryContext as Record<string, unknown>)
+      : undefined;
+  const origin =
+    match.origin && typeof match.origin === "object"
+      ? (match.origin as Record<string, unknown>)
+      : undefined;
+  const channelCandidates = [
+    typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined,
+    typeof match.lastChannel === "string" ? match.lastChannel : undefined,
+    typeof match.channel === "string" ? match.channel : undefined,
+    typeof origin?.provider === "string" ? origin.provider : undefined,
+  ];
+
+  return channelCandidates.some((channel) => prefersSessionLookupForChannel(channel));
+}
+
+export function resolveParsedAnnounceTargetDecision(
+  sessionKey: string,
+): AnnounceTargetDecision | null {
+  const parsed = resolveAnnounceTargetFromKey(sessionKey);
+
+  if (parsed) {
+    if (!prefersSessionLookupForAnnounceTarget(sessionKey)) {
+      return { kind: "external_target", target: parsed };
+    }
+  }
+
+  return null;
+}
+
 export async function resolveAnnounceTarget(params: {
   sessionKey: string;
   displayKey: string;
-}): Promise<AnnounceTarget | null> {
-  const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
-  const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
-  const fallback = parsed ?? parsedDisplay ?? null;
-
-  if (fallback) {
-    const normalized = normalizeChannelId(fallback.channel);
-    const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
-      return fallback;
-    }
+}): Promise<AnnounceTargetDecision> {
+  const parsedDecision = resolveParsedAnnounceTargetDecision(params.sessionKey);
+  if (parsedDecision) {
+    return parsedDecision;
   }
 
   try {
@@ -45,6 +91,7 @@ export async function resolveAnnounceTarget(params: {
     const channel =
       (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
       (typeof match?.lastChannel === "string" ? match.lastChannel : undefined) ??
+      (typeof match?.channel === "string" ? match.channel : undefined) ??
       (typeof origin?.provider === "string" ? origin.provider : undefined);
     const to =
       (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
@@ -54,11 +101,26 @@ export async function resolveAnnounceTarget(params: {
       (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
       (typeof origin?.accountId === "string" ? origin.accountId : undefined);
     if (channel && to) {
-      return { channel, to, accountId };
+      return {
+        kind: "external_target",
+        target: { channel, to, accountId },
+      };
+    }
+    if (channel || to || accountId) {
+      return { kind: "unknown", reason: "partial" };
+    }
+    if (match) {
+      if (
+        prefersSessionLookupForAnnounceTarget(params.sessionKey, match) ||
+        prefersSessionLookupForAnnounceTarget(params.displayKey, match)
+      ) {
+        return { kind: "unknown", reason: "missing_delivery" };
+      }
+      return { kind: "no_external_target" };
     }
   } catch {
-    // ignore
+    return { kind: "unknown", reason: "error" };
   }
 
-  return fallback;
+  return { kind: "unknown", reason: "miss" };
 }

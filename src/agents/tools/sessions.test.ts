@@ -275,7 +275,10 @@ describe("resolveAnnounceTarget", () => {
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "group:dev" });
+    expect(target).toEqual({
+      kind: "external_target",
+      target: { channel: "discord", to: "group:dev", threadId: undefined },
+    });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -298,9 +301,12 @@ describe("resolveAnnounceTarget", () => {
       displayKey: "agent:main:whatsapp:group:123@g.us",
     });
     expect(target).toEqual({
-      channel: "whatsapp",
-      to: "123@g.us",
-      accountId: "work",
+      kind: "external_target",
+      target: {
+        channel: "whatsapp",
+        to: "123@g.us",
+        accountId: "work",
+      },
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
@@ -327,9 +333,12 @@ describe("resolveAnnounceTarget", () => {
       displayKey: "agent:main:whatsapp:group:123@g.us",
     });
     expect(target).toEqual({
-      channel: "whatsapp",
-      to: "123@g.us",
-      accountId: "work",
+      kind: "external_target",
+      target: {
+        channel: "whatsapp",
+        to: "123@g.us",
+        accountId: "work",
+      },
     });
   });
 });
