@@ -97,6 +97,39 @@ describe("before_tools_resolve hook", () => {
     expect(result?.allow).toEqual(["read"]);
   });
 
+  it("treats bash and exec as the same tool when intersecting allow lists", async () => {
+    addBeforeToolsResolveHook("policy-a", () => ({ allow: ["bash"] }), 10);
+    addBeforeToolsResolveHook("policy-b", () => ({ allow: ["exec"] }), 5);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolsResolve({ toolNames: ["bash", "exec"] }, {});
+
+    expect(result?.allow).toEqual(["exec"]);
+  });
+
+  it("intersects allow lists using normalized aliases (bash vs exec)", async () => {
+    addBeforeToolsResolveHook("policy-a", () => ({ allow: ["bash", "read"] }), 10);
+    addBeforeToolsResolveHook("policy-b", () => ({ allow: ["exec", "read"] }), 5);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolsResolve(
+      { toolNames: ["bash", "exec", "read", "write"] },
+      {},
+    );
+
+    expect(result?.allow).toEqual(["exec", "read"]);
+  });
+
+  it("intersects allow lists using normalized casing", async () => {
+    addBeforeToolsResolveHook("policy-a", () => ({ allow: ["Read"] }), 10);
+    addBeforeToolsResolveHook("policy-b", () => ({ allow: ["read", "write"] }), 5);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolsResolve({ toolNames: ["read", "write"] }, {});
+
+    expect(result?.allow).toEqual(["read"]);
+  });
+
   it("receives identity context", async () => {
     let receivedCtx: Record<string, unknown> = {};
     addBeforeToolsResolveHook("spy", (_event: unknown, ctx: unknown) => {

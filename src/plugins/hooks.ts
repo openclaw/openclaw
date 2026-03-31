@@ -5,6 +5,7 @@
  * error handling, priority ordering, and async support.
  */
 
+import { normalizeToolName } from "../agents/tool-policy.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
@@ -748,6 +749,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Intersect allow lists from multiple hooks using the same name canonicalization as
+   * tool filtering (lowercase + tool aliases such as bash→exec), so equivalent
+   * identifiers do not collapse the intersection to empty.
+   */
+  function intersectMergedAllowLists(accAllow: string[], nextAllow: string[]): string[] {
+    const accCanon = new Set(accAllow.map((n) => normalizeToolName(n)));
+    const nextCanon = new Set(nextAllow.map((n) => normalizeToolName(n)));
+    return [...accCanon].filter((n) => nextCanon.has(n)).toSorted();
+  }
+
+  /**
    * Run before_tools_resolve hook.
    * Allows plugins to dynamically filter the tool list based on caller identity.
    * Runs sequentially; results are merged (deny lists unioned, allow lists intersected).
@@ -765,7 +777,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           deny: [...(acc?.deny ?? []), ...(next.deny ?? [])],
           allow:
             acc?.allow !== undefined && next.allow !== undefined
-              ? acc.allow.filter((n) => (next.allow as string[]).includes(n))
+              ? intersectMergedAllowLists(acc.allow, next.allow)
               : (next.allow ?? acc?.allow),
         }),
       },
