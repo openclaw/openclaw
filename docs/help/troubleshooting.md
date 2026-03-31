@@ -342,3 +342,11 @@ flowchart TD
 
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [FAQ](/help/faq) — frequently asked questions
+- [Gateway Troubleshooting](/gateway/troubleshooting) — gateway-specific issues
+- [Doctor](/gateway/doctor) — automated health checks and repairs
+- [Channel Troubleshooting](/channels/troubleshooting) — channel connectivity issues
+- [Automation Troubleshooting](/automation/troubleshooting) — cron and heartbeat issues
