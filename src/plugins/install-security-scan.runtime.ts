@@ -3,6 +3,7 @@ import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -121,6 +122,7 @@ async function scanDirectoryTarget(params: {
 
 function buildBlockedScanResult(params: {
   builtinScan: BuiltinInstallScan;
+  dangerouslyForceUnsafeInstall?: boolean;
   targetLabel: string;
 }): InstallSecurityScanResult | undefined {
   if (params.builtinScan.status === "error") {
@@ -135,6 +137,9 @@ function buildBlockedScanResult(params: {
     };
   }
   if (params.builtinScan.critical > 0) {
+    if (params.dangerouslyForceUnsafeInstall) {
+      return undefined;
+    }
     return {
       blocked: {
         code: "security_scan_blocked",
@@ -146,6 +151,38 @@ function buildBlockedScanResult(params: {
     };
   }
   return undefined;
+}
+
+function logDangerousForceUnsafeInstall(params: {
+  findings: Array<{ file: string; line: number; message: string; severity: string }>;
+  logger: InstallScanLogger;
+  targetLabel: string;
+}) {
+  params.logger.warn?.(
+    `WARNING: ${params.targetLabel} forced despite dangerous code patterns via --dangerously-force-unsafe-install: ${buildCriticalDetails({ findings: params.findings })}`,
+  );
+}
+
+function resolveBuiltinScanDecision(
+  params: InstallSafetyOverrides & {
+    builtinScan: BuiltinInstallScan;
+    logger: InstallScanLogger;
+    targetLabel: string;
+  },
+): InstallSecurityScanResult | undefined {
+  const builtinBlocked = buildBlockedScanResult({
+    builtinScan: params.builtinScan,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    targetLabel: params.targetLabel,
+  });
+  if (params.dangerouslyForceUnsafeInstall && params.builtinScan.critical > 0) {
+    logDangerousForceUnsafeInstall({
+      findings: params.builtinScan.findings,
+      logger: params.logger,
+      targetLabel: params.targetLabel,
+    });
+  }
+  return builtinBlocked;
 }
 
 async function scanFileTarget(params: {
@@ -248,15 +285,17 @@ async function runBeforeInstallHook(params: {
   return undefined;
 }
 
-export async function scanBundleInstallSourceRuntime(params: {
-  logger: InstallScanLogger;
-  pluginId: string;
-  sourceDir: string;
-  requestKind?: PluginInstallRequestKind;
-  requestedSpecifier?: string;
-  mode?: "install" | "update";
-  version?: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanBundleInstallSourceRuntime(
+  params: InstallSafetyOverrides & {
+    logger: InstallScanLogger;
+    pluginId: string;
+    sourceDir: string;
+    requestKind?: PluginInstallRequestKind;
+    requestedSpecifier?: string;
+    mode?: "install" | "update";
+    version?: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const builtinScan = await scanDirectoryTarget({
     logger: params.logger,
     path: params.sourceDir,
@@ -264,8 +303,10 @@ export async function scanBundleInstallSourceRuntime(params: {
     targetName: params.pluginId,
     warningMessage: `WARNING: Bundle "${params.pluginId}" contains dangerous code patterns`,
   });
-  const builtinBlocked = buildBlockedScanResult({
+  const builtinBlocked = resolveBuiltinScanDecision({
     builtinScan,
+    logger: params.logger,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Bundle "${params.pluginId}" installation`,
   });
 
@@ -291,18 +332,20 @@ export async function scanBundleInstallSourceRuntime(params: {
   return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
-export async function scanPackageInstallSourceRuntime(params: {
-  extensions: string[];
-  logger: InstallScanLogger;
-  packageDir: string;
-  pluginId: string;
-  requestKind?: PluginInstallRequestKind;
-  requestedSpecifier?: string;
-  mode?: "install" | "update";
-  packageName?: string;
-  manifestId?: string;
-  version?: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanPackageInstallSourceRuntime(
+  params: InstallSafetyOverrides & {
+    extensions: string[];
+    logger: InstallScanLogger;
+    packageDir: string;
+    pluginId: string;
+    requestKind?: PluginInstallRequestKind;
+    requestedSpecifier?: string;
+    mode?: "install" | "update";
+    packageName?: string;
+    manifestId?: string;
+    version?: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const forcedScanEntries: string[] = [];
   for (const entry of params.extensions) {
     const resolvedEntry = path.resolve(params.packageDir, entry);
@@ -328,8 +371,10 @@ export async function scanPackageInstallSourceRuntime(params: {
     targetName: params.pluginId,
     warningMessage: `WARNING: Plugin "${params.pluginId}" contains dangerous code patterns`,
   });
-  const builtinBlocked = buildBlockedScanResult({
+  const builtinBlocked = resolveBuiltinScanDecision({
     builtinScan,
+    logger: params.logger,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
 
@@ -357,13 +402,15 @@ export async function scanPackageInstallSourceRuntime(params: {
   return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
-export async function scanFileInstallSourceRuntime(params: {
-  filePath: string;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  pluginId: string;
-  requestedSpecifier?: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanFileInstallSourceRuntime(
+  params: InstallSafetyOverrides & {
+    filePath: string;
+    logger: InstallScanLogger;
+    mode?: "install" | "update";
+    pluginId: string;
+    requestedSpecifier?: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const builtinScan = await scanFileTarget({
     logger: params.logger,
     path: params.filePath,
@@ -371,8 +418,10 @@ export async function scanFileInstallSourceRuntime(params: {
     targetName: params.pluginId,
     warningMessage: `WARNING: Plugin file "${params.pluginId}" contains dangerous code patterns`,
   });
-  const builtinBlocked = buildBlockedScanResult({
+  const builtinBlocked = resolveBuiltinScanDecision({
     builtinScan,
+    logger: params.logger,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Plugin file "${params.pluginId}" installation`,
   });
 
