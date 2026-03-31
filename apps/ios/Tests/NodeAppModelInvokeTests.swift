@@ -96,6 +96,64 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
     }
 
+    @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {
+        #expect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+        #expect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+        #expect(
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+        #expect(
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: "shared-token",
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+    }
+
+    @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() {
+        let config = GatewayConnectConfig(
+            url: URL(string: "wss://gateway.example")!,
+            stableID: "test-gateway",
+            tls: nil,
+            token: nil,
+            bootstrapToken: "spent-bootstrap-token",
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil))
+
+        let cleared = NodeAppModel.clearingBootstrapToken(in: config)
+        #expect(cleared?.bootstrapToken == nil)
+        #expect(cleared?.url == config.url)
+        #expect(cleared?.stableID == config.stableID)
+        #expect(cleared?.token == config.token)
+        #expect(cleared?.password == config.password)
+        #expect(cleared?.nodeOptions.role == config.nodeOptions.role)
+    }
+
     @Test @MainActor func handleInvokeRejectsBackgroundCommands() async {
         let appModel = NodeAppModel()
         appModel.setScenePhase(.background)

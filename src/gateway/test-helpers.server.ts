@@ -684,10 +684,27 @@ export async function readConnectChallengeNonce(
   }
 }
 
+function resolveAuthTokenForSignature(opts?: {
+  token?: string;
+  bootstrapToken?: string;
+  deviceToken?: string;
+}) {
+  return opts?.token ?? opts?.bootstrapToken ?? opts?.deviceToken;
+}
+
+export function testOnlyResolveAuthTokenForSignature(opts?: {
+  token?: string;
+  bootstrapToken?: string;
+  deviceToken?: string;
+}) {
+  return resolveAuthTokenForSignature(opts);
+}
+
 export async function connectReq(
   ws: WebSocket,
   opts?: {
     token?: string;
+    bootstrapToken?: string;
     deviceToken?: string;
     password?: string;
     skipDefaultAuth?: boolean;
@@ -742,9 +759,14 @@ export async function connectReq(
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
         : process.env.OPENCLAW_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
+  const bootstrapToken = opts?.bootstrapToken?.trim() || undefined;
   const deviceToken = opts?.deviceToken?.trim() || undefined;
   const password = opts?.password ?? defaultPassword;
-  const authTokenForSignature = token ?? deviceToken;
+  const authTokenForSignature = resolveAuthTokenForSignature({
+    token,
+    bootstrapToken,
+    deviceToken,
+  });
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
     : role === "operator"
@@ -811,9 +833,10 @@ export async function connectReq(
         role,
         scopes: requestedScopes,
         auth:
-          token || password || deviceToken
+          token || bootstrapToken || password || deviceToken
             ? {
                 token,
+                bootstrapToken,
                 deviceToken,
                 password,
               }
