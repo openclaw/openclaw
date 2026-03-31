@@ -813,7 +813,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.qmd.extraCollections.path":
     "Use an absolute or workspace-relative filesystem path for the extra QMD collection; keep it pointed at the transcript directory or note folder you actually want this agent to search.",
   "agents.defaults.memorySearch.qmd.extraCollections.name":
-    "Use this to preserve a stable collection label for shared transcript roots; omit it only when you want the default agent-scoped name.",
+    "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent transcript roots that live outside the workspace.",
   "agents.defaults.memorySearch.qmd.extraCollections.pattern":
     "Use a glob pattern to restrict which files inside the collection are indexed; keep the default `**/*.md` unless you need a narrower subset.",
   "agents.defaults.memorySearch.multimodal":
