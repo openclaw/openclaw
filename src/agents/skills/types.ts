@@ -30,6 +30,10 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  /** Fully-qualified model to route to when this skill is active, e.g. "anthropic/claude-opus-4-6". */
+  model?: string;
+  /** Capability-tier hint resolved against available models, e.g. "fast" | "balanced" | "powerful" | "vision". */
+  modelProfile?: string;
 };
 
 export type SkillInvocationPolicy = {
