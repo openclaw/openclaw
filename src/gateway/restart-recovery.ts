@@ -433,15 +433,19 @@ export async function queueDrainRestartMessage(params: {
     receivedAt: Date.now(),
   };
   let queuedToManifest = false;
-  manifestWriteChain = manifestWriteChain.then(async () => {
-    const manifest = await readManifestFile(restartConfig.manifestPath);
-    if (!manifest) {
-      return;
-    }
-    manifest.queuedMessages.push(queued);
-    await writeManifestFile(restartConfig.manifestPath, manifest);
-    queuedToManifest = true;
-  });
+  manifestWriteChain = manifestWriteChain
+    .then(async () => {
+      const manifest = await readManifestFile(restartConfig.manifestPath);
+      if (!manifest) {
+        return;
+      }
+      manifest.queuedMessages.push(queued);
+      await writeManifestFile(restartConfig.manifestPath, manifest);
+      queuedToManifest = true;
+    })
+    .catch(() => {
+      // Prevent a write failure from permanently rejecting the chain.
+    });
   await manifestWriteChain;
   return queuedToManifest;
 }
