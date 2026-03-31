@@ -21,6 +21,7 @@ vi.mock("@pierre/diffs/ssr", () => ({
 
 import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
+import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 function createRenderOptions() {
   return {
@@ -88,5 +89,39 @@ describe("renderDiffDocument render targets", () => {
     expect(rendered.html).toBeUndefined();
     expect(rendered.imageHtml).toContain("mock diff");
     expect(preloadFileDiffMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes stale patch payload languages before serializing viewer output", async () => {
+    preloadFileDiffMock.mockResolvedValueOnce({
+      prerenderedHTML: "<div>mock diff</div>",
+      fileDiff: {
+        name: "a.ts",
+        lang: "not-a-real-language",
+      },
+    });
+
+    const rendered = await renderDiffDocument(
+      {
+        kind: "patch",
+        patch: [
+          "diff --git a/a.ts b/a.ts",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -1 +1 @@",
+          "-a",
+          "+b",
+        ].join("\n"),
+      },
+      createRenderOptions(),
+      "viewer",
+    );
+
+    const payloads = [
+      ...(rendered.html ?? "").matchAll(/data-openclaw-diff-payload>(.*?)<\/script>/g),
+    ].map((match) => parseViewerPayloadJson(match[1] ?? ""));
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.langs).toEqual(["text"]);
+    expect(payloads[0]?.fileDiff?.lang).toBe("text");
   });
 });
