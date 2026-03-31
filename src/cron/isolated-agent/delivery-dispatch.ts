@@ -214,6 +214,7 @@ function getCompletedDirectCronDelivery(
 
 function buildDirectCronDeliveryIdempotencyKey(params: {
   runSessionId: string;
+  runStartedAt: number;
   delivery: SuccessfulDeliveryTarget;
 }): string {
   const threadId =
@@ -222,7 +223,10 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
       : String(params.delivery.threadId);
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
-  return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+  // Include runStartedAt so persistent sessions (which reuse sessionId) get a
+  // unique key per cron run. Without this, the 24h idempotency cache prevents
+  // delivery on all runs after the first.
+  return `cron-direct-delivery:v2:${params.runSessionId}:${params.runStartedAt}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
 function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
@@ -368,6 +372,7 @@ export async function dispatchCronDelivery(
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       runSessionId: params.runSessionId,
+      runStartedAt: params.runStartedAt,
       delivery,
     });
     try {

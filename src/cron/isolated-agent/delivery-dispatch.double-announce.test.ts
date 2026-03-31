@@ -283,7 +283,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
-      contextKey: "cron-direct-delivery:v1:run-123:telegram::123456:",
+      contextKey: expect.stringMatching(/^cron-direct-delivery:v2:run-123:\d+:telegram::123456:$/),
     });
   });
 
