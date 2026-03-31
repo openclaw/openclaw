@@ -405,6 +405,7 @@ Docs: https://docs.openclaw.ai
 - OpenShell and ACP file boundaries: skip symlinks and preserve trusted host-only directories during OpenShell mirror sync, and route ACP attachment reads through the shared attachment cache so local files outside allowed roots are no longer forwarded. (#57693, #57690)
 - Channel/webhook authorization: skip Discord audio preflight transcription for unauthorized guild senders, add a shared pre-auth in-flight guard to Synology Chat webhooks, and validate Microsoft Teams bearer auth before JSON body parsing. (#57695, #57722, #57686)
 - Infra/randomness: replace `Math.random()` in affected identifier and delay-jitter paths with shared secure-random helpers, including UI UUID generation. (#57744)
+- Gateway/sessions: scope bare `sessions.create` aliases like `main` to the requested agent while preserving the canonical `global` and `unknown` sentinel keys. (#58207) Thanks @jalehman.
 
 ## 2026.3.28
 
