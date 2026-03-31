@@ -18,6 +18,7 @@ import {
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
@@ -66,6 +67,19 @@ export async function configureGatewayForSetup(
           ),
           10,
         );
+
+  // Warn early if the chosen port is already occupied so users don't finish
+  // setup only to discover the gateway can't bind.
+  if (flow !== "quickstart") {
+    const portUsage = await inspectPortUsage(port).catch(() => null);
+    if (portUsage?.status === "busy") {
+      const hint = portUsage.hints.length > 0 ? `\n\n${portUsage.hints[0]}` : "";
+      await prompter.note(
+        `Port ${port} is already in use. The gateway may fail to start.\nStop the existing listener or choose a different port during setup.${hint}`,
+        "Port conflict",
+      );
+    }
+  }
 
   let bind: GatewayWizardSettings["bind"] =
     flow === "quickstart"

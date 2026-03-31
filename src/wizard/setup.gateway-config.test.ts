@@ -22,6 +22,10 @@ vi.mock("../infra/tailscale.js", () => ({
   getTailnetHostname: mocks.getTailnetHostname,
 }));
 
+vi.mock("../infra/ports-inspect.js", () => ({
+  inspectPortUsage: vi.fn(async () => ({ port: 18789, status: "free", listeners: [], hints: [] })),
+}));
+
 import { configureGatewayForSetup } from "./setup.gateway-config.js";
 
 describe("configureGatewayForSetup", () => {
@@ -316,5 +320,45 @@ describe("configureGatewayForSetup", () => {
 
     expect(result.nextConfig.gateway?.auth?.token).toEqual(quickstartGateway.token);
     expect(result.settings.gatewayToken).toBe("token-from-exec");
+  });
+
+  it("shows a port conflict note when the chosen port is already in use (advanced flow)", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+    const { inspectPortUsage } = await import("../infra/ports-inspect.js");
+    vi.mocked(inspectPortUsage).mockResolvedValueOnce({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: ["Port 18789 is used by process 1234 (some-server)"],
+    });
+
+    const prompter = createPrompter({
+      selectQueue: ["loopback", "token", "off"],
+      textQueue: ["18789", undefined],
+    });
+    const note = vi.spyOn(prompter, "note");
+    const runtime = createRuntime();
+
+    await configureGatewayForSetup({
+      flow: "advanced",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway: createQuickstartGateway("token"),
+      prompter,
+      runtime,
+    });
+
+    expect(note).toHaveBeenCalledWith(expect.stringContaining("already in use"), "Port conflict");
+  });
+
+  it("skips port conflict check in quickstart flow", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+    const { inspectPortUsage } = await import("../infra/ports-inspect.js");
+    vi.mocked(inspectPortUsage).mockClear();
+
+    await runGatewayConfig({ flow: "quickstart", textQueue: [] });
+
+    expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 });

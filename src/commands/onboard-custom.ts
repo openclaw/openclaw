@@ -289,7 +289,25 @@ function formatVerificationError(error: unknown): string {
     return "unknown error";
   }
   if (error instanceof Error) {
-    return error.message;
+    const msg = error.message;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ECONNREFUSED") {
+      return `Connection refused — is the endpoint running at this address? (${msg})`;
+    }
+    if (code === "ENOTFOUND") {
+      return `Host not found — check the base URL hostname (${msg})`;
+    }
+    if (code === "ECONNRESET") {
+      return `Connection reset — the endpoint closed the connection unexpectedly (${msg})`;
+    }
+    if (
+      error.name === "AbortError" ||
+      msg.toLowerCase().includes("timed out") ||
+      msg.toLowerCase().includes("abort")
+    ) {
+      return `Request timed out (${VERIFY_TIMEOUT_MS / 1000}s) — the endpoint may be slow or unreachable`;
+    }
+    return msg;
   }
   if (typeof error === "string") {
     return error;

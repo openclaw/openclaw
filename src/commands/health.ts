@@ -794,6 +794,11 @@ export async function healthCommand(
       }
     }
 
+    if (!debugEnabled && !opts.verbose) {
+      runtime.log(
+        info("Tip: set OPENCLAW_DEBUG_HEALTH=1 or use --verbose for detailed diagnostics."),
+      );
+    }
     if (resolvedAgents.length > 0) {
       const agentLabels = resolvedAgents.map((agent) =>
         agent.isDefault ? `${agent.agentId} (default)` : agent.agentId,

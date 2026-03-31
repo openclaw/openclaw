@@ -25,6 +25,9 @@ export async function runInteractiveSetup(
     // Keep stdin paused so non-daemon runs can exit cleanly (e.g. Docker setup).
     restoreTerminalState("setup finish", { resumeStdinIfPaused: false });
     if (exitCode !== null) {
+      if (exitCode === 1) {
+        runtime.log("Setup cancelled. Re-run `openclaw onboard` to complete setup.");
+      }
       runtime.exit(exitCode);
     }
   }
