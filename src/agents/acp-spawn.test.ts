@@ -1319,6 +1319,57 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBe("telegram");
   });
 
+  it("preserves topic-qualified Telegram targets without a separate threadId", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      channels: {
+        ...hoisted.state.cfg.channels,
+        telegram: {
+          threadBindings: {
+            enabled: true,
+          },
+        },
+      },
+    });
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "default",
+      capabilities: createSessionBindingCapabilities(),
+      bind: async (input) => await hoisted.sessionBindingBindMock(input),
+      listBySession: (targetSessionKey) =>
+        hoisted.sessionBindingListBySessionMock(targetSessionKey),
+      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:2",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:group:-1003342490704:topic:2",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1003342490704:topic:2",
+        }),
+      }),
+    );
+  });
+
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
     const relayHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayHandle);
