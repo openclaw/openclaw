@@ -13445,7 +13445,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.defaults.memorySearch.qmd.extraCollections.name": {
       label: "QMD Extra Collection Name",
-      help: "Use this to preserve a stable collection label for shared transcript roots; omit it only when you want the default agent-scoped name.",
+      help: "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent transcript roots that live outside the workspace.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.qmd.extraCollections.pattern": {
