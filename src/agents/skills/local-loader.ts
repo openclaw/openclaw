@@ -4,6 +4,26 @@ import { type Skill } from "@mariozechner/pi-coding-agent";
 import { openVerifiedFileSync } from "../../infra/safe-open-sync.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 
+type SkillSourceInfoField = Skill extends { sourceInfo: infer SourceInfo }
+  ? { sourceInfo: SourceInfo }
+  : {};
+
+function createSkillSourceInfoCompat(params: {
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillSourceInfoField {
+  return {
+    sourceInfo: {
+      source: params.source,
+      baseDir: params.baseDir,
+      filePath: params.filePath,
+      scope: "project",
+      origin: "top-level",
+    },
+  } as SkillSourceInfoField;
+}
+
 function isPathWithinRoot(rootRealPath: string, candidatePath: string): boolean {
   const relative = path.relative(rootRealPath, candidatePath);
   return (
@@ -74,6 +94,11 @@ function loadSingleSkillDirectory(params: {
     filePath,
     baseDir,
     source: params.source,
+    ...createSkillSourceInfoCompat({
+      filePath,
+      baseDir,
+      source: params.source,
+    }),
     disableModelInvocation: invocation.disableModelInvocation,
   };
 }

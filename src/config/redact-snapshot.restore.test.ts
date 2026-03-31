@@ -228,6 +228,40 @@ describe("restoreRedactedValues", () => {
     expect(result.channels.slack.accounts[1].botToken).toBe("user-provided-new-token-value");
   });
 
+  it("restores redacted SecretRef ids for channels token paths", () => {
+    const hints: ConfigUiHints = {
+      "channels.discord.token": { sensitive: true },
+    };
+    const incoming = {
+      channels: {
+        discord: {
+          token: {
+            source: "env",
+            provider: "default",
+            id: REDACTED_SENTINEL,
+          },
+        },
+      },
+    };
+    const original = {
+      channels: {
+        discord: {
+          token: {
+            source: "env",
+            provider: "default",
+            id: "DISCORD_BOT_TOKEN",
+          },
+        },
+      },
+    };
+    const result = restoreRedactedValues(incoming, original, hints);
+    expect(result.channels.discord.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DISCORD_BOT_TOKEN",
+    });
+  });
+
   it("rejects SecretRef source/provider changes when id is still redacted", () => {
     const incoming = {
       models: {
