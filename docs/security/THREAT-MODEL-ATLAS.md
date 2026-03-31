@@ -177,15 +177,15 @@ Nothing is explicitly out of scope for this threat model.
 
 #### T-ACCESS-001: Pairing Code Interception
 
-| Attribute               | Value                                                    |
-| ----------------------- | -------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                |
+| Attribute               | Value                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                                                     |
 | **Description**         | Attacker intercepts pairing code during pairing grace period (1h for DM channel pairing, 5m for node pairing) |
 | **Attack Vector**       | Shoulder surfing, network sniffing, social engineering                                                        |
 | **Affected Components** | Device pairing system                                                                                         |
-| **Current Mitigations** | 1h expiry (DM pairing) / 5m expiry (node pairing), codes sent via existing channel                           |
-| **Residual Risk**       | Medium - Grace period exploitable                        |
-| **Recommendations**     | Reduce grace period, add confirmation step               |
+| **Current Mitigations** | 1h expiry (DM pairing) / 5m expiry (node pairing), codes sent via existing channel                            |
+| **Residual Risk**       | Medium - Grace period exploitable                                                                             |
+| **Recommendations**     | Reduce grace period, add confirmation step                                                                    |
 
 #### T-ACCESS-002: AllowFrom Spoofing
 
