@@ -181,7 +181,7 @@
       "durationMs": 981
     },
     "extensions/telegram/src/bot-message-context.acp-bindings.test.ts": {
-      "durationMs": 980
+      "durationMs": 18290
     },
     "extensions/slack/src/monitor/message-handler.test.ts": {
       "durationMs": 967
