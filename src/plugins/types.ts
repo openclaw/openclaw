@@ -1664,7 +1664,7 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
