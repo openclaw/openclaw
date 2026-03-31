@@ -9,6 +9,7 @@ import type { FlowRecord } from "./flow-registry.types.js";
 function createStoredFlow(): FlowRecord {
   return {
     flowId: "flow-restored",
+    shape: "linear",
     ownerSessionKey: "agent:main:main",
     status: "blocked",
     notifyPolicy: "done_only",
@@ -61,6 +62,7 @@ describe("flow-registry store runtime", () => {
 
     expect(getFlowById("flow-restored")).toMatchObject({
       flowId: "flow-restored",
+      shape: "linear",
       goal: "Restored flow",
       blockedTaskId: "task-restored",
       blockedSummary: "Writable session required.",
@@ -98,6 +100,7 @@ describe("flow-registry store runtime", () => {
 
       expect(getFlowById(created.flowId)).toMatchObject({
         flowId: created.flowId,
+        shape: "linear",
         status: "waiting",
         currentStep: "ask_user",
       });
