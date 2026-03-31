@@ -110,24 +110,35 @@ After:
 
 ### Actual
 
-- TBD — to be filled after implementation and manual verification
+- Confirmed via Docker-based manual testing with STS-assumed role, application inference profile (`arn:aws:bedrock:us-east-1:723944466306:application-inference-profile/osaqrgj6cj55`), and guardrail ID `3i5e0gco0f5w` (DRAFT version).
 
 ## Evidence
 
 Attach at least one:
 
 - [x] Failing test/log before + passing after
-- [ ] Trace/log snippets
+- [x] Trace/log snippets
 - [ ] Screenshot/recording
 - [ ] Perf numbers (if relevant)
 
-_TBD: Attach test output after implementation._
+Manual testing results (Docker, STS creds, inference profile, guardrail `3i5e0gco0f5w` DRAFT):
+
+| Test | Scenario                         | Result                                                                                 |
+| ---- | -------------------------------- | -------------------------------------------------------------------------------------- |
+| 1    | Happy path (benign message)      | "Paris is the capital of France." — guardrail allowed                                  |
+| 2    | Guardrail blocks (topic denial)  | "Sorry, your query violates our usage policy." — guardrail blocked                     |
+| 3    | Trace enabled                    | Normal response with trace config accepted                                             |
+| 4    | No guardrail config (regression) | `AccessDeniedException` — IAM deny enforcement rejected call without `guardrailConfig` |
+| 5    | Required fields only             | Normal response, no errors about missing optional fields                               |
+| 6    | Full ARN as guardrailIdentifier  | Normal response, same behavior as plain ID                                             |
+| 7    | Invalid guardrail ID             | `"The provided guardrail identifier is invalid."` — clean AWS error, no local crash    |
+| 8    | Async stream processing mode     | Normal response with async guardrail evaluation                                        |
 
 ## Human Verification (required)
 
-- Verified scenarios: TBD
-- Edge cases checked: TBD
-- What you did **not** verify: Live Bedrock guardrail enforcement (requires AWS account with guardrails configured). Unit tests cover the payload injection path.
+- Verified scenarios: All 8 test scenarios from the manual testing guide (happy path, guardrail block, trace, no-guardrail regression, required-fields-only, full ARN, invalid ID, async mode)
+- Edge cases checked: Invalid guardrail ID (AWS error), missing guardrail config with IAM deny enforcement (AccessDeniedException), full ARN vs plain ID, DRAFT version
+- What you did **not** verify: `enabled_full` trace mode, production (non-DRAFT) guardrail versions, non-Anthropic models with guardrails (tested with Sonnet 4.6 inference profile only)
 
 ## Review Conversations
 
