@@ -79,6 +79,8 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: unwrap `caffeinate` and `sandbox-exec` before persisting allow-always trust so later shell payload changes still require a fresh approval. Thanks @tdjackey and @vincentkoc.
 - Exec/approvals: infer Discord and Telegram exec approvers from existing owner config when `execApprovals.approvers` is unset, extend the default approval window to 30 minutes, and clarify approval-unavailable guidance so approvals do not appear to silently disappear.
 - Pi/TUI: flush message-boundary replies at `message_end` so turns stop looking stuck until the next nudge when the final reply was already ready. Thanks @vincentkoc.
+- Status/tasks: fall back to same-agent task counts in `/status` when the current session has no linked tasks, keeping the default view useful without exposing other sessions' task details. Thanks @vincentkoc.
+- Status/auto-reply: stop status-only turns from replying twice when inline `/status` handling already produced the reply, so Discord and other chat surfaces no longer emit duplicate status cards. Thanks @vincentkoc.
 - Exec/approvals: keep `awk` and `sed` family binaries out of the low-risk `safeBins` fast path, and stop doctor profile scaffolding from treating them like ordinary custom filters. Thanks @vincentkoc.
 - Exec/env: block proxy, TLS, and Docker endpoint env overrides in host execution so request-scoped commands cannot silently reroute outbound traffic or trust attacker-supplied certificate settings. Thanks @AntAISecurityLab.
 - Exec/env: block Python package index override variables from request-scoped host exec environment sanitization so package fetches cannot be redirected through a caller-supplied index. Thanks @nexrin and @vincentkoc.
