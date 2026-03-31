@@ -3,7 +3,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
@@ -12,11 +11,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
@@ -58,6 +53,8 @@ import {
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -69,7 +66,6 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
-  resolveSessionStoreKey,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
@@ -748,57 +744,52 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     });
 }
 
+const resetSessionsInFlight = new Set<string>();
+
 export async function performGatewaySessionReset(params: {
   key: string;
-  agentId?: string;
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry; agentId: string }
+  | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const resetTarget = (() => {
+  const { cfg, target, storePath } = (() => {
     const cfg = getRuntimeConfig();
-    const explicitAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const parsedKey = parseAgentSessionKey(params.key);
-    const inferredGlobalAgentId =
-      !explicitAgentId &&
-      parsedKey &&
-      resolveSessionStoreKey({ cfg, sessionKey: params.key }) === "global"
-        ? normalizeAgentId(parsedKey.agentId)
-        : undefined;
-    const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
-    if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
-      };
-    }
-    if (
-      explicitAgentId &&
-      parsedKey?.agentId &&
-      normalizeAgentId(parsedKey.agentId) !== explicitAgentId
-    ) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
-    }
-    const target = resolveGatewaySessionStoreTarget({
-      cfg,
-      key: params.key,
-      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-    });
-    return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
+    return { cfg, target, storePath: target.storePath };
   })();
-  if (!resetTarget.ok) {
-    return resetTarget;
+
+  const lockKey = target.canonicalKey;
+  if (resetSessionsInFlight.has(lockKey)) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `session reset already in progress for key: ${lockKey}`,
+      ),
+    };
   }
-  const { cfg, target, storePath, requestedAgentId } = resetTarget;
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(
-    params.key,
-    requestedAgentId ? { agentId: requestedAgentId } : undefined,
-  );
+  resetSessionsInFlight.add(lockKey);
+  try {
+    return await performGatewaySessionResetInner({ cfg, target, storePath, params });
+  } finally {
+    resetSessionsInFlight.delete(lockKey);
+  }
+}
+
+async function performGatewaySessionResetInner(ctx: {
+  cfg: ReturnType<typeof loadConfig>;
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  storePath: string;
+  params: { key: string; reason: "new" | "reset"; commandSource: string };
+}): Promise<
+  | { ok: true; key: string; entry: SessionEntry }
+  | { ok: false; error: ReturnType<typeof errorShape> }
+> {
+  const { cfg, target, storePath, params } = ctx;
+  // Use the same cfg snapshot for entry resolution to avoid config drift.
+  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key, cfg);
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -840,14 +831,11 @@ export async function performGatewaySessionReset(params: {
       cfg,
       key: params.key,
       store,
-      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
     });
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
     const parsed = parseAgentSessionKey(primaryKey);
-    const sessionAgentId = normalizeAgentId(
-      parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
-    );
+    const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resetPreservedSelection = resolveResetPreservedSelection({
       entry: currentEntry,
     });
@@ -1014,5 +1002,12 @@ export async function performGatewaySessionReset(params: {
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next, agentId: target.agentId };
+  emitSessionLifecycleEvent({
+    sessionKey: target.canonicalKey,
+    reason: params.reason,
+    parentSessionKey: next.parentSessionKey,
+    label: next.label,
+    displayName: next.displayName,
+  });
+  return { ok: true, key: target.canonicalKey, entry: next };
 }
