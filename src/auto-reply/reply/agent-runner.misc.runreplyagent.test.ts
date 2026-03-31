@@ -2043,4 +2043,74 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
     });
     expect(payload?.text).toBeUndefined();
   });
+
+  it("suppresses verbose New session notice when resetTriggered is true", async () => {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "on",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    // Mock the embedded pi agent to return a simple text response
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "agent response" }],
+      meta: {},
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "on",
+      isNewSession: true,
+      resetTriggered: true, // this should suppress the verbose notice
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    const verboseNewSessionNotices = payloads.filter(
+      (p) => typeof p.text === "string" && p.text.startsWith("🧭 New session:"),
+    );
+    expect(verboseNewSessionNotices).toHaveLength(0);
+  });
 });
