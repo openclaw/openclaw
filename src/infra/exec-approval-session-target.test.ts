@@ -251,7 +251,7 @@ describe("exec approval session target", () => {
     ).toBe(true);
   });
 
-  it("rejects conflicting turn-source and stale session account bindings", () => {
+  it("prefers explicit turn-source accounts over stale session account bindings", () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
     const cfg = writeStoreFile(storePath, {
@@ -268,7 +268,7 @@ describe("exec approval session target", () => {
       turnSourceAccountId: "work",
     });
 
-    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBeNull();
+    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBe("work");
     expect(
       doesApprovalRequestMatchChannelAccount({
         cfg,
@@ -276,6 +276,6 @@ describe("exec approval session target", () => {
         channel: "slack",
         accountId: "work",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
