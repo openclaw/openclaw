@@ -5,6 +5,9 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { getBrowserTestFetch } from "./test-fetch.js";
+
+const fetch = getBrowserTestFetch();
 
 function buildResolvedConfig(): ResolvedBrowserConfig {
   return {
