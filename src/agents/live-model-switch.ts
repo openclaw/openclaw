@@ -59,16 +59,28 @@ export function resolveLiveSessionModelSelection(params: {
   // attempt, effectively inverting the fallback order (#57063, #56788).
   const hasExplicitOverride = Boolean(entry?.modelOverride?.trim());
   const callerDefault = { provider: params.defaultProvider, model: params.defaultModel };
-  const configDefault = hasExplicitOverride && agentId
+
+  // Always resolve the config-level default when an agentId is present so that
+  // mid-run `/model reset` (clearing modelOverride) is detected as a switch
+  // back to the agent default rather than silently staying on callerDefault.
+  const configDefault = agentId
     ? resolveDefaultModelForAgent({ cfg, agentId })
     : callerDefault;
+
+  // When there is an explicit override, use it; when the session entry exists
+  // but has no override, use callerDefault (the in-flight resolved model);
+  // when there is no entry at all, use configDefault so that a cleared
+  // override is distinguishable from "never set".
+  const entryExists = entry !== undefined && entry !== null;
 
   const provider = runtimeProvider
     || (hasExplicitOverride
       ? (entry.providerOverride?.trim() || configDefault.provider)
-      : callerDefault.provider);
+      : entryExists ? callerDefault.provider : configDefault.provider);
   const model = runtimeModel
-    || (hasExplicitOverride ? entry.modelOverride!.trim() : callerDefault.model);
+    || (hasExplicitOverride
+      ? entry.modelOverride!.trim()
+      : entryExists ? callerDefault.model : configDefault.model);
 
   const authProfileId = entry?.authProfileOverride?.trim() || undefined;
   return {
