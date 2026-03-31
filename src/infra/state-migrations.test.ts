@@ -19,6 +19,7 @@ function createConfig(): OpenClawConfig {
     },
     channels: {
       telegram: {
+        defaultAccount: "alpha",
         accounts: {
           beta: {},
           alpha: {},
@@ -100,7 +101,6 @@ describe("state migrations", () => {
     expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
     expect(detected.pairingAllowFrom.copyPlans.map((plan) => plan.targetPath)).toEqual([
       resolveChannelAllowFromPath("telegram", env, "alpha"),
-      resolveChannelAllowFromPath("telegram", env, "beta"),
     ]);
     expect(detected.preview).toEqual([
       `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
@@ -108,7 +108,6 @@ describe("state migrations", () => {
       `- Agent dir: ${path.join(stateDir, "agent")} → ${path.join(stateDir, "agents", "worker-1", "agent")}`,
       `- WhatsApp auth: ${path.join(stateDir, "credentials")} → ${path.join(stateDir, "credentials", "whatsapp", "default")} (keep oauth.json)`,
       `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
     ]);
   });
 
@@ -135,7 +134,6 @@ describe("state migrations", () => {
       "Moved WhatsApp auth creds.json → whatsapp/default",
       "Moved WhatsApp auth pre-key-1.json → whatsapp/default",
       `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
     ]);
 
     const mergedStore = JSON.parse(
@@ -176,7 +174,10 @@ describe("state migrations", () => {
       fs.readFile(resolveChannelAllowFromPath("telegram", env, "alpha"), "utf8"),
     ).resolves.toBe('["123","456"]\n');
     await expect(
-      fs.readFile(resolveChannelAllowFromPath("telegram", env, "beta"), "utf8"),
-    ).resolves.toBe('["123","456"]\n');
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "default")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "beta")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

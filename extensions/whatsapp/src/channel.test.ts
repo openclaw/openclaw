@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "wa-poll-1", toJid: "1555@s.whatsapp.net" })),
+  sendReactionWhatsApp: vi.fn(async () => undefined),
   handleWhatsAppAction: vi.fn(async () => ({ content: [{ type: "text", text: '{"ok":true}' }] })),
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
@@ -42,6 +43,19 @@ vi.mock("./runtime.js", () => ({
       },
     },
   }),
+}));
+
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendPollWhatsApp: hoisted.sendPollWhatsApp,
+    sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
+  };
+});
+
+vi.mock("./action-runtime.js", () => ({
+  handleWhatsAppAction: hoisted.handleWhatsAppAction,
 }));
 
 vi.mock("./login.js", () => ({
@@ -168,6 +182,7 @@ describe("whatsappPlugin outbound sendMedia", () => {
 describe("whatsappPlugin outbound sendPoll", () => {
   beforeEach(async () => {
     vi.resetModules();
+    hoisted.sendPollWhatsApp.mockClear();
   });
 
   it("threads cfg into runtime sendPollWhatsApp call", async () => {
@@ -435,6 +450,7 @@ describe("whatsappPlugin actions.handleAction react messageId resolution", () =>
 
   beforeEach(() => {
     hoisted.handleWhatsAppAction.mockClear();
+    hoisted.sendReactionWhatsApp.mockClear();
   });
 
   it("uses explicit messageId when provided", async () => {

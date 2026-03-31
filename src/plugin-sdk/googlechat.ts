@@ -22,10 +22,11 @@ export {
 } from "../channels/plugins/directory-config-helpers.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
+export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { fetchRemoteMedia } from "../media/fetch.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { loadWebMedia } from "./web-media.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export {

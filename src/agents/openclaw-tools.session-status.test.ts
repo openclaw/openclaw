@@ -8,8 +8,11 @@ const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
 const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
-const listTasksForSessionKeyMock = vi.hoisted(() =>
-  vi.fn((_: string) => [] as Array<Record<string, unknown>>),
+const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
+  vi.fn(
+    (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
+      [] as Array<Record<string, unknown>>,
+  ),
 );
 
 const createMockConfig = () => ({
@@ -192,8 +195,11 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
   vi.doMock("../auto-reply/status.js", () => ({
     buildStatusMessage: buildStatusMessageMock,
   }));
-  vi.doMock("../tasks/task-registry.js", () => ({
-    listTasksForSessionKey: (sessionKey: string) => listTasksForSessionKeyMock(sessionKey),
+  vi.doMock("../tasks/task-owner-access.js", () => ({
+    listTasksForRelatedSessionKeyForOwner: (params: {
+      relatedSessionKey: string;
+      callerOwnerKey: string;
+    }) => listTasksForRelatedSessionKeyForOwnerMock(params),
   }));
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
@@ -206,8 +212,8 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
   loadCombinedSessionStoreForGatewayMock.mockClear();
-  listTasksForSessionKeyMock.mockClear();
-  listTasksForSessionKeyMock.mockReturnValue([]);
+  listTasksForRelatedSessionKeyForOwnerMock.mockClear();
+  listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   loadSessionStoreMock.mockReturnValue(store);
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({
     storePath: "(multiple)",
@@ -390,7 +396,7 @@ describe("session_status tool", () => {
         updatedAt: Date.now(),
       },
     });
-    listTasksForSessionKeyMock.mockReturnValue([
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
       {
         taskId: "task-1",
         runtime: "acp",
