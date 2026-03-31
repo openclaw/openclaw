@@ -17,7 +17,6 @@ import {
   buildSessionEntry,
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
-  extractKeywords,
   isQmdScopeAllowed,
   listSessionFilesForAgent,
   parseQmdQueryJson,
@@ -53,7 +52,6 @@ const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
-const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
@@ -85,32 +83,8 @@ function hasHanScript(value: string): boolean {
 
 function normalizeHanBm25Query(query: string): string {
   const trimmed = query.trim();
-  if (!trimmed || !hasHanScript(trimmed)) {
-    return trimmed;
-  }
-  const keywords = extractKeywords(trimmed);
-  const normalizedKeywords: string[] = [];
-  const seen = new Set<string>();
-  for (const keyword of keywords) {
-    const token = keyword.trim();
-    if (!token || seen.has(token)) {
-      continue;
-    }
-    const includesHan = hasHanScript(token);
-    // Han unigrams are usually too broad for BM25 and can drown signal.
-    if (includesHan && Array.from(token).length < 2) {
-      continue;
-    }
-    if (!includesHan && token.length < 2) {
-      continue;
-    }
-    seen.add(token);
-    normalizedKeywords.push(token);
-    if (normalizedKeywords.length >= QMD_BM25_HAN_KEYWORD_LIMIT) {
-      break;
-    }
-  }
-  return normalizedKeywords.length > 0 ? normalizedKeywords.join(" ") : trimmed;
+  // Keep Han/CJK BM25 queries intact so OpenClaw search semantics match direct qmd search.
+  return trimmed;
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
@@ -765,7 +739,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     const message = err instanceof Error ? err.message : String(err);
     const lower = message.toLowerCase();
     return (
-      (lower.includes("enotdir") || lower.includes("not a directory")) &&
+      (lower.includes("enotdir") ||
+        lower.includes("not a directory") ||
+        lower.includes("enoent") ||
+        lower.includes("no such file")) &&
       NUL_MARKER_RE.test(message)
     );
   }
