@@ -59,6 +59,7 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
+  recentWebhookEvents.clear();
   webhookAnomalyTracker.clear();
 }
 
@@ -87,12 +88,12 @@ function timingSafeEquals(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
+function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
   const messageId = update.message?.message_id;
   if (!messageId) {
     return false;
   }
-  const key = `${update.event_name}:${messageId}`;
+  const key = `${target.path}:${target.account.accountId}:${update.event_name}:${messageId}`;
   return recentWebhookEvents.check(key, nowMs);
 }
 
@@ -222,7 +223,7 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      if (isReplayEvent(update, nowMs)) {
+      if (isReplayEvent(target, update, nowMs)) {
         res.statusCode = 200;
         res.end("ok");
         return true;

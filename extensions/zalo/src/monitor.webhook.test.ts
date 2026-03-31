@@ -238,6 +238,62 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
+  it("keeps replay dedupe isolated per authenticated target", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    const unregisterA = registerTarget({
+      path: "/hook-replay-scope",
+      secret: "secret-a",
+      statusSink: sinkA,
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-replay-scope",
+      secret: "secret-b",
+      statusSink: sinkB,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "work",
+      },
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-replay-scope-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-a",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-b",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sinkA).toHaveBeenCalledTimes(1);
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
   it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
     const {
       core,
