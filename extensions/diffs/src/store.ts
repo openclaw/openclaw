@@ -166,10 +166,55 @@ export class DiffArtifactStore {
   }
 
   scheduleCleanup(): void {
-    this.maybeCleanupExpired();
+    void this.startCleanupSweep({ respectThrottle: true }).catch((error) => {
+      this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
+    });
   }
 
   async cleanupExpired(): Promise<void> {
+    if (this.cleanupInFlight) {
+      await this.cleanupInFlight;
+    }
+    await this.startCleanupSweep({ respectThrottle: false });
+  }
+
+  private async ensureRoot(): Promise<void> {
+    await fs.mkdir(this.rootDir, { recursive: true });
+  }
+
+  private async startCleanupSweep(params: { respectThrottle: boolean }): Promise<void> {
+    if (this.cleanupInFlight) {
+      await this.cleanupInFlight;
+      if (params.respectThrottle) {
+        return;
+      }
+    }
+
+    const now = Date.now();
+    if (params.respectThrottle && now < this.nextCleanupAt) {
+      return;
+    }
+    if (params.respectThrottle) {
+      this.nextCleanupAt = now + this.cleanupIntervalMs;
+    }
+
+    const cleanupPromise = this.runCleanupSweep();
+    this.cleanupInFlight = cleanupPromise;
+    try {
+      await cleanupPromise;
+    } catch (error) {
+      if (params.respectThrottle) {
+        this.nextCleanupAt = 0;
+      }
+      throw error;
+    } finally {
+      if (this.cleanupInFlight === cleanupPromise) {
+        this.cleanupInFlight = null;
+      }
+    }
+  }
+
+  private async runCleanupSweep(): Promise<void> {
     await this.ensureRoot();
     const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
     const now = Date.now();
@@ -205,31 +250,6 @@ export class DiffArtifactStore {
           }
         }),
     );
-  }
-
-  private async ensureRoot(): Promise<void> {
-    await fs.mkdir(this.rootDir, { recursive: true });
-  }
-
-  private maybeCleanupExpired(): void {
-    const now = Date.now();
-    if (this.cleanupInFlight || now < this.nextCleanupAt) {
-      return;
-    }
-
-    this.nextCleanupAt = now + this.cleanupIntervalMs;
-    const cleanupPromise = this.cleanupExpired()
-      .catch((error) => {
-        this.nextCleanupAt = 0;
-        this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
-      })
-      .finally(() => {
-        if (this.cleanupInFlight === cleanupPromise) {
-          this.cleanupInFlight = null;
-        }
-      });
-
-    this.cleanupInFlight = cleanupPromise;
   }
 
   private artifactDir(id: string): string {
@@ -312,7 +332,14 @@ export class DiffArtifactStore {
   }
 
   private async deleteArtifact(id: string): Promise<void> {
-    await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
+    try {
+      await fs.rm(this.artifactDir(id), { recursive: true, force: true });
+    } catch (error) {
+      if (isFileNotFound(error)) {
+        return;
+      }
+      this.logger?.warn(`Failed to delete diff artifact ${id}: ${String(error)}`);
+    }
   }
 
   private resolveWithinRoot(...parts: string[]): string {

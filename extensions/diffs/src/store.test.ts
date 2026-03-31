@@ -22,6 +22,7 @@ describe("DiffArtifactStore", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     await cleanupRootDir();
   });
 
@@ -186,7 +187,9 @@ describe("DiffArtifactStore", () => {
       rootDir,
       cleanupIntervalMs: 60_000,
     });
-    const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
+    const runCleanupSweepSpy = vi
+      .spyOn(store as unknown as { runCleanupSweep: () => Promise<void> }, "runCleanupSweep")
+      .mockResolvedValue();
 
     await store.createArtifact({
       html: "<html>one</html>",
@@ -201,7 +204,7 @@ describe("DiffArtifactStore", () => {
       fileCount: 1,
     });
 
-    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    expect(runCleanupSweepSpy).toHaveBeenCalledTimes(1);
 
     vi.setSystemTime(new Date(now.getTime() + 61_000));
     await store.createArtifact({
@@ -211,7 +214,50 @@ describe("DiffArtifactStore", () => {
       fileCount: 1,
     });
 
-    expect(cleanupSpy).toHaveBeenCalledTimes(2);
+    expect(runCleanupSweepSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reruns explicit cleanup after an in-flight scheduled sweep", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+
+    const realReaddir = fs.readdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    let releaseFirstReaddir: (() => void) | undefined;
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    readdirSpy.mockImplementation((...args: unknown[]) => {
+      if (!releaseFirstReaddir) {
+        return new Promise((resolve, reject) => {
+          releaseFirstReaddir = () => {
+            void realReaddir(...args).then(resolve, reject);
+          };
+        }) as ReturnType<typeof fs.readdir>;
+      }
+      return realReaddir(...args) as ReturnType<typeof fs.readdir>;
+    });
+
+    const standalone = await store.createStandaloneFileArtifact({
+      format: "png",
+      ttlMs: 1_000,
+    });
+    await fs.writeFile(standalone.filePath, Buffer.from("png"));
+
+    for (let attempt = 0; attempt < 10 && readdirSpy.mock.calls.length === 0; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(readdirSpy).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    const cleanupPromise = store.cleanupExpired();
+    expect(readdirSpy).toHaveBeenCalledTimes(1);
+
+    releaseFirstReaddir?.();
+    await cleanupPromise;
+
+    expect(readdirSpy).toHaveBeenCalledTimes(2);
+    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
