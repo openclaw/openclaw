@@ -145,6 +145,22 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   normalizeTextLikeParam(normalized, "content");
   normalizeTextLikeParam(normalized, "oldText");
   normalizeTextLikeParam(normalized, "newText");
+
+  // Also normalize aliases inside edits[] entries so the upstream tool receives
+  // canonical keys (oldText/newText) even when agents send old_string/new_string.
+  if (Array.isArray(normalized.edits)) {
+    normalized.edits = (normalized.edits as unknown[]).map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return entry;
+      }
+      const normalizedEntry = { ...(entry as Record<string, unknown>) };
+      normalizeClaudeParamAliases(normalizedEntry);
+      normalizeTextLikeParam(normalizedEntry, "oldText");
+      normalizeTextLikeParam(normalizedEntry, "newText");
+      return normalizedEntry;
+    });
+  }
+
   return normalized;
 }
 
@@ -231,6 +247,25 @@ function hasValidEditsArray(record: Record<string, unknown> | undefined): boolea
 }
 
 /**
+ * The set of all known canonical + alias keys for oldText / newText params.
+ * Used by {@link resolveEditRequiredParamGroups} to decide which
+ * required-param groups to drop when `edits[]` is present.
+ *
+ * Correctness is coupled to the actual key list (the source of truth for
+ * param names) rather than to ephemeral display-label strings.
+ */
+const EDIT_TEXT_KEYS = new Set([
+  "oldText",
+  "old_string",
+  "old_text",
+  "oldString",
+  "newText",
+  "new_string",
+  "new_text",
+  "newString",
+]);
+
+/**
  * For the edit tool, derive the effective required-param groups based on
  * whether the caller supplied the `edits[]` array or top-level params.
  *
@@ -245,11 +280,8 @@ function resolveEditRequiredParamGroups(
   if (!hasValidEditsArray(record)) {
     return groups;
   }
-  // Keep only the "path" group — oldText/newText live inside each edits[] entry.
-  return groups.filter((group) => {
-    const label = group.label ?? "";
-    return !label.includes("oldText") && !label.includes("newText");
-  });
+  // Keep only groups whose keys don't overlap with oldText/newText aliases.
+  return groups.filter((group) => !group.keys.some((k) => EDIT_TEXT_KEYS.has(k)));
 }
 
 // Generic wrapper to normalize parameters for any tool.
@@ -261,6 +293,10 @@ export function wrapToolParamNormalization(
   return {
     ...patched,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      // normalizeToolParams rewrites aliases at the top level *and* inside
+      // each edits[] entry (old_string → oldText, etc.), so by the time we
+      // reach validation or tool.execute the upstream schema's canonical
+      // keys (oldText / newText) are always present.
       const normalized = normalizeToolParams(params);
       const record =
         normalized ??

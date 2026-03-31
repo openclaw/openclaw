@@ -124,19 +124,59 @@ describe("edit tool edits[] multi-edit mode param validation", () => {
       expect(executeMock).toHaveBeenCalledOnce();
     });
 
-    it("accepts edits[] with Claude-style aliases (old_string/new_string)", async () => {
-      const executeMock = vi.fn(async () => ({
-        content: [{ type: "text" as const, text: "ok" }],
-      }));
+    it("normalizes Claude-style aliases inside edits[] entries (old_string → oldText)", async () => {
+      let receivedParams: unknown;
+      const executeMock = vi.fn(async (_toolCallId: string, params: unknown) => {
+        receivedParams = params;
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      });
       const tool = wrapToolParamNormalization(
         createMockEditTool(executeMock as unknown as AnyAgentTool["execute"]),
         CLAUDE_PARAM_GROUPS.edit,
       );
 
-      // Claude Code style: file_path + edits array
+      // Claude Code style: file_path + edits array with old_string/new_string
       const params = {
         file_path: "/tmp/test.txt",
         edits: [{ old_string: "alpha", new_string: "ALPHA" }],
+      };
+
+      await expect(tool.execute("call-1", params, undefined)).resolves.not.toThrow();
+      expect(executeMock).toHaveBeenCalledOnce();
+
+      // After normalization, aliases inside edits[] should be mapped to canonical keys
+      const normalized = receivedParams as Record<string, unknown>;
+      expect(normalized.path).toBe("/tmp/test.txt");
+      expect(normalized.edits).toEqual([{ oldText: "alpha", newText: "ALPHA" }]);
+    });
+
+    it("skips oldText/newText validation in edits[] mode even when labels are renamed", async () => {
+      // Regression guard: the filtering must be based on group.keys overlap
+      // with the known edit-text key set, NOT on group.label strings.
+      // Here we supply custom groups whose labels do NOT mention "oldText"
+      // or "newText" — the filter must still recognise them via their keys.
+      const customGroups = [
+        { keys: ["path", "file_path", "filePath", "file"], label: "file location" },
+        { keys: ["oldText", "old_string", "old_text", "oldString"], label: "search text" },
+        {
+          keys: ["newText", "new_string", "new_text", "newString"],
+          label: "replacement text",
+          allowEmpty: true,
+        },
+      ] as const;
+
+      const executeMock = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }));
+      const tool = wrapToolParamNormalization(
+        createMockEditTool(executeMock as unknown as AnyAgentTool["execute"]),
+        customGroups,
+      );
+
+      // edits[] mode — should NOT require top-level oldText/newText
+      const params = {
+        path: "/tmp/test.txt",
+        edits: [{ oldText: "alpha", newText: "ALPHA" }],
       };
 
       await expect(tool.execute("call-1", params, undefined)).resolves.not.toThrow();
@@ -170,6 +210,43 @@ describe("edit tool edits[] multi-edit mode param validation", () => {
       await expect(tool.execute("call-1", params, undefined)).rejects.toThrow(
         /Missing required parameter.*: content/,
       );
+    });
+
+    it("normalizes edits[] aliases before bypassing old/new validation (end-to-end)", async () => {
+      // Regression guard for the review comment: when edits[] contains only
+      // alias keys (old_string / new_string), normalization must rewrite them
+      // to canonical keys *before* the params reach the upstream tool.
+      // Without the edits[] normalization in normalizeToolParams, the upstream
+      // tool would receive { old_string, new_string } and silently fail.
+      let receivedParams: unknown;
+      const executeMock = vi.fn(async (_toolCallId: string, params: unknown) => {
+        receivedParams = params;
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      });
+      const tool = wrapToolParamNormalization(
+        createMockEditTool(executeMock as unknown as AnyAgentTool["execute"]),
+        CLAUDE_PARAM_GROUPS.edit,
+      );
+
+      // Payload with ONLY alias keys — no canonical oldText/newText anywhere.
+      const params = {
+        file_path: "/tmp/test.txt",
+        edits: [
+          { old_string: "alpha", new_string: "ALPHA" },
+          { old_text: "gamma", new_text: "GAMMA" },
+        ],
+      };
+
+      await expect(tool.execute("call-1", params, undefined)).resolves.not.toThrow();
+      expect(executeMock).toHaveBeenCalledOnce();
+
+      // The upstream tool must see canonical keys in every edits[] entry.
+      const normalized = receivedParams as Record<string, unknown>;
+      expect(normalized.path).toBe("/tmp/test.txt");
+      expect(normalized.edits).toEqual([
+        { oldText: "alpha", newText: "ALPHA" },
+        { oldText: "gamma", newText: "GAMMA" },
+      ]);
     });
 
     it("normalizes edits[] params correctly for the upstream tool", async () => {
@@ -222,6 +299,40 @@ describe("edit tool edits[] multi-edit mode param validation", () => {
       ]);
       // Alias should be removed
       expect(result!.file_path).toBeUndefined();
+    });
+
+    it("normalizes Claude-style aliases inside edits[] entries", () => {
+      const result = normalizeToolParams({
+        file_path: "/tmp/test.txt",
+        edits: [
+          { old_string: "alpha", new_string: "ALPHA" },
+          { old_text: "gamma", new_text: "GAMMA" },
+        ],
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.path).toBe("/tmp/test.txt");
+      expect(result!.edits).toEqual([
+        { oldText: "alpha", newText: "ALPHA" },
+        { oldText: "gamma", newText: "GAMMA" },
+      ]);
+    });
+
+    it("does not clobber canonical keys in edits[] when aliases are also present", () => {
+      const result = normalizeToolParams({
+        path: "/tmp/test.txt",
+        edits: [
+          {
+            oldText: "correct",
+            old_string: "ignored",
+            newText: "also correct",
+            new_string: "ignored",
+          },
+        ],
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.edits).toEqual([{ oldText: "correct", newText: "also correct" }]);
     });
   });
 });

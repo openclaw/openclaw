@@ -45,9 +45,11 @@ function readEditToolParams(params: unknown): EditToolParams {
   let oldText = readStringParam(record, "oldText", "old_string", "old_text", "oldString");
   let newText = readStringParam(record, "newText", "new_string", "new_text", "newString");
 
-  // Fall back to the first entry in edits[] (multi-edit mode) so recovery
-  // logic can snapshot/verify at least the first replacement.
-  if (oldText === undefined && newText === undefined && record) {
+  // Fall back per-field to the first entry in edits[] (multi-edit mode) so
+  // recovery logic can snapshot/verify at least the first replacement.
+  // Check each field independently — mixed payloads (e.g. top-level oldText
+  // without newText) must still fill the missing field from edits[0].
+  if ((oldText === undefined || newText === undefined) && record) {
     const edits = record.edits;
     if (Array.isArray(edits) && edits.length > 0) {
       const first =
@@ -55,8 +57,8 @@ function readEditToolParams(params: unknown): EditToolParams {
           ? (edits[0] as Record<string, unknown>)
           : undefined;
       if (first) {
-        oldText = readStringParam(first, "oldText", "old_string", "old_text", "oldString");
-        newText = readStringParam(first, "newText", "new_string", "new_text", "newString");
+        oldText ??= readStringParam(first, "oldText", "old_string", "old_text", "oldString");
+        newText ??= readStringParam(first, "newText", "new_string", "new_text", "newString");
       }
     }
   }

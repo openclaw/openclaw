@@ -248,6 +248,70 @@ describe("edit tool recovery hardening", () => {
     });
   });
 
+  it("recovers mixed-format payload where top-level oldText is present but newText comes from edits[0]", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "before old text after\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "before new text after\n", "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
+    });
+
+    // Mixed payload: top-level oldText only, newText lives inside edits[0].
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        oldText: "old text",
+        edits: [{ oldText: "old text", newText: "new text" }],
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Successfully replaced text in ${filePath}.`,
+    });
+  });
+
+  it("recovers mixed-format payload where top-level newText is present but oldText comes from edits[0]", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "before old text after\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "before new text after\n", "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
+    });
+
+    // Mixed payload: top-level newText only, oldText lives inside edits[0].
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        newText: "new text",
+        edits: [{ oldText: "old text", newText: "new text" }],
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Successfully replaced text in ${filePath}.`,
+    });
+  });
+
   it("adds mismatch hint for edits[] mode when edit fails", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
