@@ -1223,6 +1223,9 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
   const channelCandidateFiles = context.catalog.allKnownTestFiles.filter((file) =>
     context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix)),
   );
+  const extensionCandidateFiles = context.catalog.allKnownTestFiles.filter((file) =>
+    file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX),
+  );
   const unitShardCount = resolveDynamicShardCount({
     estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
     fileCount: context.catalog.allKnownUnitFiles.length,
@@ -1256,15 +1259,24 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     maxShards: 9,
   });
   const bunShardCount = windowsShardCount;
+  const extensionFastShardCount = resolveDynamicShardCount({
+    estimatedDurationMs: sumKnownManifestDurationsMs(context.extensionTimingManifest),
+    fileCount: extensionCandidateFiles.length,
+    targetDurationMs: 120_000,
+    targetFilesPerShard: 140,
+    minShards: 4,
+    maxShards: 5,
+  });
 
   const checksFastInclude = nodeEligible
     ? [
-        {
-          check_name: "checks-fast-extensions",
+        ...createShardMatrixEntries({
+          checkNamePrefix: "checks-fast-extensions",
           runtime: "node",
           task: "extensions",
           command: "pnpm test:extensions",
-        },
+          shardCount: extensionFastShardCount,
+        }),
         {
           check_name: "checks-fast-contracts-protocol",
           runtime: "node",
@@ -1395,6 +1407,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     shardCounts: {
       unit: unitShardCount,
       channels: channelShardCount,
+      extensionFast: extensionFastShardCount,
       windows: windowsShardCount,
       macosNode: macosNodeShardCount,
       bun: bunShardCount,
