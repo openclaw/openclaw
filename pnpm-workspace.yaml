@@ -4,6 +4,13 @@ packages:
   - packages/*
   - extensions/*
 
+# Delay new releases by 48h to reduce exposure to compromised packages,
+# while allowing our explicitly trusted Pi packages to update immediately.
+minimumReleaseAge: 2880
+
+minimumReleaseAgeExclude:
+  - "@mariozechner/*"
+
 onlyBuiltDependencies:
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
