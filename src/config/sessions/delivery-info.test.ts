@@ -44,6 +44,14 @@ describe("extractDeliveryInfo", () => {
       baseSessionKey: "agent:main:slack:channel:C1",
       threadId: "123.456",
     });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
+      ),
+    ).toEqual({
+      baseSessionKey: "agent:main:matrix:channel:!room:example.org",
+      threadId: "$AbC123:example.org",
+    });
     expect(parseSessionThreadInfo("agent:main:telegram:dm:user-1")).toEqual({
       baseSessionKey: "agent:main:telegram:dm:user-1",
       threadId: undefined,
