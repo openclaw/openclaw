@@ -332,7 +332,18 @@ function resolveExaSearchEndpoint(baseUrl?: string): string {
   if (!baseUrl || !baseUrl.trim()) {
     return EXA_SEARCH_ENDPOINT;
   }
-  const parsed = new URL(baseUrl.trim());
+  let urlStr = baseUrl.trim();
+  // Auto-prepend https:// for common misconfiguration (e.g. "api.exa.ai")
+  if (!/^https?:\/\//i.test(urlStr)) {
+    urlStr = `https://${urlStr}`;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    // Malformed URL — fall back to the default endpoint
+    return EXA_SEARCH_ENDPOINT;
+  }
   // Strip trailing slash(es) from pathname
   const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   // If pathname already ends with /search, use as-is; otherwise append /search

@@ -229,5 +229,19 @@ describe("exa web search provider", () => {
         "https://api.exa.ai/search#section",
       );
     });
+
+    it("auto-prepends https:// for bare hostname", () => {
+      expect(resolveExaSearchEndpoint("api.exa.ai")).toBe("https://api.exa.ai/search");
+    });
+
+    it("auto-prepends https:// for bare hostname with path", () => {
+      expect(resolveExaSearchEndpoint("proxy.example.com/exa")).toBe(
+        "https://proxy.example.com/exa/search",
+      );
+    });
+
+    it("falls back to default endpoint for completely malformed input", () => {
+      expect(resolveExaSearchEndpoint("://not-a-url")).toBe("https://api.exa.ai/search");
+    });
   });
 });
