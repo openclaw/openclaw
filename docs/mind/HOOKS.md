@@ -1,6 +1,4 @@
-# Hooks and Custom Commands
-
-## Model Hooks
+# Model Hooks
 
 Hooks execute shell scripts before or after each model turn. They are configured per model under `agents.defaults.models` in `openclaw.json` and run in **all paths** — Telegram/Discord, RPC, and embedded agent.
 
@@ -87,50 +85,3 @@ For other local models that don't need per-session KV cache:
 - Keep `beforeMessage` scripts fast — they block the response. Use `timeoutSeconds` to set a hard limit.
 - `afterResponse` is fire-and-forget. Errors are logged but don't affect the response.
 - Use a lockfile or `pkill` to prevent accumulation if the hook can be called concurrently (e.g. from a polling loop).
-
----
-
-## Telegram Custom Commands
-
-Custom commands map a `/slash` command to a shell script. The script's stdout is returned as the command response.
-
-### Configuration
-
-```json
-{
-  "channels": {
-    "telegram": {
-      "customCommands": [
-        {
-          "command": "mycommand",
-          "description": "Description shown in Telegram command picker",
-          "shellCommand": "~/scripts/my-script.sh"
-        }
-      ]
-    }
-  }
-}
-```
-
-### Synchronous vs fire-and-forget
-
-Return output directly (synchronous — response is the script output):
-
-```json
-{ "command": "pcstatus", "shellCommand": "~/scripts/pc-status.sh" }
-```
-
-Launch in background (fire-and-forget — response is immediate, script runs async):
-
-```json
-{
-  "command": "loadmodels",
-  "shellCommand": "nohup ~/scripts/start-llama-servers.sh >> /tmp/llama.log 2>&1 &"
-}
-```
-
-### Tips
-
-- Scripts run with the same environment as the gateway process. Ensure `PATH` includes your tools.
-- For long-running operations, use `nohup ... &` and send a notification when done rather than blocking.
-- Avoid leaving background processes that accumulate across calls — use lockfiles (`mkdir` atomic) or `pkill` to prevent duplicates.

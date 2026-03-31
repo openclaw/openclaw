@@ -44,15 +44,7 @@ Intensive mode that suppresses background memory (SOUL.md, USER.md, MEMORY.md) a
 
 Mindbot adds `beforeMessage` and `afterResponse` hook support to the RPC/embedded agent path (in addition to the existing Telegram/Discord path). Hooks run shell scripts before/after each model turn and support `{sessionId}`, `{agentId}`, `{provider}`, and `{model}` substitution variables.
 
-See [docs/mind/HOOKS_AND_COMMANDS.md](docs/mind/HOOKS_AND_COMMANDS.md) for configuration details and examples.
-
----
-
-## Telegram Custom Commands
-
-OpenClaw supports shell-backed custom commands on any channel. Commands map a `/slash` to a shell script whose output is returned as the response.
-
-See [docs/mind/HOOKS_AND_COMMANDS.md](docs/mind/HOOKS_AND_COMMANDS.md) for configuration details and examples.
+See [docs/mind/HOOKS.md](docs/mind/HOOKS.md) for configuration details and examples.
 
 ---
 
