@@ -174,6 +174,9 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
+  // /tools/invoke intentionally uses the same shared-secret HTTP trust model as
+  // the OpenAI-compatible APIs: token/password bearer auth is full operator
+  // access for the gateway, not a narrower per-request scope boundary.
   const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("agent", requestedScopes);
   if (!scopeAuth.allowed) {
@@ -324,6 +327,8 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
+  // Owner semantics intentionally follow the same shared-secret HTTP contract
+  // on this direct tool surface; SECURITY.md documents this as designed-as-is.
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const ownerFiltered = applyOwnerOnlyToolPolicy(subagentFiltered, senderIsOwner);
   const gatewayFiltered = ownerFiltered.filter((t) => !gatewayDenySet.has(t.name));
