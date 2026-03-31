@@ -225,24 +225,23 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       .slice(0, 30)
       .map((t) => `- ${t.name}: ${t.propertiesCount} params`);
 
-    // Sum all tracked char buckets for a grand-total estimate (#28278).
-    const totalCountedChars =
-      report.systemPrompt.chars +
-      report.tools.schemaChars +
-      report.skills.promptChars +
-      injectedBootstrapChars;
-    const grandTotalLine = `Grand total (estimated): ${formatCharsAndTokens(totalCountedChars)}`;
-
-    // Warn when the estimate is substantially below what the API actually reported.
-    const estimatedTok = estimateTokensFromChars(totalCountedChars);
-    const actualTok = session.contextTokens;
-    const discrepancyLines =
-      actualTok != null && actualTok > estimatedTok * 1.5
-        ? [
-            `⚠ Estimate (${formatInt(estimatedTok)} tok) is significantly lower than actual API usage (${formatInt(actualTok)} tok).`,
-            "Provider overhead (tool schema framing, system formatting) is not captured here. Use /status for authoritative context usage.",
-          ]
-        : [];
+    // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
+    // Add only tool schemas here so the tracked estimate stays disjoint.
+    const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
+    const trackedPromptTokens = estimateTokensFromChars(trackedPromptChars);
+    const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
+    const actualContextLine =
+      session.contextTokens != null
+        ? `Actual context usage (cached): ${formatInt(session.contextTokens)} tok`
+        : "Actual context usage (cached): unavailable";
+    const overheadTokens =
+      session.contextTokens != null ? session.contextTokens - trackedPromptTokens : null;
+    const overheadLine =
+      overheadTokens == null
+        ? null
+        : overheadTokens > 0
+          ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
+          : "Untracked provider/runtime overhead: not observed in cached usage";
 
     return {
       text: [
@@ -263,8 +262,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
         ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
         "",
-        grandTotalLine,
-        ...discrepancyLines,
+        trackedPromptLine,
+        actualContextLine,
+        ...(overheadLine ? [overheadLine] : []),
         "",
         totalsLine,
         "",

@@ -2325,6 +2325,7 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/Stuck session signal: add configurable stuck-session warning threshold via `diagnostics.stuckSessionWarnMs` (default 120000ms) to reduce false-positive warnings on long multi-tool turns. (#31032)
 - Agents/error classification: check billing errors before context overflow heuristics in the agent runner catch block so spend-limit and quota errors show the billing-specific message instead of being misclassified as "Context overflow: prompt too large". (#40409) Thanks @ademczuk.
 - Memory/MMR CJK tokenization: add Han, kana, and hangul tokens plus adjacent bigrams so memory-search reranking can detect overlap for CJK text instead of treating unrelated snippets as identical. (#29396) Thanks @buyitsydney.
+- `/context detail` now compares the tracked prompt estimate with cached context usage and surfaces untracked provider/runtime overhead when present. (#28391) thanks @ImLukeF.
 
 ## 2026.2.26
 
