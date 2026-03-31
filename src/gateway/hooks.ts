@@ -127,7 +127,7 @@ function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] |
   return set.size > 0 ? Array.from(set) : undefined;
 }
 
-function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
+export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
   const normalized = sessionKey.trim().toLowerCase();
   if (!normalized) {
     return false;
