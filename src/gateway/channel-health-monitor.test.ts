@@ -442,6 +442,24 @@ describe("channel-health-monitor", () => {
       await expectRestartedChannel(manager, "slack");
     });
 
+    it("skips stale-socket restart for webhook-mode channels", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        telegram: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            mode: "webhook",
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: null,
+          },
+        },
+      });
+      await expectNoRestart(manager);
+    });
+
     it("respects custom staleEventThresholdMs", async () => {
       const customThreshold = 10 * 60_000;
       const now = Date.now();

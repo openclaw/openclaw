@@ -160,7 +160,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     };
 
     if (opts.useWebhook) {
-      await startTelegramWebhook({
+      const webhook = await startTelegramWebhook({
         token,
         accountId: account.accountId,
         config: cfg,
@@ -174,6 +174,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         publicUrl: opts.webhookUrl,
       });
       await waitForAbortSignal(opts.abortSignal);
+      // Wait for the HTTP server to fully release its port so that a
+      // subsequent health-monitor restart can bind the same port cleanly.
+      await webhook.shutdownComplete();
       return;
     }
 

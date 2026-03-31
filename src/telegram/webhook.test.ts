@@ -599,4 +599,30 @@ describe("startTelegramWebhook", () => {
     await vi.waitFor(() => expect(deleteWebhookSpy).toHaveBeenCalledTimes(1));
     expect(deleteWebhookSpy).toHaveBeenCalledWith({ drop_pending_updates: false });
   });
+
+  it("shutdownComplete resolves after server is fully closed", async () => {
+    const abort = new AbortController();
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
+      port: 0,
+      abortSignal: abort.signal,
+      path: TELEGRAM_WEBHOOK_PATH,
+    });
+
+    const port = getServerPort(started.server);
+    abort.abort();
+    await started.shutdownComplete();
+
+    // The port should be free — a new server should bind without EADDRINUSE.
+    const probe = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
+      port,
+      path: TELEGRAM_WEBHOOK_PATH,
+    });
+    expect(probe.server.listening).toBe(true);
+    probe.stop();
+    await probe.shutdownComplete();
+  });
 });

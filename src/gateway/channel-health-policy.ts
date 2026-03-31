@@ -6,6 +6,7 @@ export type ChannelHealthSnapshot = {
   lastEventAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
+  mode?: string;
 };
 
 export type ChannelHealthEvaluationReason =
@@ -52,14 +53,18 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
-    const upSince = snapshot.lastStartAt ?? 0;
-    const upDuration = policy.now - upSince;
-    if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
-      if (eventAge > policy.staleEventThresholdMs) {
-        return { healthy: false, reason: "stale-socket" };
+  // Webhook-mode channels receive messages via HTTP POST, not socket events.
+  // The stale-socket heuristic only applies to socket-based transports.
+  if (snapshot.mode !== "webhook") {
+    if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
+      const upSince = snapshot.lastStartAt ?? 0;
+      const upDuration = policy.now - upSince;
+      if (upDuration > policy.staleEventThresholdMs) {
+        const lastEvent = snapshot.lastEventAt ?? 0;
+        const eventAge = policy.now - lastEvent;
+        if (eventAge > policy.staleEventThresholdMs) {
+          return { healthy: false, reason: "stale-socket" };
+        }
       }
     }
   }

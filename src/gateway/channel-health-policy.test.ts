@@ -54,6 +54,26 @@ describe("evaluateChannelHealth", () => {
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
+
+  it("skips stale-socket check for webhook-mode channels", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+        mode: "webhook",
+      },
+      {
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {
