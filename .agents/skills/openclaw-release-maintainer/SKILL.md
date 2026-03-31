@@ -64,7 +64,8 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 Before tagging or publishing, run:
 
 ```bash
-node --import tsx scripts/release-check.ts
+pnpm build
+pnpm ui:build
 pnpm release:check
 pnpm test:install:smoke
 ```
@@ -92,7 +93,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - Default release checks:
   - `pnpm check`
   - `pnpm build`
-  - `node --import tsx scripts/release-check.ts`
+  - `pnpm ui:build`
   - `pnpm release:check`
   - `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke`
 - Check all release-related build surfaces touched by the release, not only the npm package.
@@ -119,6 +120,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
+- Both workflows also accept a prior successful preflight run id so a real
+  publish can promote the prepared artifacts without rebuilding them again.
 - The private mac workflow also accepts `smoke_test_only=true` for branch-safe
   workflow smoke tests that use ad-hoc signing, skip notarization, skip shared
   appcast generation, and do not prove release readiness.
@@ -206,31 +209,38 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 7. Create and push the git tag.
 8. Create or refresh the matching GitHub release.
 9. Start `.github/workflows/openclaw-npm-release.yml` with `preflight_only=true`
-   and wait for it to pass.
+   and wait for it to pass. Save that run id if you want the real publish to
+   reuse the prepared npm tarball.
 10. Start `.github/workflows/macos-release.yml` in `openclaw/openclaw` and wait
     for the public validation-only run to pass.
 11. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
-    with `preflight_only=true` and wait for it to pass.
+    with `preflight_only=true` and wait for it to pass. Save that run id if you
+    want the real publish to reuse the notarized mac artifacts.
 12. If any preflight or validation run fails, fix the issue on a new commit,
     delete the tag and matching GitHub release, recreate them from the fixed
     commit, and rerun all relevant preflights from scratch before continuing.
     Never reuse old preflight results after the commit changes.
 13. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
-    the real publish.
-14. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
-15. Start
+    the real publish. When the preflight run id is available, pass it via
+    `preflight_run_id` to skip the second npm rebuild.
+14. Start the real private mac publish with the same tag. When the private
+    preflight run id is available, pass it via `preflight_run_id` to skip the
+    second mac build/sign/notarize cycle and promote those prepared artifacts
+    directly to the public release.
+15. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
+16. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
     for the real publish and wait for success.
-16. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+17. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
-17. For stable releases, download `macos-appcast-<tag>` from the successful
+18. For stable releases, download `macos-appcast-<tag>` from the successful
     private mac run, update `appcast.xml` on `main`, and verify the feed.
-18. For beta releases, publish the mac assets but expect no shared production
+19. For beta releases, publish the mac assets but expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-19. After publish, verify npm and the attached release artifacts.
+20. After publish, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 
