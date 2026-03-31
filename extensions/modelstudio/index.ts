@@ -1,5 +1,8 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyModelStudioNativeStreamingUsageCompat } from "./api.js";
+import {
+  applyModelStudioNativeStreamingUsageCompat,
+  createDashscopeStreamingUsageWrapper,
+} from "./api.js";
 import {
   applyModelStudioConfig,
   applyModelStudioConfigCn,
@@ -114,5 +117,6 @@ export default defineSingleProviderPluginEntry({
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyModelStudioNativeStreamingUsageCompat(providerConfig),
+    wrapStreamFn: ({ streamFn }) => createDashscopeStreamingUsageWrapper(streamFn),
   },
 });

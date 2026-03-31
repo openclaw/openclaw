@@ -2,6 +2,7 @@ export {
   applyModelStudioNativeStreamingUsageCompat,
   buildModelStudioDefaultModelDefinition,
   buildModelStudioModelDefinition,
+  createDashscopeStreamingUsageWrapper,
   isNativeModelStudioBaseUrl,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_CN_BASE_URL,

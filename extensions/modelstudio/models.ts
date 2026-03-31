@@ -1,7 +1,10 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { streamSimple } from "@mariozechner/pi-ai";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream";
 
 export const MODELSTUDIO_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
 export const MODELSTUDIO_GLOBAL_BASE_URL = MODELSTUDIO_BASE_URL;
@@ -148,6 +151,39 @@ export function applyModelStudioNativeStreamingUsageCompat(
   return isNativeModelStudioBaseUrl(provider.baseUrl)
     ? withStreamingUsageCompat(provider)
     : provider;
+}
+
+/**
+ * Creates a stream wrapper that adds `stream_options.include_usage=true` to the
+ * request payload for Alibaba Cloud DashScope API calls.
+ *
+ * According to DashScope documentation, streaming responses do not include token
+ * usage information by default. Setting `stream_options.include_usage=true` ensures
+ * the final chunk contains the token consumption data.
+ *
+ * @see https://help.aliyun.com/zh/model-studio/stream
+ */
+export function createDashscopeStreamingUsageWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Only apply to OpenAI-compatible completion APIs (dashscope uses this format)
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      // Only add if not already set (respect explicit user configuration)
+      if (payloadObj.stream_options === undefined) {
+        payloadObj.stream_options = { include_usage: true };
+      } else if (
+        payloadObj.stream_options &&
+        typeof payloadObj.stream_options === "object" &&
+        !("include_usage" in payloadObj.stream_options)
+      ) {
+        (payloadObj.stream_options as Record<string, unknown>).include_usage = true;
+      }
+    });
+  };
 }
 
 export function buildModelStudioModelDefinition(params: {
