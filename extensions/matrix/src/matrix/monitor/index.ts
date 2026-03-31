@@ -226,9 +226,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       }),
     shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
       try {
+        const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
+        if (!roomInfo.nameResolved || !roomInfo.aliasesResolved) {
+          return undefined;
+        }
         return shouldPromoteRecentInviteRoom({
           roomId,
-          roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+          roomInfo,
           rooms: roomsConfig,
         });
       } catch (err) {
