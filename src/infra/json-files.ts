@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "./backoff.ts";
 
 const MAX_RETRIES = 5;
-const RETRY_BASE_DELAY_MS = 50;
 const IS_WINDOWS = process.platform === "win32";
+
+const EPERM_BACKOFF: BackoffPolicy = {
+  initialMs: 100,
+  maxMs: 1_600,
+  factor: 2,
+  jitter: 0.25,
+};
 
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
@@ -42,8 +48,8 @@ export async function writeTextAtomic(
     mkdirOptions.mode = options.ensureDirMode;
   }
   const parentDir = path.dirname(filePath);
+  await fs.mkdir(parentDir, mkdirOptions);
   for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-    await fs.mkdir(parentDir, mkdirOptions);
     const tmp = `${filePath}.${randomUUID()}.tmp`;
     try {
       const tmpHandle = await fs.open(tmp, "w", mode);
@@ -85,8 +91,8 @@ export async function writeTextAtomic(
         err.code === "EPERM" &&
         attempt < MAX_RETRIES + 1
       ) {
-        const delay = 2 ** attempt * RETRY_BASE_DELAY_MS;
-        await sleep(delay);
+        const delay = computeBackoff(EPERM_BACKOFF, attempt);
+        await sleepWithAbort(delay);
         continue;
       }
       throw err;
