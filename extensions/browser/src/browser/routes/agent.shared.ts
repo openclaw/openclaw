@@ -1,5 +1,5 @@
+import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { toBrowserErrorResponse } from "../errors.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
