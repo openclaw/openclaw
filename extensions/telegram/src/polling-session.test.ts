@@ -5,6 +5,8 @@ const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
 const computeBackoffMock = vi.hoisted(() => vi.fn(() => 0));
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
+const heartbeatStartMock = vi.hoisted(() => vi.fn());
+const heartbeatStopMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@grammyjs/runner", () => ({
   run: runMock,
@@ -30,6 +32,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
     sleepWithAbort: sleepWithAbortMock,
   };
 });
+
+vi.mock("./heartbeat.js", () => ({
+  HeartbeatSupervisor: class {
+    start = heartbeatStartMock;
+    stop = heartbeatStopMock;
+  },
+}));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 
@@ -142,6 +151,8 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
+    heartbeatStartMock.mockReset();
+    heartbeatStopMock.mockReset();
     ({ TelegramPollingSession } = await import("./polling-session.js"));
   });
 
@@ -866,5 +877,38 @@ describe("TelegramPollingSession", () => {
 
     expectTelegramBotTransportSequence(transport1, transport1);
     expect(createTelegramTransport).not.toHaveBeenCalled();
+  });
+
+  it("starts HeartbeatSupervisor when apiBase is provided", async () => {
+    const abort = new AbortController();
+    createTelegramBotMock.mockReturnValue(makeBot());
+    runMock.mockImplementation(() => ({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    }));
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: makeTelegramTransport(),
+      createTelegramTransport: () => makeTelegramTransport(),
+      apiBase: "https://api.telegram.org",
+    });
+
+    await session.runUntilAbort();
+
+    expect(heartbeatStartMock).toHaveBeenCalledTimes(1);
+    expect(heartbeatStopMock).toHaveBeenCalled();
   });
 });
