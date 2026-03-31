@@ -9,6 +9,7 @@ import { fetchRemoteMedia } from "./fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
+  MAX_IMAGE_INPUT_PIXELS,
   optimizeImageToPng,
   resizeToJpeg,
 } from "./image-ops.js";
@@ -76,6 +77,13 @@ function formatCapLimit(label: string, cap: number, size: number): string {
 
 function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
+}
+
+function isPixelLimitError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes(`${MAX_IMAGE_INPUT_PIXELS.toLocaleString("en-US")} pixel input limit`)
+  );
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
@@ -404,7 +412,10 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
+      } catch (error) {
+        if (isPixelLimitError(error)) {
+          throw error;
+        }
         // Continue trying other size/quality combinations
       }
     }
