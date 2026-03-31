@@ -183,6 +183,7 @@ const PNPM_FLAG_OPTIONS = new Set([
   "--silent",
   "--workspace-root",
   "-r",
+  "-s",
 ]);
 
 const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);
@@ -358,7 +359,7 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
       return null;
     }
     const [flag] = token.toLowerCase().split("=", 2);
-    if (PNPM_OPTIONS_WITH_VALUE.has(flag)) {
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }

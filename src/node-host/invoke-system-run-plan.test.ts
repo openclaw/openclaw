@@ -496,6 +496,13 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 3,
     },
     {
+      name: "pnpm pre-dlx package-equals tsx file",
+      argv: ["pnpm", "--package=tsx", "dlx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
       name: "pnpm reporter dlx package tsx file",
       argv: ["pnpm", "--reporter", "silent", "dlx", "--package", "tsx", "tsx", "./run.ts"],
       scriptName: "run.ts",
@@ -508,6 +515,13 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 7,
+    },
+    {
+      name: "pnpm silent dlx tsx file",
+      argv: ["pnpm", "dlx", "-s", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
     },
     {
       name: "pnpm reporter exec tsx file",
