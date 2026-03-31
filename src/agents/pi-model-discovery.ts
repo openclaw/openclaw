@@ -107,14 +107,15 @@ function createOpenClawModelRegistry(
   modelsJsonPath: string,
   agentDir: string,
 ): PiModelRegistry {
-  const registry = PiModelRegistryClass.create(authStorage, modelsJsonPath);
+  const registry = new PiModelRegistryClass(authStorage, modelsJsonPath);
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
 
-  registry.getAll = () => getAll().map((entry) => normalizeRegistryModel(entry, agentDir));
+  registry.getAll = () =>
+    getAll().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
   registry.getAvailable = () =>
-    getAvailable().map((entry) => normalizeRegistryModel(entry, agentDir));
+    getAvailable().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
   registry.find = (provider: string, modelId: string) =>
     normalizeRegistryModel(find(provider, modelId), agentDir);
 
