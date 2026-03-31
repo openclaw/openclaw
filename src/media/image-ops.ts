@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 
 type Sharp = typeof import("sharp");
@@ -134,7 +134,7 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
 }
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-img-"));
+  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-img-"));
   try {
     return await fn(dir);
   } finally {
