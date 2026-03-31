@@ -78,11 +78,25 @@ async function resolveBotUserId(client: WebClient) {
 }
 
 function matchesSlackErrorCode(error: unknown, code: string) {
-  const dataError =
-    typeof error === "object" && error !== null
-      ? (error as { data?: { error?: unknown } }).data?.error
-      : undefined;
-  return (typeof dataError === "string" && dataError === code) || String(error).includes(code);
+  if (typeof error === "string") {
+    return error === code;
+  }
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    error?: unknown;
+    message?: unknown;
+    data?: { error?: unknown };
+  };
+  return (
+    candidate.data?.error === code ||
+    candidate.error === code ||
+    candidate.code === code ||
+    candidate.message === code
+  );
 }
 
 export async function reactSlackMessage(

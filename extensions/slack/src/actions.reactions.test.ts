@@ -35,6 +35,18 @@ describe("reactSlackMessage", () => {
     });
   });
 
+  it("ignores plain Error duplicates when the message matches exactly", async () => {
+    const client = createClient();
+    client.reactions.add.mockRejectedValueOnce(new Error("already_reacted"));
+
+    await expect(
+      reactSlackMessage("C1", "123.456", "✅", {
+        client,
+        token: "xoxb-test",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("rethrows unrelated Slack reaction errors", async () => {
     const client = createClient();
     const error = new Error("missing_scope");
