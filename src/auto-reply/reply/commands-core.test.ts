@@ -40,7 +40,7 @@ describe("emitResetCommandHooks", () => {
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
-    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
     const [, ctx] = hookRunnerMocks.runBeforeReset.mock.calls[0] ?? [];
     return ctx;
   }

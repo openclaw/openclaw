@@ -160,6 +160,8 @@ export function createSubagentRegistryLifecycleController(params: {
   }) => {
     setDetachedTaskDeliveryStatusByRunId({
       runId: giveUpParams.runId,
+      runtime: "subagent",
+      sessionKey: giveUpParams.entry.childSessionKey,
       deliveryStatus: "failed",
     });
     giveUpParams.entry.wakeOnDescendantSettle = undefined;
@@ -276,6 +278,8 @@ export function createSubagentRegistryLifecycleController(params: {
     if (didAnnounce) {
       setDetachedTaskDeliveryStatusByRunId({
         runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
         deliveryStatus: "delivered",
       });
       entry.wakeOnDescendantSettle = undefined;
@@ -332,6 +336,8 @@ export function createSubagentRegistryLifecycleController(params: {
     if (deferredDecision.kind === "give-up") {
       setDetachedTaskDeliveryStatusByRunId({
         runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
         deliveryStatus: "failed",
       });
       entry.wakeOnDescendantSettle = undefined;
@@ -466,6 +472,8 @@ export function createSubagentRegistryLifecycleController(params: {
     if (completeParams.outcome.status === "ok") {
       completeTaskRunByRunId({
         runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
         endedAt: entry.endedAt,
         lastEventAt: entry.endedAt ?? Date.now(),
         progressSummary: entry.frozenResultText ?? undefined,
@@ -474,6 +482,8 @@ export function createSubagentRegistryLifecycleController(params: {
     } else {
       failTaskRunByRunId({
         runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
         status: completeParams.outcome.status === "timeout" ? "timed_out" : "failed",
         endedAt: entry.endedAt,
         lastEventAt: entry.endedAt ?? Date.now(),

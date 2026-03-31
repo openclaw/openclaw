@@ -419,6 +419,7 @@ async function sendDiscordMedia(
   mediaUrl: string,
   filename: string | undefined,
   mediaLocalRoots: readonly string[] | undefined,
+  mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
   replyTo: string | undefined,
   request: DiscordRequest,
@@ -430,7 +431,7 @@ async function sendDiscordMedia(
 ) {
   const media = await loadWebMedia(
     mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots }),
+    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
   );
   const requestedFileName = filename?.trim();
   const resolvedFileName =

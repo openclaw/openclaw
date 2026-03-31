@@ -1,6 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  patchCodexNativeWebSearchPayload,
+  resolveCodexNativeSearchActivation,
+} from "../codex-native-web-search.js";
 import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
@@ -10,6 +15,12 @@ type OpenAITextVerbosity = "low" | "medium" | "high";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const OPENAI_REASONING_COMPAT_PROVIDERS = new Set([
+  "openai",
+  "openai-codex",
+  "azure-openai",
+  "azure-openai-responses",
+]);
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
@@ -188,6 +199,42 @@ function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unkno
   return !isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
+function shouldApplyOpenAIReasoningCompatibility(model: {
+  api?: unknown;
+  provider?: unknown;
+}): boolean {
+  if (typeof model.api !== "string" || typeof model.provider !== "string") {
+    return false;
+  }
+  if (
+    model.api !== "openai-completions" &&
+    model.api !== "openai-responses" &&
+    model.api !== "openai-codex-responses" &&
+    model.api !== "azure-openai-responses"
+  ) {
+    return false;
+  }
+  return OPENAI_REASONING_COMPAT_PROVIDERS.has(model.provider);
+}
+
+function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {
+  const reasoning = payloadObj.reasoning;
+  if (reasoning === "none") {
+    delete payloadObj.reasoning;
+    return;
+  }
+  if (!reasoning || typeof reasoning !== "object" || Array.isArray(reasoning)) {
+    return;
+  }
+
+  // GPT-5 models reject `reasoning.effort: "none"`. Treat the disabled effort
+  // as "reasoning omitted" instead of forwarding an unsupported value.
+  const reasoningObj = reasoning as Record<string, unknown>;
+  if (reasoningObj.effort === "none") {
+    delete payloadObj.reasoning;
+  }
+}
+
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
@@ -354,6 +401,20 @@ export function createOpenAIResponsesContextManagementWrapper(
   };
 }
 
+export function createOpenAIReasoningCompatibilityWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldApplyOpenAIReasoningCompatibility(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      stripDisabledOpenAIReasoningPayload(payloadObj);
+    });
+  };
+}
+
 export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -427,7 +488,58 @@ export function createOpenAITextVerbosityWrapper(
     });
   };
 }
+export function createCodexNativeWebSearchWrapper(
+  baseStreamFn: StreamFn | undefined,
+  params: { config?: OpenClawConfig; agentDir?: string },
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const activation = resolveCodexNativeSearchActivation({
+      config: params.config,
+      modelProvider: typeof model.provider === "string" ? model.provider : undefined,
+      modelApi: typeof model.api === "string" ? model.api : undefined,
+      agentDir: params.agentDir,
+    });
 
+    if (activation.state !== "native_active") {
+      if (activation.codexNativeEnabled) {
+        log.debug(
+          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${String(
+            model.provider ?? "unknown",
+          )}/${String(model.id ?? "unknown")}`,
+        );
+      }
+      return underlying(model, context, options);
+    }
+
+    log.debug(
+      `activating Codex native web search (${activation.codexMode}) for ${String(
+        model.provider ?? "unknown",
+      )}/${String(model.id ?? "unknown")}`,
+    );
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        const result = patchCodexNativeWebSearchPayload({
+          payload,
+          config: params.config,
+        });
+        if (result.status === "payload_not_object") {
+          log.debug(
+            "Skipping Codex native web search injection because provider payload is not an object",
+          );
+        } else if (result.status === "native_tool_already_present") {
+          log.debug("Codex native web search tool already present in provider payload");
+        } else if (result.status === "injected") {
+          log.debug("Injected Codex native web search tool into provider payload");
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
 export function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
