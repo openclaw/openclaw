@@ -1,15 +1,23 @@
 import crypto from "node:crypto";
 import { getFlowRegistryStore, resetFlowRegistryRuntimeForTests } from "./flow-registry.store.js";
-import type { FlowRecord, FlowShape, FlowStatus } from "./flow-registry.types.js";
+import type { FlowOutputBag, FlowRecord, FlowShape, FlowStatus } from "./flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
 const flows = new Map<string, FlowRecord>();
 let restoreAttempted = false;
 
+function cloneFlowOutputs(outputs: FlowOutputBag | undefined): FlowOutputBag | undefined {
+  if (!outputs) {
+    return undefined;
+  }
+  return JSON.parse(JSON.stringify(outputs)) as FlowOutputBag;
+}
+
 function cloneFlowRecord(record: FlowRecord): FlowRecord {
   return {
     ...record,
     ...(record.requesterOrigin ? { requesterOrigin: { ...record.requesterOrigin } } : {}),
+    ...(record.outputs ? { outputs: cloneFlowOutputs(record.outputs) } : {}),
   };
 }
 
@@ -38,25 +46,16 @@ function resolveFlowBlockedSummary(
   return task.terminalSummary?.trim() || task.progressSummary?.trim() || undefined;
 }
 
-type FlowRecordPatch = Partial<
-  Omit<
-    Pick<
-      FlowRecord,
-      | "status"
-      | "notifyPolicy"
-      | "goal"
-      | "currentStep"
-      | "blockedTaskId"
-      | "blockedSummary"
-      | "updatedAt"
-      | "endedAt"
-    >,
-    "currentStep" | "blockedTaskId" | "blockedSummary" | "endedAt"
-  >
-> & {
+type FlowRecordPatch = {
+  status?: FlowStatus;
+  notifyPolicy?: TaskNotifyPolicy;
+  goal?: string;
   currentStep?: string | null;
+  waitingOnTaskId?: string | null;
+  outputs?: FlowOutputBag | null;
   blockedTaskId?: string | null;
   blockedSummary?: string | null;
+  updatedAt?: number;
   endedAt?: number | null;
 };
 
@@ -125,6 +124,8 @@ export function createFlowRecord(params: {
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;
+  waitingOnTaskId?: string;
+  outputs?: FlowOutputBag;
   blockedTaskId?: string;
   blockedSummary?: string;
   createdAt?: number;
@@ -142,6 +143,8 @@ export function createFlowRecord(params: {
     notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
     goal: params.goal,
     currentStep: params.currentStep?.trim() || undefined,
+    waitingOnTaskId: params.waitingOnTaskId?.trim() || undefined,
+    outputs: cloneFlowOutputs(params.outputs),
     blockedTaskId: params.blockedTaskId?.trim() || undefined,
     blockedSummary: params.blockedSummary?.trim() || undefined,
     createdAt: now,
@@ -212,6 +215,14 @@ export function updateFlowRecordById(flowId: string, patch: FlowRecordPatch): Fl
       patch.currentStep === undefined
         ? current.currentStep
         : patch.currentStep?.trim() || undefined,
+    waitingOnTaskId:
+      patch.waitingOnTaskId === undefined
+        ? current.waitingOnTaskId
+        : patch.waitingOnTaskId?.trim() || undefined,
+    outputs:
+      patch.outputs === undefined
+        ? cloneFlowOutputs(current.outputs)
+        : (cloneFlowOutputs(patch.outputs ?? undefined) ?? undefined),
     blockedTaskId:
       patch.blockedTaskId === undefined
         ? current.blockedTaskId

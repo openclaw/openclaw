@@ -12,20 +12,32 @@ function noteFlowRecoveryHints() {
   const suspicious = listFlowRecords().flatMap((flow) => {
     const tasks = listTasksForFlowId(flow.flowId);
     const findings: string[] = [];
+    const missingWaitingTask =
+      flow.shape === "linear" &&
+      flow.status === "waiting" &&
+      flow.waitingOnTaskId &&
+      !tasks.some((task) => task.taskId === flow.waitingOnTaskId);
+    const missingBlockedTask =
+      flow.status === "blocked" &&
+      flow.blockedTaskId &&
+      !tasks.some((task) => task.taskId === flow.blockedTaskId);
     if (
       flow.shape === "linear" &&
       (flow.status === "running" || flow.status === "waiting" || flow.status === "blocked") &&
-      tasks.length === 0
+      tasks.length === 0 &&
+      !missingWaitingTask &&
+      !missingBlockedTask
     ) {
       findings.push(
         `${flow.flowId}: ${flow.status} linear flow has no linked tasks; inspect or cancel it manually.`,
       );
     }
-    if (
-      flow.status === "blocked" &&
-      flow.blockedTaskId &&
-      !tasks.some((task) => task.taskId === flow.blockedTaskId)
-    ) {
+    if (missingWaitingTask) {
+      findings.push(
+        `${flow.flowId}: waiting flow points at missing task ${flow.waitingOnTaskId}; inspect or cancel it manually.`,
+      );
+    }
+    if (missingBlockedTask) {
       findings.push(
         `${flow.flowId}: blocked flow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
       );

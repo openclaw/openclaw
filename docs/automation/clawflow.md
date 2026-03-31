@@ -45,6 +45,51 @@ ClawFlow sits above that ledger:
 
 For a single detached run, the flow can be a one-task flow. For more structured work, ClawFlow can keep multiple task runs under the same job.
 
+## Runtime substrate
+
+ClawFlow is the runtime substrate, not a workflow language.
+
+It owns:
+
+- the flow id
+- the owner session and return context
+- waiting state
+- small persisted outputs
+- finish, fail, cancel, and blocked state
+
+It does **not** own branching or business logic. Put that in the authoring layer that sits above it:
+
+- Lobster
+- acpx
+- plain TypeScript helpers
+- bundled skills
+
+In practice, authoring layers target a small runtime surface:
+
+- `createFlow(...)`
+- `runTaskInFlow(...)`
+- `setFlowWaiting(...)`
+- `setFlowOutput(...)`
+- `appendFlowOutput(...)`
+- `emitFlowUpdate(...)`
+- `resumeFlow(...)`
+- `finishFlow(...)`
+- `failFlow(...)`
+
+That keeps flow ownership and return-to-thread behavior in core without forcing a single DSL on top of it.
+
+## Authoring pattern
+
+The intended shape is linear:
+
+1. Create one flow for the job.
+2. Run one detached task under that flow.
+3. Wait for the child task or outside event.
+4. Resume the flow in the caller.
+5. Spawn the next child task or finish.
+
+ClawFlow persists the minimal state needed to resume that job: the current step, the task it is waiting on, and a small output bag for handoff between steps.
+
 ## CLI surface
 
 The flow CLI is intentionally small:
@@ -52,6 +97,8 @@ The flow CLI is intentionally small:
 - `openclaw flows list` shows active and recent flows
 - `openclaw flows show <lookup>` shows one flow and its linked tasks
 - `openclaw flows cancel <lookup>` cancels the flow and any active child tasks
+
+`flows show` also surfaces the current wait target and any stored output keys, which is often enough to answer "what is this job waiting on?" without digging into every child task.
 
 The lookup token accepts either a flow id or the owner session key.
 

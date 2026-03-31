@@ -61,11 +61,19 @@ describe("flow-registry", () => {
       const updated = updateFlowRecordById(created.flowId, {
         status: "waiting",
         currentStep: "ask_user",
+        waitingOnTaskId: "task-123",
+        outputs: {
+          bucket: ["personal"],
+        },
       });
       expect(updated).toMatchObject({
         flowId: created.flowId,
         status: "waiting",
         currentStep: "ask_user",
+        waitingOnTaskId: "task-123",
+        outputs: {
+          bucket: ["personal"],
+        },
       });
 
       expect(listFlowRecords()).toEqual([

@@ -15,6 +15,10 @@ function createStoredFlow(): FlowRecord {
     notifyPolicy: "done_only",
     goal: "Restored flow",
     currentStep: "spawn_task",
+    waitingOnTaskId: "task-waiting",
+    outputs: {
+      bucket: ["business"],
+    },
     blockedTaskId: "task-restored",
     blockedSummary: "Writable session required.",
     createdAt: 100,
@@ -64,6 +68,10 @@ describe("flow-registry store runtime", () => {
       flowId: "flow-restored",
       shape: "linear",
       goal: "Restored flow",
+      waitingOnTaskId: "task-waiting",
+      outputs: {
+        bucket: ["business"],
+      },
       blockedTaskId: "task-restored",
       blockedSummary: "Writable session required.",
     });
@@ -94,6 +102,10 @@ describe("flow-registry store runtime", () => {
         goal: "Persisted flow",
         status: "waiting",
         currentStep: "ask_user",
+        waitingOnTaskId: "task-restored",
+        outputs: {
+          bucket: ["personal"],
+        },
       });
 
       resetFlowRegistryForTests({ persist: false });
@@ -103,6 +115,10 @@ describe("flow-registry store runtime", () => {
         shape: "linear",
         status: "waiting",
         currentStep: "ask_user",
+        waitingOnTaskId: "task-restored",
+        outputs: {
+          bucket: ["personal"],
+        },
       });
     });
   });

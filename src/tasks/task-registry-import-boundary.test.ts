@@ -12,6 +12,7 @@ const ALLOWED_IMPORTERS = new Set([
   "commands/doctor-workspace-status.ts",
   "commands/flows.ts",
   "commands/tasks.ts",
+  "tasks/flow-runtime.ts",
   "tasks/task-executor.ts",
   "tasks/task-registry.maintenance.ts",
 ]);
