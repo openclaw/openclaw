@@ -29,7 +29,21 @@ export default definePluginEntry({
           const pluginConfig = ctx.config.plugins?.entries?.["amazon-bedrock"]?.config as
             | Record<string, unknown>
             | undefined;
-          const bearerToken = normalizeSecretInputString(pluginConfig?.bearerToken) ?? undefined;
+          // Resolve bearer token from plugin config. Supports plain strings and
+          // env-backed SecretRefs ({ source: "env", id: "MY_VAR" }). File/exec refs
+          // are not supported in catalog runs (non-interactive); they silently
+          // fall through to undefined so env/credential discovery still works.
+          const bearerTokenRaw = pluginConfig?.bearerToken;
+          const bearerToken =
+            normalizeSecretInputString(bearerTokenRaw) ??
+            (bearerTokenRaw &&
+            typeof bearerTokenRaw === "object" &&
+            (bearerTokenRaw as Record<string, unknown>).source === "env" &&
+            typeof (bearerTokenRaw as Record<string, unknown>).id === "string"
+              ? normalizeSecretInputString(
+                  ctx.env[(bearerTokenRaw as Record<string, unknown>).id as string],
+                )
+              : undefined);
           const region =
             typeof pluginConfig?.region === "string"
               ? pluginConfig.region.trim() || undefined

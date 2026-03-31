@@ -246,17 +246,27 @@ export async function resolveImplicitBedrockProvider(params: {
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
 
-  // If a bearer token is provided via plugin config, inject it into process.env so the
-  // AWS SDK client picks it up. We overwrite if the incoming token differs from the
-  // current env value so that a rotated/changed token takes effect without requiring a
-  // process restart. We only skip injection when they are identical (avoids redundant
-  // writes on repeated catalog refreshes).
+  // Sync process.env["AWS_BEARER_TOKEN_BEDROCK"] with the plugin-configured bearer token
+  // so the AWS SDK client (which reads process.env directly) picks up the correct value.
+  // - Set/overwrite when a token is provided and differs from the current env value,
+  //   so that rotated tokens take effect without a process restart.
+  // - Clear when no token is configured, so that removing the plugin config actually
+  //   stops bearer-token auth rather than leaving a stale value in process.env.
   let env = baseEnv;
-  if (params.bearerToken && params.bearerToken !== baseEnv["AWS_BEARER_TOKEN_BEDROCK"]?.trim()) {
-    process.env["AWS_BEARER_TOKEN_BEDROCK"] = params.bearerToken;
-    if (baseEnv !== process.env) {
-      env = { ...baseEnv, AWS_BEARER_TOKEN_BEDROCK: params.bearerToken };
+  const currentEnvToken = baseEnv["AWS_BEARER_TOKEN_BEDROCK"]?.trim();
+  if (params.bearerToken) {
+    if (params.bearerToken !== currentEnvToken) {
+      process.env["AWS_BEARER_TOKEN_BEDROCK"] = params.bearerToken;
+      if (baseEnv !== process.env) {
+        env = { ...baseEnv, AWS_BEARER_TOKEN_BEDROCK: params.bearerToken };
+      }
     }
+  } else if (currentEnvToken && baseEnv === process.env) {
+    // Token was removed from plugin config — clear the stale env var so the
+    // AWS SDK does not continue authenticating with it.
+    delete process.env["AWS_BEARER_TOKEN_BEDROCK"];
+    env = { ...baseEnv };
+    delete (env as Record<string, string | undefined>)["AWS_BEARER_TOKEN_BEDROCK"];
   }
 
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
