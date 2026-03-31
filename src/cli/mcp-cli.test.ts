@@ -2,21 +2,38 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerMcpCli } from "./mcp-cli.js";
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mocks = vi.hoisted(() => {
+  const runtime = {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+  };
+  return {
+    runtime,
+    serveOpenClawChannelMcp: vi.fn(),
+  };
+});
+
+const defaultRuntime = mocks.runtime;
 const mockLog = defaultRuntime.log;
 const mockError = defaultRuntime.error;
-const serveOpenClawChannelMcp = vi.fn();
+const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.runtime,
 }));
 
 vi.mock("../mcp/channel-server.js", () => ({
-  serveOpenClawChannelMcp,
+  serveOpenClawChannelMcp: mocks.serveOpenClawChannelMcp,
 }));
 
 const tempDirs: string[] = [];
@@ -27,7 +44,6 @@ async function createWorkspace(): Promise<string> {
   return dir;
 }
 
-let registerMcpCli: typeof import("./mcp-cli.js").registerMcpCli;
 let sharedProgram: Command;
 
 async function runMcpCommand(args: string[]) {
@@ -35,16 +51,14 @@ async function runMcpCommand(args: string[]) {
 }
 
 describe("mcp cli", () => {
-  beforeAll(async () => {
-    ({ registerMcpCli } = await import("./mcp-cli.js"));
+  if (!sharedProgram) {
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerMcpCli(sharedProgram);
-  }, 300_000);
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resetRuntimeCapture();
   });
 
   afterEach(async () => {

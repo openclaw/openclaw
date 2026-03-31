@@ -1,18 +1,41 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../cli/test-runtime-capture.js";
+import {
+  tasksAuditCommand,
+  tasksCancelCommand,
+  tasksListCommand,
+  tasksMaintenanceCommand,
+  tasksNotifyCommand,
+  tasksShowCommand,
+} from "./tasks.js";
 
-const reconcileInspectableTasksMock = vi.fn();
-const reconcileTaskLookupTokenMock = vi.fn();
-const listTaskAuditFindingsMock = vi.fn();
-const summarizeTaskAuditFindingsMock = vi.fn();
-const previewTaskRegistryMaintenanceMock = vi.fn();
-const runTaskRegistryMaintenanceMock = vi.fn();
-const getInspectableTaskRegistrySummaryMock = vi.fn();
-const getInspectableTaskAuditSummaryMock = vi.fn();
-const updateTaskNotifyPolicyByIdMock = vi.fn();
-const cancelTaskByIdMock = vi.fn();
-const getTaskByIdMock = vi.fn();
-const loadConfigMock = vi.fn(() => ({ loaded: true }));
+const mocks = vi.hoisted(() => ({
+  reconcileInspectableTasksMock: vi.fn(),
+  reconcileTaskLookupTokenMock: vi.fn(),
+  listTaskAuditFindingsMock: vi.fn(),
+  summarizeTaskAuditFindingsMock: vi.fn(),
+  previewTaskRegistryMaintenanceMock: vi.fn(),
+  runTaskRegistryMaintenanceMock: vi.fn(),
+  getInspectableTaskRegistrySummaryMock: vi.fn(),
+  getInspectableTaskAuditSummaryMock: vi.fn(),
+  updateTaskNotifyPolicyByIdMock: vi.fn(),
+  cancelTaskByIdMock: vi.fn(),
+  getTaskByIdMock: vi.fn(),
+  loadConfigMock: vi.fn(() => ({ loaded: true })),
+}));
+
+const reconcileInspectableTasksMock = mocks.reconcileInspectableTasksMock;
+const reconcileTaskLookupTokenMock = mocks.reconcileTaskLookupTokenMock;
+const listTaskAuditFindingsMock = mocks.listTaskAuditFindingsMock;
+const summarizeTaskAuditFindingsMock = mocks.summarizeTaskAuditFindingsMock;
+const previewTaskRegistryMaintenanceMock = mocks.previewTaskRegistryMaintenanceMock;
+const runTaskRegistryMaintenanceMock = mocks.runTaskRegistryMaintenanceMock;
+const getInspectableTaskRegistrySummaryMock = mocks.getInspectableTaskRegistrySummaryMock;
+const getInspectableTaskAuditSummaryMock = mocks.getInspectableTaskAuditSummaryMock;
+const updateTaskNotifyPolicyByIdMock = mocks.updateTaskNotifyPolicyByIdMock;
+const cancelTaskByIdMock = mocks.cancelTaskByIdMock;
+const getTaskByIdMock = mocks.getTaskByIdMock;
+const loadConfigMock = mocks.loadConfigMock;
 
 vi.mock("../tasks/task-registry.reconcile.js", () => ({
   reconcileInspectableTasks: (...args: unknown[]) => reconcileInspectableTasksMock(...args),
@@ -51,13 +74,6 @@ const {
   resetRuntimeCapture,
 } = createCliRuntimeCapture();
 
-let tasksListCommand: typeof import("./tasks.js").tasksListCommand;
-let tasksShowCommand: typeof import("./tasks.js").tasksShowCommand;
-let tasksNotifyCommand: typeof import("./tasks.js").tasksNotifyCommand;
-let tasksCancelCommand: typeof import("./tasks.js").tasksCancelCommand;
-let tasksAuditCommand: typeof import("./tasks.js").tasksAuditCommand;
-let tasksMaintenanceCommand: typeof import("./tasks.js").tasksMaintenanceCommand;
-
 const taskFixture = {
   taskId: "task-12345678",
   runtime: "acp",
@@ -73,17 +89,6 @@ const taskFixture = {
   lastEventAt: Date.parse("2026-03-29T10:00:10.000Z"),
   progressSummary: "No output for 60s. It may be waiting for input.",
 } as const;
-
-beforeAll(async () => {
-  ({
-    tasksListCommand,
-    tasksShowCommand,
-    tasksNotifyCommand,
-    tasksCancelCommand,
-    tasksAuditCommand,
-    tasksMaintenanceCommand,
-  } = await import("./tasks.js"));
-});
 
 describe("tasks commands", () => {
   beforeEach(() => {

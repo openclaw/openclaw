@@ -213,4 +213,63 @@ describe("session MCP runtime", () => {
     expect(await fs.readFile(startupCounterPath, "utf8")).toBe("1");
     expect(__testing.getCachedSessionIds()).not.toContain("session-d");
   });
+
+  it("materialized disposal can retire a manager-owned runtime", async () => {
+    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
+    const startupCounterPath = path.join(workspaceDir, "bundle-starts.txt");
+    const pidPath = path.join(workspaceDir, "bundle.pid");
+    const exitMarkerPath = path.join(workspaceDir, "bundle.exit");
+    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
+    const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
+    await writeBundleProbeMcpServer(serverScriptPath, {
+      startupCounterPath,
+      pidPath,
+      exitMarkerPath,
+    });
+    await writeClaudeBundle({ pluginRoot, serverScriptPath });
+
+    const runtimeA = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-e",
+      sessionKey: "agent:test:session-e",
+      workspaceDir,
+      cfg: {
+        plugins: {
+          entries: {
+            "bundle-probe": { enabled: true },
+          },
+        },
+      },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({
+      runtime: runtimeA,
+      disposeRuntime: async () => {
+        await disposeSessionMcpRuntime("session-e");
+      },
+    });
+
+    expect(materialized.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(await waitForFileText(pidPath)).toMatch(/^\d+$/);
+
+    await materialized.dispose();
+
+    expect(await waitForFileText(exitMarkerPath)).toBe("exited");
+    expect(__testing.getCachedSessionIds()).not.toContain("session-e");
+
+    const runtimeB = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-e",
+      sessionKey: "agent:test:session-e",
+      workspaceDir,
+      cfg: {
+        plugins: {
+          entries: {
+            "bundle-probe": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(runtimeB).not.toBe(runtimeA);
+    await materializeBundleMcpToolsForRun({ runtime: runtimeB });
+    expect(await fs.readFile(startupCounterPath, "utf8")).toBe("2");
+  });
 });

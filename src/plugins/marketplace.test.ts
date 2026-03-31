@@ -1,19 +1,50 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const installPluginFromPathMock = vi.fn();
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit }) => {
+    // Keep unit tests focused on guarded call sites, not AbortSignal timer behavior.
+    const { signal: _signal, ...init } = params.init ?? {};
+    const response = await fetch(params.url, init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {
+        await response.body?.cancel().catch(() => undefined);
+      },
+    };
+  }),
+);
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+let installPluginFromMarketplace: typeof import("./marketplace.js").installPluginFromMarketplace;
+let listMarketplacePlugins: typeof import("./marketplace.js").listMarketplacePlugins;
+let resolveMarketplaceInstallShortcut: typeof import("./marketplace.js").resolveMarketplaceInstallShortcut;
 
 vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
 }));
 
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: { url: string; init?: RequestInit }) =>
+      fetchWithSsrFGuardMock(params),
+  };
+});
+
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
+
+beforeAll(async () => {
+  ({ installPluginFromMarketplace, listMarketplacePlugins, resolveMarketplaceInstallShortcut } =
+    await import("./marketplace.js"));
+});
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-test-"));
@@ -73,7 +104,6 @@ function mockRemoteMarketplaceClone(params: { manifest: unknown; pluginDir?: str
 async function expectRemoteMarketplaceError(params: { manifest: unknown; expectedError: string }) {
   mockRemoteMarketplaceClone({ manifest: params.manifest });
 
-  const { listMarketplacePlugins } = await import("./marketplace.js");
   const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
 
   expect(result).toEqual({
@@ -144,6 +174,7 @@ function expectLocalMarketplaceInstallResult(params: {
 
 describe("marketplace plugins", () => {
   afterEach(() => {
+    fetchWithSsrFGuardMock.mockClear();
     installPluginFromPathMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     vi.unstubAllGlobals();
@@ -164,7 +195,6 @@ describe("marketplace plugins", () => {
         ],
       });
 
-      const { listMarketplacePlugins } = await import("./marketplace.js");
       expectMarketplaceManifestListing(await listMarketplacePlugins({ marketplace: rootDir }));
     });
   });
@@ -192,7 +222,6 @@ describe("marketplace plugins", () => {
         extensions: ["index.ts"],
       });
 
-      const { installPluginFromMarketplace } = await import("./marketplace.js");
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
         plugin: "frontend-design",
@@ -224,7 +253,6 @@ describe("marketplace plugins", () => {
         }),
       );
 
-      const { resolveMarketplaceInstallShortcut } = await import("./marketplace.js");
       const shortcut = await withEnvAsync(
         { HOME: homeDir, OPENCLAW_HOME: openClawHome },
         async () => await resolveMarketplaceInstallShortcut("superpowers@claude-plugins-official"),
@@ -259,7 +287,6 @@ describe("marketplace plugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { installPluginFromMarketplace } = await import("./marketplace.js");
     const result = await installPluginFromMarketplace({
       marketplace: "owner/repo",
       plugin: "frontend-design",
@@ -283,7 +310,6 @@ describe("marketplace plugins", () => {
         ],
       });
 
-      const { installPluginFromMarketplace } = await import("./marketplace.js");
       const result = await installPluginFromMarketplace({
         marketplace: manifestPath,
         plugin: "frontend-design",
@@ -292,6 +318,10 @@ describe("marketplace plugins", () => {
       expect(result).toEqual({
         ok: false,
         error: "failed to download https://example.com/frontend-design.tgz: empty response body",
+      });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+        url: "https://example.com/frontend-design.tgz",
+        auditContext: "marketplace-plugin-download",
       });
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });

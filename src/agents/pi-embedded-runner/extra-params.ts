@@ -278,7 +278,11 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
+    if (
+      model.api !== "openai-completions" &&
+      model.api !== "openai-responses" &&
+      model.api !== "azure-openai-responses"
+    ) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -439,7 +443,10 @@ function applyPostPluginStreamWrappers(
         log.debug(
           `applying OpenAI text verbosity=${openAITextVerbosity} for ${ctx.provider}/${ctx.modelId}`,
         );
-        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(ctx.agent.streamFn, openAITextVerbosity);
+        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(
+          ctx.agent.streamFn,
+          openAITextVerbosity,
+        );
       }
     }
   }

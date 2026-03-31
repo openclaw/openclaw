@@ -70,6 +70,8 @@ export type MatrixConfig = {
   homeserver?: string;
   /** Allow Matrix homeserver traffic to private/internal hosts. */
   allowPrivateNetwork?: boolean;
+  /** Optional HTTP(S) proxy URL for Matrix connections (e.g. http://127.0.0.1:7890). */
+  proxy?: string;
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */
@@ -121,6 +123,12 @@ export type MatrixConfig = {
   startupVerificationCooldownHours?: number;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /**
+   * Number of recent room messages shown to the agent as context when it is mentioned
+   * in a group chat (0 = disabled). Applies to room messages that did not directly
+   * trigger a reply. Default: 0 (disabled).
+   */
+  historyLimit?: number;
   /** Auto-join invites (always|allowlist|off). Default: off. */
   autoJoin?: "always" | "allowlist" | "off";
   /** Allowlist for auto-join invites (room IDs, aliases). */
