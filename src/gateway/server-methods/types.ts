@@ -80,6 +80,7 @@ export type GatewayRequestContext = {
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   getSessionMessageSubscribers: (sessionKey: string) => ReadonlySet<string>;
   getChatSenderConnId: (runId: string) => string | undefined;
+  deleteChatSenderConnId: (runId: string) => void;
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;

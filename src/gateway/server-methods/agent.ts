@@ -711,6 +711,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedChannel,
         });
         if (!shouldDowngrade) {
+          context.deleteChatSenderConnId(idem);
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
           return;
         }

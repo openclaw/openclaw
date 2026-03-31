@@ -1288,6 +1288,9 @@ export async function startGatewayServer(
       getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
       getSessionMessageSubscribers: sessionMessageSubscribers.get,
       getChatSenderConnId: (runId: string) => chatRunState.senderConnIds.get(runId),
+      deleteChatSenderConnId: (runId: string) => {
+        chatRunState.senderConnIds.delete(runId);
+      },
       registerToolEventRecipient: toolEventRecipients.add,
       dedupe,
       wizardSessions,

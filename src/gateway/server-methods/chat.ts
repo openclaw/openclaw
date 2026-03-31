@@ -1170,6 +1170,7 @@ function broadcastChatFinal(params: {
     | "getSessionMessageSubscribers"
     | "getSessionEventSubscriberConnIds"
     | "getChatSenderConnId"
+    | "deleteChatSenderConnId"
     | "nodeSendToSession"
     | "agentRunSeq"
   >;
@@ -1190,6 +1191,7 @@ function broadcastChatFinal(params: {
   };
   chatBroadcast(params.context, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
+  params.context.deleteChatSenderConnId(params.runId);
 }
 
 function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
@@ -1232,6 +1234,7 @@ function broadcastChatError(params: {
     | "getSessionMessageSubscribers"
     | "getSessionEventSubscriberConnIds"
     | "getChatSenderConnId"
+    | "deleteChatSenderConnId"
     | "nodeSendToSession"
     | "agentRunSeq"
   >;
@@ -1249,6 +1252,7 @@ function broadcastChatError(params: {
   };
   chatBroadcast(params.context, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
+  params.context.deleteChatSenderConnId(params.runId);
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
