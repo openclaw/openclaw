@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
 import {
   connectOk,
   getFreePort,
@@ -90,6 +94,49 @@ describe("gateway config.apply", () => {
       expect(after.ok).toBe(true);
       expect(after.payload?.hash).toBe(current.payload?.hash);
       expect(after.payload?.raw).toBe(current.payload?.raw);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it("does not reject config.apply for unresolved auth-profile refs outside submitted config", async () => {
+    const ws = await openClient();
+    try {
+      const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_APPLY_${Date.now()}`;
+      delete process.env[missingEnvVar];
+
+      const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
+      await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+      await fs.writeFile(
+        authStorePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "custom:token": {
+                type: "token",
+                provider: "custom",
+                tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const current = await sendConfigGet(ws, "req-auth-profile-get-before");
+      expect(current.ok).toBe(true);
+      expect(current.payload?.config).toBeTruthy();
+
+      const res = await sendConfigApply(
+        ws,
+        "req-auth-profile-apply",
+        JSON.stringify(current.payload?.config ?? {}, null, 2),
+      );
+      expect(res.ok).toBe(true);
+      expect(res.error).toBeUndefined();
     } finally {
       ws.close();
     }

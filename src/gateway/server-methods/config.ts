@@ -239,7 +239,10 @@ async function ensureResolvableSecretRefsOrRespond(params: {
   respond: RespondFn;
 }): Promise<boolean> {
   try {
-    await prepareSecretsRuntimeSnapshot({ config: params.config });
+    await prepareSecretsRuntimeSnapshot({
+      config: params.config,
+      includeAuthStoreRefs: false,
+    });
     return true;
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);

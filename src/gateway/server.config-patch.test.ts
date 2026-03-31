@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -118,6 +120,52 @@ describe("gateway config methods", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.path).toBe(createConfigIO().configPath);
     expect(res.payload?.config).toBeTruthy();
+  });
+
+  it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
+    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+    await fs.writeFile(
+      authStorePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "custom:token": {
+              type: "token",
+              provider: "custom",
+              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    expect(current.payload?.config).toBeTruthy();
+
+    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+      requireWs(),
+      "config.set",
+      {
+        raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+        baseHash: current.payload?.hash,
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.error).toBeUndefined();
   });
 
   it("returns config.set validation details in the top-level error message", async () => {
