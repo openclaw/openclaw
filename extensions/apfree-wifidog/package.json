@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/apfree-wifidog",
+  "version": "2026.3.8",
+  "private": true,
+  "description": "OpenClaw bridge for apfree-wifidog device WebSocket control",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "ws": "^8.20.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

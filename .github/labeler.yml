@@ -334,3 +334,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: apfree-wifidog":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apfree-wifidog/**"
