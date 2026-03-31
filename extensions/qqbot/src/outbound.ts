@@ -1078,6 +1078,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         debugError(`[qqbot] sendText: Failed to send ${item.type}: ${errMsg}`);
+        lastResult = { channel: "qqbot", error: errMsg };
       }
     }
 
