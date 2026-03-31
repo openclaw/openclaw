@@ -31,7 +31,7 @@ function readAttachmentFileHint(args: Record<string, unknown>): string | undefin
   );
 }
 
-function resolveAttachmentMaxBytes(params: {
+export function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;
@@ -299,10 +299,17 @@ export async function hydrateAttachmentParamsForAction(params: {
 }): Promise<void> {
   const shouldHydrateBlueBubblesUploadFile =
     params.action === "upload-file" && params.channel === "bluebubbles";
+  // Allow buffer hydration for "send" action when buffer is explicitly provided,
+  // so callers can attach files via base64 without using sendAttachment.
+  const hasBufferInSend =
+    params.action === "send" &&
+    typeof params.args["buffer"] === "string" &&
+    params.args["buffer"].trim().length > 0;
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
-    !shouldHydrateBlueBubblesUploadFile
+    !shouldHydrateBlueBubblesUploadFile &&
+    !hasBufferInSend
   ) {
     return;
   }

@@ -12,6 +12,19 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
+vi.mock("../../media/store.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../media/store.js")>("../../media/store.js");
+  return {
+    ...actual,
+    saveMediaBuffer: vi.fn(async (_buffer, contentType, _subdir, _maxBytes, filename) => ({
+      path: `/tmp/mock-media/${filename ?? "file"}`,
+      size: (_buffer as Buffer).byteLength,
+      contentType: contentType ?? "application/octet-stream",
+    })),
+  };
+});
+
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
     "../../media/web-media.js",
@@ -86,9 +99,11 @@ async function expectSandboxMediaRewrite(params: {
 
 type MessageActionRunnerModule = typeof import("./message-action-runner.js");
 type WebMediaModule = typeof import("../../media/web-media.js");
+type MediaStoreModule = typeof import("../../media/store.js");
 
 let runMessageAction: MessageActionRunnerModule["runMessageAction"];
 let loadWebMedia: WebMediaModule["loadWebMedia"];
+let saveMediaBuffer: MediaStoreModule["saveMediaBuffer"];
 
 const slackPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -126,6 +141,7 @@ describe("runMessageAction media behavior", () => {
     vi.resetModules();
     ({ runMessageAction } = await import("./message-action-runner.js"));
     ({ loadWebMedia } = await import("../../media/web-media.js"));
+    ({ saveMediaBuffer } = await import("../../media/store.js"));
     vi.clearAllMocks();
   });
 
@@ -599,6 +615,103 @@ describe("runMessageAction media behavior", () => {
         ).rejects.toThrow(/sandbox/i);
       } finally {
         await fs.rm(sandboxDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("send action with buffer", () => {
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "slack",
+            source: "test",
+            plugin: slackPlugin,
+          },
+        ]),
+      );
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+    });
+
+    it("accepts send with buffer and message through the full runner path", async () => {
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          buffer: "aGVsbG8=",
+          contentType: "text/plain",
+          message: "Here is a file",
+        },
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+    });
+
+    it("accepts send with data-URI buffer through the runner without error", async () => {
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          buffer: "data:image/png;base64,iVBOR",
+          message: "screenshot",
+        },
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+    });
+
+    it("accepts send with buffer but no message (buffer counts as media content)", async () => {
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          buffer: "aGVsbG8=",
+        },
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+    });
+
+    it("materializes buffer to temp file and sets params.media in non-dryRun", async () => {
+      const actionParams: Record<string, unknown> = {
+        channel: "slack",
+        target: "#C12345678",
+        buffer: "aGVsbG8=",
+        contentType: "text/plain",
+        filename: "hello.txt",
+        message: "Here is a file",
+      };
+
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: actionParams,
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(saveMediaBuffer).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        "text/plain",
+        "outbound",
+        undefined,
+        "hello.txt",
+      );
+      expect(result.kind).toBe("send");
+      if (result.kind === "send") {
+        expect(result.sendResult?.mediaUrl).toBe("/tmp/mock-media/hello.txt");
       }
     });
   });

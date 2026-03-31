@@ -153,6 +153,134 @@ describe("message action media helpers", () => {
   });
 });
 
+describe("hydrateAttachmentParamsForAction buffer-in-send", () => {
+  it("processes buffer when action is send and buffer is a non-empty string", async () => {
+    const args: Record<string, unknown> = {
+      buffer: "aGVsbG8=", // "hello" in base64
+      to: "user:123",
+      message: "Here is a file",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    // Filename should be inferred (hydration was not skipped)
+    expect(args.filename).toBe("attachment");
+  });
+
+  it("normalizes data-URI buffer and extracts content type for send action", async () => {
+    const args: Record<string, unknown> = {
+      buffer: "data:image/png;base64,iVBOR",
+      to: "user:123",
+      message: "screenshot",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    expect(args.buffer).toBe("iVBOR");
+    expect(args.contentType).toBe("image/png");
+    // filename inferred without extension because contentType was not in
+    // original args — normalizeBase64Payload sets it on args after the
+    // contentTypeParam snapshot is captured
+    expect(args.filename).toBe("attachment");
+  });
+
+  it("infers filename with extension when contentType is provided upfront", async () => {
+    const args: Record<string, unknown> = {
+      buffer: "aGVsbG8=",
+      contentType: "image/png",
+      to: "user:123",
+      message: "screenshot",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    expect(args.filename).toBe("attachment.png");
+  });
+
+  it("skips hydration for send action when buffer is absent", async () => {
+    const args: Record<string, unknown> = {
+      to: "user:123",
+      message: "plain text",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    expect(args.filename).toBeUndefined();
+  });
+
+  it("skips hydration for send action when buffer is empty string", async () => {
+    const args: Record<string, unknown> = {
+      buffer: "",
+      to: "user:123",
+      message: "no file",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    expect(args.filename).toBeUndefined();
+  });
+
+  it("skips hydration for send action when buffer is whitespace-only", async () => {
+    const args: Record<string, unknown> = {
+      buffer: "   ",
+      to: "user:123",
+      message: "no file",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    expect(args.filename).toBeUndefined();
+  });
+
+  it("does not apply caption fallback for send action with buffer", async () => {
+    const args: Record<string, unknown> = {
+      buffer: "aGVsbG8=",
+      to: "user:123",
+      message: "some text",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    // caption should NOT be set from message (unlike sendAttachment)
+    expect(args.caption).toBeUndefined();
+  });
+});
+
 describe("message action sandbox media hydration", () => {
   maybeIt("rejects symlink retarget escapes after sandbox media normalization", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-sandbox-"));
