@@ -331,12 +331,40 @@ describe("marketplace plugins", () => {
         ok: false,
         error: "failed to download https://example.com/frontend-design.tgz: empty response body",
       });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-        url: "https://example.com/frontend-design.tgz",
-        auditContext: "marketplace-plugin-download",
-      });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://example.com/frontend-design.tgz",
+          timeoutMs: 120_000,
+          auditContext: "marketplace-plugin-download",
+        }),
+      );
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("returns a structured error for invalid archive URLs", async () => {
+    await withTempDir(async (rootDir) => {
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://%/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "failed to download https://%/frontend-design.tgz: Invalid URL",
+      });
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     });
   });
 
@@ -379,10 +407,13 @@ describe("marketplace plugins", () => {
         marketplacePlugin: "frontend-design",
         marketplaceSource: manifestPath,
       });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-        url: "https://example.com/frontend-design.tgz",
-        auditContext: "marketplace-plugin-download",
-      });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://example.com/frontend-design.tgz",
+          timeoutMs: 120_000,
+          auditContext: "marketplace-plugin-download",
+        }),
+      );
       expect(installPluginFromPathMock).toHaveBeenCalledWith(
         expect.objectContaining({
           path: expect.stringMatching(/[\\/]frontend-design\.tgz$/),
@@ -396,14 +427,12 @@ describe("marketplace plugins", () => {
     await withTempDir(async (rootDir) => {
       const beforeTempDirs = await listMarketplaceDownloadTempDirs();
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: {
-          ok: true,
-          body: {
-            pipeTo: vi.fn(async () => {
-              throw new Error("stream failed");
-            }),
+        response: new Response("x".repeat(1024), {
+          status: 200,
+          headers: {
+            "content-length": String(300 * 1024 * 1024),
           },
-        } as unknown as Response,
+        }),
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
@@ -423,7 +452,9 @@ describe("marketplace plugins", () => {
 
       expect(result).toEqual({
         ok: false,
-        error: "failed to download https://example.com/frontend-design.tgz: stream failed",
+        error:
+          "failed to download https://example.com/frontend-design.tgz: " +
+          "download too large: 314572800 bytes (limit: 268435456 bytes)",
       });
       expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
       expect(installPluginFromPathMock).not.toHaveBeenCalled();

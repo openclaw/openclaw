@@ -1,16 +1,17 @@
-import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Writable } from "node:stream";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
+const DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS = 120_000;
+const MAX_MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MARKETPLACE_MANIFEST_CANDIDATES = [
   path.join(".claude-plugin", "marketplace.json"),
   "marketplace.json",
@@ -579,7 +580,25 @@ async function loadMarketplace(params: {
   };
 }
 
-async function downloadUrlToTempFile(url: string): Promise<
+function resolveSafeMarketplaceDownloadFileName(url: string, fallback: string): string {
+  const pathname = new URL(url).pathname;
+  const fileName = path.basename(pathname).trim() || fallback;
+  if (
+    fileName === "." ||
+    fileName === ".." ||
+    path.isAbsolute(fileName) ||
+    fileName.includes("/") ||
+    fileName.includes("\\")
+  ) {
+    throw new Error("invalid download filename");
+  }
+  return fileName;
+}
+
+async function downloadUrlToTempFile(
+  url: string,
+  timeoutMs?: number,
+): Promise<
   | {
       ok: true;
       path: string;
@@ -590,12 +609,17 @@ async function downloadUrlToTempFile(url: string): Promise<
       error: string;
     }
 > {
-  const sourcePathname = new URL(url).pathname;
-  const sourceFileName = path.basename(sourcePathname) || "plugin.tgz";
+  let sourceFileName = "plugin.tgz";
   let tmpDir: string | undefined;
   try {
+    sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
+    const downloadTimeoutMs = Math.max(
+      1_000,
+      Math.floor(timeoutMs ?? DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS),
+    );
     const { response, finalUrl, release } = await fetchWithSsrFGuard({
       url,
+      timeoutMs: downloadTimeoutMs,
       auditContext: "marketplace-plugin-download",
     });
     try {
@@ -606,14 +630,33 @@ async function downloadUrlToTempFile(url: string): Promise<
         return { ok: false, error: `failed to download ${url}: empty response body` };
       }
 
-      const finalPathname = new URL(finalUrl).pathname;
-      const finalFileName = path.basename(finalPathname) || sourceFileName;
+      const contentLength = response.headers.get("content-length");
+      if (contentLength) {
+        const size = Number(contentLength);
+        if (Number.isFinite(size) && size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+          throw new Error(
+            `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
+          );
+        }
+      }
+
+      const finalFileName = resolveSafeMarketplaceDownloadFileName(finalUrl, sourceFileName);
       const fileName = resolveArchiveKind(finalFileName) ? finalFileName : sourceFileName;
       tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
       const createdTmpDir = tmpDir;
-      const targetPath = path.join(createdTmpDir, fileName);
-      const fileStream = createWriteStream(targetPath);
-      await response.body.pipeTo(Writable.toWeb(fileStream));
+      const targetPath = path.resolve(createdTmpDir, fileName);
+      const relativeTargetPath = path.relative(createdTmpDir, targetPath);
+      if (relativeTargetPath === ".." || relativeTargetPath.startsWith(`..${path.sep}`)) {
+        throw new Error("invalid download filename");
+      }
+      const buffer = await readResponseWithLimit(response, MAX_MARKETPLACE_ARCHIVE_BYTES, {
+        chunkTimeoutMs: downloadTimeoutMs,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`download too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`download timed out after ${chunkTimeoutMs}ms`),
+      });
+      await fs.writeFile(targetPath, buffer);
       return {
         ok: true,
         path: targetPath,
@@ -719,7 +762,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   if (params.source.kind === "path") {
     if (isHttpUrl(params.source.path)) {
       if (resolveArchiveKind(params.source.path)) {
-        return await downloadUrlToTempFile(params.source.path);
+        return await downloadUrlToTempFile(params.source.path, params.timeoutMs);
       }
       return {
         ok: false,
@@ -769,7 +812,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   }
 
   if (resolveArchiveKind(params.source.url)) {
-    return await downloadUrlToTempFile(params.source.url);
+    return await downloadUrlToTempFile(params.source.url, params.timeoutMs);
   }
 
   if (!normalizeGitCloneSource(params.source.url)) {
