@@ -16,6 +16,7 @@ import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
+import { isMatrixNotFoundError } from "./errors.js";
 import { MatrixCryptoBootstrapper } from "./sdk/crypto-bootstrap.js";
 import type { MatrixCryptoBootstrapResult } from "./sdk/crypto-bootstrap.js";
 import { createMatrixCryptoFacade, type MatrixCryptoFacade } from "./sdk/crypto-facade.js";
@@ -143,17 +144,6 @@ export type MatrixOwnDeviceDeleteResult = {
 function normalizeOptionalString(value: string | null | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
-}
-
-function isMatrixNotFoundError(err: unknown): boolean {
-  const errObj = err as { statusCode?: number; body?: { errcode?: string } };
-  if (errObj?.statusCode === 404 || errObj?.body?.errcode === "M_NOT_FOUND") {
-    return true;
-  }
-  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  return (
-    message.includes("m_not_found") || message.includes("[404]") || message.includes("not found")
-  );
 }
 
 function isUnsupportedAuthenticatedMediaEndpointError(err: unknown): boolean {

@@ -53,7 +53,7 @@ import { createMatrixThreadContextResolver } from "./thread-context.js";
 import {
   resolveMatrixReplyToEventId,
   resolveMatrixThreadRootId,
-  resolveMatrixThreadTarget,
+  resolveMatrixThreadRouting,
 } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
@@ -80,6 +80,8 @@ export type MatrixMonitorHandlerParams = {
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
+  /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
+  dmThreadReplies?: "off" | "inbound" | "always";
   streaming: "partial" | "off";
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
@@ -196,6 +198,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     groupPolicy,
     replyToMode,
     threadReplies,
+    dmThreadReplies,
     streaming,
     dmEnabled,
     dmPolicy,
@@ -630,6 +633,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         const _messageId = event.event_id ?? "";
         const _threadRootId = resolveMatrixThreadRootId({ event, content });
+        const thread = resolveMatrixThreadRouting({
+          isDirectMessage,
+          threadReplies,
+          dmThreadReplies,
+          messageId: _messageId,
+          threadRootId: _threadRootId,
+        });
         const {
           route: _route,
           configuredBinding: _configuredBinding,
@@ -640,8 +650,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           roomId,
           senderId,
           isDirectMessage,
-          messageId: _messageId,
-          threadRootId: _threadRootId,
+          threadId: thread.threadId,
           eventTs: eventTs ?? undefined,
           resolveAgentRoute: core.channel.routing.resolveAgentRoute,
         });
@@ -850,6 +859,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           messageId: _messageId,
           triggerSnapshot,
           threadRootId: _threadRootId,
+          thread,
         };
       };
       const ingressResult =
@@ -899,17 +909,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         messageId: _messageId,
         triggerSnapshot,
         threadRootId: _threadRootId,
+        thread,
       } = resolvedIngressResult;
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
-      const threadTarget = resolveMatrixThreadTarget({
-        threadReplies,
-        messageId: _messageId,
-        threadRootId: _threadRootId,
-        isThreadRoot: false,
-      });
+      const threadTarget = thread.threadId;
       const threadContext = _threadRootId
         ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
         : undefined;
