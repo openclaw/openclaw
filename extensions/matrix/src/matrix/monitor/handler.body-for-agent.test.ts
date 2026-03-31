@@ -267,4 +267,87 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     expect(getEvent).toHaveBeenCalledTimes(1);
     expect(getMemberDisplayName).toHaveBeenCalledTimes(2);
   });
+
+  it("drops thread and reply context fetched from non-allowlisted room senders", async () => {
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$thread-root",
+            sender: "@mallory:example.org",
+            body: "Malicious root topic",
+          }),
+      },
+      isDirectMessage: false,
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["@alice:example.org"],
+      roomsConfig: { "*": {} },
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@alice:example.org" ? "Alice" : "Mallory",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        sender: "@alice:example.org",
+        body: "@room follow up",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$thread-root",
+          "m.in_reply_to": { event_id: "$thread-root" },
+        },
+        mentions: { room: true },
+      }),
+    );
+
+    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
+      ReplyToBody?: string;
+      ReplyToSender?: string;
+      ThreadStarterBody?: string;
+    };
+    expect(finalized.ThreadStarterBody).toBeUndefined();
+    expect(finalized.ReplyToBody).toBeUndefined();
+    expect(finalized.ReplyToSender).toBeUndefined();
+  });
+
+  it("drops quoted reply context fetched from non-allowlisted room senders", async () => {
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$quoted",
+            sender: "@mallory:example.org",
+            body: "Quoted payload",
+          }),
+      },
+      isDirectMessage: false,
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["@alice:example.org"],
+      roomsConfig: { "*": {} },
+      replyToMode: "all",
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@alice:example.org" ? "Alice" : "Mallory",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        sender: "@alice:example.org",
+        body: "@room follow up",
+        relatesTo: {
+          "m.in_reply_to": { event_id: "$quoted" },
+        },
+        mentions: { room: true },
+      }),
+    );
+
+    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
+      ReplyToBody?: string;
+      ReplyToSender?: string;
+    };
+    expect(finalized.ReplyToBody).toBeUndefined();
+    expect(finalized.ReplyToSender).toBeUndefined();
+  });
 });
