@@ -292,7 +292,7 @@
       "durationMs": 324
     },
     "extensions/whatsapp/src/outbound-adapter.poll.test.ts": {
-      "durationMs": 284
+      "durationMs": 17860
     },
     "src/browser/server.agent-contract-form-layout-act-commands.test.ts": {
       "durationMs": 282
