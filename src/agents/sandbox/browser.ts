@@ -272,7 +272,6 @@ export async function ensureSandboxBrowser(params: {
     await execDocker(args);
     await execDocker(["start", containerName]);
   } else if (!running) {
-  } else if (!running) {
     await execDocker(["start", containerName]);
   }
 
