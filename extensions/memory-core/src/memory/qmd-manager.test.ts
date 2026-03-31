@@ -4032,6 +4032,56 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("reports vector availability as unavailable when qmd status shows zero vectors", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "status") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "Documents: 12\nVectors: 0\n");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
+      ok: false,
+      error: "QMD index has 0 vectors; semantic search is unavailable until embeddings finish",
+    });
+    expect(manager.status().vector).toEqual({
+      enabled: true,
+      available: false,
+      loadError: "QMD index has 0 vectors; semantic search is unavailable until embeddings finish",
+    });
+    await manager.close();
+  });
+
+  it("reports vector availability as ready when qmd status shows vectors", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "status") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "Documents: 12\nVectors: 42\n");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
+      ok: true,
+      error: undefined,
+    });
+    expect(manager.status().vector).toEqual({
+      enabled: true,
+      available: true,
+      loadError: undefined,
+    });
+    await manager.close();
+  });
+
   describe("model cache symlink", () => {
     let defaultModelsDir: string;
     let customModelsDir: string;

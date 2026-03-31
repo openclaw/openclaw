@@ -105,6 +105,15 @@ function normalizeHanBm25Query(query: string): string {
   return trimmed;
 }
 
+function parseQmdStatusVectorCount(raw: string): number | null {
+  const match = raw.match(/(?:^|\n)\s*Vectors:\s*(\d+)\b/i);
+  if (!match) {
+    return null;
+  }
+  const count = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(count) ? count : null;
+}
+
 function resolveStableJitterMs(params: { seed: string; windowMs: number }): number {
   if (params.windowMs <= 0) {
     return 0;
@@ -260,6 +269,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private lastEmbedAt: number | null = null;
   private embedBackoffUntil: number | null = null;
   private embedFailureCount = 0;
+  private vectorAvailable: boolean | null = null;
+  private vectorStatusDetail: string | null = null;
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private readonly sessionWarm = new Set<string>();
@@ -1095,7 +1106,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       dbPath: this.indexPath,
       sources: Array.from(this.sources),
       sourceCounts: counts.sourceCounts,
-      vector: { enabled: true, available: true },
+      vector: {
+        enabled: true,
+        available: this.vectorAvailable ?? undefined,
+        loadError: this.vectorStatusDetail ?? undefined,
+      },
       batch: {
         enabled: false,
         failures: 0,
@@ -1115,11 +1130,36 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    return { ok: true };
+    const ok = await this.probeVectorAvailability();
+    return {
+      ok,
+      error: ok ? undefined : (this.vectorStatusDetail ?? "QMD semantic vectors are unavailable"),
+    };
   }
 
   async probeVectorAvailability(): Promise<boolean> {
-    return true;
+    try {
+      const result = await this.runQmd(["status"], {
+        timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+      });
+      const vectorCount = parseQmdStatusVectorCount(`${result.stdout}\n${result.stderr}`);
+      if (vectorCount === null) {
+        this.vectorAvailable = false;
+        this.vectorStatusDetail = "Could not determine QMD vector status from `qmd status`";
+        return false;
+      }
+      this.vectorAvailable = vectorCount > 0;
+      this.vectorStatusDetail =
+        vectorCount > 0
+          ? null
+          : "QMD index has 0 vectors; semantic search is unavailable until embeddings finish";
+      return this.vectorAvailable;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.vectorAvailable = false;
+      this.vectorStatusDetail = `QMD status probe failed: ${message}`;
+      return false;
+    }
   }
 
   async close(): Promise<void> {
