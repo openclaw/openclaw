@@ -39,16 +39,19 @@ function resolveFlowBlockedSummary(
 }
 
 type FlowRecordPatch = Partial<
-  Pick<
-    FlowRecord,
-    | "status"
-    | "notifyPolicy"
-    | "goal"
-    | "currentStep"
-    | "blockedTaskId"
-    | "blockedSummary"
-    | "updatedAt"
-    | "endedAt"
+  Omit<
+    Pick<
+      FlowRecord,
+      | "status"
+      | "notifyPolicy"
+      | "goal"
+      | "currentStep"
+      | "blockedTaskId"
+      | "blockedSummary"
+      | "updatedAt"
+      | "endedAt"
+    >,
+    "currentStep" | "blockedTaskId" | "blockedSummary" | "endedAt"
   >
 > & {
   currentStep?: string | null;
