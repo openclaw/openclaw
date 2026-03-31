@@ -225,5 +225,30 @@ describe("resolveFeishuGroupConfig - Issue #56338 regression tests", () => {
 
       expect(resolved).toBeUndefined();
     });
+
+    it("should reject dangerous prototype-pollution keys", () => {
+      const cfg = createFeishuConfig({
+        groups: {
+          oc_xxxxxx: {
+            requireMention: false,
+          },
+          // Attacker tries to access __proto__
+          __proto__: {
+            requireMention: true,
+          } as any,
+          constructor: {
+            requireMention: true,
+          } as any,
+        },
+      });
+
+      // These dangerous keys should be rejected
+      expect(resolveFeishuGroupConfig({ cfg, groupId: "__proto__" })).toBeUndefined();
+      expect(resolveFeishuGroupConfig({ cfg, groupId: "constructor" })).toBeUndefined();
+      expect(resolveFeishuGroupConfig({ cfg, groupId: "prototype" })).toBeUndefined();
+
+      // Normal keys still work
+      expect(resolveFeishuGroupConfig({ cfg, groupId: "oc_xxxxxx" })?.requireMention).toBe(false);
+    });
   });
 });

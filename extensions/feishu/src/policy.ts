@@ -62,19 +62,37 @@ export function resolveFeishuAllowlistMatch(params: {
   return { allowed: false };
 }
 
+// Block dangerous prototype-pollution keys
+const DANGEROUS_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function safeGetGroupConfig(
+  groups: Record<string, FeishuGroupConfig | undefined>,
+  key: string,
+): FeishuGroupConfig | undefined {
+  // Reject dangerous keys that could affect prototypes
+  if (DANGEROUS_KEYS.has(key)) {
+    return undefined;
+  }
+  // Only return own properties, not inherited ones
+  if (!Object.hasOwn(groups, key)) {
+    return undefined;
+  }
+  return groups[key];
+}
+
 export function resolveFeishuGroupConfig(params: {
   cfg?: FeishuConfig;
   groupId?: string | null;
 }): FeishuGroupConfig | undefined {
   const groups = params.cfg?.groups ?? {};
-  const wildcard = groups["*"];
+  const wildcard = safeGetGroupConfig(groups, "*");
   const rawGroupId = params.groupId?.trim();
   if (!rawGroupId) {
     return undefined;
   }
 
   // Step 1: Try exact match with raw group ID (backward compatible)
-  const direct = groups[rawGroupId];
+  const direct = safeGetGroupConfig(groups, rawGroupId);
   if (direct) {
     return direct;
   }
@@ -84,7 +102,7 @@ export function resolveFeishuGroupConfig(params: {
 
   // Step 2: Try match with normalized ID (fixes prefix mismatch bug)
   if (normalizedGroupId !== rawGroupId) {
-    const normalizedDirect = groups[normalizedGroupId];
+    const normalizedDirect = safeGetGroupConfig(groups, normalizedGroupId);
     if (normalizedDirect) {
       return normalizedDirect;
     }
@@ -96,7 +114,7 @@ export function resolveFeishuGroupConfig(params: {
     (key) => normalizeGroupIdForLookup(key).toLowerCase() === lowered,
   );
   if (matchKey) {
-    return groups[matchKey];
+    return safeGetGroupConfig(groups, matchKey);
   }
 
   // Fallback to wildcard
