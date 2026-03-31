@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { wrapDeliverWithRelay } from "./relay.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -60,8 +61,16 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
+  const wrappedOptions: ReplyDispatcherWithTypingOptions = {
+    ...params.dispatcherOptions,
+    deliver: wrapDeliverWithRelay(params.dispatcherOptions.deliver, {
+      originatingChannel: params.ctx.OriginatingChannel,
+      sessionKey: params.ctx.SessionKey,
+      cfg: params.cfg,
+    }),
+  };
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
-    createReplyDispatcherWithTyping(params.dispatcherOptions);
+    createReplyDispatcherWithTyping(wrappedOptions);
   try {
     return await dispatchInboundMessage({
       ctx: params.ctx,
@@ -86,7 +95,15 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+  const dispatcherOptions = {
+    ...params.dispatcherOptions,
+    deliver: wrapDeliverWithRelay(params.dispatcherOptions.deliver, {
+      originatingChannel: params.ctx.OriginatingChannel,
+      sessionKey: params.ctx.SessionKey,
+      cfg: params.cfg,
+    }),
+  };
+  const dispatcher = createReplyDispatcher(dispatcherOptions);
   return await dispatchInboundMessage({
     ctx: params.ctx,
     cfg: params.cfg,

@@ -69,6 +69,20 @@ export const SessionSchema = z
       })
       .strict()
       .optional(),
+    relay: z
+      .object({
+        targets: z.array(
+          z
+            .object({
+              channel: z.string(),
+              to: z.string(),
+              accountId: z.string().optional(),
+            })
+            .strict(),
+        ),
+      })
+      .strict()
+      .optional(),
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),

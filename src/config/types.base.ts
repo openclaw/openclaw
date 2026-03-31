@@ -133,6 +133,8 @@ export type SessionConfig = {
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
+  /** Cross-channel relay: mirror AI replies to additional channels. */
+  relay?: SessionRelayConfig;
 };
 
 export type SessionMaintenanceMode = "enforce" | "warn";
@@ -163,6 +165,21 @@ export type SessionMaintenanceConfig = {
    * Default: 80% of maxDiskBytes.
    */
   highWaterBytes?: number | string;
+};
+
+/** A single relay destination for cross-channel reply mirroring. */
+export type SessionRelayTarget = {
+  /** Channel identifier (e.g. "telegram", "discord", "slack"). */
+  channel: string;
+  /** Destination chat/channel/user ID. */
+  to: string;
+  /** Provider account id (multi-account). */
+  accountId?: string;
+};
+
+/** Config for mirroring AI replies to additional channels. */
+export type SessionRelayConfig = {
+  targets: SessionRelayTarget[];
 };
 
 export type LoggingConfig = {
