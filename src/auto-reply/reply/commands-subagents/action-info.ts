@@ -1,7 +1,7 @@
 import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
 import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
+import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
@@ -37,7 +37,10 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const outcome = run.outcome
     ? `${run.outcome.status}${run.outcome.error ? ` (${run.outcome.error})` : ""}`
     : "n/a";
-  const linkedTask = findTaskByRunId(run.runId);
+  const linkedTask = findTaskByRunIdForOwner({
+    runId: run.runId,
+    callerOwnerKey: params.sessionKey,
+  });
 
   const lines = [
     "ℹ️ Subagent info",

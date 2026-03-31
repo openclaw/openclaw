@@ -27,10 +27,40 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-update.js";
-import { credentialsMatchConfig, loadMatrixCredentials } from "../credentials-read.js";
-import { MatrixClient } from "../sdk.js";
-import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
+
+type MatrixAuthClientDeps = {
+  MatrixClient: typeof import("../sdk.js").MatrixClient;
+  ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+};
+
+type MatrixCredentialsReadDeps = {
+  loadMatrixCredentials: typeof import("../credentials-read.js").loadMatrixCredentials;
+  credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
+};
+
+let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
+let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
+
+async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
+  matrixAuthClientDepsPromise ??= Promise.all([import("../sdk.js"), import("./logging.js")]).then(
+    ([sdkModule, loggingModule]) => ({
+      MatrixClient: sdkModule.MatrixClient,
+      ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+    }),
+  );
+  return await matrixAuthClientDepsPromise;
+}
+
+async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDeps> {
+  matrixCredentialsReadDepsPromise ??= import("../credentials-read.js").then(
+    (credentialsReadModule) => ({
+      loadMatrixCredentials: credentialsReadModule.loadMatrixCredentials,
+      credentialsMatchConfig: credentialsReadModule.credentialsMatchConfig,
+    }),
+  );
+  return await matrixCredentialsReadDepsPromise;
+}
 
 function readEnvSecretRefFallback(params: {
   value: unknown;
@@ -649,6 +679,7 @@ export async function resolveMatrixAuth(params?: {
     return credentialsWriter;
   };
 
+  const { loadMatrixCredentials, credentialsMatchConfig } = await loadMatrixCredentialsReadDeps();
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
     cached &&
@@ -670,6 +701,7 @@ export async function resolveMatrixAuth(params?: {
 
     if (!userId || !knownDeviceId) {
       // Fetch whoami when we need to resolve userId and/or deviceId from token auth.
+      const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
       ensureMatrixSdkLoggingConfigured();
       const tempClient = new MatrixClient(homeserver, accessToken, {
         ssrfPolicy: resolved.ssrfPolicy,
@@ -767,6 +799,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   // Login with password using the same hardened request path as other Matrix HTTP calls.
+  const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
   ensureMatrixSdkLoggingConfigured();
   const loginClient = new MatrixClient(homeserver, "", {
     ssrfPolicy: resolved.ssrfPolicy,
