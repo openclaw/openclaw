@@ -688,9 +688,22 @@ export async function getReplyFromConfig(
     });
     if (overrideRef) {
       const overrideKey = modelKey(overrideRef.ref.provider, overrideRef.ref.model);
-      // Check if final model is in the fallback chain
+      // Check if final model is in the fallback chain.
+      // IMPORTANT: Use the override's provider context (not defaultProvider) to resolve
+      // providerless fallbacks, matching the logic used when fallbacks were originally
+      // resolved in the allowlist check above (lines 200-241).
+      const overrideProvider = overrideRef.ref.provider;
+      const fallbackProviderContext = overrideProvider ?? defaultProvider;
+      const fallbackAliasIndex =
+        overrideProvider && overrideProvider !== defaultProvider
+          ? buildModelAliasIndex({ cfg, defaultProvider: fallbackProviderContext })
+          : aliasIndex;
       const isInFallbacks = (opts?.modelOverrideFallbacks ?? []).some((fb) => {
-        const fbRef = resolveModelRefFromString({ raw: fb.trim(), defaultProvider, aliasIndex });
+        const fbRef = resolveModelRefFromString({
+          raw: fb.trim(),
+          defaultProvider: fallbackProviderContext,
+          aliasIndex: fallbackAliasIndex,
+        });
         return fbRef && modelKey(fbRef.ref.provider, fbRef.ref.model) === finalModelKey;
       });
       if (finalModelKey !== overrideKey && !isInFallbacks) {
@@ -706,12 +719,15 @@ export async function getReplyFromConfig(
   // Log final model selection when image model override was considered
   if (hasAppliedImageModelOverride && opts?.modelOverride) {
     const finalModelKey = modelKey(provider, model);
-    const overrideKey = modelKey(
-      resolveModelRefFromString({ raw: opts.modelOverride.trim(), defaultProvider, aliasIndex })
-        ?.ref.provider ?? defaultProvider,
-      resolveModelRefFromString({ raw: opts.modelOverride.trim(), defaultProvider, aliasIndex })
-        ?.ref.model ?? opts.modelOverride.trim(),
-    );
+    // Use the same resolution as above for consistency
+    const overrideRef = resolveModelRefFromString({
+      raw: opts.modelOverride.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    const overrideKey = overrideRef
+      ? modelKey(overrideRef.ref.provider, overrideRef.ref.model)
+      : opts.modelOverride.trim();
     if (finalModelKey !== overrideKey) {
       defaultRuntime.log?.(
         `[image-model-switch] Final model ${finalModelKey} differs from Gateway override ${overrideKey}, stored override or directive took precedence`,
