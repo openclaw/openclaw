@@ -74,7 +74,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         "read",
         target.mountRootPath,
         path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath),
-        path.posix.basename(target.containerPath),
+        path.posix.basename(relativePath),
       ],
       signal: params.signal,
     });

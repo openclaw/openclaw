@@ -138,6 +138,34 @@ describe("remote sandbox fs bridge", () => {
       );
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects final-component symlinks even when they stay inside the workspace",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "note.txt"), "hello", "utf8");
+        await fs.symlink("note.txt", path.join(workspaceDir, "link.txt"));
+
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+          }),
+          runtime,
+        });
+
+        await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(
+          /symbolic links|too many levels|ELOOP/i,
+        );
+      });
+    },
+  );
 });
 
 async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {
