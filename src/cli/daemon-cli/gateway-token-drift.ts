@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { hasConfiguredSecretInput, resolveSecretInputRef } from "../../config/types.secrets.js";
-import { trimToUndefined } from "../../gateway/credential-planner.js";
+import { resolveSecretInputRef } from "../../config/types.secrets.js";
+import { createGatewayCredentialPlan, trimToUndefined } from "../../gateway/credential-planner.js";
 import { GatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 
@@ -12,13 +12,14 @@ function isPasswordFallbackActive(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): boolean {
-  if (params.cfg.gateway?.auth?.mode !== undefined) {
+  const plan = createGatewayCredentialPlan({
+    config: params.cfg,
+    env: params.env,
+  });
+  if (plan.authMode !== undefined) {
     return false;
   }
-  if (trimToUndefined(params.env.OPENCLAW_GATEWAY_PASSWORD)) {
-    return true;
-  }
-  return hasConfiguredSecretInput(params.cfg.gateway?.auth?.password, params.cfg.secrets?.defaults);
+  return plan.passwordCanWin && !plan.tokenCanWin;
 }
 
 export async function resolveGatewayTokenForDriftCheck(params: {

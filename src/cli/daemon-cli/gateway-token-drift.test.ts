@@ -90,17 +90,12 @@ describe("resolveGatewayTokenForDriftCheck", () => {
     expect(token).toBeUndefined();
   });
 
-  it("returns undefined when password fallback is active with mode unset", async () => {
+  it("returns undefined when password fallback is active with mode unset and no token candidate", async () => {
     const token = await resolveGatewayTokenForDriftCheck({
       cfg: {
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+            password: "config-password",
           },
         },
       } as OpenClawConfig,
@@ -110,5 +105,27 @@ describe("resolveGatewayTokenForDriftCheck", () => {
     });
 
     expect(token).toBeUndefined();
+  });
+
+  it("does not skip token resolution when mode is unset and token can win", async () => {
+    await expect(
+      resolveGatewayTokenForDriftCheck({
+        cfg: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            auth: {
+              token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+            },
+          },
+        } as OpenClawConfig,
+        env: {
+          OPENCLAW_GATEWAY_PASSWORD: "env-password",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/gateway\.auth\.token/i);
   });
 });
