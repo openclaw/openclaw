@@ -160,6 +160,7 @@ function mockSingleBrowserProxyNode() {
 
 function resetBrowserToolMocks() {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   configMocks.loadConfig.mockReturnValue({ browser: {} });
   browserConfigMocks.resolveBrowserConfig.mockReturnValue({
     enabled: true,
@@ -559,6 +560,60 @@ describe("browser tool url alias support", () => {
       baseUrl: undefined,
       profile: undefined,
     });
+  });
+});
+
+describe("browser tool local-browser-bridge adapter", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("routes profile=user status through local-browser-bridge", async () => {
+    vi.stubEnv("OPENCLAW_LOCAL_BROWSER_BRIDGE_URL", "http://127.0.0.1:3000");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ capabilities: { navigate: true } }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            diagnostics: {
+              browser: "safari",
+              attach: { mode: "direct" },
+              ready: true,
+              blockers: [],
+            },
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ sessions: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", { action: "status", profile: "user" });
+
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      adapter: "local-browser-bridge",
+      profile: "user",
+      route: "safari-direct",
+      browser: "safari",
+      attachMode: "direct",
+    });
+  });
+
+  it("rejects write actions for profile=chrome-relay through local-browser-bridge", async () => {
+    vi.stubEnv("OPENCLAW_LOCAL_BROWSER_BRIDGE_URL", "http://127.0.0.1:3000");
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "navigate",
+        profile: "chrome-relay",
+        url: "https://example.com",
+      }),
+    ).rejects.toThrow("read-only in v1");
+    expect(browserActionsMocks.browserNavigate).not.toHaveBeenCalled();
   });
 });
 

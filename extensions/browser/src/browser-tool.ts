@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { executeLocalBrowserBridgeAction } from "./browser/local-browser-bridge.js";
 import {
   executeActAction,
   executeConsoleAction,
@@ -379,8 +380,10 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser on the local host, use profile="user". A supported Chromium-based browser (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
+      'For the logged-in user browser on the local host, prefer profile="user". Use it only when existing logins/cookies matter and the user is present to click/approve any browser attach prompt.',
+      'Use profile="chrome-relay" only for the Chrome extension / Browser Relay / toolbar-button attach-tab flow, or when the user explicitly asks for the extension relay.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
+      'User-browser flows need user interaction: profile="user" may require approving a browser attach prompt; profile="chrome-relay" needs the user to click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If user presence is unclear, ask first.',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -398,8 +401,8 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      // User-browser profiles (existing-session) are host-only.
-      const isUserBrowserProfile = shouldPreferHostForProfile(profile);
+      // User-browser profiles are host-only.
+      const isUserBrowserProfile = shouldPreferHostForProfile(profile) || profile === "chrome-relay";
       if (isUserBrowserProfile) {
         if (requestedNode || target === "node") {
           throw new Error(`profile="${profile}" only supports the local host browser.`);
@@ -452,6 +455,16 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
+      if (!proxyRequest && resolvedTarget !== "sandbox") {
+        const directBridgeResult = await executeLocalBrowserBridgeAction({
+          action,
+          profile: profile ?? undefined,
+          input: params,
+        });
+        if (directBridgeResult) {
+          return jsonResult(directBridgeResult);
+        }
+      }
 
       switch (action) {
         case "status":

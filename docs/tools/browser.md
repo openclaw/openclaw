@@ -18,7 +18,7 @@ Beginner view:
 - Think of it as a **separate, agent-only browser**.
 - The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
-- The built-in `user` profile attaches to your real signed-in Chrome session via Chrome MCP.
+- The built-in `user` profile attaches to your real signed-in browser session.
 
 ## What you get
 
@@ -122,20 +122,42 @@ Typical symptoms:
 - `browser.request` is missing.
 - The agent reports the browser tool as unavailable or missing.
 
-## Profiles: `openclaw` vs `user`
+## Profiles: `openclaw` vs `user` vs `chrome-relay`
 
 - `openclaw`: managed, isolated browser (no extension required).
-- `user`: built-in Chrome MCP attach profile for your **real signed-in Chrome**
-  session.
+- `user`: built-in Chrome MCP attach profile for your **real signed-in browser** session. If `OPENCLAW_LOCAL_BROWSER_BRIDGE_URL` is set and reachable, the agent browser tool and `openclaw browser` CLI can route `user` through `local-browser-bridge` as **Safari actionable** (`safari-direct`) for `status`/`tabs`/`open`/`navigate`.
+- `chrome-relay`: explicit Chrome extension relay flow. If `OPENCLAW_LOCAL_BROWSER_BRIDGE_URL` is set and reachable, the agent browser tool and `openclaw browser` CLI can also route `chrome-relay` through `local-browser-bridge` as **Chrome shared-tab read-only** (`chrome-relay`) for `status`/`tabs`.
 
 For agent browser tool calls:
 
 - Default: use the isolated `openclaw` browser.
-- Prefer `profile="user"` when existing logged-in sessions matter and the user
-  is at the computer to click/approve any attach prompt.
+- Prefer `profile="user"` when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
+- Use `profile="chrome-relay"` only when the user explicitly wants the Chrome extension / toolbar-button attach flow.
 - `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
+
+### Experimental local-browser-bridge adapter
+
+If `OPENCLAW_LOCAL_BROWSER_BRIDGE_URL` is set (default bridge URL expectation:
+`http://127.0.0.1:3000`) and the service is reachable, OpenClaw has a minimal
+bridge-backed path:
+
+- `profile="user"` → Safari actionable (`safari-direct`) via local-browser-bridge
+- `profile="chrome-relay"` → Chrome shared-tab read-only via local-browser-bridge
+
+Current OpenClaw wiring is intentionally narrow and truthful:
+
+- supported through the agent browser tool and `openclaw browser` CLI:
+  `status`, `tabs`, `open`, `navigate`
+- Safari runtime path: `open`/`navigate` only
+- Chrome relay path: `status`/`tabs` only
+- Chrome relay rejects write actions like `open`, `navigate`, `focus`, `close`,
+  `snapshot`, `act`, and `screenshot`
+- not yet wired through this adapter path: session attach/resume UX
+
+This is a consumer seam for the bridge contract, not a full replacement for the
+existing managed-browser / Chrome MCP / extension-relay implementations.
 
 ## Configuration
 
@@ -173,6 +195,10 @@ Browser settings live in `~/.openclaw/openclaw.json`.
         attachOnly: true,
         userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
         color: "#FB542B",
+      "chrome-relay": {
+        driver: "extension",
+        cdpUrl: "http://127.0.0.1:18792",
+        color: "#00AA00",
       },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
@@ -379,6 +405,7 @@ Defaults:
 - The `openclaw` profile is auto-created if missing.
 - The `user` profile is built-in for Chrome MCP existing-session attach.
 - Existing-session profiles are opt-in beyond `user`; create them with `--driver existing-session`.
+- The `chrome-relay` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
@@ -431,6 +458,8 @@ Then in the matching browser:
 3. Keep the browser running and approve the connection prompt when OpenClaw attaches.
 
 Common inspect pages:
+- CLI: `openclaw browser --browser-profile chrome-relay tabs`
+- Agent tool: `browser` with `profile="chrome-relay"`
 
 - Chrome: `chrome://inspect/#remote-debugging`
 - Brave: `brave://inspect/#remote-debugging`

@@ -1,3 +1,4 @@
+import { executeLocalBrowserBridgeRequest } from "../browser/local-browser-bridge.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
 export type BrowserParentOpts = GatewayRpcOpts & {
@@ -42,6 +43,26 @@ export async function callBrowserRequest<T>(
       ? resolvedTimeoutMs
       : undefined;
   const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
+  const directPayload = await executeLocalBrowserBridgeRequest({
+    profile:
+      typeof params.query?.profile === "string"
+        ? params.query.profile
+        : typeof params.body === "object" &&
+            params.body &&
+            "profile" in params.body &&
+            typeof (params.body as { profile?: unknown }).profile === "string"
+          ? (params.body as { profile: string }).profile
+          : opts.browserProfile,
+    request: {
+      method: params.method,
+      path: params.path,
+      body: params.body,
+    },
+    timeoutMs: resolvedTimeout,
+  });
+  if (directPayload !== null) {
+    return directPayload as T;
+  }
   const payload = await callGatewayFromCli(
     "browser.request",
     { ...opts, timeout },
