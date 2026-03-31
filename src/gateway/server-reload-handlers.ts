@@ -1,4 +1,4 @@
-import { getInspectableTaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
+import { getInspectableTaskRegistrySummary } from "openclaw/plugin-sdk/tasks-summary";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";

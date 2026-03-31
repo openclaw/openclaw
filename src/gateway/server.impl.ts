@@ -1,5 +1,5 @@
 import path from "node:path";
-import { getInspectableTaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
+import { getInspectableTaskRegistrySummary } from "openclaw/plugin-sdk/tasks-summary";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";

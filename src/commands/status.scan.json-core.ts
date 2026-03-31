@@ -1,5 +1,7 @@
-import { createEmptyTaskAuditSummary } from "openclaw/plugin-sdk/tasks";
-import { createEmptyTaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
+import {
+  createEmptyTaskAuditSummary,
+  createEmptyTaskRegistrySummary,
+} from "openclaw/plugin-sdk/tasks-empty-summary";
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { loggingState } from "../logging/state.js";

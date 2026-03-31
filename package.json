@@ -189,6 +189,14 @@
       "types": "./dist/plugin-sdk/tasks.d.ts",
       "default": "./dist/plugin-sdk/tasks.js"
     },
+    "./plugin-sdk/tasks-summary": {
+      "types": "./dist/plugin-sdk/tasks-summary.d.ts",
+      "default": "./dist/plugin-sdk/tasks-summary.js"
+    },
+    "./plugin-sdk/tasks-empty-summary": {
+      "types": "./dist/plugin-sdk/tasks-empty-summary.d.ts",
+      "default": "./dist/plugin-sdk/tasks-empty-summary.js"
+    },
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"
