@@ -87,6 +87,12 @@ describe("resolveAnnounceTargetFromKey", () => {
             },
             capabilities: { chatTypes: ["direct", "group", "thread"] },
             messaging: {
+              resolveSessionTarget: ({ kind, id }: { kind: string; id: string }) => {
+                if (kind === "group" || kind === "channel") {
+                  return id;
+                }
+                return undefined;
+              },
               normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
             },
             config: {

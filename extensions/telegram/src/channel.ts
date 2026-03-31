@@ -529,6 +529,14 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     messaging: {
+      resolveSessionTarget: ({ kind, id }) => {
+        // Return raw numeric chat ID for announce delivery.
+        // Caller passes kind and id separately; threadId handled by caller.
+        if (kind === "group" || kind === "channel") {
+          return id;
+        }
+        return undefined;
+      },
       normalizeTarget: normalizeTelegramMessagingTarget,
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
