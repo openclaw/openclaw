@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig } from "../types.js";
+import {
+  listMatrixAccountIds,
+  resolveConfiguredMatrixBotUserIds,
+  resolveDefaultMatrixAccountId,
+  resolveMatrixAccount,
+} from "./accounts.js";
 import type { MatrixStoredCredentials } from "./credentials-read.js";
 
 const loadMatrixCredentialsMock = vi.hoisted(() =>
@@ -14,11 +20,6 @@ vi.mock("./credentials-read.js", () => ({
     loadMatrixCredentialsMock(env, accountId),
   credentialsMatchConfig: () => false,
 }));
-
-let listMatrixAccountIds: typeof import("./accounts.js").listMatrixAccountIds;
-let resolveConfiguredMatrixBotUserIds: typeof import("./accounts.js").resolveConfiguredMatrixBotUserIds;
-let resolveDefaultMatrixAccountId: typeof import("./accounts.js").resolveDefaultMatrixAccountId;
-let resolveMatrixAccount: typeof import("./accounts.js").resolveMatrixAccount;
 
 const envKeys = [
   "MATRIX_HOMESERVER",
@@ -35,14 +36,7 @@ const envKeys = [
 describe("resolveMatrixAccount", () => {
   let prevEnv: Record<string, string | undefined> = {};
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({
-      listMatrixAccountIds,
-      resolveConfiguredMatrixBotUserIds,
-      resolveDefaultMatrixAccountId,
-      resolveMatrixAccount,
-    } = await import("./accounts.js"));
+  beforeEach(() => {
     loadMatrixCredentialsMock.mockReset().mockReturnValue(null);
     prevEnv = {};
     for (const key of envKeys) {

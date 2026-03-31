@@ -1,5 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
+import { setMatrixRuntime } from "../runtime.js";
+import { voteMatrixPoll } from "./actions/polls.js";
+import { sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } from "./send.js";
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -44,19 +47,6 @@ const runtimeStub = {
     },
   },
 } as unknown as PluginRuntime;
-
-let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
-let sendSingleTextMessageMatrix: typeof import("./send.js").sendSingleTextMessageMatrix;
-let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
-let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
-let setMatrixRuntime: typeof import("../runtime.js").setMatrixRuntime;
-
-async function primeMatrixSendModules() {
-  ({ setMatrixRuntime } = await import("../runtime.js"));
-  ({ sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } =
-    await import("./send.js"));
-  ({ voteMatrixPoll } = await import("./actions/polls.js"));
-}
 
 function applyMatrixSendRuntimeStub() {
   setMatrixRuntime(runtimeStub);
@@ -128,11 +118,9 @@ function resetMatrixSendRuntimeMocks() {
 }
 
 describe("sendMessageMatrix media", () => {
-  beforeAll(async () => {
-    await primeMatrixSendModules();
-  });
+  beforeAll(() => {});
 
-  beforeEach(async () => {
+  beforeEach(() => {
     resetMatrixSendRuntimeMocks();
   });
 
@@ -432,11 +420,7 @@ describe("sendSingleTextMessageMatrix", () => {
 });
 
 describe("voteMatrixPoll", () => {
-  beforeAll(async () => {
-    await primeMatrixSendModules();
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     resetMatrixSendRuntimeMocks();
   });
@@ -574,11 +558,7 @@ describe("voteMatrixPoll", () => {
 });
 
 describe("sendTypingMatrix", () => {
-  beforeAll(async () => {
-    await primeMatrixSendModules();
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     resetMatrixSendRuntimeMocks();
   });
