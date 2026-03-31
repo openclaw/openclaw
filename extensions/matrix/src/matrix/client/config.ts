@@ -27,7 +27,6 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-update.js";
-import { credentialsMatchConfig, loadMatrixCredentials } from "../credentials-read.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 type MatrixAuthClientDeps = {
@@ -35,7 +34,13 @@ type MatrixAuthClientDeps = {
   ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
 };
 
+type MatrixCredentialsReadDeps = {
+  loadMatrixCredentials: typeof import("../credentials-read.js").loadMatrixCredentials;
+  credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
+};
+
 let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
+let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
 
 async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
   matrixAuthClientDepsPromise ??= Promise.all([import("../sdk.js"), import("./logging.js")]).then(
@@ -45,6 +50,16 @@ async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
     }),
   );
   return await matrixAuthClientDepsPromise;
+}
+
+async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDeps> {
+  matrixCredentialsReadDepsPromise ??= import("../credentials-read.js").then(
+    (credentialsReadModule) => ({
+      loadMatrixCredentials: credentialsReadModule.loadMatrixCredentials,
+      credentialsMatchConfig: credentialsReadModule.credentialsMatchConfig,
+    }),
+  );
+  return await matrixCredentialsReadDepsPromise;
 }
 
 function readEnvSecretRefFallback(params: {
@@ -664,6 +679,7 @@ export async function resolveMatrixAuth(params?: {
     return credentialsWriter;
   };
 
+  const { loadMatrixCredentials, credentialsMatchConfig } = await loadMatrixCredentialsReadDeps();
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
     cached &&
