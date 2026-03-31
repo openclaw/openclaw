@@ -59,6 +59,24 @@ describe("shouldPromoteRecentInviteRoom", () => {
     ).toBe(false);
   });
 
+  it("rejects rooms matched only by wildcard config", () => {
+    expect(
+      shouldPromoteRecentInviteRoom({
+        roomId: "!room:example.org",
+        roomInfo: {
+          altAliases: [],
+          nameResolved: true,
+          aliasesResolved: true,
+        },
+        rooms: {
+          "*": {
+            enabled: false,
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("allows strict unnamed invite rooms without direct room config", () => {
     expect(
       shouldPromoteRecentInviteRoom({

@@ -26,5 +26,5 @@ export function shouldPromoteRecentInviteRoom(params: {
     roomId: params.roomId,
     aliases: roomAliases,
   });
-  return roomConfig.matchSource !== "direct";
+  return roomConfig.matchSource === undefined;
 }

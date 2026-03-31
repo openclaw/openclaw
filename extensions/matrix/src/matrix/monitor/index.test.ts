@@ -337,6 +337,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.accountConfig.dm = {};
+    delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
     hoisted.createDirectRoomTracker.mockReset().mockReturnValue({
@@ -523,6 +524,29 @@ describe("monitorMatrixProvider", () => {
 
     hoisted.getRoomInfo.mockResolvedValueOnce({
       name: "Ops Room",
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
+
+    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
+  });
+
+  it("wires recent-invite promotion to reject wildcard-configured rooms", async () => {
+    (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms = {
+      "*": { enabled: false },
+    };
+
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1] as
+      | { canPromoteRecentInvite?: (roomId: string) => Promise<boolean> }
+      | undefined;
+    if (!trackerOpts?.canPromoteRecentInvite) {
+      throw new Error("recent invite promotion callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
       altAliases: [],
       nameResolved: true,
       aliasesResolved: true,
