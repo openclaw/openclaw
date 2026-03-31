@@ -57,12 +57,6 @@ vi.mock("./tools/session-status-tool.js", () => ({
 vi.mock("./tools/sessions-list-tool.js", () => ({
   createSessionsListTool: mockToolFactory("sessions_list_stub"),
 }));
-vi.mock("./tools/sessions-send-tool.js", () => ({
-  createSessionsSendTool: mockToolFactory("sessions_send_stub"),
-}));
-vi.mock("./tools/sessions-spawn-tool.js", () => ({
-  createSessionsSpawnTool: mockToolFactory("sessions_spawn_stub"),
-}));
 vi.mock("./tools/sessions-yield-tool.js", () => ({
   createSessionsYieldTool: mockToolFactory("sessions_yield_stub"),
 }));
@@ -105,6 +99,18 @@ function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
   return tool;
 }
 
+function getToolByName(name: string, options?: { sandboxed?: boolean }) {
+  const tool = createOpenClawTools({
+    agentSessionKey: "main",
+    sandboxed: options?.sandboxed,
+  }).find((candidate) => candidate.name === name);
+  expect(tool).toBeDefined();
+  if (!tool) {
+    throw new Error(`missing ${name} tool`);
+  }
+  return tool;
+}
+
 function mockGatewayWithHistory(
   extra?: (req: { method?: string; params?: Record<string, unknown> }) => unknown,
 ) {
@@ -125,6 +131,21 @@ function mockGatewayWithHistory(
 describe("sessions tools visibility", () => {
   beforeEach(async () => {
     await loadFreshOpenClawToolsModuleForTest();
+  });
+
+  it("registers real sessions_send and sessions_spawn schemas through createOpenClawTools", () => {
+    const sessionsSend = getToolByName("sessions_send");
+    const sessionsSendSchema = sessionsSend.parameters as {
+      properties?: Record<string, { type?: unknown }>;
+    };
+    expect(sessionsSendSchema.properties?.timeoutSeconds?.type).toBe("number");
+
+    const sessionsSpawn = getToolByName("sessions_spawn");
+    const sessionsSpawnSchema = sessionsSpawn.parameters as {
+      properties?: Record<string, { type?: unknown }>;
+    };
+    expect(sessionsSpawnSchema.properties?.runTimeoutSeconds?.type).toBe("number");
+    expect(sessionsSpawnSchema.properties?.timeoutSeconds?.type).toBe("number");
   });
 
   it("defaults to tree visibility (self + spawned) for sessions_history", async () => {

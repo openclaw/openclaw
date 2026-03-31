@@ -274,42 +274,113 @@ describe("sessions_send fail-closed announce flow", () => {
     expect(runSessionsSendA2AFlowMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps fire-and-forget sends deliverable without waiting for agent completion", async () => {
+  it("fails closed for fire-and-forget sends without immediate target classification", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          sessions: [{ key: "main", displayName: "main" }],
-        };
-      }
       if (request.method === "agent") {
         return { runId: "run-fire-and-forget", status: "accepted" };
       }
       return {};
     });
 
-    const result = await createTool().execute("call-fire-and-forget", {
+    const resultPromise = createTool().execute("call-fire-and-forget", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    const timeoutSentinel = Symbol("timeout");
+    const resultOrTimeout = await Promise.race([
+      resultPromise,
+      new Promise<typeof timeoutSentinel>((resolve) => {
+        setTimeout(() => resolve(timeoutSentinel), 0);
+      }),
+    ]);
+
+    expect(resultOrTimeout).not.toBe(timeoutSentinel);
+    const result = resultOrTimeout as Awaited<ReturnType<ReturnType<typeof createTool>["execute"]>>;
+
+    expect(result.details).toMatchObject({
+      runId: "run-fire-and-forget",
+      status: "accepted",
+      delivery: { status: "skipped", mode: "none" },
+    });
+    expect(runSessionsSendA2AFlowMock).not.toHaveBeenCalled();
+    const methods = callGatewayMock.mock.calls.map(
+      ([request]) => (request as { method?: string }).method,
+    );
+    expect(methods).not.toContain("sessions.list");
+    expect(methods).not.toContain("agent.wait");
+    expect(methods).not.toContain("chat.history");
+  });
+
+  it("fails closed for fire-and-forget sends even when metadata-backed routing would exist", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-fire-metadata-route", status: "accepted" };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: "main",
+              displayName: "main",
+              deliveryContext: {
+                channel: "discord",
+                to: "group:dev",
+              },
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await createTool().execute("call-fire-and-forget-metadata-route", {
       sessionKey: "main",
       message: "ping",
       timeoutSeconds: 0,
     });
 
     expect(result.details).toMatchObject({
-      runId: "run-fire-and-forget",
+      runId: "run-fire-metadata-route",
       status: "accepted",
-      delivery: { status: "pending", mode: "announce" },
+      delivery: { status: "skipped", mode: "none" },
     });
-    expect(runSessionsSendA2AFlowMock).toHaveBeenCalledTimes(1);
-    expect(runSessionsSendA2AFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        targetSessionKey: "main",
-        displayKey: "main",
-        waitRunId: "run-fire-and-forget",
-      }),
-    );
+    expect(runSessionsSendA2AFlowMock).not.toHaveBeenCalled();
     const methods = callGatewayMock.mock.calls.map(
       ([request]) => (request as { method?: string }).method,
     );
+    expect(methods).not.toContain("sessions.list");
+    expect(methods).not.toContain("agent.wait");
+    expect(methods).not.toContain("chat.history");
+  });
+
+  it("skips fire-and-forget announce flow for immediate external targets", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-fire-external", status: "accepted" };
+      }
+      return {};
+    });
+
+    const result = await createTool().execute("call-fire-and-forget-external", {
+      sessionKey: "agent:main:discord:group:target",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      runId: "run-fire-external",
+      status: "accepted",
+      delivery: { status: "skipped", mode: "none" },
+    });
+    expect(runSessionsSendA2AFlowMock).not.toHaveBeenCalled();
+    const methods = callGatewayMock.mock.calls.map(
+      ([request]) => (request as { method?: string }).method,
+    );
+    expect(methods).not.toContain("sessions.list");
     expect(methods).not.toContain("agent.wait");
     expect(methods).not.toContain("chat.history");
   });
@@ -317,22 +388,27 @@ describe("sessions_send fail-closed announce flow", () => {
   it("fails closed for fire-and-forget lookup-preferred sessions missing delivery metadata", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          sessions: [{ key: "agent:main:whatsapp:group:123@g.us", displayName: "wa target" }],
-        };
-      }
       if (request.method === "agent") {
         return { runId: "run-fire-skip", status: "accepted" };
       }
       return {};
     });
 
-    const result = await createTool().execute("call-fire-and-forget-skip", {
+    const resultPromise = createTool().execute("call-fire-and-forget-skip", {
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       message: "ping",
       timeoutSeconds: 0,
     });
+    const timeoutSentinel = Symbol("timeout");
+    const resultOrTimeout = await Promise.race([
+      resultPromise,
+      new Promise<typeof timeoutSentinel>((resolve) => {
+        setTimeout(() => resolve(timeoutSentinel), 0);
+      }),
+    ]);
+
+    expect(resultOrTimeout).not.toBe(timeoutSentinel);
+    const result = resultOrTimeout as Awaited<ReturnType<ReturnType<typeof createTool>["execute"]>>;
 
     expect(result.details).toMatchObject({
       runId: "run-fire-skip",
@@ -343,6 +419,7 @@ describe("sessions_send fail-closed announce flow", () => {
     const methods = callGatewayMock.mock.calls.map(
       ([request]) => (request as { method?: string }).method,
     );
+    expect(methods).not.toContain("sessions.list");
     expect(methods).not.toContain("agent.wait");
     expect(methods).not.toContain("chat.history");
   });
