@@ -6301,6 +6301,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         webhookPath: {
           type: "string",
         },
+        threadBindings: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            idleHours: {
+              type: "number",
+            },
+            maxAgeHours: {
+              type: "number",
+            },
+            spawnSubagentSessions: {
+              type: "boolean",
+            },
+            spawnAcpSessions: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
         accounts: {
           type: "object",
           propertyNames: {
@@ -6371,6 +6392,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               webhookPath: {
                 type: "string",
+              },
+              threadBindings: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  idleHours: {
+                    type: "number",
+                  },
+                  maxAgeHours: {
+                    type: "number",
+                  },
+                  spawnSubagentSessions: {
+                    type: "boolean",
+                  },
+                  spawnAcpSessions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               groups: {
                 type: "object",
@@ -6674,6 +6716,17 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["open", "disabled", "allowlist"],
         },
+        streaming: {
+          anyOf: [
+            {
+              type: "string",
+              enum: ["partial", "off"],
+            },
+            {
+              type: "boolean",
+            },
+          ],
+        },
         replyToMode: {
           type: "string",
           enum: ["off", "first", "all"],
@@ -6735,6 +6788,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         mediaMaxMb: {
           type: "number",
+        },
+        historyLimit: {
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
         },
         autoJoin: {
           type: "string",

@@ -255,7 +255,16 @@ function resolveResponsesLimits(
 }
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  return (body.tools ?? []) as ClientToolDefinition[];
+  // Normalize from Responses API flat format to the internal wrapped format.
+  return (body.tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  }));
 }
 
 function applyToolChoice(params: {
@@ -415,6 +424,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -430,8 +440,7 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      // HTTP API callers are authenticated operator clients for this gateway context.
-      senderIsOwner: true,
+      senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
     },
     defaultRuntime,
@@ -695,6 +704,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner: false,
         deps,
       });
 
@@ -947,6 +957,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner: false,
         deps,
       });
 

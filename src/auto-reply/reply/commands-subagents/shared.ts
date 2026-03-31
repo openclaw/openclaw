@@ -148,7 +148,7 @@ export function formatSubagentListLine(params: {
   const usageText = formatTokenUsageDisplay(params.sessionEntry);
   const label = truncateLine(formatRunLabel(params.entry, { maxLength: 48 }), 48);
   const task = formatTaskPreview(params.entry.task);
-  const runtime = formatDurationCompact(params.runtimeMs);
+  const runtime = formatDurationCompact(params.runtimeMs) ?? "n/a";
   const status = resolveDisplayStatus(params.entry, {
     pendingDescendants: params.pendingDescendants,
   });

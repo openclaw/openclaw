@@ -1,3 +1,10 @@
+import {
+  asObject,
+  readResponseTextLimited,
+  trimToUndefined,
+  truncateErrorDetail,
+} from "openclaw/plugin-sdk/speech";
+
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
@@ -58,6 +65,45 @@ export function resolveOpenAITtsInstructions(
   return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
+function formatOpenAiErrorPayload(payload: unknown): string | undefined {
+  const root = asObject(payload);
+  const subject = asObject(root?.error) ?? root;
+  if (!subject) {
+    return undefined;
+  }
+  const message =
+    trimToUndefined(subject.message) ??
+    trimToUndefined(subject.detail) ??
+    trimToUndefined(root?.message);
+  const type = trimToUndefined(subject.type);
+  const code = trimToUndefined(subject.code);
+  const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
+    .filter((value): value is string => Boolean(value))
+    .join(", ");
+  if (message && metadata) {
+    return `${truncateErrorDetail(message)} [${metadata}]`;
+  }
+  if (message) {
+    return truncateErrorDetail(message);
+  }
+  if (metadata) {
+    return `[${metadata}]`;
+  }
+  return undefined;
+}
+
+async function extractOpenAiErrorDetail(response: Response): Promise<string | undefined> {
+  const rawBody = trimToUndefined(await readResponseTextLimited(response));
+  if (!rawBody) {
+    return undefined;
+  }
+  try {
+    return formatOpenAiErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
+  } catch {
+    return truncateErrorDetail(rawBody);
+  }
+}
+
 export async function openaiTTS(params: {
   text: string;
   apiKey: string;
@@ -102,7 +148,15 @@ export async function openaiTTS(params: {
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI TTS API error (${response.status})`);
+      const detail = await extractOpenAiErrorDetail(response);
+      const requestId =
+        trimToUndefined(response.headers.get("x-request-id")) ??
+        trimToUndefined(response.headers.get("request-id"));
+      throw new Error(
+        `OpenAI TTS API error (${response.status})` +
+          (detail ? `: ${detail}` : "") +
+          (requestId ? ` [request_id=${requestId}]` : ""),
+      );
     }
 
     return Buffer.from(await response.arrayBuffer());

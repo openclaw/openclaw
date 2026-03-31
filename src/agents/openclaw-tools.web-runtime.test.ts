@@ -1,30 +1,8 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../secrets/runtime-web-tools.types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-
-const mockedModuleIds = [
-  "../plugins/tools.js",
-  "../gateway/call.js",
-  "./tools/agents-list-tool.js",
-  "./tools/canvas-tool.js",
-  "./tools/cron-tool.js",
-  "./tools/gateway-tool.js",
-  "./tools/image-generate-tool.js",
-  "./tools/image-tool.js",
-  "./tools/message-tool.js",
-  "./tools/nodes-tool.js",
-  "./tools/pdf-tool.js",
-  "./tools/session-status-tool.js",
-  "./tools/sessions-history-tool.js",
-  "./tools/sessions-list-tool.js",
-  "./tools/sessions-send-tool.js",
-  "./tools/sessions-spawn-tool.js",
-  "./tools/sessions-yield-tool.js",
-  "./tools/subagents-tool.js",
-  "./tools/tts-tool.js",
-] as const;
 
 vi.mock("../plugins/tools.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/tools.js")>("../plugins/tools.js");
@@ -160,8 +138,7 @@ async function prepareAndActivate(params: { config: OpenClawConfig; env?: NodeJS
 describe("openclaw tools runtime web metadata wiring", () => {
   const priorFetch = global.fetch;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     secretsRuntime = await import("../secrets/runtime.js");
     ({ createWebFetchTool, createWebSearchTool } = await import("./tools/web-tools.js"));
   });
@@ -169,12 +146,6 @@ describe("openclaw tools runtime web metadata wiring", () => {
   afterEach(() => {
     global.fetch = priorFetch;
     secretsRuntime.clearSecretsRuntimeSnapshot();
-  });
-
-  afterAll(() => {
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
   });
 
   it("uses runtime-selected provider when higher-precedence provider ref is unresolved", async () => {

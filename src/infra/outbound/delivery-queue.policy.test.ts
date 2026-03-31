@@ -16,6 +16,7 @@ describe("delivery-queue policy", () => {
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
       "Outbound not configured for channel: demo-channel",
+      "MatrixError: [403] User @bot:matrix.example.com not in room !mixedCase:matrix.example.com",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });

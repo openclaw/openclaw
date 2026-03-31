@@ -162,6 +162,23 @@ function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): Gate
   return resolved;
 }
 
+function isGatewayLockError(err: unknown): err is GatewayLockError {
+  return (
+    err instanceof GatewayLockError ||
+    (!!err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
+  );
+}
+
+function isHealthyGatewayLockError(err: unknown): boolean {
+  if (!isGatewayLockError(err) || typeof err.message !== "string") {
+    return false;
+  }
+  return (
+    err.message.includes("gateway already running") ||
+    err.message.includes("another gateway instance is already listening")
+  );
+}
+
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
@@ -457,10 +474,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       }
     }
   } catch (err) {
-    if (
-      err instanceof GatewayLockError ||
-      (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
-    ) {
+    if (isGatewayLockError(err)) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
@@ -476,7 +490,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         // ignore diagnostics failures
       }
       await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(1);
+      defaultRuntime.exit(isHealthyGatewayLockError(err) ? 0 : 1);
       return;
     }
     defaultRuntime.error(`Gateway failed to start: ${String(err)}`);

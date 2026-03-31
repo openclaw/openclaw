@@ -152,6 +152,40 @@ function mergeRoles(...items: Array<string | string[] | undefined>): string[] | 
   return [...roles];
 }
 
+function listActiveTokenRoles(
+  tokens: Record<string, DeviceAuthToken> | undefined,
+): string[] | undefined {
+  if (!tokens) {
+    return undefined;
+  }
+  return mergeRoles(
+    Object.values(tokens)
+      .filter((entry) => !entry.revokedAtMs)
+      .map((entry) => entry.role),
+  );
+}
+
+export function listEffectivePairedDeviceRoles(
+  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
+): string[] {
+  const activeTokenRoles = listActiveTokenRoles(device.tokens);
+  if (device.tokens) {
+    return activeTokenRoles ?? [];
+  }
+  return mergeRoles(device.roles, device.role) ?? [];
+}
+
+export function hasEffectivePairedDeviceRole(
+  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
+  role: string,
+): boolean {
+  const normalized = normalizeRole(role);
+  if (!normalized) {
+    return false;
+  }
+  return listEffectivePairedDeviceRoles(device).includes(normalized);
+}
+
 function mergeScopes(...items: Array<string[] | undefined>): string[] | undefined {
   const scopes = new Set<string>();
   for (const item of items) {

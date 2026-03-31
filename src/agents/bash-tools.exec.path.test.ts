@@ -251,14 +251,13 @@ describe("exec host env validation", () => {
     }
   });
 
-  it("fails closed when the implicit sandbox host has no sandbox runtime", async () => {
+  it("routes implicit auto host to gateway when sandbox runtime is unavailable", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
-    await expect(
-      tool.execute("call1", {
-        command: "echo ok",
-      }),
-    ).rejects.toThrow(/sandbox runtime is unavailable/);
+    const result = await tool.execute("call1", {
+      command: "echo ok",
+    });
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
@@ -268,6 +267,33 @@ describe("exec host env validation", () => {
       tool.execute("call1", {
         command: "echo ok",
       }),
-    ).rejects.toThrow(/sandbox runtime is unavailable/);
+    ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it.each([
+    "echo ok && /approve abc123 allow-once",
+    "echo ok | /approve abc123 deny",
+    "echo ok\n/approve abc123 allow-once",
+    "FOO=1 /approve abc123 allow-once",
+    "env -i /approve abc123 deny",
+    "env --ignore-environment /approve abc123 allow-once",
+    "env -i FOO=1 /approve abc123 allow-once",
+    "env -S '/approve abc123 deny'",
+    "command /approve abc123 deny",
+    "command -p /approve abc123 deny",
+    "exec -a openclaw /approve abc123 deny",
+    "sudo /approve abc123 allow-once",
+    "sudo -E /approve abc123 allow-once",
+    "bash -lc '/approve abc123 deny'",
+    "bash -c 'sudo /approve abc123 allow-once'",
+    "sh -c '/approve abc123 allow-once'",
+  ])("rejects /approve shell commands in %s", async (command) => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-approve", {
+        command,
+      }),
+    ).rejects.toThrow(/exec cannot run \/approve commands/);
   });
 });

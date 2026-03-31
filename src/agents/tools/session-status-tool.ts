@@ -23,6 +23,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { listTasksForSessionKey } from "../../tasks/task-registry.js";
 import { resolveAgentConfig, resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
@@ -118,6 +119,33 @@ function resolveStoreScopedRequesterKey(params: {
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
+function formatSessionTaskLine(sessionKey: string): string | undefined {
+  const tasks = listTasksForSessionKey(sessionKey);
+  if (tasks.length === 0) {
+    return undefined;
+  }
+  const latest = tasks[0];
+  const active = tasks.filter(
+    (task) => task.status === "queued" || task.status === "running",
+  ).length;
+  const failed = tasks.filter(
+    (task) => task.status === "failed" || task.status === "timed_out" || task.status === "lost",
+  ).length;
+  const headline =
+    active > 0
+      ? `${active} active`
+      : failed > 0
+        ? `${failed} recent failure${failed === 1 ? "" : "s"}`
+        : `latest ${latest.status.replaceAll("_", " ")}`;
+  const title = latest.label?.trim() || latest.task.trim();
+  const detail =
+    latest.status === "running" || latest.status === "queued"
+      ? latest.progressSummary?.trim()
+      : latest.error?.trim() || latest.terminalSummary?.trim();
+  const parts = [headline, latest.runtime, title, detail].filter(Boolean);
+  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
+}
+
 async function resolveModelOverride(params: {
   cfg: OpenClawConfig;
   raw: string;
@@ -191,7 +219,7 @@ export function createSessionStatusTool(opts?: {
     label: "Session Status",
     name: "session_status",
     description:
-      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+      "Show a /status-equivalent session status card (usage + time + cost when available), including linked background task context when present. Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -205,7 +233,7 @@ export function createSessionStatusTool(opts?: {
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? effectiveRequesterKey,
       );
-      const visibilityRequesterKey = effectiveRequesterKey.trim();
+      const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
       const usesLegacyMainAlias = alias === mainKey;
       const isLegacyMainVisibilityKey = (sessionKey: string) => {
         const trimmed = sessionKey.trim();
@@ -254,7 +282,8 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
-      let resolvedTargetViaSessionId = false;
+      const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+      let resolvedViaSessionId = false;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
@@ -329,7 +358,7 @@ export function createSessionStatusTool(opts?: {
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
           ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
-          resolvedTargetViaSessionId = true;
+          resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -367,13 +396,15 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      if (resolvedTargetViaSessionId || (opts?.sandboxed === true && !isExplicitAgentKey)) {
-        const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(resolved.key, agentId),
-        );
-        if (!access.allowed) {
-          throw new Error(access.error);
-        }
+      // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
+      const visibilityTargetKey =
+        !resolvedViaSessionId &&
+        (requestedKeyInput === "current" || resolved.key === requestedKeyInput)
+          ? visibilityRequesterKey
+          : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
+      const access = visibilityGuard.check(visibilityTargetKey);
+      if (!access.allowed) {
+        throw new Error(access.error);
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
@@ -537,14 +568,16 @@ export function createSessionStatusTool(opts?: {
         },
         includeTranscriptUsage: true,
       });
+      const taskLine = formatSessionTaskLine(resolved.key);
+      const fullStatusText = taskLine ? `${statusText}\n${taskLine}` : statusText;
 
       return {
-        content: [{ type: "text", text: statusText }],
+        content: [{ type: "text", text: fullStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
-          statusText,
+          statusText: fullStatusText,
         },
       };
     },

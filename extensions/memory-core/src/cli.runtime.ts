@@ -27,6 +27,7 @@ import {
   listMemoryFiles,
   normalizeExtraMemoryPaths,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
 import { getMemorySearchManager } from "./memory/index.js";
 
@@ -110,6 +111,15 @@ function resolveAgent(cfg: OpenClawConfig, agent?: string) {
     return trimmed;
   }
   return resolveDefaultAgentId(cfg);
+}
+
+function buildCliMemorySearchSessionKey(agentId: string): string {
+  return buildAgentSessionKey({
+    agentId,
+    channel: "cli",
+    peer: { kind: "direct", id: "memory-search" },
+    dmScope: "per-channel-peer",
+  });
 }
 
 function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
@@ -726,11 +736,13 @@ export async function runMemorySearch(
     cfg,
     agentId,
     run: async (manager) => {
+      const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
       try {
         results = await manager.search(query, {
           maxResults: opts.maxResults,
           minScore: opts.minScore,
+          sessionKey,
         });
       } catch (err) {
         const message = formatErrorMessage(err);

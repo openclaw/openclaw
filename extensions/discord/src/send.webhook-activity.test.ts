@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: () => loadConfigMock(),
@@ -22,9 +22,11 @@ vi.mock("../../../src/infra/channel-activity.js", async (importOriginal) => {
 let sendWebhookMessageDiscord: typeof import("./send.js").sendWebhookMessageDiscord;
 
 describe("sendWebhookMessageDiscord activity", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ sendWebhookMessageDiscord } = await import("./send.js"));
+  });
+
+  beforeEach(() => {
     recordChannelActivityMock.mockClear();
     loadConfigMock.mockClear();
     vi.stubGlobal(

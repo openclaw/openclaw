@@ -21,12 +21,14 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
+import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { createTaskRecord } from "../../tasks/task-registry.js";
+import { createRunningTaskRun } from "../../tasks/task-executor.js";
 import {
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
@@ -38,7 +40,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
-import { parseMessageWithAttachments } from "../chat-attachments.js";
+import { MediaOffloadError, parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
@@ -57,6 +59,8 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveGatewayModelSupportsImages,
+  resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -190,9 +194,9 @@ function dispatchAgentRunFromGateway(params: {
 }) {
   if (params.ingressOpts.sessionKey?.trim()) {
     try {
-      createTaskRecord({
-        source: "background_cli",
+      createRunningTaskRun({
         runtime: "cli",
+        sourceId: params.runId,
         requesterSessionKey: params.ingressOpts.sessionKey,
         requesterOrigin: normalizeDeliveryContext({
           channel: params.ingressOpts.channel,
@@ -202,9 +206,7 @@ function dispatchAgentRunFromGateway(params: {
         }),
         childSessionKey: params.ingressOpts.sessionKey,
         runId: params.runId,
-        bindingTargetKind: "session",
         task: params.ingressOpts.message,
-        status: "running",
         deliveryStatus: "not_applicable",
         startedAt: Date.now(),
       });
@@ -347,16 +349,53 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+    let imageOrder: PromptImageOrderEntry[] = [];
     if (normalizedAttachments.length > 0) {
+      const requestedSessionKeyRaw =
+        typeof request.sessionKey === "string" && request.sessionKey.trim()
+          ? request.sessionKey.trim()
+          : undefined;
+
+      let baseProvider: string | undefined;
+      let baseModel: string | undefined;
+      if (requestedSessionKeyRaw) {
+        const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
+        const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
+        baseProvider = modelRef.provider;
+        baseModel = modelRef.model;
+      }
+      const effectiveProvider = providerOverride || baseProvider;
+      const effectiveModel = modelOverride || baseModel;
+      const supportsImages = await resolveGatewayModelSupportsImages({
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        provider: effectiveProvider,
+        model: effectiveModel,
+      });
+
       try {
         const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
+          supportsImages,
         });
         message = parsed.message.trim();
         images = parsed.images;
+        imageOrder = parsed.imageOrder;
+        // offloadedRefs are appended as text markers to `message`; the agent
+        // runner will resolve them via detectAndLoadPromptImages.
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
+        // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
+        // a bad request. All other errors are input-validation failures → 4xx.
+        const isServerFault = err instanceof MediaOffloadError;
+        respond(
+          false,
+          undefined,
+          errorShape(
+            isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            String(err),
+          ),
+        );
         return;
       }
     }
@@ -481,7 +520,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // Inject timestamp into user-authored messages that don't already have one.
     // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
     // formatting in a separate code path — they never reach this handler.
-    // See: https://github.com/moltbot/moltbot/issues/3658
+    // See: https://github.com/openclaw/openclaw/issues/3658
     if (!skipTimestampInjection) {
       message = injectTimestamp(message, timestampOptsFromConfig(cfg));
     }
@@ -645,6 +684,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
     let effectivePlan = deliveryPlan;
+    let deliveryDowngradeReason: string | null = null;
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
       const cfgResolved = cfgForAgent ?? cfg;
@@ -659,8 +699,16 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedAccountId,
         };
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+        const shouldDowngrade = shouldDowngradeDeliveryToSessionOnly({
+          wantsDelivery,
+          bestEffortDeliver,
+          resolvedChannel,
+        });
+        if (!shouldDowngrade) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+          return;
+        }
+        deliveryDowngradeReason = String(err);
       }
     }
 
@@ -678,15 +726,27 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
+      const shouldDowngrade = shouldDowngradeDeliveryToSessionOnly({
+        wantsDelivery,
+        bestEffortDeliver,
+        resolvedChannel,
+      });
+      if (!shouldDowngrade) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+          ),
+        );
+        return;
+      }
+      context.logGateway.info(
+        deliveryDowngradeReason
+          ? `agent delivery downgraded to session-only (bestEffortDeliver): ${deliveryDowngradeReason}`
+          : "agent delivery downgraded to session-only (bestEffortDeliver): no deliverable channel",
       );
-      return;
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
@@ -745,6 +805,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       ingressOpts: {
         message,
         images,
+        imageOrder,
         provider: providerOverride,
         model: modelOverride,
         to: resolvedTo,

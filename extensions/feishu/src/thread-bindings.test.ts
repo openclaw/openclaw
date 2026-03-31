@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
 import { __testing, createFeishuThreadBindingManager } from "./thread-bindings.js";
 
 const baseCfg = {

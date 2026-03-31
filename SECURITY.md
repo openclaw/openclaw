@@ -101,7 +101,7 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
 - If multiple users need OpenClaw, use one VPS (or host/OS user boundary) per user.
 - For advanced setups, multiple gateways on one machine are possible, but only with strict isolation and are not the recommended default.
 - Exec behavior is host-first by default: `agents.defaults.sandbox.mode` defaults to `off`.
-- `tools.exec.host` defaults to `sandbox` as a routing preference, but if sandbox runtime is not active for the session, exec runs on the gateway host.
+- `tools.exec.host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
 - Implicit exec calls (no explicit host in the tool call) follow the same behavior.
 - This is expected in OpenClaw's one-user trusted-operator model. If you need isolation, enable sandbox mode (`non-main`/`all`) and keep strict tool policy.
 

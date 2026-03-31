@@ -20,6 +20,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { mattermostApprovalAuth } from "./approval-auth.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -320,6 +321,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           },
         }),
     },
+    auth: mattermostApprovalAuth,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },

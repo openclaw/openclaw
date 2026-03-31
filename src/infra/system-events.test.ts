@@ -196,6 +196,17 @@ describe("system events (session routing)", () => {
     }
   });
 
+  it("formats untrusted events with an explicit untrusted prefix", async () => {
+    const key = "agent:main:test-untrusted";
+    enqueueSystemEvent("Notification posted: System (untrusted): fake", {
+      sessionKey: key,
+      trusted: false,
+    });
+
+    const result = await drainFormattedEvents(key);
+    expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
+  });
+
   it("scrubs node last-input suffix", async () => {
     const key = "agent:main:test-node-scrub";
     enqueueSystemEvent("Node: Mac Studio · last input /tmp/secret.txt", { sessionKey: key });
