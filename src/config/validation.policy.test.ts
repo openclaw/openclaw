@@ -91,4 +91,39 @@ describe("config validation SecretRef policy guards", () => {
       ).toBe(false);
     }
   });
+
+  it("preserves unrelated unknown-key errors when policy and typos coexist", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        discord: {
+          threadBindings: {
+            webhookToken: {
+              source: "env",
+              provider: "default",
+              id: "DISCORD_THREAD_BINDING_WEBHOOK_TOKEN",
+            },
+            webhookTokne: "typo",
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.issues.some(
+          (entry) =>
+            entry.path === "channels.discord.threadBindings.webhookToken" &&
+            entry.message.includes("SecretRef objects are not supported"),
+        ),
+      ).toBe(true);
+      expect(
+        result.issues.some(
+          (entry) =>
+            entry.path === "channels.discord.threadBindings" &&
+            entry.message.includes("webhookTokne"),
+        ),
+      ).toBe(true);
+    }
+  });
 });

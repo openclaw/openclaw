@@ -320,7 +320,11 @@ function isUnsupportedMutableSecretRefSchemaIssue(params: {
   if (!/Unrecognized key/i.test(issue.message)) {
     return false;
   }
-  return issue.message.includes(`"${childKey}"`);
+  const unrecognizedKeys = [...issue.message.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  if (unrecognizedKeys.length === 0) {
+    return false;
+  }
+  return unrecognizedKeys.length === 1 && unrecognizedKeys[0] === childKey;
 }
 
 function mergeUnsupportedMutableSecretRefIssues(

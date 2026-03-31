@@ -45,7 +45,7 @@ Notes:
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
 - On Linux systemd installs, `status` token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
 - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
-- If `gateway.auth.mode` disables token auth (`password`, `none`, `trusted-proxy`), token-drift checks skip config token resolution for that mode.
+- If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset with password fallback active), token-drift checks skip config token resolution.
 - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
