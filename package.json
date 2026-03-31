@@ -313,6 +313,10 @@
       "types": "./dist/plugin-sdk/command-auth.d.ts",
       "default": "./dist/plugin-sdk/command-auth.js"
     },
+    "./plugin-sdk/command-auth-native": {
+      "types": "./dist/plugin-sdk/command-auth-native.d.ts",
+      "default": "./dist/plugin-sdk/command-auth-native.js"
+    },
     "./plugin-sdk/collection-runtime": {
       "types": "./dist/plugin-sdk/collection-runtime.d.ts",
       "default": "./dist/plugin-sdk/collection-runtime.js"

@@ -68,6 +68,7 @@
   "byteplus",
   "chutes",
   "command-auth",
+  "command-auth-native",
   "collection-runtime",
   "compat",
   "direct-dm",
