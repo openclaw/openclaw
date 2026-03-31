@@ -101,6 +101,8 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+# Committed lockfiles for bundled plugin runtime deps (supply chain safety)
+!extensions/*/package-lock.json
 .claude/
 .agent/
 skills-lock.json

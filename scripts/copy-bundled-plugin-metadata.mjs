@@ -238,6 +238,16 @@ export function copyBundledPluginMetadata(params = {}) {
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+    // Copy committed package-lock.json so stageBundledPluginRuntimeDeps can use
+    // a lockfile for deterministic, supply-chain-safe installs.
+    const lockfilePath = path.join(pluginDir, "package-lock.json");
+    const distLockfilePath = path.join(distPluginDir, "package-lock.json");
+    if (fs.existsSync(lockfilePath)) {
+      fs.copyFileSync(lockfilePath, distLockfilePath);
+    } else {
+      removeFileIfExists(distLockfilePath);
+    }
   }
 
   if (!fs.existsSync(distExtensionsRoot)) {

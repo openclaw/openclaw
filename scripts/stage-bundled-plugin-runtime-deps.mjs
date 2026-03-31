@@ -221,6 +221,8 @@ function installPluginRuntimeDeps(params) {
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
   const tempInstallDir = makeTempDir(pluginDir, ".runtime-deps-");
+  const lockfilePath = path.join(pluginDir, "package-lock.json");
+  const hasLockfile = fs.existsSync(lockfilePath);
   const npmRunner = resolveNpmRunner({
     npmArgs: [
       "install",
@@ -228,11 +230,14 @@ function installPluginRuntimeDeps(params) {
       "--silent",
       "--ignore-scripts",
       "--legacy-peer-deps",
-      "--package-lock=false",
+      ...(hasLockfile ? [] : ["--package-lock=false"]),
     ],
   });
   try {
     writeJson(path.join(tempInstallDir, "package.json"), packageJson);
+    if (hasLockfile) {
+      fs.copyFileSync(lockfilePath, path.join(tempInstallDir, "package-lock.json"));
+    }
     const result = spawnSync(npmRunner.command, npmRunner.args, {
       cwd: tempInstallDir,
       encoding: "utf8",
