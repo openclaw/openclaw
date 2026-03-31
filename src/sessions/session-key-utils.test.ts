@@ -68,6 +68,11 @@ describe("parseAgentSessionKey", () => {
   it("filters empty parts from consecutive colons", () => {
     // "agent::bot:rest" → split(":") = ["agent","","bot","rest"]
     // filter(Boolean) removes the empty string → ["agent","bot","rest"]
+    // NOTE: The double-colon produces an empty segment, which the parser
+    // silently drops via filter(Boolean). This means "agent::bot:rest" is
+    // treated identically to "agent:bot:rest" — the empty segment does not
+    // cause a parse failure. We test the current behavior here; whether
+    // empty segments should be rejected is a separate design decision.
     const result = parseAgentSessionKey("agent::bot:rest");
     expect(result).toEqual({ agentId: "bot", rest: "rest" });
   });
@@ -391,7 +396,10 @@ describe("resolveThreadParentSessionKey", () => {
     expect(resolveThreadParentSessionKey(":thread:something")).toBeNull();
   });
 
-  it("trims the parent and returns null if parent is empty after trim", () => {
+  // The idx<=0 guard is effectively dead code: the input is already trimmed
+  // before the marker search, so a leading `:thread:` always appears at
+  // index 0, not after whitespace. This test exercises that idx<=0 path.
+  it("returns null when marker appears at index 0 after input trim", () => {
     expect(resolveThreadParentSessionKey("   :thread:something")).toBeNull();
   });
 });
