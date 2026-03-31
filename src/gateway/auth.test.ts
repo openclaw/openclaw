@@ -491,6 +491,99 @@ describe("trusted-proxy auth", () => {
     expect(res.user).toBe("nick@example.com");
   });
 
+  it("rejects trusted-proxy HTTP requests from origins outside the allowlist", async () => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://evil.example",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://evil.example",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "trusted_proxy_origin_not_allowed",
+    });
+  });
+
+  it("accepts trusted-proxy HTTP requests from allowed origins", async () => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://control.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://control.example.com",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      method: "trusted-proxy",
+      user: "nick@example.com",
+    });
+  });
+
+  it("keeps origin-less trusted-proxy HTTP requests working", async () => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      method: "trusted-proxy",
+      user: "nick@example.com",
+    });
+  });
+
   it("rejects request from untrusted source", async () => {
     const res = await authorizeTrustedProxy({
       remoteAddress: "192.168.1.100",
