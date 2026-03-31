@@ -1,90 +1,28 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  createFlowForTask,
-  createFlowRecord,
-  deleteFlowRecordById,
-  getFlowById,
-  updateFlowRecordById,
-} from "./flow-registry.js";
-import type { FlowRecord } from "./flow-registry.types.js";
 import {
   cancelTaskById,
   createTaskRecord,
-  findLatestTaskForFlowId,
-  linkTaskToFlowById,
-  listTasksForFlowId,
   markTaskLostById,
   markTaskRunningByRunId,
   markTaskTerminalByRunId,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./task-registry.js";
-import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
   TaskRecord,
-  TaskRegistrySummary,
   TaskRuntime,
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
-
-const log = createSubsystemLogger("tasks/executor");
-
-function isOneTaskFlowEligible(task: TaskRecord): boolean {
-  if (task.parentFlowId?.trim() || !task.requesterSessionKey.trim()) {
-    return false;
-  }
-  if (task.deliveryStatus === "not_applicable") {
-    return false;
-  }
-  return task.runtime === "acp" || task.runtime === "subagent";
-}
-
-function ensureSingleTaskFlow(params: {
-  task: TaskRecord;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-}): TaskRecord {
-  if (!isOneTaskFlowEligible(params.task)) {
-    return params.task;
-  }
-  try {
-    const flow = createFlowForTask({
-      task: params.task,
-      requesterOrigin: params.requesterOrigin,
-    });
-    const linked = linkTaskToFlowById({
-      taskId: params.task.taskId,
-      flowId: flow.flowId,
-    });
-    if (!linked) {
-      deleteFlowRecordById(flow.flowId);
-      return params.task;
-    }
-    if (linked.parentFlowId !== flow.flowId) {
-      deleteFlowRecordById(flow.flowId);
-      return linked;
-    }
-    return linked;
-  } catch (error) {
-    log.warn("Failed to create one-task flow for detached run", {
-      taskId: params.task.taskId,
-      runId: params.task.runId,
-      error,
-    });
-    return params.task;
-  }
-}
 
 export function createQueuedTaskRun(params: {
   runtime: TaskRuntime;
   sourceId?: string;
   requesterSessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  parentFlowId?: string;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
@@ -95,248 +33,10 @@ export function createQueuedTaskRun(params: {
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
 }): TaskRecord {
-  const task = createTaskRecord({
+  return createTaskRecord({
     ...params,
     status: "queued",
   });
-  return ensureSingleTaskFlow({
-    task,
-    requesterOrigin: params.requesterOrigin,
-  });
-}
-
-export function createLinearFlow(params: {
-  ownerSessionKey: string;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  goal: string;
-  notifyPolicy?: TaskNotifyPolicy;
-  currentStep?: string;
-  createdAt?: number;
-  updatedAt?: number;
-}): FlowRecord {
-  return createFlowRecord({
-    shape: "linear",
-    ownerSessionKey: params.ownerSessionKey,
-    requesterOrigin: params.requesterOrigin,
-    goal: params.goal,
-    notifyPolicy: params.notifyPolicy,
-    currentStep: params.currentStep,
-    status: "queued",
-    createdAt: params.createdAt,
-    updatedAt: params.updatedAt,
-  });
-}
-
-export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
-  return summarizeTaskRecords(listTasksForFlowId(flowId));
-}
-
-type RetryBlockedFlowResult = {
-  found: boolean;
-  retried: boolean;
-  reason?: string;
-  previousTask?: TaskRecord;
-  task?: TaskRecord;
-};
-
-type RetryBlockedFlowParams = {
-  flowId: string;
-  sourceId?: string;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  childSessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task?: string;
-  preferMetadata?: boolean;
-  notifyPolicy?: TaskNotifyPolicy;
-  deliveryStatus?: TaskDeliveryStatus;
-  status: "queued" | "running";
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-};
-
-function resolveRetryableBlockedFlowTask(flowId: string): {
-  flowFound: boolean;
-  retryable: boolean;
-  latestTask?: TaskRecord;
-  reason?: string;
-} {
-  const flow = getFlowById(flowId);
-  if (!flow) {
-    return {
-      flowFound: false,
-      retryable: false,
-      reason: "Flow not found.",
-    };
-  }
-  const latestTask = findLatestTaskForFlowId(flowId);
-  if (!latestTask) {
-    return {
-      flowFound: true,
-      retryable: false,
-      reason: "Flow has no retryable task.",
-    };
-  }
-  if (flow.status !== "blocked") {
-    return {
-      flowFound: true,
-      retryable: false,
-      latestTask,
-      reason: "Flow is not blocked.",
-    };
-  }
-  if (latestTask.status !== "succeeded" || latestTask.terminalOutcome !== "blocked") {
-    return {
-      flowFound: true,
-      retryable: false,
-      latestTask,
-      reason: "Latest flow task is not blocked.",
-    };
-  }
-  return {
-    flowFound: true,
-    retryable: true,
-    latestTask,
-  };
-}
-
-function retryBlockedFlowTask(params: RetryBlockedFlowParams): RetryBlockedFlowResult {
-  const resolved = resolveRetryableBlockedFlowTask(params.flowId);
-  if (!resolved.retryable || !resolved.latestTask) {
-    return {
-      found: resolved.flowFound,
-      retried: false,
-      reason: resolved.reason,
-    };
-  }
-  const flow = getFlowById(params.flowId);
-  if (!flow) {
-    return {
-      found: false,
-      retried: false,
-      reason: "Flow not found.",
-      previousTask: resolved.latestTask,
-    };
-  }
-  const task = createTaskRecord({
-    runtime: resolved.latestTask.runtime,
-    sourceId: params.sourceId ?? resolved.latestTask.sourceId,
-    requesterSessionKey: flow.ownerSessionKey,
-    requesterOrigin: params.requesterOrigin ?? flow.requesterOrigin,
-    parentFlowId: flow.flowId,
-    childSessionKey: params.childSessionKey,
-    parentTaskId: resolved.latestTask.taskId,
-    agentId: params.agentId ?? resolved.latestTask.agentId,
-    runId: params.runId,
-    label: params.label ?? resolved.latestTask.label,
-    task: params.task ?? resolved.latestTask.task,
-    preferMetadata: params.preferMetadata,
-    notifyPolicy: params.notifyPolicy ?? resolved.latestTask.notifyPolicy,
-    deliveryStatus: params.deliveryStatus ?? "pending",
-    status: params.status,
-    startedAt: params.startedAt,
-    lastEventAt: params.lastEventAt,
-    progressSummary: params.progressSummary,
-  });
-  return {
-    found: true,
-    retried: true,
-    previousTask: resolved.latestTask,
-    task,
-  };
-}
-
-export function retryBlockedFlowAsQueuedTaskRun(
-  params: Omit<RetryBlockedFlowParams, "status" | "startedAt" | "lastEventAt" | "progressSummary">,
-): RetryBlockedFlowResult {
-  return retryBlockedFlowTask({
-    ...params,
-    status: "queued",
-  });
-}
-
-export function retryBlockedFlowAsRunningTaskRun(
-  params: Omit<RetryBlockedFlowParams, "status">,
-): RetryBlockedFlowResult {
-  return retryBlockedFlowTask({
-    ...params,
-    status: "running",
-  });
-}
-
-type CancelFlowResult = {
-  found: boolean;
-  cancelled: boolean;
-  reason?: string;
-  flow?: FlowRecord;
-  tasks?: TaskRecord[];
-};
-
-function isActiveTaskStatus(status: TaskStatus): boolean {
-  return status === "queued" || status === "running";
-}
-
-function isTerminalFlowStatus(status: FlowRecord["status"]): boolean {
-  return (
-    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
-  );
-}
-
-export async function cancelFlowById(params: {
-  cfg: OpenClawConfig;
-  flowId: string;
-}): Promise<CancelFlowResult> {
-  const flow = getFlowById(params.flowId);
-  if (!flow) {
-    return {
-      found: false,
-      cancelled: false,
-      reason: "Flow not found.",
-    };
-  }
-  const linkedTasks = listTasksForFlowId(flow.flowId);
-  const activeTasks = linkedTasks.filter((task) => isActiveTaskStatus(task.status));
-  for (const task of activeTasks) {
-    await cancelTaskById({
-      cfg: params.cfg,
-      taskId: task.taskId,
-    });
-  }
-  const refreshedTasks = listTasksForFlowId(flow.flowId);
-  const remainingActive = refreshedTasks.filter((task) => isActiveTaskStatus(task.status));
-  if (remainingActive.length > 0) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: "One or more child tasks are still active.",
-      flow: getFlowById(flow.flowId),
-      tasks: refreshedTasks,
-    };
-  }
-  if (isTerminalFlowStatus(flow.status)) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: `Flow is already ${flow.status}.`,
-      flow,
-      tasks: refreshedTasks,
-    };
-  }
-  const updatedFlow = updateFlowRecordById(flow.flowId, {
-    status: "cancelled",
-    blockedTaskId: null,
-    blockedSummary: null,
-    endedAt: Date.now(),
-    updatedAt: Date.now(),
-  });
-  return {
-    found: true,
-    cancelled: true,
-    flow: updatedFlow ?? getFlowById(flow.flowId),
-    tasks: refreshedTasks,
-  };
 }
 
 export function createRunningTaskRun(params: {
@@ -344,7 +44,6 @@ export function createRunningTaskRun(params: {
   sourceId?: string;
   requesterSessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  parentFlowId?: string;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
@@ -358,13 +57,9 @@ export function createRunningTaskRun(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
 }): TaskRecord {
-  const task = createTaskRecord({
+  return createTaskRecord({
     ...params,
     status: "running",
-  });
-  return ensureSingleTaskFlow({
-    task,
-    requesterOrigin: params.requesterOrigin,
   });
 }
 
