@@ -59,6 +59,9 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["make", "test"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["sed", "-f", "script.sed", "input.txt"])).toBeNull();
     expect(
+      detectInterpreterInlineEvalArgv(["sed", "-i", "-f", "script.sed", "input.txt"]),
+    ).toBeNull();
+    expect(
       detectInterpreterInlineEvalArgv(["sed", "-E", "-f", "script.sed", "input.txt"]),
     ).toBeNull();
   });
