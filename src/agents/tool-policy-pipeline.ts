@@ -129,7 +129,7 @@ export function applyToolPolicyPipeline(params: {
           })
         ) {
           const suffix = describeUnknownAllowlistSuffix({
-            strippedAllowlist: resolved.strippedAllowlist,
+            pluginOnlyAllowlist: resolved.pluginOnlyAllowlist,
             hasGatedCoreEntries: gatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
           });
@@ -164,11 +164,11 @@ function shouldSuppressUnavailableCoreToolWarning(params: {
 }
 
 function describeUnknownAllowlistSuffix(params: {
-  strippedAllowlist: boolean;
+  pluginOnlyAllowlist: boolean;
   hasGatedCoreEntries: boolean;
   hasOtherEntries: boolean;
 }): string {
-  const preface = params.strippedAllowlist
+  const preface = params.pluginOnlyAllowlist
     ? "Allowlist contains only plugin entries; core tools will not be available."
     : "";
   const detail =

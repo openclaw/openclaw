@@ -11,14 +11,14 @@ describe("stripPluginOnlyAllowlist", () => {
   it("preserves allowlist when it only targets plugin tools", () => {
     const policy = stripPluginOnlyAllowlist({ allow: ["lobster"] }, pluginGroups, coreTools);
     expect(policy.policy?.allow).toEqual(["lobster"]);
-    expect(policy.strippedAllowlist).toBe(true);
+    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toEqual([]);
   });
 
   it("preserves allowlist when it only targets plugin groups", () => {
     const policy = stripPluginOnlyAllowlist({ allow: ["group:plugins"] }, pluginGroups, coreTools);
     expect(policy.policy?.allow).toEqual(["group:plugins"]);
-    expect(policy.strippedAllowlist).toBe(true);
+    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toEqual([]);
   });
 
@@ -42,7 +42,7 @@ describe("stripPluginOnlyAllowlist", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
     const policy = stripPluginOnlyAllowlist({ allow: ["lobster"] }, emptyPlugins, coreTools);
     expect(policy.policy?.allow).toEqual(["lobster"]);
-    expect(policy.strippedAllowlist).toBe(true);
+    expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });
 
