@@ -338,4 +338,147 @@ describe("runAgentTurnWithFallback", () => {
     expect(followupRun.run.provider).toBe("openai");
     expect(followupRun.run.model).toBe("gpt-5.4");
   });
+
+  it("breaks out of the retry loop when LiveSessionModelSwitchError is thrown repeatedly (#58348)", async () => {
+    // Simulate a scenario where the persisted session selection keeps conflicting
+    // with the fallback model, causing LiveSessionModelSwitchError on every attempt.
+    // The outer loop must be bounded to prevent a session death loop.
+    let switchCallCount = 0;
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        switchCallCount++;
+        return {
+          result: await params.run("anthropic", "claude"),
+          provider: "anthropic",
+          model: "claude",
+          attempts: [],
+        };
+      },
+    );
+    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+      throw new LiveSessionModelSwitchError({
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    // After MAX_LIVE_SWITCH_RETRIES (2) the loop must break instead of continuing
+    // forever. The result should be a final error, not an infinite hang.
+    expect(result.kind).toBe("final");
+    // 1 initial + 2 retries = 3 total invocations at most
+    expect(switchCallCount).toBeLessThanOrEqual(3);
+  });
+
+  it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        invocation++;
+        if (invocation <= 2) {
+          return {
+            result: await params.run("anthropic", "claude"),
+            provider: "anthropic",
+            model: "claude",
+            attempts: [],
+          };
+        }
+        // Third invocation succeeds with the switched model
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+          attempts: [],
+        };
+      },
+    );
+    state.runEmbeddedPiAgentMock
+      .mockImplementationOnce(async () => {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "profile-b",
+          authProfileIdSource: "user",
+        });
+      })
+      .mockImplementationOnce(async () => {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "profile-c",
+          authProfileIdSource: "auto",
+        });
+      })
+      .mockImplementationOnce(async () => {
+        return {
+          payloads: [{ text: "finally ok" }],
+          meta: {
+            agentMeta: {
+              sessionId: "session",
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        };
+      });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    // Two switches (within the limit of 2) then success on third attempt
+    expect(result.kind).toBe("success");
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(3);
+    expect(followupRun.run.provider).toBe("openai");
+    expect(followupRun.run.model).toBe("gpt-5.4");
+    expect(followupRun.run.authProfileId).toBe("profile-c");
+    expect(followupRun.run.authProfileIdSource).toBe("auto");
+  });
 });

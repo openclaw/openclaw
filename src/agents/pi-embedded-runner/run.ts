@@ -75,6 +75,7 @@ import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
+  MAX_OVERLOAD_PROFILE_ROTATIONS,
   OVERLOAD_FAILOVER_BACKOFF_POLICY,
   resolveActiveErrorContext,
   resolveMaxRunRetryIterations,
@@ -316,6 +317,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let overloadProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
@@ -1198,6 +1200,31 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              // For overloaded errors, cap profile rotations: overloaded is a
+              // provider-level capacity issue, not an auth-profile issue.
+              // Rotating more profiles just wastes time with backoff delays.
+              // See: https://github.com/openclaw/openclaw/issues/58348
+              if (assistantFailoverReason === "overloaded") {
+                overloadProfileRotations += 1;
+                if (
+                  overloadProfileRotations > MAX_OVERLOAD_PROFILE_ROTATIONS &&
+                  fallbackConfigured
+                ) {
+                  logAssistantFailoverDecision("rotate_profile");
+                  const message = lastAssistant?.errorMessage?.trim() || "Provider is overloaded.";
+                  const status = resolveFailoverStatus("overloaded");
+                  log.warn(
+                    `overload profile rotation cap reached for ${provider}/${modelId} after ${overloadProfileRotations} rotations; escalating to model fallback`,
+                  );
+                  throw new FailoverError(message, {
+                    reason: "overloaded",
+                    provider: activeErrorContext.provider,
+                    model: activeErrorContext.model,
+                    profileId: lastProfileId,
+                    status,
+                  });
+                }
+              }
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
