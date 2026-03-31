@@ -6,6 +6,7 @@ import {
   getFlowById,
   listFlowRecords,
   resetFlowRegistryForTests,
+  syncFlowFromTask,
   updateFlowRecordById,
 } from "./flow-registry.js";
 
@@ -128,6 +129,59 @@ describe("flow-registry", () => {
         flowId: created.flowId,
         endedAt: 456,
       });
+    });
+  });
+
+  it("stores blocked metadata and clears it when a later task resumes the same flow", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetFlowRegistryForTests();
+
+      const created = createFlowRecord({
+        ownerSessionKey: "agent:main:main",
+        goal: "Fix permissions",
+        status: "running",
+      });
+
+      const blocked = syncFlowFromTask({
+        taskId: "task-blocked",
+        parentFlowId: created.flowId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 200,
+        endedAt: 200,
+        terminalSummary: "Writable session required.",
+      });
+
+      expect(blocked).toMatchObject({
+        flowId: created.flowId,
+        status: "blocked",
+        blockedTaskId: "task-blocked",
+        blockedSummary: "Writable session required.",
+        endedAt: 200,
+      });
+
+      const resumed = syncFlowFromTask({
+        taskId: "task-retry",
+        parentFlowId: created.flowId,
+        status: "running",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 260,
+        progressSummary: "Retrying with writable session",
+      });
+
+      expect(resumed).toMatchObject({
+        flowId: created.flowId,
+        status: "running",
+      });
+      expect(resumed?.blockedTaskId).toBeUndefined();
+      expect(resumed?.blockedSummary).toBeUndefined();
+      expect(resumed?.endedAt).toBeUndefined();
     });
   });
 });

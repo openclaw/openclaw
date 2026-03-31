@@ -14,6 +14,8 @@ type FlowRegistryRow = {
   notify_policy: FlowRecord["notifyPolicy"];
   goal: string;
   current_step: string | null;
+  blocked_task_id: string | null;
+  blocked_summary: string | null;
   created_at: number | bigint;
   updated_at: number | bigint;
   ended_at: number | bigint | null;
@@ -70,6 +72,8 @@ function rowToFlowRecord(row: FlowRegistryRow): FlowRecord {
     notifyPolicy: row.notify_policy,
     goal: row.goal,
     ...(row.current_step ? { currentStep: row.current_step } : {}),
+    ...(row.blocked_task_id ? { blockedTaskId: row.blocked_task_id } : {}),
+    ...(row.blocked_summary ? { blockedSummary: row.blocked_summary } : {}),
     createdAt: normalizeNumber(row.created_at) ?? 0,
     updatedAt: normalizeNumber(row.updated_at) ?? 0,
     ...(endedAt != null ? { endedAt } : {}),
@@ -85,6 +89,8 @@ function bindFlowRecord(record: FlowRecord) {
     notify_policy: record.notifyPolicy,
     goal: record.goal,
     current_step: record.currentStep ?? null,
+    blocked_task_id: record.blockedTaskId ?? null,
+    blocked_summary: record.blockedSummary ?? null,
     created_at: record.createdAt,
     updated_at: record.updatedAt,
     ended_at: record.endedAt ?? null,
@@ -102,6 +108,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         notify_policy,
         goal,
         current_step,
+        blocked_task_id,
+        blocked_summary,
         created_at,
         updated_at,
         ended_at
@@ -117,6 +125,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         notify_policy,
         goal,
         current_step,
+        blocked_task_id,
+        blocked_summary,
         created_at,
         updated_at,
         ended_at
@@ -128,6 +138,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         @notify_policy,
         @goal,
         @current_step,
+        @blocked_task_id,
+        @blocked_summary,
         @created_at,
         @updated_at,
         @ended_at
@@ -139,6 +151,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         notify_policy = excluded.notify_policy,
         goal = excluded.goal,
         current_step = excluded.current_step,
+        blocked_task_id = excluded.blocked_task_id,
+        blocked_summary = excluded.blocked_summary,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
         ended_at = excluded.ended_at
@@ -158,16 +172,33 @@ function ensureSchema(db: DatabaseSync) {
       notify_policy TEXT NOT NULL,
       goal TEXT NOT NULL,
       current_step TEXT,
+      blocked_task_id TEXT,
+      blocked_summary TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       ended_at INTEGER
     );
   `);
+  ensureColumn(db, "flow_runs", "blocked_task_id", "TEXT");
+  ensureColumn(db, "flow_runs", "blocked_summary", "TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_session_key ON flow_runs(owner_session_key);`,
   );
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);`);
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string,
+) {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: string }>;
+  if (rows.some((row) => row.name === columnName)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition};`);
 }
 
 function ensureFlowRegistryPermissions(pathname: string) {
