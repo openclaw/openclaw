@@ -397,6 +397,33 @@ export type ChannelThreadingToolContext = {
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  /**
+   * Canonical plugin-owned session conversation grammar.
+   * Use this when the provider encodes thread or scoped-conversation semantics
+   * inside `rawId` (for example Telegram topics or Feishu sender scopes).
+   * Return `baseConversationId` and `parentConversationCandidates` here when
+   * you can so parsing and inheritance stay in one place.
+   * `parentConversationCandidates`, when present, should be ordered from the
+   * narrowest parent to the broadest/base conversation.
+   * Bundled plugins that need the same grammar before runtime bootstrap can
+   * mirror this contract through a top-level `session-key-api.ts` surface.
+   */
+  resolveSessionConversation?: (params: { kind: "group" | "channel"; rawId: string }) => {
+    id: string;
+    threadId?: string | null;
+    baseConversationId?: string | null;
+    parentConversationCandidates?: string[];
+  } | null;
+  /**
+   * Legacy compatibility hook for parent fallbacks when a plugin does not need
+   * to customize `id` or `threadId`. Core only uses this when
+   * `resolveSessionConversation(...)` does not return
+   * `parentConversationCandidates`.
+   */
+  resolveParentConversationCandidates?: (params: {
+    kind: "group" | "channel";
+    rawId: string;
+  }) => string[] | null;
   resolveSessionTarget?: (params: {
     kind: "group" | "channel";
     id: string;

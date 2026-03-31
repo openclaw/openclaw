@@ -28,11 +28,31 @@ shared `message` tool in core. Your plugin owns:
 - **Config** — account resolution and setup wizard
 - **Security** — DM policy and allowlists
 - **Pairing** — DM approval flow
+- **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
 - **Threading** — how replies are threaded
 
-Core owns the shared message tool, prompt wiring, session bookkeeping, and
-dispatch.
+Core owns the shared message tool, prompt wiring, the outer session-key shape,
+generic `:thread:` bookkeeping, and dispatch.
+
+If your platform stores extra scope inside conversation ids, keep that parsing
+in the plugin with `messaging.resolveSessionConversation(...)`. That is the
+canonical hook for mapping `rawId` to the base conversation id, optional thread
+id, explicit `baseConversationId`, and any `parentConversationCandidates`.
+When you return `parentConversationCandidates`, keep them ordered from the
+narrowest parent to the broadest/base conversation.
+
+Bundled plugins that need the same parsing before the channel registry boots
+can also expose a top-level `session-key-api.ts` file with a matching
+`resolveSessionConversation(...)` export. Core uses that bootstrap-safe surface
+only when the runtime plugin registry is not available yet.
+
+`messaging.resolveParentConversationCandidates(...)` remains available as a
+legacy compatibility fallback when a plugin only needs parent fallbacks on top
+of the generic/raw id. If both hooks exist, core uses
+`resolveSessionConversation(...).parentConversationCandidates` first and only
+falls back to `resolveParentConversationCandidates(...)` when the canonical hook
+omits them.
 
 ## Approvals and channel capabilities
 

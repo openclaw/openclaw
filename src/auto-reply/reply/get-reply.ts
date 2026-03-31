@@ -267,6 +267,7 @@ export async function getReplyFromConfig(
         : undefined) ??
       finalized.Provider,
     groupId: groupResolution?.id ?? sessionEntry.groupId,
+    groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
     groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
     groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
     parentSessionKey: sessionCtx.ParentSessionKey,

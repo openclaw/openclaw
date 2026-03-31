@@ -104,26 +104,20 @@ describe("thread session suffix parsing", () => {
     ).toBeNull();
   });
 
-  it("still parses telegram topic session suffixes", () => {
+  it("does not treat telegram :topic: as a generic thread suffix", () => {
     expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:topic:77")).toEqual({
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      threadId: "77",
+      baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
+      threadId: undefined,
     });
-    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBe(
-      "agent:main:telegram:group:-100123",
-    );
+    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBeNull();
   });
 
-  it("parses mixed-case suffix markers without lowercasing the stored key", () => {
+  it("parses mixed-case :thread: markers without lowercasing the stored key", () => {
     expect(
       parseThreadSessionSuffix("agent:main:slack:channel:General:Thread:1699999999.0001"),
     ).toEqual({
       baseSessionKey: "agent:main:slack:channel:General",
       threadId: "1699999999.0001",
-    });
-    expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:Topic:77")).toEqual({
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      threadId: "77",
     });
   });
 });

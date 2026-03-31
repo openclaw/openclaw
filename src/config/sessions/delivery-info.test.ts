@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
@@ -31,6 +33,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
 });
 
