@@ -15,6 +15,7 @@
   "approval-runtime",
   "config-runtime",
   "reply-runtime",
+  "reply-dispatch-runtime",
   "reply-chunking",
   "reply-payload",
   "channel-reply-pipeline",
