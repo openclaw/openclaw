@@ -96,6 +96,30 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
     }
 
+    @Test func operatorReconnectIgnoresBootstrapTokenWhenStoredOperatorTokenExists() {
+        #expect(
+            NodeAppModel._test_shouldIgnoreBootstrapTokenForOperatorReconnect(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+        #expect(
+            !NodeAppModel._test_shouldIgnoreBootstrapTokenForOperatorReconnect(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+        #expect(
+            !NodeAppModel._test_shouldIgnoreBootstrapTokenForOperatorReconnect(
+                token: "shared-token",
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+    }
+
     @Test @MainActor func handleInvokeRejectsBackgroundCommands() async {
         let appModel = NodeAppModel()
         appModel.setScenePhase(.background)

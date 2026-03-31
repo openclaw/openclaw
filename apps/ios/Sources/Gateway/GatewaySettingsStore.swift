@@ -119,6 +119,12 @@ enum GatewaySettingsStore {
             account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }
 
+    static func clearGatewayBootstrapToken(instanceId: String) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
+    }
+
     static func loadGatewayPassword(instanceId: String) -> String? {
         KeychainStore.loadString(
             service: self.gatewayService,

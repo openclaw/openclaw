@@ -752,6 +752,7 @@ export function attachGatewayWsMessageHandler(params: {
           };
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
+            existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
           ) => {
             const pairingStateAllowsRequestedAccess = (
               pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
@@ -786,11 +787,23 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
+            // QR bootstrap onboarding is node-only and single-use. When a fresh device presents
+            // a valid bootstrap token for the baseline node profile, complete pairing in the same
+            // handshake so iOS does not get stuck retrying with an already-consumed bootstrap token.
+            const allowSilentBootstrapPairing =
+              authMethod === "bootstrap-token" &&
+              reason === "not-paired" &&
+              role === "node" &&
+              scopes.length === 0 &&
+              !existingPairedDevice;
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
-              silent: reason === "scope-upgrade" ? false : allowSilentLocalPairing,
+              silent:
+                reason === "scope-upgrade"
+                  ? false
+                  : allowSilentLocalPairing || allowSilentBootstrapPairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -879,7 +892,7 @@ export function attachGatewayWsMessageHandler(params: {
           const paired = await getPairedDevice(device.id);
           const isPaired = paired?.publicKey === devicePublicKey;
           if (!isPaired) {
-            const ok = await requirePairing("not-paired");
+            const ok = await requirePairing("not-paired", paired);
             if (!ok) {
               return;
             }
@@ -899,7 +912,7 @@ export function attachGatewayWsMessageHandler(params: {
               logGateway.warn(
                 `security audit: device metadata upgrade requested reason=metadata-upgrade device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} payload=${deviceAuthPayloadVersion ?? "unknown"} claimedPlatform=${claimedPlatform ?? "<none>"} pinnedPlatform=${pairedPlatform ?? "<none>"} claimedDeviceFamily=${claimedDeviceFamily ?? "<none>"} pinnedDeviceFamily=${pairedDeviceFamily ?? "<none>"} client=${connectParams.client.id} conn=${connId}`,
               );
-              const ok = await requirePairing("metadata-upgrade");
+              const ok = await requirePairing("metadata-upgrade", paired);
               if (!ok) {
                 return;
               }
@@ -920,13 +933,13 @@ export function attachGatewayWsMessageHandler(params: {
             const allowedRoles = new Set(pairedRoles);
             if (allowedRoles.size === 0) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
-              const ok = await requirePairing("role-upgrade");
+              const ok = await requirePairing("role-upgrade", paired);
               if (!ok) {
                 return;
               }
             } else if (!allowedRoles.has(role)) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
-              const ok = await requirePairing("role-upgrade");
+              const ok = await requirePairing("role-upgrade", paired);
               if (!ok) {
                 return;
               }
@@ -935,7 +948,7 @@ export function attachGatewayWsMessageHandler(params: {
             if (scopes.length > 0) {
               if (pairedScopes.length === 0) {
                 logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                const ok = await requirePairing("scope-upgrade");
+                const ok = await requirePairing("scope-upgrade", paired);
                 if (!ok) {
                   return;
                 }
@@ -947,7 +960,7 @@ export function attachGatewayWsMessageHandler(params: {
                 });
                 if (!scopesAllowed) {
                   logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                  const ok = await requirePairing("scope-upgrade");
+                  const ok = await requirePairing("scope-upgrade", paired);
                   if (!ok) {
                     return;
                   }
