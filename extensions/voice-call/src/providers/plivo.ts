@@ -544,6 +544,13 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private baseWebhookUrlFromCtx(ctx: WebhookContext): string | null {
     try {
+      if (this.options.publicUrl) {
+        const base = new URL(this.options.publicUrl);
+        const requestUrl = new URL(ctx.url);
+        base.pathname = requestUrl.pathname;
+        return `${base.origin}${base.pathname}`;
+      }
+
       const u = new URL(
         reconstructWebhookUrl(ctx, {
           allowedHosts: this.options.webhookSecurity?.allowedHosts,
