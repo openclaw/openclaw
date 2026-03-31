@@ -78,6 +78,24 @@ function cloneTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   };
 }
 
+function setTaskDeliveryStateInMemory(state: TaskDeliveryState): TaskDeliveryState {
+  const current = taskDeliveryStates.get(state.taskId);
+  const next: TaskDeliveryState = {
+    taskId: state.taskId,
+    ...(state.requesterOrigin
+      ? { requesterOrigin: normalizeDeliveryContext(state.requesterOrigin) }
+      : {}),
+    ...(state.lastNotifiedEventAt != null
+      ? { lastNotifiedEventAt: state.lastNotifiedEventAt }
+      : {}),
+  };
+  if (!next.requesterOrigin && typeof next.lastNotifiedEventAt !== "number" && !current) {
+    return cloneTaskDeliveryState({ taskId: state.taskId });
+  }
+  taskDeliveryStates.set(state.taskId, next);
+  return cloneTaskDeliveryState(next);
+}
+
 function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
   return [...source.values()].map((record) => cloneTaskRecord(record));
 }
@@ -106,6 +124,14 @@ function persistTaskRegistry() {
 
 function persistTaskUpsert(task: TaskRecord) {
   const store = getTaskRegistryStore();
+  const deliveryState = taskDeliveryStates.get(task.taskId);
+  if (store.upsertTaskWithDeliveryState) {
+    store.upsertTaskWithDeliveryState({
+      task,
+      ...(deliveryState ? { deliveryState } : {}),
+    });
+    return;
+  }
   if (store.upsertTask) {
     store.upsertTask(task);
     return;
@@ -118,32 +144,12 @@ function persistTaskUpsert(task: TaskRecord) {
 
 function persistTaskDelete(taskId: string) {
   const store = getTaskRegistryStore();
+  if (store.deleteTaskWithDeliveryState) {
+    store.deleteTaskWithDeliveryState(taskId);
+    return;
+  }
   if (store.deleteTask) {
     store.deleteTask(taskId);
-    return;
-  }
-  store.saveSnapshot({
-    tasks,
-    deliveryStates: taskDeliveryStates,
-  });
-}
-
-function persistTaskDeliveryStateUpsert(state: TaskDeliveryState) {
-  const store = getTaskRegistryStore();
-  if (store.upsertDeliveryState) {
-    store.upsertDeliveryState(state);
-    return;
-  }
-  store.saveSnapshot({
-    tasks,
-    deliveryStates: taskDeliveryStates,
-  });
-}
-
-function persistTaskDeliveryStateDelete(taskId: string) {
-  const store = getTaskRegistryStore();
-  if (store.deleteDeliveryState) {
-    store.deleteDeliveryState(taskId);
     return;
   }
   store.saveSnapshot({
@@ -435,12 +441,14 @@ function mergeExistingTaskForCreate(
   const patch: Partial<TaskRecord> = {};
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const currentDeliveryState = taskDeliveryStates.get(existing.taskId);
+  let deliveryStateChanged = false;
   if (requesterOrigin && !currentDeliveryState?.requesterOrigin) {
-    upsertTaskDeliveryState({
+    setTaskDeliveryStateInMemory({
       taskId: existing.taskId,
       requesterOrigin,
       lastNotifiedEventAt: currentDeliveryState?.lastNotifiedEventAt,
     });
+    deliveryStateChanged = true;
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
@@ -476,6 +484,9 @@ function mergeExistingTaskForCreate(
     patch.notifyPolicy = notifyPolicy;
   }
   if (Object.keys(patch).length === 0) {
+    if (deliveryStateChanged) {
+      persistTaskUpsert(existing);
+    }
     return cloneTaskRecord(existing);
   }
   return updateTask(existing.taskId, patch) ?? cloneTaskRecord(existing);
@@ -572,25 +583,6 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     previous: cloneTaskRecord(current),
   }));
   return cloneTaskRecord(next);
-}
-
-function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
-  const current = taskDeliveryStates.get(state.taskId);
-  const next: TaskDeliveryState = {
-    taskId: state.taskId,
-    ...(state.requesterOrigin
-      ? { requesterOrigin: normalizeDeliveryContext(state.requesterOrigin) }
-      : {}),
-    ...(state.lastNotifiedEventAt != null
-      ? { lastNotifiedEventAt: state.lastNotifiedEventAt }
-      : {}),
-  };
-  if (!next.requesterOrigin && typeof next.lastNotifiedEventAt !== "number" && !current) {
-    return cloneTaskDeliveryState({ taskId: state.taskId });
-  }
-  taskDeliveryStates.set(state.taskId, next);
-  persistTaskDeliveryStateUpsert(next);
-  return cloneTaskDeliveryState(next);
 }
 
 function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
@@ -788,7 +780,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
     }
     if (!canDeliverTaskToRequesterOrigin(current)) {
       queueTaskSystemEvent(current, eventText);
-      upsertTaskDeliveryState({
+      setTaskDeliveryStateInMemory({
         taskId,
         requesterOrigin: deliveryState?.requesterOrigin,
         lastNotifiedEventAt: latestEvent.at,
@@ -818,7 +810,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
         idempotencyKey,
       },
     });
-    upsertTaskDeliveryState({
+    setTaskDeliveryStateInMemory({
       taskId,
       requesterOrigin: deliveryState?.requesterOrigin,
       lastNotifiedEventAt: latestEvent.at,
@@ -1086,7 +1078,7 @@ export function createTaskRecord(params: {
       (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
   }
   tasks.set(taskId, record);
-  upsertTaskDeliveryState({
+  setTaskDeliveryStateInMemory({
     taskId,
     requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
   });
@@ -1454,7 +1446,6 @@ export function deleteTaskRecordById(taskId: string): boolean {
   taskDeliveryStates.delete(taskId);
   rebuildRunIdIndex();
   persistTaskDelete(taskId);
-  persistTaskDeliveryStateDelete(taskId);
   emitTaskRegistryHookEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,

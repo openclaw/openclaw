@@ -403,7 +403,7 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(pathname);
   db.exec(`PRAGMA journal_mode = WAL;`);
-  db.exec(`PRAGMA synchronous = NORMAL;`);
+  db.exec(`PRAGMA synchronous = FULL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
   ensureSchema(db);
   ensureTaskRegistryPermissions(pathname);
@@ -457,11 +457,32 @@ export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   ensureTaskRegistryPermissions(store.path);
 }
 
+export function upsertTaskWithDeliveryStateToSqlite(params: {
+  task: TaskRecord;
+  deliveryState?: TaskDeliveryState;
+}) {
+  withWriteTransaction((statements) => {
+    statements.upsertRow.run(bindTaskRecord(params.task));
+    if (params.deliveryState) {
+      statements.replaceDeliveryState.run(bindTaskDeliveryState(params.deliveryState));
+    } else {
+      statements.deleteDeliveryState.run(params.task.taskId);
+    }
+  });
+}
+
 export function deleteTaskRegistryRecordFromSqlite(taskId: string) {
   const store = openTaskRegistryDatabase();
   store.statements.deleteRow.run(taskId);
   store.statements.deleteDeliveryState.run(taskId);
   ensureTaskRegistryPermissions(store.path);
+}
+
+export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
+  withWriteTransaction((statements) => {
+    statements.deleteRow.run(taskId);
+    statements.deleteDeliveryState.run(taskId);
+  });
 }
 
 export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {
