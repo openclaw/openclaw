@@ -7,6 +7,8 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - Nodes/exec: remove the duplicated `nodes.run` shell wrapper from the CLI and agent `nodes` tool so node shell execution always goes through `exec host=node`, keeping node-specific capabilities on `nodes invoke` and the dedicated media/location/notify actions.
+- Plugin SDK: remove legacy provider compat subpaths plus the old bundled provider setup and channel-specific SDK shims, so plugins and extensions must use the current documented `openclaw/plugin-sdk/*` entrypoints and local `api.ts` / `runtime-api.ts` barrels instead of removed compatibility surfaces.
+- Skills/install: fail closed on dangerous-code skill installs by default, so installs that previously succeeded with critical dangerous findings now require an explicit unsafe override to proceed.
 
 ### Changes
 
