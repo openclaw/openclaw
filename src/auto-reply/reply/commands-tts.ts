@@ -135,6 +135,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         textLength: args.length,
         summarized: false,
         provider: result.provider,
+        fallbackFrom: result.fallbackFrom,
+        attemptedProviders: result.attemptedProviders,
         latencyMs: result.latencyMs,
       });
       const payload: ReplyPayload = {
@@ -150,6 +152,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       success: false,
       textLength: args.length,
       summarized: false,
+      attemptedProviders: result.attemptedProviders,
       error: result.error,
       latencyMs: Date.now() - start,
     });
@@ -285,9 +288,18 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
       if (last.success) {
         lines.push(`Provider: ${last.provider ?? "unknown"}`);
+        if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
+          lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
+        }
+        if (last.attemptedProviders && last.attemptedProviders.length > 1) {
+          lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
+        }
         lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
       } else if (last.error) {
         lines.push(`Error: ${last.error}`);
+        if (last.attemptedProviders && last.attemptedProviders.length > 0) {
+          lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
+        }
       }
     }
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
