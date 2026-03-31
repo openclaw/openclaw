@@ -185,6 +185,8 @@ const PNPM_FLAG_OPTIONS = new Set([
   "-r",
 ]);
 
+const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package"]);
+
 type FileOperandCollection = {
   hits: number[];
   sawOptionValueFile: boolean;
@@ -345,6 +347,9 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
         const tail = argv.slice(idx + 1);
         return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
       }
+      if (token === "dlx") {
+        return unwrapPnpmDlxInvocation(argv.slice(idx + 1));
+      }
       if (token === "node") {
         const tail = argv.slice(idx + 1);
         const normalizedTail = tail[0] === "--" ? tail.slice(1) : tail;
@@ -354,6 +359,40 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
     }
     const [flag] = token.toLowerCase().split("=", 2);
     if (PNPM_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapPnpmDlxInvocation(argv: string[]): string[] | null {
+  let idx = 0;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      // Once dlx-specific flags are stripped, the first positional token is the
+      // package binary pnpm will execute inside the temporary environment.
+      return argv.slice(idx);
+    }
+    const [flag] = token.toLowerCase().split("=", 2);
+    if (flag === "-c" || flag === "--shell-mode") {
+      return null;
+    }
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }
