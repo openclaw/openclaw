@@ -19,11 +19,11 @@ vi.mock("../../../src/infra/channel-activity.js", async (importOriginal) => {
   };
 });
 
-let sendWebhookMessageDiscord: typeof import("./send.js").sendWebhookMessageDiscord;
+let sendWebhookMessageDiscord: typeof import("./send.outbound.js").sendWebhookMessageDiscord;
 
 describe("sendWebhookMessageDiscord activity", () => {
   beforeAll(async () => {
-    ({ sendWebhookMessageDiscord } = await import("./send.js"));
+    ({ sendWebhookMessageDiscord } = await import("./send.outbound.js"));
   });
 
   beforeEach(() => {
