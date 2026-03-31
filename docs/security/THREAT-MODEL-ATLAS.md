@@ -79,7 +79,7 @@ Nothing is explicitly out of scope for this threat model.
 │                 TRUST BOUNDARY 1: Channel Access                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                      GATEWAY                              │   │
-│  │  • Device Pairing (30s grace period)                      │   │
+│  │  • Device Pairing (1h DM / 5m node grace period)           │   │
 │  │  • AllowFrom / AllowList validation                       │   │
 │  │  • Token/Password/Tailscale auth                          │   │
 │  └──────────────────────────────────────────────────────────┘   │
@@ -180,10 +180,10 @@ Nothing is explicitly out of scope for this threat model.
 | Attribute               | Value                                                    |
 | ----------------------- | -------------------------------------------------------- |
 | **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                |
-| **Description**         | Attacker intercepts pairing code during 30s grace period |
-| **Attack Vector**       | Shoulder surfing, network sniffing, social engineering   |
-| **Affected Components** | Device pairing system                                    |
-| **Current Mitigations** | 30s expiry, codes sent via existing channel              |
+| **Description**         | Attacker intercepts pairing code during pairing grace period (1h for DM channel pairing, 5m for node pairing) |
+| **Attack Vector**       | Shoulder surfing, network sniffing, social engineering                                                        |
+| **Affected Components** | Device pairing system                                                                                         |
+| **Current Mitigations** | 1h expiry (DM pairing) / 5m expiry (node pairing), codes sent via existing channel                           |
 | **Residual Risk**       | Medium - Grace period exploitable                        |
 | **Recommendations**     | Reduce grace period, add confirmation step               |
 
@@ -586,12 +586,9 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 | ----------------------------------- | --------------------------- | ------------ |
 | `src/infra/exec-approvals.ts`       | Command approval logic      | **Critical** |
 | `src/gateway/auth.ts`               | Gateway authentication      | **Critical** |
-| `src/web/inbound/access-control.ts` | Channel access control      | **Critical** |
 | `src/infra/net/ssrf.ts`             | SSRF protection             | **Critical** |
 | `src/security/external-content.ts`  | Prompt injection mitigation | **Critical** |
 | `src/agents/sandbox/tool-policy.ts` | Tool policy enforcement     | **Critical** |
-| `convex/lib/moderation.ts`          | ClawHub moderation          | **High**     |
-| `convex/lib/skillPublish.ts`        | Skill publishing flow       | **High**     |
 | `src/routing/resolve-route.ts`      | Session isolation           | **Medium**   |
 
 ### 7.3 Glossary
