@@ -267,7 +267,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
           "stdout",
           JSON.stringify([
             {
-              file: "qmd://vault-main/topics/sub-category/topic-name.md",
+              file: "qmd://vault/topics/sub-category/topic-name.md",
               score: 0.81,
               snippet: "@@ -1,1\nvault memory",
             },
@@ -281,7 +281,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     const { manager } = await createManager({ cfg });
     installIndexedPathStub({
       manager,
-      collection: "vault-main",
+      collection: "vault",
       normalizedPath: "topics/sub-category/topic-name.md",
       actualPath: actualRelative,
     });
@@ -291,7 +291,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     });
     expect(results).toEqual([
       {
-        path: `qmd/vault-main/${actualRelative}`,
+        path: `qmd/vault/${actualRelative}`,
         startLine: 1,
         endLine: 1,
         score: 0.81,
@@ -301,7 +301,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     ]);
 
     await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
-      path: `qmd/vault-main/${actualRelative}`,
+      path: `qmd/vault/${actualRelative}`,
       text: "vault memory",
     });
   });

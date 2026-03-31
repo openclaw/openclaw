@@ -62,7 +62,7 @@ async function fetchSessionHistory(
     headers?: HeadersInit;
   },
 ) {
-  const headers = new Headers(AUTH_HEADER);
+  const headers = new Headers();
   for (const [key, value] of new Headers(READ_SCOPE_HEADER).entries()) {
     headers.set(key, value);
   }
@@ -80,7 +80,11 @@ async function fetchSessionHistory(
 async function withGatewayHarness<T>(
   run: (harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>) => Promise<T>,
 ) {
-  const harness = await createGatewaySuiteHarness();
+  const harness = await createGatewaySuiteHarness({
+    serverOptions: {
+      auth: { mode: "none" },
+    },
+  });
   try {
     return await run(harness);
   } finally {

@@ -3,15 +3,14 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  authorizeGatewayBearerRequestOrReply,
-  resolveGatewayRequestedOperatorScopes,
-} from "./http-auth-helpers.js";
 import { sendInvalidRequest, sendJson, sendMethodNotAllowed } from "./http-common.js";
 import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
+  authorizeGatewayHttpRequestOrReply,
+  type AuthorizedGatewayHttpRequest,
   resolveAgentIdFromModel,
+  resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
@@ -44,8 +43,8 @@ async function authorizeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenAiModelsHttpOptions,
-): Promise<boolean> {
-  return await authorizeGatewayBearerRequestOrReply({
+): Promise<AuthorizedGatewayHttpRequest | null> {
+  return await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -85,11 +84,12 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  if (!(await authorizeRequest(req, res, opts))) {
+  const requestAuth = await authorizeRequest(req, res, opts);
+  if (!requestAuth) {
     return true;
   }
 
-  const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

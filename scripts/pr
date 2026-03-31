@@ -17,6 +17,8 @@ fi
 usage() {
   cat <<USAGE
 Usage:
+  scripts/pr ls
+  scripts/pr gc [--dry-run]
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
   scripts/pr review-checkout-pr <PR>
@@ -130,6 +132,237 @@ require_artifact() {
   fi
 }
 
+path_is_docsish() {
+  local path="$1"
+  case "$path" in
+    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|mintlify.json|docs.json)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+path_is_testish() {
+  local path="$1"
+  case "$path" in
+    *__tests__/*|*.test.*|*.spec.*|test/*|tests/*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+path_is_maintainer_workflow_only() {
+  local path="$1"
+  case "$path" in
+    .agents/*|scripts/pr|scripts/pr-*|docs/subagent.md)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+file_list_is_docsish_only() {
+  local files="$1"
+  local saw_any=false
+  local path
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    saw_any=true
+    if ! path_is_docsish "$path"; then
+      return 1
+    fi
+  done <<<"$files"
+
+  [ "$saw_any" = "true" ]
+}
+
+changelog_required_for_changed_files() {
+  local files="$1"
+  local saw_any=false
+  local path
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    saw_any=true
+    if path_is_docsish "$path" || path_is_testish "$path" || path_is_maintainer_workflow_only "$path"; then
+      continue
+    fi
+    return 0
+  done <<<"$files"
+
+  if [ "$saw_any" = "false" ]; then
+    return 1
+  fi
+
+  return 1
+}
+
+normalize_pr_changelog_entries() {
+  local pr="$1"
+  local changelog_path="CHANGELOG.md"
+
+  [ -f "$changelog_path" ] || return 0
+
+  PR_NUMBER_FOR_CHANGELOG="$pr" node <<'EOF_NODE'
+const fs = require("node:fs");
+
+const pr = process.env.PR_NUMBER_FOR_CHANGELOG;
+const path = "CHANGELOG.md";
+const original = fs.readFileSync(path, "utf8");
+const lines = original.split("\n");
+const prPattern = new RegExp(`(?:\\(#${pr}\\)|openclaw#${pr})`, "i");
+
+function findActiveSectionIndex(arr) {
+  return arr.findIndex((line) => line.trim() === "## Unreleased");
+}
+
+function findSectionEnd(arr, start) {
+  for (let i = start + 1; i < arr.length; i += 1) {
+    if (/^## /.test(arr[i])) {
+      return i;
+    }
+  }
+  return arr.length;
+}
+
+function ensureActiveSection(arr) {
+  let activeIndex = findActiveSectionIndex(arr);
+  if (activeIndex !== -1) {
+    return activeIndex;
+  }
+
+  let insertAt = arr.findIndex((line, idx) => idx > 0 && /^## /.test(line));
+  if (insertAt === -1) {
+    insertAt = arr.length;
+  }
+
+  const block = ["## Unreleased", "", "### Changes", ""];
+  if (insertAt > 0 && arr[insertAt - 1] !== "") {
+    block.unshift("");
+  }
+  arr.splice(insertAt, 0, ...block);
+  return findActiveSectionIndex(arr);
+}
+
+function contextFor(arr, index) {
+  let major = "";
+  let minor = "";
+  for (let i = index; i >= 0; i -= 1) {
+    const line = arr[i];
+    if (!minor && /^### /.test(line)) {
+      minor = line.trim();
+    }
+    if (/^## /.test(line)) {
+      major = line.trim();
+      break;
+    }
+  }
+  return { major, minor };
+}
+
+function ensureSubsection(arr, subsection) {
+  const activeIndex = ensureActiveSection(arr);
+  const activeEnd = findSectionEnd(arr, activeIndex);
+  const desired = subsection && /^### /.test(subsection) ? subsection : "### Changes";
+  for (let i = activeIndex + 1; i < activeEnd; i += 1) {
+    if (arr[i].trim() === desired) {
+      return i;
+    }
+  }
+
+  let insertAt = activeEnd;
+  while (insertAt > activeIndex + 1 && arr[insertAt - 1] === "") {
+    insertAt -= 1;
+  }
+  const block = ["", desired, ""];
+  arr.splice(insertAt, 0, ...block);
+  return insertAt + 1;
+}
+
+function sectionTailInsertIndex(arr, subsectionIndex) {
+  let nextHeading = arr.length;
+  for (let i = subsectionIndex + 1; i < arr.length; i += 1) {
+    if (/^### /.test(arr[i]) || /^## /.test(arr[i])) {
+      nextHeading = i;
+      break;
+    }
+  }
+
+  let insertAt = nextHeading;
+  while (insertAt > subsectionIndex + 1 && arr[insertAt - 1] === "") {
+    insertAt -= 1;
+  }
+  return insertAt;
+}
+
+ensureActiveSection(lines);
+
+const moved = [];
+for (let i = 0; i < lines.length; i += 1) {
+  if (!prPattern.test(lines[i])) {
+    continue;
+  }
+  const ctx = contextFor(lines, i);
+  if (ctx.major === "## Unreleased") {
+    continue;
+  }
+  moved.push({
+    line: lines[i],
+    subsection: ctx.minor || "### Changes",
+    index: i,
+  });
+}
+
+if (moved.length === 0) {
+  process.exit(0);
+}
+
+const removeIndexes = new Set(moved.map((entry) => entry.index));
+const nextLines = lines.filter((_, idx) => !removeIndexes.has(idx));
+
+for (const entry of moved) {
+  const subsectionIndex = ensureSubsection(nextLines, entry.subsection);
+  const insertAt = sectionTailInsertIndex(nextLines, subsectionIndex);
+
+  let nextHeading = nextLines.length;
+  for (let i = subsectionIndex + 1; i < nextLines.length; i += 1) {
+    if (/^### /.test(nextLines[i]) || /^## /.test(nextLines[i])) {
+      nextHeading = i;
+      break;
+    }
+  }
+
+  const alreadyPresent = nextLines
+    .slice(subsectionIndex + 1, nextHeading)
+    .some((line) => line === entry.line);
+  if (alreadyPresent) {
+    continue;
+  }
+  nextLines.splice(insertAt, 0, entry.line);
+}
+
+const updated = nextLines.join("\n");
+if (updated !== original) {
+  fs.writeFileSync(path, updated);
+}
+EOF_NODE
+}
+
+print_review_stdout_summary() {
+  require_artifact .local/review.md
+  require_artifact .local/review.json
+
+  local recommendation
+  recommendation=$(jq -r '.recommendation // ""' .local/review.json)
+  local finding_count
+  finding_count=$(jq '[.findings[]?] | length' .local/review.json)
+
+  echo "review summary:"
+  echo "recommendation: $recommendation"
+  echo "findings: $finding_count"
+  cat .local/review.md
+}
+
 print_relevant_log_excerpt() {
   local log_file="$1"
   if [ ! -s "$log_file" ]; then
@@ -149,6 +382,21 @@ print_relevant_log_excerpt() {
   rm -f "$filtered_log"
 }
 
+print_unrelated_gate_failure_guidance() {
+  local label="$1"
+  case "$label" in
+    pnpm\ build*|pnpm\ check*|pnpm\ test*)
+      cat <<'EOF_GUIDANCE'
+If this local gate failure already reproduces on latest origin/main and is clearly unrelated to the PR:
+- treat it as baseline repo noise
+- document it explicitly
+- report the scoped verification that validates the PR itself
+- do not use this to ignore plausibly related failures
+EOF_GUIDANCE
+      ;;
+  esac
+}
+
 run_quiet_logged() {
   local label="$1"
   local log_file="$2"
@@ -162,6 +410,7 @@ run_quiet_logged() {
 
   echo "$label failed (log: $log_file)"
   print_relevant_log_excerpt "$log_file"
+  print_unrelated_gate_failure_guidance "$label"
   return 1
 }
 
@@ -742,7 +991,7 @@ EOF_MD
   if [ ! -f .local/review.json ]; then
     cat > .local/review.json <<'EOF_JSON'
 {
-  "recommendation": "READY FOR /prepare-pr",
+  "recommendation": "NEEDS WORK",
   "findings": [],
   "nitSweep": {
     "performed": true,
@@ -759,8 +1008,8 @@ EOF_MD
   "issueValidation": {
     "performed": true,
     "source": "pr_body",
-    "status": "valid",
-    "summary": "PR description clearly states a valid problem."
+    "status": "unclear",
+    "summary": "Review not completed yet."
   },
   "tests": {
     "ran": [],
@@ -768,7 +1017,7 @@ EOF_MD
     "result": "pass"
   },
   "docs": "not_applicable",
-  "changelog": "required"
+  "changelog": "not_required"
 }
 EOF_JSON
   fi
@@ -1011,15 +1260,16 @@ review_validate_artifacts() {
   local changelog_status
   changelog_status=$(jq -r '.changelog // ""' .local/review.json)
   case "$changelog_status" in
-    "required")
+    "required"|"not_required")
       ;;
     *)
-      echo "Invalid changelog status in .local/review.json: $changelog_status (must be \"required\")"
+      echo "Invalid changelog status in .local/review.json: $changelog_status (must be \"required\" or \"not_required\")"
       exit 1
       ;;
   esac
 
   echo "review artifacts validated"
+  print_review_stdout_summary
 }
 
 review_tests() {
@@ -1043,26 +1293,8 @@ review_tests() {
 
   bootstrap_deps_if_needed
 
-  local list_log=".local/review-tests-list.log"
-  run_quiet_logged "pnpm vitest list" "$list_log" pnpm vitest list "$@"
-
-  local missing_list=()
-  for target in "$@"; do
-    local base
-    base=$(basename "$target")
-    if ! rg -F -q "$target" "$list_log" && ! rg -F -q "$base" "$list_log"; then
-      missing_list+=("$target")
-    fi
-  done
-
-  if [ "${#missing_list[@]}" -gt 0 ]; then
-    echo "These requested targets were not selected by vitest list:"
-    printf ' - %s\n' "${missing_list[@]}"
-    exit 1
-  fi
-
   local run_log=".local/review-tests-run.log"
-  run_quiet_logged "pnpm vitest run" "$run_log" pnpm vitest run "$@"
+  run_quiet_logged "pnpm test" "$run_log" pnpm test -- "$@"
 
   local missing_run=()
   for target in "$@"; do
@@ -1149,7 +1381,6 @@ prepare_init() {
   git fetch origin "pull/$pr/head:pr-$pr" --force
   git checkout -B "pr-$pr-prep" "pr-$pr"
   git fetch origin main
-  git rebase origin/main
 
   cat > .local/prep-context.env <<EOF_ENV
 PR_NUMBER=$pr
@@ -1163,7 +1394,7 @@ EOF_ENV
     cat > .local/prep.md <<EOF_PREP
 # PR $pr prepare log
 
-- Initialized prepare context and rebased prep branch on origin/main.
+- Initialized prepare context from the PR head branch without rebasing on origin/main.
 EOF_PREP
   fi
 
@@ -1181,27 +1412,22 @@ prepare_validate_commit() {
 
   # shellcheck disable=SC1091
   source .local/pr-meta.env
-  local contrib="${PR_AUTHOR:-}"
   local pr_number="${PR_NUMBER:-$pr}"
-
-  if [ -z "$contrib" ]; then
-    contrib=$(gh pr view "$pr" --json author --jq .author.login)
-  fi
 
   local subject
   subject=$(git log -1 --pretty=%s)
 
-  echo "$subject" | rg -q "openclaw#$pr_number" || {
-    echo "ERROR: commit subject missing openclaw#$pr_number"
+  if echo "$subject" | rg -qi "(^|[[:space:]])openclaw#$pr_number([[:space:]]|$)|\\(#$pr_number\\)"; then
+    echo "ERROR: prep commit subject should not include PR number metadata"
     exit 1
-  }
+  fi
 
-  echo "$subject" | rg -q "thanks @$contrib" || {
-    echo "ERROR: commit subject missing thanks @$contrib"
+  if echo "$subject" | rg -qi "thanks @"; then
+    echo "ERROR: prep commit subject should not include contributor thanks"
     exit 1
-  }
+  fi
 
-  echo "commit subject validated: $subject"
+  echo "prep commit subject validated: $subject"
 }
 
 validate_changelog_entry_for_pr() {
@@ -1278,8 +1504,12 @@ FNR == NR {
 END {
   for (idx = 1; idx <= pr_added_count; idx++) {
     entry_line = pr_added_lines[idx]
+    release_line = 0
     section_line = 0
     for (i = entry_line; i >= 1; i--) {
+      if (release_line == 0 && changelog[i] ~ /^## /) {
+        release_line = i
+      }
       if (changelog[i] ~ /^### /) {
         section_line = i
         break
@@ -1287,6 +1517,11 @@ END {
       if (changelog[i] ~ /^## /) {
         break
       }
+    }
+    if (release_line == 0 || changelog[release_line] != "## Unreleased") {
+      printf "CHANGELOG.md PR-linked entry must be in ## Unreleased: line %d: %s\n", entry_line, pr_added_text[entry_line]
+      issue_count++
+      continue
     }
     if (section_line == 0) {
       printf "CHANGELOG.md entry must be inside a subsection (### ...): line %d: %s\n", entry_line, pr_added_text[entry_line]
@@ -1395,11 +1630,21 @@ prepare_gates() {
   local changed_files
   changed_files=$(git diff --name-only origin/main...HEAD)
   local non_docs
-  non_docs=$(printf '%s\n' "$changed_files" | grep -Ev '^(docs/|README.*\.md$|CHANGELOG\.md$|.*\.md$|.*\.mdx$|mintlify\.json$|docs\.json$)' || true)
+  non_docs=$(printf '%s\n' "$changed_files" | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if ! path_is_docsish "$path"; then
+      printf '%s\n' "$path"
+    fi
+  done)
 
   local docs_only=false
   if [ -n "$changed_files" ] && [ -z "$non_docs" ]; then
     docs_only=true
+  fi
+
+  local changelog_required=false
+  if changelog_required_for_changed_files "$changed_files"; then
+    changelog_required=true
   fi
 
   local has_changelog_update=false
@@ -1416,37 +1661,80 @@ prepare_gates() {
     exit 1
   fi
 
-  # Enforce workflow policy: every prepared PR must include CHANGELOG.md.
-  if [ "$has_changelog_update" = "false" ]; then
+  if [ "$changelog_required" = "true" ] && [ "$has_changelog_update" = "false" ]; then
     echo "Missing changelog update. Add CHANGELOG.md changes."
     exit 1
   fi
-  local contrib="${PR_AUTHOR:-}"
-  validate_changelog_merge_hygiene
-  validate_changelog_entry_for_pr "$pr" "$contrib"
 
-  run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-  run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+  if [ "$has_changelog_update" = "true" ]; then
+    normalize_pr_changelog_entries "$pr"
+  fi
 
-  if [ "$docs_only" = "true" ]; then
-    echo "Docs-only change detected with high confidence; skipping pnpm test."
+  if [ "$changelog_required" = "true" ]; then
+    local contrib="${PR_AUTHOR:-}"
+    validate_changelog_merge_hygiene
+    validate_changelog_entry_for_pr "$pr" "$contrib"
   else
-    local prepare_unit_fast_batch_target_ms
-    prepare_unit_fast_batch_target_ms="${OPENCLAW_PREPARE_TEST_UNIT_FAST_BATCH_TARGET_MS:-5000}"
-    echo "Running pnpm test with OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS=$prepare_unit_fast_batch_target_ms for shorter-lived unit-fast workers."
-    run_quiet_logged \
-      "pnpm test" \
-      ".local/gates-test.log" \
-      env OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS="$prepare_unit_fast_batch_target_ms" pnpm test
+    echo "Changelog not required for this changed-file set."
+  fi
+
+  local current_head
+  current_head=$(git rev-parse HEAD)
+  local previous_last_verified_head=""
+  local previous_full_gates_head=""
+  if [ -s .local/gates.env ]; then
+    # shellcheck disable=SC1091
+    source .local/gates.env
+    previous_last_verified_head="${LAST_VERIFIED_HEAD_SHA:-}"
+    previous_full_gates_head="${FULL_GATES_HEAD_SHA:-}"
+  fi
+
+  local gates_mode="full"
+  local reuse_gates=false
+  if [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
+    local delta_since_verified
+    delta_since_verified=$(git diff --name-only "$previous_last_verified_head"..HEAD)
+    if [ -z "$delta_since_verified" ] || file_list_is_docsish_only "$delta_since_verified"; then
+      reuse_gates=true
+    fi
+  fi
+
+  if [ "$reuse_gates" = "true" ]; then
+    gates_mode="reused_docs_only"
+    echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
+  else
+    run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
+    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+
+    if [ "$docs_only" = "true" ]; then
+      gates_mode="docs_only"
+      echo "Docs-only change detected with high confidence; skipping pnpm test."
+    else
+      gates_mode="full"
+      local prepare_unit_fast_batch_target_ms
+      prepare_unit_fast_batch_target_ms="${OPENCLAW_PREPARE_TEST_UNIT_FAST_BATCH_TARGET_MS:-5000}"
+      echo "Running pnpm test with OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS=$prepare_unit_fast_batch_target_ms for shorter-lived unit-fast workers."
+      run_quiet_logged \
+        "pnpm test" \
+        ".local/gates-test.log" \
+        env OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS="$prepare_unit_fast_batch_target_ms" pnpm test
+      previous_full_gates_head="$current_head"
+    fi
   fi
 
   cat > .local/gates.env <<EOF_ENV
 PR_NUMBER=$pr
 DOCS_ONLY=$docs_only
+CHANGELOG_REQUIRED=$changelog_required
+GATES_MODE=$gates_mode
+LAST_VERIFIED_HEAD_SHA=$current_head
+FULL_GATES_HEAD_SHA=${previous_full_gates_head:-}
 GATES_PASSED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF_ENV
 
   echo "docs_only=$docs_only"
+  echo "changelog_required=$changelog_required"
+  echo "gates_mode=$gates_mode"
   echo "wrote=.local/gates.env"
 }
 
@@ -1492,6 +1780,7 @@ prepare_push() {
 
   cat >> .local/prep.md <<EOF_PREP
 - Gates passed and push succeeded to branch $PR_HEAD.
+- Gate mode: ${GATES_MODE:-unknown}.
 - Verified PR head SHA matches local prep HEAD.
 - Verified PR head contains origin/main.
 EOF_PREP
@@ -1528,6 +1817,15 @@ prepare_sync_head() {
   # shellcheck disable=SC1091
   source .local/prep-context.env
 
+  local rebased=false
+  git fetch origin main
+  if ! git merge-base --is-ancestor origin/main HEAD; then
+    git rebase origin/main
+    rebased=true
+    prepare_gates "$pr"
+    checkout_prep_branch "$pr"
+  fi
+
   local prep_head_sha
   prep_head_sha=$(git rev-parse HEAD)
 
@@ -1553,9 +1851,10 @@ prepare_sync_head() {
 
   cat >> .local/prep.md <<EOF_PREP
 - Prep head sync completed to branch $PR_HEAD.
+- Rebased onto origin/main: $rebased.
 - Verified PR head SHA matches local prep HEAD.
 - Verified PR head contains origin/main.
-- Note: prep sync flow does not re-run prepare gates.
+- Prepare gates reran automatically when the sync rebase changed the prep head.
 EOF_PREP
 
   cat > .local/prep.env <<EOF_ENV
@@ -1579,7 +1878,6 @@ EOF_ENV
 prepare_run() {
   local pr="$1"
   prepare_init "$pr"
-  prepare_validate_commit "$pr"
   prepare_gates "$pr"
   prepare_push "$pr"
   echo "prepare-run complete for PR #$pr"
@@ -1694,6 +1992,7 @@ merge_verify() {
   if [ "$pr_head_sha" != "$PREP_HEAD_SHA" ]; then
     echo "PR head changed after prepare (expected $PREP_HEAD_SHA, got $pr_head_sha)."
     echo "Re-run prepare to refresh prep artifacts and gates: scripts/pr-prepare run $pr"
+    echo "Note: docs/changelog-only follow-ups reuse prior gate results automatically."
 
     # Best-effort delta summary to show exactly what changed since PREP_HEAD_SHA.
     git fetch origin "pull/$pr/head" >/dev/null 2>&1 || true
@@ -1742,7 +2041,7 @@ merge_verify() {
   if ! git merge-base --is-ancestor origin/main "pr-$pr"; then
     echo "PR branch is behind main."
     if mainline_drift_requires_sync "$PREP_HEAD_SHA"; then
-      echo "Merge verify failed: mainline drift is relevant to this PR; refresh prep head before merge."
+      echo "Merge verify failed: mainline drift is relevant to this PR; run scripts/pr prepare-sync-head $pr before merge."
       exit 1
     fi
     echo "Merge verify: continuing without prep-head sync because behind-main drift is unrelated."
@@ -1953,8 +2252,87 @@ EOF_COMMENT
   echo "$pr_url"
 }
 
+list_pr_worktrees() {
+  local root
+  root=$(repo_root)
+  cd "$root"
+
+  local dir
+  local found=false
+  for dir in .worktrees/pr-*; do
+    [ -d "$dir" ] || continue
+    found=true
+    local pr
+    if ! pr=$(pr_number_from_worktree_dir "$dir"); then
+      printf 'UNKNOWN\t%s\tUNKNOWN\t(unparseable)\t\n' "$dir"
+      continue
+    fi
+    local info
+    info=$(gh pr view "$pr" --json state,title,url --jq '[.state, .title, .url] | @tsv' 2>/dev/null || printf 'UNKNOWN\t(unavailable)\t')
+    printf '%s\t%s\t%s\n' "$pr" "$dir" "$info"
+  done
+
+  if [ "$found" = "false" ]; then
+    echo "No PR worktrees found."
+  fi
+}
+
+gc_pr_worktrees() {
+  local dry_run="${1:-false}"
+  local root
+  root=$(repo_root)
+  cd "$root"
+
+  local dir
+  local removed=0
+  for dir in .worktrees/pr-*; do
+    [ -d "$dir" ] || continue
+    local pr
+    if ! pr=$(pr_number_from_worktree_dir "$dir"); then
+      echo "skipping $dir (could not parse PR number)"
+      continue
+    fi
+    local state
+    state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || printf 'UNKNOWN')
+    case "$state" in
+      MERGED|CLOSED)
+        if [ "$dry_run" = "true" ]; then
+          echo "would remove $dir (PR #$pr state=$state)"
+        else
+          git worktree remove "$dir" --force
+          git branch -D "temp/pr-$pr" 2>/dev/null || true
+          git branch -D "pr-$pr" 2>/dev/null || true
+          git branch -D "pr-$pr-prep" 2>/dev/null || true
+          echo "removed $dir (PR #$pr state=$state)"
+        fi
+        removed=$((removed + 1))
+        ;;
+    esac
+  done
+
+  if [ "$removed" -eq 0 ]; then
+    if [ "$dry_run" = "true" ]; then
+      echo "No merged/closed PR worktrees eligible for removal."
+    else
+      echo "No merged/closed PR worktrees removed."
+    fi
+  fi
+}
+
+pr_number_from_worktree_dir() {
+  local dir="$1"
+  local token
+  token="${dir##*/pr-}"
+  token="${token%%[^0-9]*}"
+  if [ -n "$token" ]; then
+    printf '%s\n' "$token"
+    return 0
+  fi
+  return 1
+}
+
 main() {
-  if [ "$#" -lt 2 ]; then
+  if [ "$#" -lt 1 ]; then
     usage
     exit 2
   fi
@@ -1963,61 +2341,97 @@ main() {
 
   local cmd="${1-}"
   shift || true
-  local pr="${1-}"
-  shift || true
-
-  if [ -z "$cmd" ] || [ -z "$pr" ]; then
-    usage
-    exit 2
-  fi
 
   case "$cmd" in
+    ls)
+      list_pr_worktrees
+      ;;
+    gc)
+      local dry_run=false
+      if [ "${1-}" = "--dry-run" ]; then
+        dry_run=true
+      fi
+      gc_pr_worktrees "$dry_run"
+      ;;
     review-init)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       review_init "$pr"
       ;;
     review-checkout-main)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       review_checkout_main "$pr"
       ;;
     review-checkout-pr)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       review_checkout_pr "$pr"
       ;;
     review-claim)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       review_claim "$pr"
       ;;
     review-guard)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       review_guard "$pr"
       ;;
     review-artifacts-init)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       review_artifacts_init "$pr"
       ;;
     review-validate-artifacts)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       review_validate_artifacts "$pr"
       ;;
     review-tests)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      shift || true
       review_tests "$pr" "$@"
       ;;
     prepare-init)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       prepare_init "$pr"
       ;;
     prepare-validate-commit)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       prepare_validate_commit "$pr"
       ;;
     prepare-gates)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       prepare_gates "$pr"
       ;;
     prepare-push)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       prepare_push "$pr"
       ;;
     prepare-sync-head)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       prepare_sync_head "$pr"
       ;;
     prepare-run)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       prepare_run "$pr"
       ;;
     merge-verify)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       merge_verify "$pr"
       ;;
     merge-run)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
       merge_run "$pr"
       ;;
     *)
