@@ -32,6 +32,7 @@ function createReplyDispatcher(): ReplyDispatcher {
     sendFinalReply: vi.fn(),
     waitForIdle: vi.fn(),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getDeliveredCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };

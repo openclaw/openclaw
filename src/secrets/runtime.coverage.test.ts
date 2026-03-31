@@ -170,19 +170,19 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
       "webhook",
     );
   }
-  if (entry.id === "channels.feishu.accounts.*.tts.elevenlabs.apiKey") {
+  if (entry.id === "channels.feishu.accounts.*.tts.providers.elevenlabs.apiKey") {
     setPathCreateStrict(config, ["channels", "feishu", "accounts", "sample", "enabled"], true);
   }
-  if (entry.id === "channels.feishu.accounts.*.tts.openai.apiKey") {
+  if (entry.id === "channels.feishu.accounts.*.tts.providers.openai.apiKey") {
     setPathCreateStrict(config, ["channels", "feishu", "accounts", "sample", "enabled"], true);
   }
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
   }
-  if (entry.id === "channels.feishu.accounts.*.tts.elevenlabs.apiKey") {
+  if (entry.id === "channels.feishu.accounts.*.tts.providers.elevenlabs.apiKey") {
     setPathCreateStrict(config, ["channels", "feishu", "accounts", "sample", "enabled"], true);
   }
-  if (entry.id === "channels.feishu.accounts.*.tts.openai.apiKey") {
+  if (entry.id === "channels.feishu.accounts.*.tts.providers.openai.apiKey") {
     setPathCreateStrict(config, ["channels", "feishu", "accounts", "sample", "enabled"], true);
   }
   if (entry.id === "tools.web.search.gemini.apiKey") {
