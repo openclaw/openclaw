@@ -137,9 +137,14 @@ final class AppState {
     }
 
     var voiceWakeTriggersTalkMode: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(
-            self.voiceWakeTriggersTalkMode,
-            forKey: voiceWakeTriggersTalkModeKey) } }
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.voiceWakeTriggersTalkMode, forKey: voiceWakeTriggersTalkModeKey)
+                if self.swabbleEnabled {
+                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+            }
+        }
     }
 
     var talkEnabled: Bool {

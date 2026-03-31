@@ -636,11 +636,18 @@ actor VoiceWakeRuntime {
         if config.triggersTalkMode {
             // Voice Wake -> Talk Mode: activate Talk Mode instead of forwarding a text message.
             // Talk Mode handles its own STT, LLM interaction, and TTS playback.
+            // Pause the wake listener to avoid two audio pipelines competing on the mic
+            // (mirrors the push-to-talk coordination pattern).
             self.logger.info("voicewake trigger -> activating Talk Mode")
             if let token = self.overlayToken {
-                await MainActor.run { VoiceSessionCoordinator.shared.dismiss(token: token) }
+                await MainActor.run {
+                    VoiceSessionCoordinator.shared.dismiss(token: token, reason: .explicit, outcome: .empty)
+                }
             }
+            self.overlayToken = nil
+            self.pauseForPushToTalk() // reuse PTT pause: stops audio engine, sets state to .pushToTalk
             await AppStateStore.shared.setTalkEnabled(true)
+            return // skip scheduleRestartRecognizer -- Talk Mode exit will call refresh to resume
         } else if let token = self.overlayToken {
             await MainActor.run {
                 VoiceSessionCoordinator.shared.finalize(
