@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { hasEnvHttpProxyConfigured } from "../../infra/net/proxy-env.js";
+import { resolveEnvHttpProxyUrl } from "../../infra/net/proxy-env.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
@@ -535,21 +535,23 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
-  const usesEnvHttpProxy = hasEnvHttpProxyConfigured(
-    parsedUrl.protocol === "https:" ? "https" : "http",
-  );
+  const envHttpProxyUrl =
+    parsedUrl.protocol === "https:" ? resolveEnvHttpProxyUrl("https") : undefined;
   try {
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
-      // Direct web_fetch owns its transport selection. When an env proxy is
-      // configured, prefer the proxy-aware dispatcher but keep the strict SSRF
-      // guard path so pinned destination routing still applies.
-      ...(usesEnvHttpProxy
+      // Strict web_fetch keeps destination pinning for untrusted URLs. For
+      // HTTPS targets, explicit proxy mode can preserve that binding by sending
+      // the pinned lookup on the request hop through the proxy. Plain HTTP
+      // targets intentionally stay on the direct strict path because explicit
+      // proxy pinning is not supported there.
+      ...(envHttpProxyUrl
         ? {
             dispatcherPolicy: {
-              mode: "env-proxy" as const,
+              mode: "explicit-proxy" as const,
+              proxyUrl: envHttpProxyUrl,
             },
           }
         : {}),

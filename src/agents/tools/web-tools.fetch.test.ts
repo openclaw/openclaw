@@ -1,4 +1,4 @@
-import { EnvHttpProxyAgent } from "undici";
+import { EnvHttpProxyAgent, ProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
@@ -255,7 +255,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details?.warning).toContain("Response body truncated");
   });
 
-  it("uses the env proxy dispatcher for web_fetch when HTTP_PROXY is configured", async () => {
+  it("uses the explicit proxy dispatcher for HTTPS web_fetch when an env HTTP proxy is configured", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const mockFetch = installMockFetch((input: RequestInfo | URL) =>
       Promise.resolve({
@@ -274,7 +274,34 @@ describe("web_fetch extraction fallbacks", () => {
       | (RequestInit & { dispatcher?: unknown })
       | undefined;
     expect(requestInit?.dispatcher).toBeDefined();
-    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(requestInit?.dispatcher).toBeInstanceOf(ProxyAgent);
+    expect(requestInit?.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("uses a pinned non-proxy dispatcher for web_fetch when no env HTTP proxy is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("https_proxy", "");
+    const mockFetch = installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: makeFetchHeaders({ "content-type": "text/plain" }),
+        text: async () => "direct body",
+        url: resolveRequestUrl(input),
+      } as Response),
+    );
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+
+    await tool?.execute?.("call", { url: "https://example.com/direct" });
+
+    const requestInit = mockFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(requestInit?.dispatcher).toBeDefined();
+    expect(requestInit?.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    expect(requestInit?.dispatcher).not.toBeInstanceOf(ProxyAgent);
   });
 
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
