@@ -17,7 +17,6 @@ import {
   buildSessionEntry,
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
-  extractKeywords,
   isQmdScopeAllowed,
   listSessionFilesForAgent,
   parseQmdQueryJson,
@@ -53,7 +52,6 @@ const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
-const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
@@ -85,32 +83,8 @@ function hasHanScript(value: string): boolean {
 
 function normalizeHanBm25Query(query: string): string {
   const trimmed = query.trim();
-  if (!trimmed || !hasHanScript(trimmed)) {
-    return trimmed;
-  }
-  const keywords = extractKeywords(trimmed);
-  const normalizedKeywords: string[] = [];
-  const seen = new Set<string>();
-  for (const keyword of keywords) {
-    const token = keyword.trim();
-    if (!token || seen.has(token)) {
-      continue;
-    }
-    const includesHan = hasHanScript(token);
-    // Han unigrams are usually too broad for BM25 and can drown signal.
-    if (includesHan && Array.from(token).length < 2) {
-      continue;
-    }
-    if (!includesHan && token.length < 2) {
-      continue;
-    }
-    seen.add(token);
-    normalizedKeywords.push(token);
-    if (normalizedKeywords.length >= QMD_BM25_HAN_KEYWORD_LIMIT) {
-      break;
-    }
-  }
-  return normalizedKeywords.length > 0 ? normalizedKeywords.join(" ") : trimmed;
+  // Keep Han/CJK BM25 queries intact so OpenClaw search semantics match direct qmd search.
+  return trimmed;
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
@@ -765,7 +739,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     const message = err instanceof Error ? err.message : String(err);
     const lower = message.toLowerCase();
     return (
-      (lower.includes("enotdir") || lower.includes("not a directory")) &&
+      (lower.includes("enotdir") ||
+        lower.includes("not a directory") ||
+        lower.includes("enoent") ||
+        lower.includes("no such file")) &&
       NUL_MARKER_RE.test(message)
     );
   }
@@ -983,7 +960,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
-      const lines = this.extractSnippetLines(snippet);
+      const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
@@ -1681,7 +1658,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       const scoreRaw = item.score;
       const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
       const snippet = typeof item.snippet === "string" ? item.snippet : "";
-      out.push({ docid, score: Number.isFinite(score) ? score : 0, snippet });
+      out.push({
+        docid,
+        score: Number.isFinite(score) ? score : 0,
+        snippet,
+        collection: typeof item.collection === "string" ? item.collection : undefined,
+        file: typeof item.file === "string" ? item.file : undefined,
+        body: typeof item.body === "string" ? item.body : undefined,
+        startLine: this.normalizeSnippetLine(item.start_line ?? item.startLine),
+        endLine: this.normalizeSnippetLine(item.end_line ?? item.endLine),
+      });
     }
     return out;
   }
@@ -2099,16 +2085,67 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private extractSnippetLines(snippet: string): { startLine: number; endLine: number } {
-    const match = SNIPPET_HEADER_RE.exec(snippet);
-    if (match) {
-      const start = Number(match[1]);
-      const count = Number(match[2]);
-      if (Number.isFinite(start) && Number.isFinite(count)) {
-        return { startLine: start, endLine: start + count - 1 };
-      }
+    const headerLines = this.parseSnippetHeaderLines(snippet);
+    if (headerLines) {
+      return headerLines;
     }
     const lines = snippet.split("\n").length;
     return { startLine: 1, endLine: lines };
+  }
+
+  private resolveSnippetLines(
+    entry: QmdQueryResult,
+    snippet: string,
+  ): { startLine: number; endLine: number } {
+    const explicitStart = this.normalizeSnippetLine(entry.startLine);
+    const explicitEnd = this.normalizeSnippetLine(entry.endLine);
+    const headerLines = this.parseSnippetHeaderLines(snippet);
+    if (explicitStart !== undefined && explicitEnd !== undefined) {
+      return explicitStart <= explicitEnd
+        ? { startLine: explicitStart, endLine: explicitEnd }
+        : { startLine: explicitEnd, endLine: explicitStart };
+    }
+    if (explicitStart !== undefined) {
+      if (headerLines) {
+        const width = headerLines.endLine - headerLines.startLine;
+        return {
+          startLine: explicitStart,
+          endLine: explicitStart + Math.max(0, width),
+        };
+      }
+      return { startLine: explicitStart, endLine: explicitStart };
+    }
+    if (explicitEnd !== undefined) {
+      if (headerLines) {
+        const width = headerLines.endLine - headerLines.startLine;
+        return {
+          startLine: Math.max(1, explicitEnd - Math.max(0, width)),
+          endLine: explicitEnd,
+        };
+      }
+      return { startLine: explicitEnd, endLine: explicitEnd };
+    }
+    if (headerLines) {
+      return headerLines;
+    }
+    return { startLine: 1, endLine: snippet.split("\n").length };
+  }
+
+  private normalizeSnippetLine(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  private parseSnippetHeaderLines(snippet: string): { startLine: number; endLine: number } | null {
+    const match = SNIPPET_HEADER_RE.exec(snippet);
+    if (!match) {
+      return null;
+    }
+    const start = Number(match[1]);
+    const count = Number(match[2]);
+    if (Number.isFinite(start) && Number.isFinite(count)) {
+      return { startLine: start, endLine: start + count - 1 };
+    }
+    return null;
   }
 
   private readCounts(): {
