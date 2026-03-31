@@ -106,6 +106,23 @@ describe("buildGroupChatContext multi-agent awareness", () => {
     expect(result).toContain("@mybot");
     expect(result).not.toContain("Other bots");
   });
+
+  it("trims whitespace from OtherBotUsernames entries", async () => {
+    vi.resetModules();
+    const { buildGroupChatContext } = await import("./groups.js");
+    const result = buildGroupChatContext({
+      sessionCtx: {
+        Provider: "telegram",
+        GroupSubject: "Dev Chat",
+        BotUsername: "mybot",
+        OtherBotUsernames: [" helperbot ", "  ", "otherbot"],
+      },
+    });
+    expect(result).toContain("@helperbot");
+    expect(result).toContain("@otherbot");
+    expect(result).not.toContain("@ helperbot");
+    expect(result).not.toContain("@  ");
+  });
 });
 
 describe("buildGroupIntro multi-agent awareness", () => {

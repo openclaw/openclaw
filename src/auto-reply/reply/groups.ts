@@ -154,7 +154,7 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   const members = params.sessionCtx.GroupMembers?.trim();
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const botUsername = params.sessionCtx.BotUsername?.trim();
-  const otherBots = params.sessionCtx.OtherBotUsernames?.filter(Boolean) ?? [];
+  const otherBots = params.sessionCtx.OtherBotUsernames?.map((b) => b.trim()).filter(Boolean) ?? [];
 
   const lines: string[] = [];
   if (subject) {
@@ -207,7 +207,7 @@ export function buildGroupIntro(params: {
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
   const styleLine =
     "Write like a human. Avoid Markdown tables. Don't type literal \\n sequences; use real line breaks sparingly.";
-  const otherBots = params.sessionCtx.OtherBotUsernames?.filter(Boolean) ?? [];
+  const otherBots = params.sessionCtx.OtherBotUsernames?.map((b) => b.trim()).filter(Boolean) ?? [];
   const multiAgentLine =
     otherBots.length > 0
       ? `This group contains multiple bots (${otherBots.map((b) => `@${b}`).join(", ")}). The chat history includes which bot each message mentioned or replied to — use that to ignore messages not addressed to you.`
