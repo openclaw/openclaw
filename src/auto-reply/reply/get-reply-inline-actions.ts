@@ -25,8 +25,9 @@ import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
+import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
-import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
+import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
 let builtinSlashCommands: Set<string> | null = null;
@@ -458,10 +459,14 @@ export async function handleInlineActions(params: {
       abortedLastRun,
     };
   }
-  const statusOnlyCommand =
-    command.commandBodyNormalized.trim().length > 0 &&
-    stripInlineStatus(command.commandBodyNormalized).cleaned.length === 0;
-  if (didSendInlineStatus && statusOnlyCommand) {
+  const remainingBodyAfterInlineStatus = (() => {
+    const stripped = stripStructuralPrefixes(cleanedBody);
+    if (!isGroup) {
+      return stripped.trim();
+    }
+    return stripMentions(stripped, ctx, cfg, agentId).trim();
+  })();
+  if (didSendInlineStatus && remainingBodyAfterInlineStatus.length === 0) {
     typing.cleanup();
     return { kind: "reply", reply: undefined };
   }
