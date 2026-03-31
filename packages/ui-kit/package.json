@@ -1,0 +1,17 @@
+{
+  "name": "@mabos/ui-kit",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "clsx": "^2.1.0",
+    "tailwind-merge": "^3.0.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}
