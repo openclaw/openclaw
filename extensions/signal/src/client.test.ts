@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithTimeoutMock = vi.fn();
 const resolveFetchMock = vi.fn();
@@ -29,11 +29,13 @@ function rpcResponse(body: unknown, status = 200): Response {
 }
 
 describe("signalRpcRequest", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ signalRpcRequest } = await import("./client.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     resolveFetchMock.mockReturnValue(vi.fn());
-    ({ signalRpcRequest } = await import("./client.js"));
   });
 
   it("returns parsed RPC result", async () => {

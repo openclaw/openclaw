@@ -13,14 +13,12 @@ import {
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { compileConfigRegex } from "../security/config-regex.js";
-import { testRegexWithBoundedInput } from "../security/safe-regex.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
+import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
@@ -122,16 +120,6 @@ function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
   return mode ?? DEFAULT_MODE;
 }
 
-function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => {
-    if (sessionKey.includes(pattern)) {
-      return true;
-    }
-    const compiled = compileConfigRegex(pattern);
-    return compiled?.regex ? testRegexWithBoundedInput(compiled.regex, sessionKey) : false;
-  });
-}
-
 function shouldForwardRoute(params: {
   config?: {
     enabled?: boolean;
@@ -144,20 +132,12 @@ function shouldForwardRoute(params: {
   if (!config?.enabled) {
     return false;
   }
-  if (config.agentFilter?.length) {
-    const agentId =
-      params.routeRequest.agentId ?? parseAgentSessionKey(params.routeRequest.sessionKey)?.agentId;
-    if (!agentId || !config.agentFilter.includes(agentId)) {
-      return false;
-    }
-  }
-  if (config.sessionFilter?.length) {
-    const sessionKey = params.routeRequest.sessionKey;
-    if (!sessionKey || !matchSessionFilter(sessionKey, config.sessionFilter)) {
-      return false;
-    }
-  }
-  return true;
+  return matchesApprovalRequestFilters({
+    request: params.routeRequest,
+    agentFilter: config.agentFilter,
+    sessionFilter: config.sessionFilter,
+    fallbackAgentIdFromSessionKey: true,
+  });
 }
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
