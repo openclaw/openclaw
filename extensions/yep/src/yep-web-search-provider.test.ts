@@ -120,6 +120,146 @@ describe("yep web search provider", () => {
     });
   });
 
+  it("sends highlights type and maps highlights in response", async () => {
+    vi.stubEnv("YEP_API_KEY", "yep_test_key");
+    const mockFetch = vi.fn(async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          results: [
+            {
+              url: "https://example.com/ml",
+              title: "ML Guide",
+              description: "A guide to ML",
+              highlights: ["Transformers changed NLP", "Attention is all you need"],
+            },
+            {
+              url: "https://example.com/dl",
+              title: "DL Guide",
+              description: "A guide to DL",
+              highlights: [],
+            },
+          ],
+        }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createYepWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "yep_test_key",
+        yep: { apiKey: "yep_test_key" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = (await tool.execute({
+      query: "machine learning",
+      result_type: "highlights",
+    })) as Record<string, unknown>;
+
+    // Verify request body uses highlights type
+    const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    expect(requestBody.type).toBe("highlights");
+
+    // First result has highlights, second has empty array (omitted)
+    const results = result.results as Array<Record<string, unknown>>;
+    expect(results[0]?.highlights).toHaveLength(2);
+    expect(results[1]?.highlights).toBeUndefined();
+  });
+
+  it("returns validation error for invalid result_type", async () => {
+    vi.stubEnv("YEP_API_KEY", "yep_test_key");
+    const provider = createYepWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "yep_test_key",
+        yep: { apiKey: "yep_test_key" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({ query: "test", result_type: "invalid_type" });
+    expect(result).toMatchObject({ error: "invalid_result_type" });
+  });
+
+  it("returns validation error for invalid search_mode", async () => {
+    vi.stubEnv("YEP_API_KEY", "yep_test_key");
+    const provider = createYepWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "yep_test_key",
+        yep: { apiKey: "yep_test_key" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({ query: "test", search_mode: "turbo" });
+    expect(result).toMatchObject({ error: "invalid_search_mode" });
+  });
+
+  it("passes safe_search to the API", async () => {
+    vi.stubEnv("YEP_API_KEY", "yep_test_key");
+    const mockFetch = vi.fn(async () => {
+      return {
+        ok: true,
+        json: async () => ({ success: true, results: [] }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createYepWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "yep_test_key",
+        yep: { apiKey: "yep_test_key" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "test safe search passthrough", safe_search: true });
+
+    const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+    expect(requestBody.safe_search).toBe(true);
+  });
+
+  it("returns validation errors for invalid crawl date ranges", async () => {
+    vi.stubEnv("YEP_API_KEY", "");
+    const provider = createYepWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "yep_test",
+        yep: { apiKey: "yep_test" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "test query",
+      crawl_date_after: "2026-03-20",
+      crawl_date_before: "2026-03-01",
+    });
+
+    expect(result).toMatchObject({ error: "invalid_date_range" });
+  });
+
   it("maps results with description and snippet fallback", async () => {
     vi.stubEnv("YEP_API_KEY", "yep_test_key");
     const mockFetch = vi.fn(async () => {
