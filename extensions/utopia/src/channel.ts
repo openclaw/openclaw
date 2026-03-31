@@ -72,11 +72,9 @@ export const utopiaPlugin: ChannelPlugin<ResolvedUtopiaAccount> = {
         return;
       }
       const bus = activeBuses.get(accountId);
-      if (!bus) {
-        // Intentionally drop: account not connected for this gateway
-        return;
+      if (bus) {
+        await bus.sendDm(id, "Pairing approved. You can now send DM commands.");
       }
-      await bus.sendDm(id, "Pairing approved. You can now send DM commands.");
     },
   },
 
