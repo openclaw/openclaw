@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
+import { resolveEffectiveToolFsRootExpansionAllowed } from "./tool-fs-policy.js";
 
 describe("pickSandboxToolPolicy", () => {
   it("returns undefined when neither allow nor deny is configured", () => {
     expect(pickSandboxToolPolicy({})).toBeUndefined();
   });
 
-  it("treats alsoAllow without allow as a restrictive allowlist", () => {
+  it("keeps alsoAllow without allow additive", () => {
     expect(
       pickSandboxToolPolicy({
         alsoAllow: ["web_search"],
       }),
     ).toEqual({
-      allow: ["web_search"],
+      allow: ["*", "web_search"],
       deny: undefined,
     });
   });
@@ -50,5 +53,28 @@ describe("pickSandboxToolPolicy", () => {
       allow: undefined,
       deny: ["exec"],
     });
+  });
+
+  it("keeps global alsoAllow additive in effective tool policy resolution", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "coding",
+        alsoAllow: ["lobster"],
+      },
+    };
+
+    const resolved = resolveEffectiveToolPolicy({ config: cfg, agentId: "main" });
+    expect(resolved.globalPolicy).toEqual({ allow: ["*", "lobster"], deny: undefined });
+    expect(resolved.profileAlsoAllow).toEqual(["lobster"]);
+  });
+
+  it("does not block fs root expansion when only global alsoAllow is configured", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        alsoAllow: ["lobster"],
+      },
+    };
+
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(true);
   });
 });
