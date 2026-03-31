@@ -187,6 +187,13 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       },
     },
     {
+      argv: ["xcrun", "bash", "-lc", "echo hi"],
+      expected:
+        process.platform === "darwin"
+          ? { kind: "unwrapped", wrapper: "xcrun", argv: ["bash", "-lc", "echo hi"] }
+          : { kind: "blocked", wrapper: "xcrun" },
+    },
+    {
       argv: ["script", "-q", "/dev/null"],
       expected: { kind: "blocked", wrapper: "script" },
     },
@@ -198,8 +205,33 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       argv: ["timeout", "--bogus", "5s", "bash", "-lc", "echo hi"],
       expected: { kind: "blocked", wrapper: "timeout" },
     },
+    {
+      argv: ["arch", "-e", "FOO=bar", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "arch" },
+    },
+    {
+      argv: ["arch", "-arch", "bogus", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "arch" },
+    },
+    {
+      argv: ["arch", "-arch", "bogus", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "arch" },
+    },
+    {
+      argv: ["xcrun", "--sdk", "macosx", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "xcrun" },
+    },
   ])("unwraps known dispatch wrappers for %j", ({ argv, expected }) => {
     expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
+  });
+
+  test("blocks arch dispatch unwrapping outside macOS", () => {
+    expect(
+      unwrapKnownDispatchWrapperInvocation(["arch", "-arm64", "bash", "-lc", "echo hi"], "linux"),
+    ).toEqual({
+      kind: "blocked",
+      wrapper: "arch",
+    });
   });
 
   test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
@@ -263,6 +295,20 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       wrapper: "timeout",
       effectiveArgv: ["bash", "-lc", "echo hi"],
     },
+    ...(process.platform === "darwin"
+      ? [
+          {
+            argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
+            wrapper: "arch",
+            effectiveArgv: ["bash", "-lc", "echo hi"],
+          },
+          {
+            argv: ["xcrun", "bash", "-lc", "echo hi"],
+            wrapper: "xcrun",
+            effectiveArgv: ["bash", "-lc", "echo hi"],
+          },
+        ]
+      : []),
   ])("keeps transparent wrapper handling in sync for %s", ({ argv, wrapper, effectiveArgv }) => {
     expectTransparentDispatchWrapperCase({ argv, wrapper, effectiveArgv });
   });
@@ -274,6 +320,21 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["nohup", "nice"],
       policyBlocked: false,
+    });
+  });
+
+  test("blocks arch trust unwrapping outside macOS", () => {
+    expect(
+      resolveDispatchWrapperTrustPlan(
+        ["arch", "-arm64", "bash", "-lc", "echo hi"],
+        undefined,
+        "linux",
+      ),
+    ).toEqual({
+      argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
+      wrappers: [],
+      policyBlocked: true,
+      blockedWrapper: "arch",
     });
   });
 

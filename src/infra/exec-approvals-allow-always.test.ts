@@ -637,6 +637,30 @@ $0 \\"$1\\"" touch {marker}`);
     });
   });
 
+  it("prevents allow-always bypass for macOS dispatch-wrapper chains", () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'id > marker-arch'",
+      env,
+      persistedPattern: echo,
+    });
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/xcrun /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/xcrun /bin/zsh -lc 'id > marker-xcrun'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for awk interpreters", () => {
     if (process.platform === "win32") {
       return;
