@@ -103,6 +103,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   macos: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
+    ...CAMERA_DANGEROUS_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
