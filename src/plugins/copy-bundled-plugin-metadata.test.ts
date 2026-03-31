@@ -350,4 +350,52 @@ describe("copyBundledPluginMetadata", () => {
 
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
   });
+
+  it("preserves manifest-less runtime support package outputs and copies package metadata", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-runtime-support-");
+    const pluginDir = path.join(repoRoot, "extensions", "image-generation-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/image-generation-core",
+      version: "0.0.1",
+      private: true,
+      type: "module",
+    });
+    fs.writeFileSync(path.join(pluginDir, "runtime-api.ts"), "export {};\n", "utf8");
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "image-generation-core"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(repoRoot, "dist", "extensions", "image-generation-core", "runtime-api.js"),
+      "export {};\n",
+      "utf8",
+    );
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "image-generation-core"))).toBe(
+      true,
+    );
+    expect(
+      fs.existsSync(
+        path.join(repoRoot, "dist", "extensions", "image-generation-core", "runtime-api.js"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(repoRoot, "dist", "extensions", "image-generation-core", "openclaw.plugin.json"),
+      ),
+    ).toBe(false);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(repoRoot, "dist", "extensions", "image-generation-core", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      name: "@openclaw/image-generation-core",
+      type: "module",
+    });
+  });
 });
