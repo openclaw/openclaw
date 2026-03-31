@@ -6,13 +6,15 @@ import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
-import { buildDmGroupAccountAllowlistAdapter } from "../../plugin-sdk/allowlist-config-edit.js";
+import {
+  buildDmGroupAccountAllowlistAdapter,
+  buildLegacyDmAccountAllowlistAdapter,
+} from "../../plugin-sdk/allowlist-config-edit.js";
 import { resolveApprovalApprovers } from "../../plugin-sdk/approval-approvers.js";
 import { createApproverRestrictedNativeApprovalAdapter } from "../../plugin-sdk/approval-runtime.js";
 import { createScopedChannelConfigAdapter } from "../../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { loadBundledPluginPublicSurfaceSync } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -20,25 +22,6 @@ import {
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
-
-const { discordPlugin } = loadBundledPluginPublicSurfaceSync<{
-  discordPlugin: ChannelPlugin;
-}>({
-  pluginId: "discord",
-  artifactBasename: "index.ts",
-});
-const { slackPlugin } = loadBundledPluginPublicSurfaceSync<{
-  slackPlugin: ChannelPlugin;
-}>({
-  pluginId: "slack",
-  artifactBasename: "index.ts",
-});
-const { whatsappPlugin } = loadBundledPluginPublicSurfaceSync<{
-  whatsappPlugin: ChannelPlugin;
-}>({
-  pluginId: "whatsapp",
-  artifactBasename: "index.ts",
-});
 
 function normalizeDiscordDirectApproverId(value: string | number): string | undefined {
   const normalized = String(value)
@@ -73,7 +56,7 @@ const discordNativeApprovalAdapterForTests = createApproverRestrictedNativeAppro
         : normalizeDiscordDirectApproverId(senderId);
     return Boolean(
       normalizedSenderId &&
-        getDiscordExecApprovalApproversForTests({ cfg }).includes(normalizedSenderId),
+      getDiscordExecApprovalApproversForTests({ cfg }).includes(normalizedSenderId),
     );
   },
   isNativeDeliveryEnabled: ({ cfg }) =>
@@ -83,8 +66,72 @@ const discordNativeApprovalAdapterForTests = createApproverRestrictedNativeAppro
 });
 
 const discordCommandTestPlugin: ChannelPlugin = {
-  ...discordPlugin,
+  ...createChannelTestPluginBase({
+    id: "discord",
+    label: "Discord",
+    docsPath: "/channels/discord",
+    capabilities: {
+      chatTypes: ["direct", "group", "thread"],
+      reactions: true,
+      threads: true,
+      media: true,
+      nativeCommands: true,
+    },
+  }),
   auth: discordNativeApprovalAdapterForTests.auth,
+  allowlist: buildLegacyDmAccountAllowlistAdapter({
+    channelId: "discord",
+    resolveAccount: ({ cfg }) => cfg.channels?.discord ?? {},
+    normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+    resolveDmAllowFrom: (account) => account.allowFrom ?? account.dm?.allowFrom,
+    resolveGroupPolicy: (account) => account.groupPolicy,
+    resolveGroupOverrides: () => undefined,
+  }),
+};
+
+const slackCommandTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "slack",
+    label: "Slack",
+    docsPath: "/channels/slack",
+    capabilities: {
+      chatTypes: ["direct", "group", "thread"],
+      reactions: true,
+      threads: true,
+      nativeCommands: true,
+    },
+  }),
+  allowlist: buildLegacyDmAccountAllowlistAdapter({
+    channelId: "slack",
+    resolveAccount: ({ cfg }) => cfg.channels?.slack ?? {},
+    normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+    resolveDmAllowFrom: (account) => account.allowFrom ?? account.dm?.allowFrom,
+    resolveGroupPolicy: (account) => account.groupPolicy,
+    resolveGroupOverrides: () => undefined,
+  }),
+};
+
+const whatsappCommandTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "whatsapp",
+    label: "WhatsApp",
+    docsPath: "/channels/whatsapp",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      reactions: true,
+      media: true,
+      nativeCommands: true,
+    },
+  }),
+  allowlist: buildDmGroupAccountAllowlistAdapter({
+    channelId: "whatsapp",
+    resolveAccount: ({ cfg }) => cfg.channels?.whatsapp ?? {},
+    normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+    resolveDmAllowFrom: (account) => account.allowFrom,
+    resolveGroupAllowFrom: (account) => account.groupAllowFrom,
+    resolveDmPolicy: (account) => account.dmPolicy,
+    resolveGroupPolicy: (account) => account.groupPolicy,
+  }),
 };
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -457,7 +504,7 @@ function setMinimalChannelPluginRegistryForTests(): void {
       },
       {
         pluginId: "slack",
-        plugin: slackPlugin,
+        plugin: slackCommandTestPlugin,
         source: "test",
       },
       {
@@ -467,7 +514,7 @@ function setMinimalChannelPluginRegistryForTests(): void {
       },
       {
         pluginId: "whatsapp",
-        plugin: whatsappPlugin,
+        plugin: whatsappCommandTestPlugin,
         source: "test",
       },
     ]),
