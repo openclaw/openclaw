@@ -214,6 +214,25 @@ describe("legacy config detection", () => {
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
   });
+
+  it("flags channels.telegram.groupMentionsOnly as legacy in snapshot", async () => {
+    await withSnapshotForConfig(
+      { channels: { telegram: { groupMentionsOnly: true } } },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(true);
+        expect(
+          ctx.snapshot.legacyIssues.some(
+            (issue) => issue.path === "channels.telegram.groupMentionsOnly",
+          ),
+        ).toBe(true);
+        const parsed = ctx.parsed as {
+          channels?: { telegram?: { groupMentionsOnly?: boolean } };
+        };
+        expect(parsed.channels?.telegram?.groupMentionsOnly).toBe(true);
+      },
+    );
+  });
+
   it("does not rewrite removed messages.tts.enabled migrations", async () => {
     const res = migrateLegacyConfig({
       messages: { tts: { enabled: true } },

@@ -242,6 +242,17 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"telegram"');
     }
   });
+  it("rejects channels.telegram.groupMentionsOnly", async () => {
+    const res = validateConfigObject({
+      channels: { telegram: { groupMentionsOnly: true } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly")).toBe(
+        true,
+      );
+    }
+  });
   it("rejects gateway.token", async () => {
     const res = validateConfigObject({
       gateway: { token: "legacy-token" },
