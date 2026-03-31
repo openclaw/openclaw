@@ -71,21 +71,46 @@ const outboundCircuitBreaker = new Map<string, OutboundSendWindow>();
 
 const OUTBOUND_CIRCUIT_EVICT_AFTER_MS = OUTBOUND_CIRCUIT_WINDOW_MS * 2;
 const OUTBOUND_CIRCUIT_SWEEP_EVERY_N_CALLS = 100;
+const OUTBOUND_CIRCUIT_SWEEP_MAX_ENTRIES = 500;
+const OUTBOUND_CIRCUIT_FORCE_SWEEP_OVER_MAP_SIZE = 2_000;
 let outboundCircuitBreakerSweepBudget = 0;
+let outboundCircuitBreakerSweepCursor: IterableIterator<[string, OutboundSendWindow]> | undefined;
 
 export function __resetOutboundCircuitBreakerForTest() {
   outboundCircuitBreaker.clear();
   outboundCircuitBreakerSweepBudget = 0;
+  outboundCircuitBreakerSweepCursor = undefined;
+}
+
+export function __getOutboundCircuitBreakerSizeForTest(): number {
+  return outboundCircuitBreaker.size;
 }
 
 function maybeSweepOutboundCircuitBreaker(now: number) {
   outboundCircuitBreakerSweepBudget += 1;
-  if (outboundCircuitBreakerSweepBudget < OUTBOUND_CIRCUIT_SWEEP_EVERY_N_CALLS) {
+
+  const shouldSweep =
+    outboundCircuitBreakerSweepBudget >= OUTBOUND_CIRCUIT_SWEEP_EVERY_N_CALLS ||
+    outboundCircuitBreaker.size > OUTBOUND_CIRCUIT_FORCE_SWEEP_OVER_MAP_SIZE;
+
+  if (!shouldSweep) {
     return;
   }
   outboundCircuitBreakerSweepBudget = 0;
 
-  for (const [key, value] of outboundCircuitBreaker.entries()) {
+  // Sweep incrementally to keep overhead low even when the map grows large.
+  // A cursor is used so we don't always start from the beginning.
+  if (!outboundCircuitBreakerSweepCursor) {
+    outboundCircuitBreakerSweepCursor = outboundCircuitBreaker.entries();
+  }
+
+  for (let i = 0; i < OUTBOUND_CIRCUIT_SWEEP_MAX_ENTRIES; i += 1) {
+    const next = outboundCircuitBreakerSweepCursor.next();
+    if (next.done) {
+      outboundCircuitBreakerSweepCursor = undefined;
+      break;
+    }
+    const [key, value] = next.value;
     if (!value.lastSentAt) {
       outboundCircuitBreaker.delete(key);
       continue;

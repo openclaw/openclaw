@@ -21,6 +21,7 @@ vi.mock("../../media/local-roots.js", () => ({
 }));
 
 import {
+  __getOutboundCircuitBreakerSizeForTest,
   __resetOutboundCircuitBreakerForTest,
   executePollAction,
   executeSendAction,
@@ -184,6 +185,56 @@ describe("executeSendAction", () => {
         message: "msg-over",
       }),
     ).rejects.toThrow(/circuit breaker/i);
+  });
+
+  it("evicts stale circuit breaker keys to avoid unbounded growth", async () => {
+    vi.useFakeTimers();
+
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "telegram",
+      to: "channel:123",
+      via: "gateway",
+      mediaUrl: null,
+    });
+
+    const baseCtx = {
+      cfg: {},
+      channel: "telegram",
+      params: {},
+      dryRun: false,
+    } as const;
+
+    // Create a batch of unique keys.
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    for (let i = 0; i < 100; i += 1) {
+      await executeSendAction({
+        ctx: {
+          ...baseCtx,
+          params: { __sessionKey: `s1-${i}` },
+        },
+        to: "channel:123",
+        message: "hello",
+      });
+    }
+    expect(__getOutboundCircuitBreakerSizeForTest()).toBe(100);
+
+    // Advance past eviction threshold (window * 2) then send again enough times to trigger a sweep.
+    vi.advanceTimersByTime(7 * 60_000);
+    for (let i = 0; i < 100; i += 1) {
+      await executeSendAction({
+        ctx: {
+          ...baseCtx,
+          params: { __sessionKey: `s2-${i}` },
+        },
+        to: "channel:123",
+        message: "hello",
+      });
+    }
+
+    // The first batch should be pruned as stale.
+    expect(__getOutboundCircuitBreakerSizeForTest()).toBeLessThanOrEqual(110);
+    vi.useRealTimers();
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
