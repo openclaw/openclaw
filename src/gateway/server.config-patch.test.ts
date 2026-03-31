@@ -91,6 +91,8 @@ describe("gateway config methods", () => {
     );
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+    const afterHash = await getConfigHash();
+    expect(afterHash).toBe(current.payload?.hash);
   });
 
   it("round-trips config.set and returns the live config path", async () => {
@@ -214,6 +216,7 @@ describe("gateway config methods", () => {
   it("rejects config.patch when merged SecretRefs cannot resolve", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
     delete process.env[missingEnvVar];
+    const beforeHash = await getConfigHash();
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
       "config.patch",
@@ -234,11 +237,13 @@ describe("gateway config methods", () => {
             },
           },
         }),
-        baseHash: await getConfigHash(),
+        baseHash: beforeHash,
       },
     );
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+    const afterHash = await getConfigHash();
+    expect(afterHash).toBe(beforeHash);
   });
 });
 

@@ -568,6 +568,12 @@ function maybeRestoreSecretRefId(params: {
 
   const originalObj = toObjectRecord(params.original);
   if (!isSecretRefWithProvider(originalObj)) {
+    if (isSecretRefShape(originalObj)) {
+      throw new RedactionError(
+        params.path,
+        `SecretRef at ${params.path} requires a provider field to restore the redacted id automatically (original ref lacks provider).`,
+      );
+    }
     throw new RedactionError(
       params.path,
       `SecretRef at ${params.path} contains a redacted id placeholder with no matching original value.`,

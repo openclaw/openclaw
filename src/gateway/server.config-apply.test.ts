@@ -46,29 +46,33 @@ const sendConfigApply = async (ws: WebSocket, id: string, raw: unknown) => {
   });
 };
 
+const sendConfigGet = async (ws: WebSocket, id: string) => {
+  ws.send(
+    JSON.stringify({
+      type: "req",
+      id,
+      method: "config.get",
+      params: {},
+    }),
+  );
+  return onceMessage<{
+    ok: boolean;
+    payload?: { hash?: string; raw?: string | null; config?: Record<string, unknown> };
+  }>(ws, (o) => {
+    const msg = o as { type?: string; id?: string };
+    return msg.type === "res" && msg.id === id;
+  });
+};
+
 describe("gateway config.apply", () => {
   it("rejects config.apply when SecretRef resolution fails", async () => {
     const ws = await openClient();
     try {
       const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
       delete process.env[missingEnvVar];
-      const getId = "req-secretref-get";
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: getId,
-          method: "config.get",
-          params: {},
-        }),
-      );
-      const current = await onceMessage<{
-        ok: boolean;
-        payload?: { config?: Record<string, unknown> };
-      }>(ws, (o) => {
-        const msg = o as { type?: string; id?: string };
-        return msg.type === "res" && msg.id === getId;
-      });
+      const current = await sendConfigGet(ws, "req-secretref-get-before");
       expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
       const nextConfig = structuredClone(current.payload?.config ?? {});
       const channels = (nextConfig.channels ??= {}) as Record<string, unknown>;
       const telegram = (channels.telegram ??= {}) as Record<string, unknown>;
@@ -81,6 +85,11 @@ describe("gateway config.apply", () => {
       const res = await sendConfigApply(ws, id, JSON.stringify(nextConfig, null, 2));
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+
+      const after = await sendConfigGet(ws, "req-secretref-get-after");
+      expect(after.ok).toBe(true);
+      expect(after.payload?.hash).toBe(current.payload?.hash);
+      expect(after.payload?.raw).toBe(current.payload?.raw);
     } finally {
       ws.close();
     }

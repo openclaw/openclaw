@@ -394,6 +394,7 @@ export function renderNode(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -618,6 +619,7 @@ function renderTextInput(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   disabled: boolean;
   showLabel?: boolean;
   searchCriteria?: ConfigSearchCriteria;
@@ -640,10 +642,13 @@ function renderTextInput(params: {
   });
   const isStructuredValue =
     value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
+  const rawAvailable = params.rawAvailable ?? true;
   const effectiveRedacted = sensitiveState.isRedacted || isStructuredValue;
   const placeholder = effectiveRedacted
     ? isStructuredValue
-      ? "Structured value (SecretRef) - use Raw mode to edit"
+      ? rawAvailable
+        ? "Structured value (SecretRef) - use Raw mode to edit"
+        : "Structured value (SecretRef) - edit the config file directly"
       : REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
       // oxlint-disable typescript/no-base-to-string
@@ -890,6 +895,7 @@ function renderObject(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -908,6 +914,7 @@ function renderObject(params: {
     disabled,
     onPatch,
     searchCriteria,
+    rawAvailable,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -949,6 +956,7 @@ function renderObject(params: {
         value: obj[propKey],
         path: [...path, propKey],
         hints,
+        rawAvailable,
         unsupported,
         disabled,
         searchCriteria: childSearchCriteria,
@@ -965,6 +973,7 @@ function renderObject(params: {
             value: obj,
             path,
             hints,
+            rawAvailable,
             unsupported,
             disabled,
             reservedKeys: reserved,
@@ -1008,6 +1017,7 @@ function renderArray(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -1026,6 +1036,7 @@ function renderArray(params: {
     disabled,
     onPatch,
     searchCriteria,
+    rawAvailable,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -1104,6 +1115,7 @@ function renderArray(params: {
                         value: item,
                         path: [...path, idx],
                         hints,
+                        rawAvailable,
                         unsupported,
                         disabled,
                         searchCriteria: childSearchCriteria,
@@ -1129,6 +1141,7 @@ function renderMapField(params: {
   value: Record<string, unknown>;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   reservedKeys: Set<string>;
@@ -1143,6 +1156,7 @@ function renderMapField(params: {
     value,
     path,
     hints,
+    rawAvailable,
     unsupported,
     disabled,
     reservedKeys,
@@ -1299,6 +1313,7 @@ function renderMapField(params: {
                               value: entryValue,
                               path: valuePath,
                               hints,
+                              rawAvailable,
                               unsupported,
                               disabled,
                               searchCriteria,

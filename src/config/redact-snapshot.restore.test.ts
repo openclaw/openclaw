@@ -259,4 +259,34 @@ describe("restoreRedactedValues", () => {
     expect(result.ok).toBe(false);
     expect(result.humanReadableMessage).toContain("changed source/provider");
   });
+
+  it("reports a provider-focused error when original SecretRefs lack provider", () => {
+    const incoming = {
+      models: {
+        providers: {
+          default: {
+            apiKey: {
+              source: "env",
+              id: REDACTED_SENTINEL,
+            },
+          },
+        },
+      },
+    };
+    const original = {
+      models: {
+        providers: {
+          default: {
+            apiKey: {
+              source: "env",
+              id: "OPENAI_API_KEY",
+            },
+          },
+        },
+      },
+    };
+    const result = restoreRedactedValues_orig(incoming, original, mainSchemaHints);
+    expect(result.ok).toBe(false);
+    expect(result.humanReadableMessage).toContain("requires a provider field");
+  });
 });

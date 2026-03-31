@@ -1082,6 +1082,7 @@ export function renderConfig(props: ConfigProps) {
                           schema: analysis.schema,
                           uiHints: props.uiHints,
                           value: props.formValue,
+                          rawAvailable,
                           disabled: props.loading || !props.formValue,
                           unsupportedPaths: analysis.unsupportedPaths,
                           onPatch: props.onFormPatch,
