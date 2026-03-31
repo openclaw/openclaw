@@ -25,12 +25,20 @@ export function resolvePreferredSessionKeyForSessionIdMatches(
     return structuralMatches[0][0];
   }
 
-  const sortedMatches = [...matches].toSorted(
-    (a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0),
-  );
-  const [freshest, secondFreshest] = sortedMatches;
+  if (structuralMatches.length > 1) {
+    const sorted = [...structuralMatches].toSorted((a, b) => {
+      const timeDiff = (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+      return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+    });
+    return sorted[0][0];
+  }
+  const sorted = [...matches].toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
+  const [freshest, secondFreshest] = sorted;
   if ((freshest?.[1]?.updatedAt ?? 0) > (secondFreshest?.[1]?.updatedAt ?? 0)) {
-    return freshest?.[0];
+    return freshest[0];
   }
 
   return undefined;

@@ -123,16 +123,14 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
       })
       .filter((match): match is { key: string; updatedAt: number } => match !== undefined);
 
-    const sortedResolvedMatches = [...resolvedMatches].toSorted(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
-    const [freshestMatch, secondFreshestMatch] = sortedResolvedMatches;
-    const resolvedKey =
-      resolvedMatches.length === 1
-        ? freshestMatch?.key
-        : (freshestMatch?.updatedAt ?? 0) > (secondFreshestMatch?.updatedAt ?? 0)
-          ? freshestMatch?.key
-          : undefined;
+    const sortedResolvedMatches = [...resolvedMatches].toSorted((a, b) => {
+      const timeDiff = b.updatedAt - a.updatedAt;
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+      return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+    });
+    const resolvedKey = sortedResolvedMatches[0]?.key;
     if (resolvedKey) {
       TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
       return resolvedKey;
