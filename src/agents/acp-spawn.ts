@@ -385,10 +385,16 @@ function resolveConversationIdForThreadBinding(params: {
       }
       chatId = next;
     }
-    chatId = chatId
-      .replace(/:topic:\d+$/i, "")
-      .replace(/:\d+$/i, "")
-      .trim();
+    const topicMatch = /^(.*?):topic:(\d+)$/i.exec(chatId);
+    if (topicMatch?.[1] && /^-?\d+$/.test(topicMatch[1].trim())) {
+      const topicId = normalizedThreadId ?? topicMatch[2];
+      return `${topicMatch[1].trim()}:topic:${topicId}`;
+    }
+    const shorthandTopicMatch = /^(.*?):(\d+)$/i.exec(chatId);
+    if (shorthandTopicMatch?.[1] && /^-?\d+$/.test(shorthandTopicMatch[1].trim())) {
+      const topicId = normalizedThreadId ?? shorthandTopicMatch[2];
+      return `${shorthandTopicMatch[1].trim()}:topic:${topicId}`;
+    }
     if (/^-?\d+$/.test(chatId)) {
       return normalizedThreadId ? `${chatId}:topic:${normalizedThreadId}` : chatId;
     }
