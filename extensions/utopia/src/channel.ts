@@ -65,11 +65,13 @@ export const utopiaPlugin: ChannelPlugin<ResolvedUtopiaAccount> = {
   pairing: {
     idLabel: "utopiaPubkey",
     normalizeAllowEntry: (entry) => entry.replace(/^utopia:/i, "").trim(),
-    notifyApproval: async ({ id }) => {
-      const bus = activeBuses.get(DEFAULT_ACCOUNT_ID);
-      if (bus) {
-        await bus.sendDm(id, "Your pairing request has been approved!");
+    notifyApproval: ({ accountId, id }) => {
+      const bus = activeBuses.get(accountId);
+      if (!bus) {
+        // Intentionally drop: account not connected for this gateway
+        return;
       }
+      void bus.sendApprovalDm(id);
     },
   },
 
