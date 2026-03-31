@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { getFlowRegistryStore, resetFlowRegistryRuntimeForTests } from "./flow-registry.store.js";
-import type { FlowRecord, FlowStatus } from "./flow-registry.types.js";
+import type { FlowRecord, FlowShape, FlowStatus } from "./flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
 const flows = new Map<string, FlowRecord>();
@@ -21,9 +21,44 @@ function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
   return notifyPolicy ?? "done_only";
 }
 
+function ensureFlowShape(shape?: FlowShape): FlowShape {
+  return shape ?? "linear";
+}
+
 function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
   return task.label?.trim() || task.task.trim() || "Background task";
 }
+
+function resolveFlowBlockedSummary(
+  task: Pick<TaskRecord, "status" | "terminalOutcome" | "terminalSummary" | "progressSummary">,
+): string | undefined {
+  if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
+    return undefined;
+  }
+  return task.terminalSummary?.trim() || task.progressSummary?.trim() || undefined;
+}
+
+type FlowRecordPatch = Partial<
+  Omit<
+    Pick<
+      FlowRecord,
+      | "status"
+      | "notifyPolicy"
+      | "goal"
+      | "currentStep"
+      | "blockedTaskId"
+      | "blockedSummary"
+      | "updatedAt"
+      | "endedAt"
+    >,
+    "currentStep" | "blockedTaskId" | "blockedSummary" | "endedAt"
+  >
+> & {
+  currentStep?: string | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  endedAt?: number | null;
+};
 
 export function deriveFlowStatusFromTask(
   task: Pick<TaskRecord, "status" | "terminalOutcome">,
@@ -83,12 +118,15 @@ function persistFlowDelete(flowId: string) {
 }
 
 export function createFlowRecord(params: {
+  shape?: FlowShape;
   ownerSessionKey: string;
   requesterOrigin?: FlowRecord["requesterOrigin"];
   status?: FlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;
+  blockedTaskId?: string;
+  blockedSummary?: string;
   createdAt?: number;
   updatedAt?: number;
   endedAt?: number;
@@ -97,12 +135,15 @@ export function createFlowRecord(params: {
   const now = params.createdAt ?? Date.now();
   const record: FlowRecord = {
     flowId: crypto.randomUUID(),
+    shape: ensureFlowShape(params.shape),
     ownerSessionKey: params.ownerSessionKey,
     ...(params.requesterOrigin ? { requesterOrigin: { ...params.requesterOrigin } } : {}),
     status: params.status ?? "queued",
     notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
     goal: params.goal,
     currentStep: params.currentStep?.trim() || undefined,
+    blockedTaskId: params.blockedTaskId?.trim() || undefined,
+    blockedSummary: params.blockedSummary?.trim() || undefined,
     createdAt: now,
     updatedAt: params.updatedAt ?? now,
     ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
@@ -116,6 +157,7 @@ export function createFlowForTask(params: {
   task: Pick<
     TaskRecord,
     | "requesterSessionKey"
+    | "taskId"
     | "notifyPolicy"
     | "status"
     | "terminalOutcome"
@@ -124,6 +166,8 @@ export function createFlowForTask(params: {
     | "createdAt"
     | "lastEventAt"
     | "endedAt"
+    | "terminalSummary"
+    | "progressSummary"
   >;
   requesterOrigin?: FlowRecord["requesterOrigin"];
 }): FlowRecord {
@@ -138,23 +182,22 @@ export function createFlowForTask(params: {
     ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
     : undefined;
   return createFlowRecord({
+    shape: "single_task",
     ownerSessionKey: params.task.requesterSessionKey,
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
     notifyPolicy: params.task.notifyPolicy,
     goal: resolveFlowGoal(params.task),
+    blockedTaskId:
+      terminalFlowStatus === "blocked" ? params.task.taskId.trim() || undefined : undefined,
+    blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
     updatedAt: params.task.lastEventAt ?? params.task.createdAt,
     ...(endedAt !== undefined ? { endedAt } : {}),
   });
 }
 
-export function updateFlowRecordById(
-  flowId: string,
-  patch: Partial<
-    Pick<FlowRecord, "status" | "notifyPolicy" | "goal" | "currentStep" | "updatedAt" | "endedAt">
-  >,
-): FlowRecord | null {
+export function updateFlowRecordById(flowId: string, patch: FlowRecordPatch): FlowRecord | null {
   ensureFlowRegistryReady();
   const current = flows.get(flowId);
   if (!current) {
@@ -166,9 +209,19 @@ export function updateFlowRecordById(
     ...(patch.notifyPolicy ? { notifyPolicy: patch.notifyPolicy } : {}),
     ...(patch.goal ? { goal: patch.goal } : {}),
     currentStep:
-      patch.currentStep === undefined ? current.currentStep : patch.currentStep.trim() || undefined,
+      patch.currentStep === undefined
+        ? current.currentStep
+        : patch.currentStep?.trim() || undefined,
+    blockedTaskId:
+      patch.blockedTaskId === undefined
+        ? current.blockedTaskId
+        : patch.blockedTaskId?.trim() || undefined,
+    blockedSummary:
+      patch.blockedSummary === undefined
+        ? current.blockedSummary
+        : patch.blockedSummary?.trim() || undefined,
     updatedAt: patch.updatedAt ?? Date.now(),
-    ...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
+    endedAt: patch.endedAt === undefined ? current.endedAt : (patch.endedAt ?? undefined),
   };
   flows.set(flowId, next);
   persistFlowUpsert(next);
@@ -186,11 +239,21 @@ export function syncFlowFromTask(
     | "task"
     | "lastEventAt"
     | "endedAt"
+    | "taskId"
+    | "terminalSummary"
+    | "progressSummary"
   >,
 ): FlowRecord | null {
   const flowId = task.parentFlowId?.trim();
   if (!flowId) {
     return null;
+  }
+  const flow = getFlowById(flowId);
+  if (!flow) {
+    return null;
+  }
+  if (flow.shape !== "single_task") {
+    return flow;
   }
   const terminalFlowStatus = deriveFlowStatusFromTask(task);
   const isTerminal =
@@ -203,12 +266,15 @@ export function syncFlowFromTask(
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: resolveFlowGoal(task),
+    blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
+    blockedSummary:
+      terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     updatedAt: task.lastEventAt ?? Date.now(),
     ...(isTerminal
       ? {
           endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
         }
-      : {}),
+      : { endedAt: null }),
   });
 }
 
@@ -218,11 +284,36 @@ export function getFlowById(flowId: string): FlowRecord | undefined {
   return flow ? cloneFlowRecord(flow) : undefined;
 }
 
+export function listFlowsForOwnerSessionKey(sessionKey: string): FlowRecord[] {
+  ensureFlowRegistryReady();
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return [];
+  }
+  return [...flows.values()]
+    .filter((flow) => flow.ownerSessionKey.trim() === normalizedSessionKey)
+    .map((flow) => cloneFlowRecord(flow))
+    .toSorted((left, right) => right.createdAt - left.createdAt);
+}
+
+export function findLatestFlowForOwnerSessionKey(sessionKey: string): FlowRecord | undefined {
+  const flow = listFlowsForOwnerSessionKey(sessionKey)[0];
+  return flow ? cloneFlowRecord(flow) : undefined;
+}
+
+export function resolveFlowForLookupToken(token: string): FlowRecord | undefined {
+  const lookup = token.trim();
+  if (!lookup) {
+    return undefined;
+  }
+  return getFlowById(lookup) ?? findLatestFlowForOwnerSessionKey(lookup);
+}
+
 export function listFlowRecords(): FlowRecord[] {
   ensureFlowRegistryReady();
   return [...flows.values()]
     .map((flow) => cloneFlowRecord(flow))
-    .toSorted((left, right) => left.createdAt - right.createdAt);
+    .toSorted((left, right) => right.createdAt - left.createdAt);
 }
 
 export function deleteFlowRecordById(flowId: string): boolean {

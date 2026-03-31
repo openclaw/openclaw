@@ -1048,6 +1048,17 @@ export function createTaskRecord(params: {
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
+  if (record.parentFlowId?.trim()) {
+    try {
+      syncFlowFromTask(record);
+    } catch (error) {
+      log.warn("Failed to sync parent flow from task create", {
+        taskId: record.taskId,
+        flowId: record.parentFlowId,
+        error,
+      });
+    }
+  }
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);
   }
@@ -1353,6 +1364,34 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
 
 export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
   const task = listTasksForSessionKey(sessionKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForFlowId(flowId: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const normalizedFlowId = flowId.trim();
+  if (!normalizedFlowId) {
+    return [];
+  }
+  return [...tasks.values()]
+    .map((task, insertionIndex) =>
+      task.parentFlowId?.trim() === normalizedFlowId
+        ? { ...cloneTaskRecord(task), insertionIndex }
+        : null,
+    )
+    .filter(
+      (
+        task,
+      ): task is TaskRecord & {
+        insertionIndex: number;
+      } => Boolean(task),
+    )
+    .toSorted(compareTasksNewestFirst)
+    .map(({ insertionIndex: _, ...task }) => task);
+}
+
+export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
+  const task = listTasksForFlowId(flowId)[0];
   return task ? cloneTaskRecord(task) : undefined;
 }
 

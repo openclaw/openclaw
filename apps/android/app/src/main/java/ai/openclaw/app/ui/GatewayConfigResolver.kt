@@ -37,9 +37,13 @@ private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
   setupCode: String,
-  manualHost: String,
-  manualPort: String,
-  manualTls: Boolean,
+  savedManualHost: String,
+  savedManualPort: String,
+  savedManualTls: Boolean,
+  manualHostInput: String,
+  manualPortInput: String,
+  manualTlsInput: Boolean,
+  fallbackBootstrapToken: String,
   fallbackToken: String,
   fallbackPassword: String,
 ): GatewayConnectConfig? {
@@ -69,13 +73,23 @@ internal fun resolveGatewayConnectConfig(
     )
   }
 
-  val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls) ?: return null
+  val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput) ?: return null
   val parsed = parseGatewayEndpoint(manualUrl) ?: return null
+  val savedManualEndpoint =
+    composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
+      ?.let(::parseGatewayEndpoint)
+  val preserveBootstrapToken =
+    savedManualEndpoint != null &&
+      savedManualEndpoint.host == parsed.host &&
+      savedManualEndpoint.port == parsed.port &&
+      savedManualEndpoint.tls == parsed.tls &&
+      fallbackToken.isBlank() &&
+      fallbackPassword.isBlank()
   return GatewayConnectConfig(
     host = parsed.host,
     port = parsed.port,
     tls = parsed.tls,
-    bootstrapToken = "",
+    bootstrapToken = if (preserveBootstrapToken) fallbackBootstrapToken.trim() else "",
     token = fallbackToken.trim(),
     password = fallbackPassword.trim(),
   )
