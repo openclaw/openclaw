@@ -231,7 +231,12 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: { link?: boolean; pin?: boolean; marketplace?: string };
+  opts: {
+    dangerouslyForceUnsafeInstall?: boolean;
+    link?: boolean;
+    pin?: boolean;
+    marketplace?: string;
+  };
 }) {
   const shorthand = !params.opts.marketplace
     ? await resolveMarketplaceInstallShortcut(params.raw)
@@ -276,6 +281,7 @@ export async function runPluginInstallCommand(params: {
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       marketplace: opts.marketplace,
       plugin: raw,
       logger: createPluginInstallLogger(),
@@ -347,6 +353,7 @@ export async function runPluginInstallCommand(params: {
     }
 
     const result = await installPluginFromPath({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       path: resolved,
       logger: createPluginInstallLogger(),
     });
@@ -417,6 +424,7 @@ export async function runPluginInstallCommand(params: {
   const clawhubSpec = parseClawHubPluginSpec(raw);
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       spec: raw,
       logger: createPluginInstallLogger(),
     });
@@ -451,6 +459,7 @@ export async function runPluginInstallCommand(params: {
   const preferredClawHubSpec = buildPreferredClawHubSpec(raw);
   if (preferredClawHubSpec) {
     const clawhubResult = await installPluginFromClawHub({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       spec: preferredClawHubSpec,
       logger: createPluginInstallLogger(),
     });
@@ -484,6 +493,7 @@ export async function runPluginInstallCommand(params: {
   }
 
   const result = await installPluginFromNpmSpec({
+    dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
     spec: raw,
     logger: createPluginInstallLogger(),
   });

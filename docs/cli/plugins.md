@@ -49,6 +49,7 @@ capabilities.
 openclaw plugins install <package>                      # ClawHub first, then npm
 openclaw plugins install clawhub:<package>              # ClawHub only
 openclaw plugins install <package> --pin                # pin version
+openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
 openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
@@ -56,6 +57,12 @@ openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
+
+`--dangerously-force-unsafe-install` is a break-glass option for false positives
+in the built-in dangerous-code scanner. It allows the install to continue even
+when the built-in scanner reports `critical` findings, but it does **not**
+bypass plugin `before_install` hook policy blocks and does **not** bypass scan
+failures.
 
 `plugins install` is also the install surface for hook packs that expose
 `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook

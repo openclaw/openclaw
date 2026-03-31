@@ -20,6 +20,7 @@ async function loadInstallSecurityScanRuntime() {
 }
 
 export async function scanBundleInstallSource(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   pluginId: string;
   sourceDir: string;
@@ -33,6 +34,7 @@ export async function scanBundleInstallSource(params: {
 }
 
 export async function scanPackageInstallSource(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
   extensions: string[];
   logger: InstallScanLogger;
   packageDir: string;
@@ -49,6 +51,7 @@ export async function scanPackageInstallSource(params: {
 }
 
 export async function scanFileInstallSource(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
   filePath: string;
   logger: InstallScanLogger;
   mode?: "install" | "update";
