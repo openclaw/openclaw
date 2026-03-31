@@ -53,7 +53,7 @@ Model:    <model-name>
 Effort:   <thinking-level> thinking
 Budget:   <spend today>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/model sonnet|opus|haiku
+/model sonnet|opus|haiku|<openrouter/model/id>
 /effort low|medium|high
 /task add|list|done <n>
 /memory show|save <key> <val>
@@ -62,40 +62,45 @@ Budget:   <spend today>
 
 ## On `/model <name>`
 
-Switch the active model. Accepted names: `sonnet`, `opus`, `haiku`.
+Switch the active model. Accepts shorthand Anthropic names OR any full OpenRouter model ID.
 
-Map:
+Shorthand map:
 - `sonnet` → `anthropic/claude-sonnet-4-6`
 - `opus`   → `anthropic/claude-opus-4-6`
 - `haiku`  → `anthropic/claude-haiku-4-5`
+- anything else → treated as a full OpenRouter model ID (e.g. `kimi/kimi-2.5:free`, `step/step-3.5-flash:free`, `minimax/minimax-m2.5:free`)
 
 ```bash
 BODHI_MODEL='<name>' python3 -c "
 import json, os, pathlib
-name = os.environ.get('BODHI_MODEL', 'sonnet').lower()
+name = os.environ.get('BODHI_MODEL', '').strip()
 MAP = {
     'sonnet': 'anthropic/claude-sonnet-4-6',
-    'opus': 'anthropic/claude-opus-4-6',
-    'haiku': 'anthropic/claude-haiku-4-5',
+    'opus':   'anthropic/claude-opus-4-6',
+    'haiku':  'anthropic/claude-haiku-4-5',
 }
-model = MAP.get(name)
-if not model:
+if name in MAP:
+    model_id = MAP[name]
+elif '/' in name:
+    # Full OpenRouter model ID — prefix if not already prefixed
+    model_id = name if name.startswith('openrouter/') else f'openrouter/{name}'
+else:
     print('UNKNOWN')
     exit()
 cfg = pathlib.Path(os.path.expanduser('~/.openclaw/openclaw.json'))
 d = json.loads(cfg.read_text())
-d['agents']['defaults']['model'] = model
+d['agents']['defaults']['model'] = {'primary': model_id, 'fallbacks': ['openrouter/kimi/kimi-2.5:free']}
 tmp = cfg.with_suffix('.tmp')
 tmp.write_text(json.dumps(d, indent=2))
 tmp.replace(cfg)
-print(model)
+print(model_id)
 "
 ```
 
-- For `opus`: warn before switching — `⚠️ Opus is 5× more expensive ($15/$75 per MTok vs $3/$15). Today remaining: $X.XX. Confirm? Reply /model opus confirm`
+- For `opus`: warn before switching — `⚠️ Opus is 5× more expensive. Today remaining: $X.XX. Confirm? Reply /model opus confirm`
 - Only switch on `/model opus confirm`
 - Reply on success: `Model → <full-model-id> 🟢`
-- Reply on unknown name: `Unknown model. Use: sonnet, opus, haiku`
+- Reply on unknown name: `Unknown model. Use: sonnet, opus, haiku, or any openrouter/model/id`
 
 ## On `/effort <level>`
 
@@ -259,5 +264,6 @@ Delegate to bodhi-budget skill: read `~/.openclaw/budget-state.json` and format 
 - If command outputs `INVALID_ARG`: reply with the correct usage (e.g. `/task done <number>` or `/memory save <key> <value>`).
 - If any other command fails: `Command failed — check server logs.`
 - `/model opus` always requires confirmation before switching.
+- `/model` accepts any OpenRouter model ID — always preserves kimi-2.5:free as fallback.
 - `/effort high` always shows cost warning in the reply.
 - Config changes hot-reload within ~3 seconds — no restart needed.

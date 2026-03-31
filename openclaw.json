@@ -30,11 +30,9 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-sonnet-4-6",
+        "primary": "openrouter/step/step-3.5-flash:free",
         "fallbacks": [
-          "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-          "openrouter/google/gemma-3-12b-it:free",
-          "ollama/gemma3:12b"
+          "openrouter/kimi/kimi-2.5:free"
         ]
       },
       "thinkingDefault": "low",
@@ -60,7 +58,6 @@
         "skills": [
           "bodhi-pm",
           "bodhi-budget",
-          "bodhi-model-switch",
           "bodhi-switch",
           "bodhi-msf"
         ]
@@ -171,7 +168,6 @@
         // ── Bodhi — core ──────────────────────────────────────────────────
         "skills/bodhi-budget",
         "skills/bodhi-pm",
-        "skills/bodhi-model-switch",
         "skills/bodhi-msf",
         "skills/bodhi-switch",
         // ── Qenjin — business (personal, on bodhi1 at ~/openbodhi/skills/) ─
