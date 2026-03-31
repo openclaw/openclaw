@@ -190,4 +190,25 @@ describe("resolveChannelModelOverride", () => {
     expect(resolved?.model).toBe("demo-provider/demo-feishu-topic-model");
     expect(resolved?.matchKey).toBe("oc_group_chat:topic:om_topic_root");
   });
+
+  it("keeps mixed-case Feishu scoped markers when matching parent session fallbacks", () => {
+    const resolved = resolveChannelModelOverride({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            feishu: {
+              "oc_group_chat:topic:om_topic_root": "demo-provider/demo-feishu-topic-model",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      channel: "feishu",
+      groupId: "unrelated",
+      parentSessionKey:
+        "agent:main:feishu:group:oc_group_chat:Topic:om_topic_root:Sender:ou_topic_user",
+    });
+
+    expect(resolved?.model).toBe("demo-provider/demo-feishu-topic-model");
+    expect(resolved?.matchKey).toBe("oc_group_chat:topic:om_topic_root");
+  });
 });
