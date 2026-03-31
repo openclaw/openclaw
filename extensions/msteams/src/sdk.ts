@@ -139,8 +139,11 @@ function createSendContext(params: {
         return { id: "unknown" };
       }
 
+      const activityType =
+        typeof msg.type === "string" && msg.type.trim().length > 0 ? msg.type : "message";
+
       return await apiClient.conversations.activities(params.conversationId).create({
-        type: "message",
+        type: activityType,
         ...msg,
         from: params.bot?.id
           ? { id: params.bot.id, name: params.bot.name ?? "", role: "bot" }
@@ -149,7 +152,7 @@ function createSendContext(params: {
           id: params.conversationId,
           conversationType: params.conversationType ?? "personal",
         },
-        ...(params.replyToActivityId && !msg.replyToId
+        ...(activityType === "message" && params.replyToActivityId && !msg.replyToId
           ? { replyToId: params.replyToActivityId }
           : {}),
       } as Parameters<
