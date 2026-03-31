@@ -479,4 +479,89 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(firstCall?.provider).toBe("openai");
     });
   });
+
+  it("caps overloaded profile rotations and escalates to cross-provider fallback (#58348)", async () => {
+    // When a provider has multiple auth profiles and all return overloaded_error,
+    // the runner should not exhaust all profiles before falling back. It should
+    // cap profile rotations at MAX_OVERLOAD_PROFILE_ROTATIONS (1) and escalate
+    // to cross-provider fallback immediately.
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      // Write auth store with multiple profiles for openai
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-openai-2" },
+            "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
+            "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "openai:p2": { lastUsed: 2 },
+            "openai:p3": { lastUsed: 3 },
+            "groq:p1": { lastUsed: 4 },
+          },
+        }),
+      );
+
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as {
+          provider: string;
+          modelId: string;
+          authProfileId?: string;
+        };
+        if (attemptParams.provider === "openai") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: ["fallback ok"],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "groq",
+              model: "mock-2",
+              stopReason: "stop",
+              content: [{ type: "text", text: "fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:overloaded-multi-profile-cap",
+        runId: "run:overloaded-multi-profile-cap",
+      });
+
+      // Should fall back to groq instead of exhausting all 3 openai profiles
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      // With MAX_OVERLOAD_PROFILE_ROTATIONS=1, we expect:
+      // - 1 initial openai attempt (p1)
+      // - 1 rotation to p2 (capped)
+      // - escalation to groq (1 attempt)
+      // Total: 3 attempts, NOT 4 (which would mean all 3 openai profiles tried)
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBeLessThanOrEqual(2);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
 });
