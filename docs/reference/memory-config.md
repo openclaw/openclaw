@@ -195,6 +195,7 @@ points outside the current workspace.
 If the same resolved path appears in both `memory.qmd.paths` and
 `memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the
 duplicate.
+
 ---
 
 ## Multimodal memory (Gemini)
