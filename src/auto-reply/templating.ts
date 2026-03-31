@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -162,6 +163,8 @@ export type MsgContext = {
   MessageThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Pre-resolved replyToMode including per-channel overrides. */
+  ReplyToMode?: ReplyToMode;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
   /** Warning: DM has topics enabled but this message is not in a topic. */

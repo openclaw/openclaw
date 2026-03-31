@@ -136,6 +136,34 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
+  it("uses pre-resolved ReplyToMode from context over account config", () => {
+    const cfg = {
+      channels: {
+        slack: { replyToMode: "off" },
+      },
+    } as OpenClawConfig;
+    const result = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: { ChatType: "channel", ReplyToMode: "all" },
+    });
+    expect(result.replyToMode).toBe("all");
+  });
+
+  it("falls back to account config when ReplyToMode is not in context", () => {
+    const cfg = {
+      channels: {
+        slack: { replyToMode: "first" },
+      },
+    } as OpenClawConfig;
+    const result = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: { ChatType: "channel" },
+    });
+    expect(result.replyToMode).toBe("first");
+  });
+
   it("defaults to off when no replyToMode is configured", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
