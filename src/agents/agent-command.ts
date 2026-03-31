@@ -839,6 +839,22 @@ async function agentCommandInternal(
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
+          // Validate the switched model against the agent allowlist before
+          // accepting it.  All other override paths (stored / explicit) are
+          // checked before entering the loop; the live-switch path must
+          // apply the same restriction to avoid bypassing allowedModelKeys.
+          const switchRef = normalizeModelRef(err.provider, err.model);
+          const switchKey = modelKey(switchRef.provider, switchRef.model);
+          if (!allowAnyModel && !allowedModelKeys.has(switchKey)) {
+            log.info(
+              `Live session model switch in subagent run ${runId}: ` +
+                `rejected ${err.provider}/${err.model} (not in allowlist)`,
+            );
+            throw new Error(
+              `Live model switch rejected: ${err.provider}/${err.model} is not in the agent allowlist`,
+              { cause: err },
+            );
+          }
           // Capture the pre-switch provider and model before mutating, so the
           // guard below can detect whether either actually changed.
           const previousProvider = provider;
@@ -852,11 +868,14 @@ async function agentCommandInternal(
           providerForAuthProfileValidation = err.provider;
           // Forward auth-profile fields carried by the switch request so the
           // retried run uses the right credentials (mirrors the main runner).
+          // Clear the stale compaction count so the new profile is not
+          // treated as already aged by resolveSessionAuthProfileOverride.
           if (sessionEntry) {
             sessionEntry.authProfileOverride = err.authProfileId;
             sessionEntry.authProfileOverrideSource = err.authProfileId
               ? err.authProfileIdSource
               : undefined;
+            sessionEntry.authProfileOverrideCompactionCount = undefined;
           }
           // Only update storedModelOverride when the model or provider actually
           // changed (or was already overridden).  Auth-only switches that keep
