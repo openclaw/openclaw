@@ -37,6 +37,7 @@ import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import {
+  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   resolveSlackAllowListMatch,
   resolveSlackUserAllowed,
@@ -436,6 +437,9 @@ export async function prepareSlackMessage(params: {
   }).allowed;
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
+  const threadContextAllowFromLower = channelUsersAllowlistConfigured
+    ? normalizeAllowListLower(channelConfig?.users)
+    : allowFromLower;
   const channelCommandAuthorized =
     isRoom && channelUsersAllowlistConfigured
       ? resolveSlackUserAllowed({
@@ -669,7 +673,7 @@ export async function prepareSlackMessage(params: {
     roomLabel,
     storePath,
     sessionKey,
-    allowFromLower,
+    allowFromLower: threadContextAllowFromLower,
     allowNameMatching: ctx.allowNameMatching,
     envelopeOptions,
     effectiveDirectMedia,
