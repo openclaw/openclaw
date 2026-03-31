@@ -341,6 +341,63 @@ describe("resolveAnnounceTarget", () => {
       },
     });
   });
+
+  it("treats lookup-preferred channels inferred only from row metadata as missing delivery", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [{ key: "main", channel: "whatsapp", displayName: "wa target" }],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({ kind: "unknown", reason: "missing_delivery" });
+  });
+
+  it("does not treat a non-lookup-preferred row channel as a partial delivery route", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [{ key: "main", channel: "discord", displayName: "discord target" }],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({ kind: "no_external_target" });
+  });
+
+  it("preserves threadId from metadata-backed delivery routes", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "main",
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:dev",
+            accountId: "ops",
+            threadId: "1710000000.000100",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({
+      kind: "external_target",
+      target: {
+        channel: "discord",
+        to: "channel:dev",
+        accountId: "ops",
+        threadId: "1710000000.000100",
+      },
+    });
+  });
 });
 
 describe("sessions_list gating", () => {

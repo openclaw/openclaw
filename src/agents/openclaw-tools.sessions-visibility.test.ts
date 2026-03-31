@@ -136,16 +136,31 @@ describe("sessions tools visibility", () => {
   it("registers real sessions_send and sessions_spawn schemas through createOpenClawTools", () => {
     const sessionsSend = getToolByName("sessions_send");
     const sessionsSendSchema = sessionsSend.parameters as {
+      anyOf?: unknown;
+      oneOf?: unknown;
       properties?: Record<string, { type?: unknown }>;
     };
+    expect(sessionsSendSchema.anyOf).toBeUndefined();
+    expect(sessionsSendSchema.oneOf).toBeUndefined();
     expect(sessionsSendSchema.properties?.timeoutSeconds?.type).toBe("number");
 
     const sessionsSpawn = getToolByName("sessions_spawn");
     const sessionsSpawnSchema = sessionsSpawn.parameters as {
+      anyOf?: unknown;
+      oneOf?: unknown;
       properties?: Record<string, { type?: unknown }>;
     };
+    expect(sessionsSpawnSchema.anyOf).toBeUndefined();
+    expect(sessionsSpawnSchema.oneOf).toBeUndefined();
+    expect(sessionsSpawnSchema.properties?.thinking?.type).toBe("string");
     expect(sessionsSpawnSchema.properties?.runTimeoutSeconds?.type).toBe("number");
     expect(sessionsSpawnSchema.properties?.timeoutSeconds?.type).toBe("number");
+    expect(sessionsSpawnSchema.properties?.thread?.type).toBe("boolean");
+    expect(sessionsSpawnSchema.properties?.mode?.type).toBe("string");
+    expect(sessionsSpawnSchema.properties?.sandbox?.type).toBe("string");
+    expect(sessionsSpawnSchema.properties?.streamTo?.type).toBe("string");
+    expect(sessionsSpawnSchema.properties?.runtime?.type).toBe("string");
+    expect(sessionsSpawnSchema.properties?.cwd?.type).toBe("string");
   });
 
   it("defaults to tree visibility (self + spawned) for sessions_history", async () => {

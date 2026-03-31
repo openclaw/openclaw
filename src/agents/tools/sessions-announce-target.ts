@@ -1,5 +1,9 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  deliveryContextFromSession,
+  type DeliveryContextSessionSource,
+} from "../../utils/delivery-context.js";
 import { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
@@ -43,6 +47,54 @@ function prefersSessionLookupForAnnounceTarget(sessionKey: string, match?: Sessi
   return channelCandidates.some((channel) => prefersSessionLookupForChannel(channel));
 }
 
+function readSessionOriginField(
+  origin: Record<string, unknown> | undefined,
+  key: "provider" | "accountId",
+) {
+  return typeof origin?.[key] === "string" ? origin[key] : undefined;
+}
+
+function readSessionThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  return undefined;
+}
+
+function resolveNormalizedDelivery(match?: SessionListRow) {
+  if (!match || typeof match !== "object") {
+    return undefined;
+  }
+  const origin =
+    match.origin && typeof match.origin === "object"
+      ? (match.origin as Record<string, unknown>)
+      : undefined;
+  const deliverySource: DeliveryContextSessionSource = {
+    // Bare row.channel is only a lookup hint, not a routable delivery field.
+    channel: readSessionOriginField(origin, "provider"),
+    lastChannel: typeof match.lastChannel === "string" ? match.lastChannel : undefined,
+    lastTo: typeof match.lastTo === "string" ? match.lastTo : undefined,
+    lastAccountId:
+      typeof match.lastAccountId === "string"
+        ? match.lastAccountId
+        : readSessionOriginField(origin, "accountId"),
+    lastThreadId: readSessionThreadId(
+      (match as Record<string, unknown>).lastThreadId ?? origin?.threadId,
+    ),
+    origin: {
+      provider: readSessionOriginField(origin, "provider"),
+      accountId: readSessionOriginField(origin, "accountId"),
+      threadId: readSessionThreadId(origin?.threadId),
+    },
+    deliveryContext: match.deliveryContext,
+  };
+  return deliveryContextFromSession(deliverySource);
+}
+
 export function resolveParsedAnnounceTargetDecision(
   sessionKey: string,
 ): AnnounceTargetDecision | null {
@@ -79,42 +131,30 @@ export async function resolveAnnounceTarget(params: {
     const match =
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
-
-    const deliveryContext =
-      match?.deliveryContext && typeof match.deliveryContext === "object"
-        ? (match.deliveryContext as Record<string, unknown>)
-        : undefined;
-    const origin =
-      match?.origin && typeof match.origin === "object"
-        ? (match.origin as Record<string, unknown>)
-        : undefined;
-    const channel =
-      (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
-      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined) ??
-      (typeof match?.channel === "string" ? match.channel : undefined) ??
-      (typeof origin?.provider === "string" ? origin.provider : undefined);
-    const to =
-      (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
-      (typeof match?.lastTo === "string" ? match.lastTo : undefined);
-    const accountId =
-      (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
-      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
-      (typeof origin?.accountId === "string" ? origin.accountId : undefined);
-    if (channel && to) {
+    const normalizedDelivery = resolveNormalizedDelivery(match);
+    if (normalizedDelivery?.channel && normalizedDelivery.to) {
       return {
         kind: "external_target",
-        target: { channel, to, accountId },
+        target: {
+          channel: normalizedDelivery.channel,
+          to: normalizedDelivery.to,
+          accountId: normalizedDelivery.accountId,
+          threadId:
+            normalizedDelivery.threadId != null ? String(normalizedDelivery.threadId) : undefined,
+        },
       };
-    }
-    if (channel || to || accountId) {
-      return { kind: "unknown", reason: "partial" };
     }
     if (match) {
       if (
         prefersSessionLookupForAnnounceTarget(params.sessionKey, match) ||
         prefersSessionLookupForAnnounceTarget(params.displayKey, match)
       ) {
-        return { kind: "unknown", reason: "missing_delivery" };
+        return normalizedDelivery
+          ? { kind: "unknown", reason: "partial" }
+          : { kind: "unknown", reason: "missing_delivery" };
+      }
+      if (normalizedDelivery) {
+        return { kind: "unknown", reason: "partial" };
       }
       return { kind: "no_external_target" };
     }

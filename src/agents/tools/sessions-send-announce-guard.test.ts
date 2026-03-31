@@ -505,6 +505,36 @@ describe("sessions_send fail-closed announce flow", () => {
     });
     expect(runSessionsSendA2AFlowMock).not.toHaveBeenCalled();
   });
+
+  it("does not consult sessions.list for fire-and-forget sends that would need metadata to classify", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-fire-metadata-only", status: "accepted" };
+      }
+      if (request.method === "sessions.list") {
+        throw new Error("sessions.list should not be called for timeoutSeconds=0");
+      }
+      return {};
+    });
+
+    const result = await createTool().execute("call-fire-and-forget-metadata-only", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      runId: "run-fire-metadata-only",
+      status: "accepted",
+      delivery: { status: "skipped", mode: "none" },
+    });
+    expect(runSessionsSendA2AFlowMock).not.toHaveBeenCalled();
+    const methods = callGatewayMock.mock.calls.map(
+      ([request]) => (request as { method?: string }).method,
+    );
+    expect(methods).toEqual(["agent"]);
+  });
 });
 
 describe("runSessionsSendA2AFlow last-mile delivery", () => {
@@ -579,6 +609,87 @@ describe("runSessionsSendA2AFlow last-mile delivery", () => {
           to: "123@g.us",
           accountId: "work",
           message: "delivered reply",
+        }),
+        timeoutMs: 10_000,
+      });
+    } finally {
+      a2aModule.__testing.setDepsForTest();
+      agentStepModule.__testing.setDepsForTest();
+    }
+  });
+
+  it("passes threadId through last-mile delivery for metadata-backed announce targets", async () => {
+    const a2aModule = await vi.importActual<typeof import("./sessions-send-tool.a2a.js")>(
+      "./sessions-send-tool.a2a.js",
+    );
+    const agentStepModule =
+      await vi.importActual<typeof import("./agent-step.js")>("./agent-step.js");
+    const a2aGatewayMock = vi.fn(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "send") {
+        return { status: "ok" };
+      }
+      return {};
+    });
+    const agentStepGatewayMock = vi.fn(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "announce-thread-run" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "threaded reply" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    a2aModule.__testing.setDepsForTest({
+      callGateway: a2aGatewayMock as typeof callGatewayMock,
+    });
+    agentStepModule.__testing.setDepsForTest({
+      callGateway: agentStepGatewayMock as typeof callGatewayMock,
+    });
+
+    try {
+      await expect(
+        a2aModule.runSessionsSendA2AFlow({
+          targetSessionKey: "main",
+          displayKey: "main",
+          message: "ping",
+          announceTimeoutMs: 1_000,
+          maxPingPongTurns: 0,
+          announcePlan: {
+            shouldRunAnnounceFlow: true,
+            delivery: { status: "pending", mode: "announce" },
+            announceTarget: {
+              channel: "discord",
+              to: "channel:dev",
+              accountId: "ops",
+              threadId: "1710000000.000100",
+            },
+          },
+          roundOneReply: "first reply",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(a2aGatewayMock).toHaveBeenCalledWith({
+        method: "send",
+        params: expect.objectContaining({
+          channel: "discord",
+          to: "channel:dev",
+          accountId: "ops",
+          threadId: "1710000000.000100",
+          message: "threaded reply",
         }),
         timeoutMs: 10_000,
       });
