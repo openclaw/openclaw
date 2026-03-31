@@ -189,6 +189,61 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages[1]?.role).toBe("user");
   });
 
+  it("does not synthesize toolResult for tool calls with empty or whitespace-only IDs (#21985)", () => {
+    // When a fallback provider returns stopReason "toolUse" without a valid toolCall
+    // block (empty or whitespace-only ID), repairToolUseResultPairing should skip
+    // those entries entirely — no synthetic toolResult should be generated.
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "", name: "read", arguments: {} },
+          { type: "toolCall", id: "   ", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_valid", name: "write", arguments: {} },
+        ],
+        stopReason: "toolUse",
+      },
+      { role: "user", content: "next message" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    // Only the valid tool call should get a synthetic result
+    expect(result.added).toHaveLength(1);
+    expect(result.added[0]?.toolCallId).toBe("call_valid");
+
+    // No phantom toolResult with empty toolCallId in the output
+    const toolResults = result.messages.filter((m) => m.role === "toolResult");
+    for (const tr of toolResults) {
+      const id = (tr as { toolCallId?: string }).toolCallId;
+      expect(id).toBeTruthy();
+      expect(id?.trim()).not.toBe("");
+    }
+  });
+
+  it("treats assistant with only empty-ID tool calls as having no tool calls", () => {
+    // If all tool calls have empty IDs, the assistant message should be treated
+    // as having no tool calls — passed through without synthesizing anything.
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I will help." },
+          { type: "toolCall", id: "", name: "read", arguments: {} },
+        ],
+        stopReason: "toolUse",
+      },
+      { role: "user", content: "ok" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("user");
+  });
+
   it("still repairs tool results for normal assistant messages with stopReason 'toolUse'", () => {
     // Normal tool calls (stopReason: "toolUse" or "stop") should still be repaired
     const input = castAgentMessages([
