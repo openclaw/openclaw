@@ -31,21 +31,92 @@ Follow the official CLI get-started steps. Don't guess install commands.
 - `references/get-started.md` (install + app integration + sign-in flow)
 - `references/cli-examples.md` (real `op` examples)
 
-## Workflow
+## Quick Check: Docker Secrets vs Interactive Auth
 
-1. Check OS + shell.
-2. Verify CLI present: `op --version`.
-3. Confirm desktop app integration is enabled (per get-started) and the app is unlocked.
-4. REQUIRED: create a fresh tmux session for all `op` commands (no direct `op` calls outside tmux).
-5. Sign in / authorize inside tmux: `op signin` (expect app prompt).
-6. Verify access inside tmux: `op whoami` (must succeed before any secret read).
-7. If multiple accounts: use `--account` or `OP_ACCOUNT`.
+First, check if a service account token is mounted via Docker secrets:
 
-## REQUIRED tmux session (T-Max)
+```bash
+ls -la /var/run/secrets/OP_SERVICE_ACCOUNT_TOKEN
+```
 
-The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session with a fresh socket/session name.
+If this file exists, use the **Docker Secrets Pattern** below (simpler, no tmux needed).
+If not, fall back to the **Interactive Auth Pattern** (requires tmux).
 
-Example (see `tmux` skill for socket conventions, do not reuse old session names):
+---
+
+## Docker Secrets Pattern (Preferred)
+
+When running in a container with a 1Password service account token mounted:
+
+### 1. Set the token from the secret file
+
+```bash
+export OP_SERVICE_ACCOUNT_TOKEN=$(cat /var/run/secrets/OP_SERVICE_ACCOUNT_TOKEN)
+```
+
+### 2. Verify access
+
+```bash
+op whoami
+op vault list
+```
+
+### 3. Use op directly
+
+```bash
+op item list --vault <vault-name>
+op item get "<item-title>" --vault <vault-name>
+op item get "<item-title>" --vault <vault-name> --fields label=password
+```
+
+**No tmux required.** The service account token handles auth automatically.
+
+### Common Operations
+
+```bash
+# List all vaults
+op vault list
+
+# List items in a vault
+op item list --vault Lexi
+
+# Get full item details
+op item get "linkedin.com" --vault Lexi
+
+# Get specific field
+op item get "linkedin.com" --vault Lexi --fields label=username
+op item get "linkedin.com" --vault Lexi --fields label=password
+
+# Get item as JSON for scripting
+op item get "linkedin.com" --vault Lexi --format json
+```
+
+---
+
+## Interactive Auth Pattern (Fallback)
+
+For local machines or containers without Docker secrets, use interactive auth via tmux.
+
+### 1. Check OS + shell
+
+```bash
+uname -a
+echo $SHELL
+```
+
+### 2. Verify CLI present
+
+```bash
+op --version
+```
+
+### 3. Confirm desktop app integration
+
+The 1Password desktop app must be running and unlocked. Integration must be enabled in the app settings.
+
+### 4. REQUIRED: Use tmux for all op commands
+
+The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session.
 
 ```bash
 SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
@@ -61,10 +132,18 @@ tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
 tmux -S "$SOCKET" kill-session -t "$SESSION"
 ```
 
+### 5. If multiple accounts
+
+Use `--account` flag or `OP_ACCOUNT` env var to specify which account.
+
+---
+
 ## Guardrails
 
 - Never paste secrets into logs, chat, or code.
 - Prefer `op run` / `op inject` over writing secrets to disk.
 - If sign-in without app integration is needed, use `op account add`.
-- If a command returns "account is not signed in", re-run `op signin` inside tmux and authorize in the app.
-- Do not run `op` outside tmux; stop and ask if tmux is unavailable.
+- If a command returns "account is not signed in":
+  - For Docker secrets: verify the secret file exists and contains a valid token
+  - For interactive auth: re-run `op signin` inside tmux
+- For interactive auth: do not run `op` outside tmux; stop and ask if tmux is unavailable.
