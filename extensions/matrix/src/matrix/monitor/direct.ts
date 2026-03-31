@@ -14,6 +14,7 @@ type DirectMessageCheck = {
 
 type DirectRoomTrackerOptions = {
   log?: (message: string) => void;
+  canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
 };
 
 const DM_CACHE_TTL_MS = 30_000;
@@ -116,6 +117,15 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     return cached.remoteUserId === normalizedRemoteUserId;
   };
 
+  const canPromoteRecentInvite = async (roomId: string): Promise<boolean> => {
+    try {
+      return (await opts.canPromoteRecentInvite?.(roomId)) ?? true;
+    } catch (err) {
+      log(`matrix: recent invite promotion veto failed room=${roomId} (${String(err)})`);
+      return false;
+    }
+  };
+
   return {
     invalidateRoom: (roomId: string): void => {
       joinedMembersCache.delete(roomId);
@@ -180,7 +190,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           return true;
         }
 
-        if (hasRecentInviteCandidate(roomId, senderId)) {
+        if (hasRecentInviteCandidate(roomId, senderId) && (await canPromoteRecentInvite(roomId))) {
           const promotion = await promoteMatrixDirectRoomCandidate({
             client,
             remoteUserId: senderId ?? "",

@@ -286,6 +286,26 @@ describe("createDirectRoomTracker", () => {
     ).resolves.toBe(false);
   });
 
+  it("does not promote recent invite candidates when local vetoes mark the room as non-DM", async () => {
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: true,
+    });
+    const tracker = createDirectRoomTracker(client, {
+      canPromoteRecentInvite: () => false,
+    });
+    tracker.rememberInvite("!room:example.org", "@alice:example.org");
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
   it("still treats recent invite candidates as DMs when m.direct repair fails", async () => {
     const client = createMockClient({
       isDm: false,

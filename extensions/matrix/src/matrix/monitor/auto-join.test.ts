@@ -4,19 +4,6 @@ import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 
-const hoisted = vi.hoisted(() => ({
-  promoteMatrixDirectRoomCandidate: vi.fn(async () => ({
-    classifyAsDirect: true as const,
-    repaired: true,
-    roomId: "!room:example.org",
-    reason: "promoted" as const,
-  })),
-}));
-
-vi.mock("../direct-management.js", () => ({
-  promoteMatrixDirectRoomCandidate: hoisted.promoteMatrixDirectRoomCandidate,
-}));
-
 type InviteHandler = (roomId: string, inviteEvent: unknown) => Promise<void>;
 
 function createClientStub() {
@@ -78,7 +65,6 @@ async function triggerInvite(
 
 describe("registerMatrixAutoJoin", () => {
   beforeEach(() => {
-    hoisted.promoteMatrixDirectRoomCandidate.mockClear();
     setMatrixRuntime({
       logging: {
         shouldLogVerbose: () => false,
@@ -95,7 +81,6 @@ describe("registerMatrixAutoJoin", () => {
 
     await triggerInvite(getInviteHandler);
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-    expect(hoisted.promoteMatrixDirectRoomCandidate).not.toHaveBeenCalled();
   });
 
   it("does not auto-join invites by default", async () => {
@@ -194,7 +179,7 @@ describe("registerMatrixAutoJoin", () => {
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("attempts eager direct repair after joining a sender-scoped invite", async () => {
+  it("joins sender-scoped invites without eager direct repair", async () => {
     const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
       accountConfig: {
         autoJoin: "always",
@@ -204,22 +189,15 @@ describe("registerMatrixAutoJoin", () => {
     await triggerInvite(getInviteHandler, { sender: "@alice:example.org" });
 
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-    expect(hoisted.promoteMatrixDirectRoomCandidate).toHaveBeenCalledWith({
-      client: expect.any(Object),
-      remoteUserId: "@alice:example.org",
-      roomId: "!room:example.org",
-    });
   });
 
-  it("skips eager direct repair when the invite sender is unavailable", async () => {
+  it("still joins invites when the sender is unavailable", async () => {
     const { getInviteHandler } = registerAutoJoinHarness({
       accountConfig: {
         autoJoin: "always",
       },
     });
 
-    await triggerInvite(getInviteHandler, {});
-
-    expect(hoisted.promoteMatrixDirectRoomCandidate).not.toHaveBeenCalled();
+    await expect(triggerInvite(getInviteHandler, {})).resolves.toBeUndefined();
   });
 });
