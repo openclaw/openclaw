@@ -877,7 +877,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
       memberStateByRoomUser: {
         "!dm:example.org": {
-          "@alice:example.org": { is_direct: true },
+          "@bot:example.org": { is_direct: true },
         },
       },
     });
@@ -924,7 +924,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
       memberStateByRoomUser: {
         "!dm:example.org": {
-          "@alice:example.org": { is_direct: true },
+          "@bot:example.org": { is_direct: true },
         },
       },
     });
