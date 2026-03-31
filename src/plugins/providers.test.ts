@@ -1,20 +1,8 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginManifestRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
-
-vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
-}));
-
-vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
-}));
-
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
-}));
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
@@ -163,12 +151,19 @@ function expectBundledProviderLoad(params?: { config?: unknown; env?: NodeJS.Pro
 }
 
 describe("resolvePluginProviders", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("./loader.js", () => ({
+      loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+    }));
+    vi.doMock("../config/plugin-auto-enable.js", () => ({
+      applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
+    }));
+    vi.doMock("./manifest-registry.js", () => ({
+      loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
+    }));
     ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
-  });
-
-  beforeEach(() => {
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
