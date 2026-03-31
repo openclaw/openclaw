@@ -945,9 +945,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         : undefined;
       let threadContextBlockedByAllowlist = false;
       if (threadContext?.senderId && !shouldIncludeRoomContextSender(threadContext.senderId)) {
-        logVerboseMessage(
-          `matrix: drop thread root context room=${roomId} sender=${threadContext.senderId} (sender allowlist)`,
-        );
+        logVerboseMessage("matrix: drop thread root context (sender allowlist)");
         threadContextBlockedByAllowlist = true;
         threadContext = undefined;
       }
@@ -969,9 +967,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         replyContext?.replyToSenderId &&
         !shouldIncludeRoomContextSender(replyContext.replyToSenderId)
       ) {
-        logVerboseMessage(
-          `matrix: drop reply context room=${roomId} sender=${replyContext.replyToSenderId} (sender allowlist)`,
-        );
+        logVerboseMessage("matrix: drop reply context (sender allowlist)");
         replyContext = undefined;
       }
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
