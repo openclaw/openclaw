@@ -504,30 +504,26 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("does not flip hasSessionModelOverride on auth-only switch with same model", async () => {
     let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: FallbackRunnerParams) => {
-        invocation += 1;
-        if (invocation === 1) {
-          // Auth-only switch: same default provider/model, only authProfileId changes.
-          throw new LiveSessionModelSwitchError({
-            provider: "anthropic",
-            model: "claude",
-            authProfileId: "profile-99",
-            authProfileIdSource: "user",
-          });
-        }
-        const result = await params.run(params.provider, params.model);
-        return {
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempts: [],
-        };
-      },
-    );
-    state.runAgentAttemptMock.mockResolvedValue(
-      makeSuccessResult("anthropic", "claude"),
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation += 1;
+      if (invocation === 1) {
+        // Auth-only switch: same default provider/model, only authProfileId changes.
+        throw new LiveSessionModelSwitchError({
+          provider: "anthropic",
+          model: "claude",
+          authProfileId: "profile-99",
+          authProfileIdSource: "user",
+        });
+      }
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
     resolveEffectiveModelFallbacksMock.mockClear();
 
@@ -546,6 +542,47 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     expect(resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
       hasSessionModelOverride: false,
+    });
+  });
+
+  it("flips hasSessionModelOverride on provider-only switch with same model", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation += 1;
+      if (invocation === 1) {
+        // Provider-only switch: model name stays the same, only provider changes.
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "claude",
+        });
+      }
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "claude"));
+
+    resolveEffectiveModelFallbacksMock.mockClear();
+
+    const agentCommand = await getAgentCommand();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+    });
+
+    // First call: no session override (initial state).
+    expect(resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
+    expect(resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
+      hasSessionModelOverride: false,
+    });
+    // Second call (retry): provider changed so session should have a model override.
+    expect(resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
+      hasSessionModelOverride: true,
     });
   });
 });

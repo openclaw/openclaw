@@ -839,8 +839,9 @@ async function agentCommandInternal(
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
-          // Capture the pre-switch model before mutating, so the guard below
-          // can detect whether the model actually changed.
+          // Capture the pre-switch provider and model before mutating, so the
+          // guard below can detect whether either actually changed.
+          const previousProvider = provider;
           const previousModel = model;
           provider = err.provider;
           model = err.model;
@@ -857,11 +858,15 @@ async function agentCommandInternal(
               ? err.authProfileIdSource
               : undefined;
           }
-          // Only update storedModelOverride when the model actually changed
-          // (or was already overridden).  Auth-only switches that keep the same
-          // provider/model should not flip hasSessionModelOverride to true,
-          // because that would alter fallback candidate resolution.
-          if (storedModelOverride || err.model !== previousModel) {
+          // Only update storedModelOverride when the model or provider actually
+          // changed (or was already overridden).  Auth-only switches that keep
+          // the same provider/model should not flip hasSessionModelOverride to
+          // true, because that would alter fallback candidate resolution.
+          if (
+            storedModelOverride ||
+            err.model !== previousModel ||
+            err.provider !== previousProvider
+          ) {
             storedModelOverride = err.model;
           }
           // Reset lifecycle tracking for the retry iteration.
