@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginManifestRegistryMock = vi.fn();
@@ -163,8 +163,12 @@ function expectBundledProviderLoad(params?: { config?: unknown; env?: NodeJS.Pro
 }
 
 describe("resolvePluginProviders", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
+    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
+  });
+
+  beforeEach(() => {
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [{ pluginId: "google", provider: { id: "demo-provider" } }],
@@ -187,8 +191,6 @@ describe("resolvePluginProviders", () => {
         origin: "workspace",
       }),
     ]);
-    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
-    ({ resolvePluginProviders } = await import("./providers.runtime.js"));
   });
 
   it("forwards an explicit env to plugin loading", () => {

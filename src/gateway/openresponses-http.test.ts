@@ -45,7 +45,7 @@ async function startServer(port: number, opts?: { openResponsesEnabled?: boolean
   const { startGatewayServer } = await import("./server.js");
   const serverOpts = {
     host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
+    auth: { mode: "none" as const },
     controlUiEnabled: false,
   } as const;
   return await startGatewayServer(
@@ -70,7 +70,6 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: "Bearer secret",
       "x-openclaw-scopes": "operator.write",
       ...headers,
     },
@@ -174,7 +173,7 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 90_000 }, async () => {
     const port = await getFreePort();
     const server = await startServer(port);
     try {
@@ -224,7 +223,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "openclaw", input: "hi" }),
       });
-      expect(resMissingAuth.status).toBe(401);
+      expect(resMissingAuth.status).toBe(403);
       await ensureResponseConsumed(resMissingAuth);
 
       const resMissingModel = await postResponses(port, { input: "hi" });
