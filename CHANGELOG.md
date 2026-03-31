@@ -83,7 +83,6 @@ Docs: https://docs.openclaw.ai
 - Web UI/markdown: stop bare auto-links from swallowing adjacent CJK text while preserving valid mixed-script path and query characters in rendered links. (#48410) Thanks @jnuyao.
 - BlueBubbles/iMessage: coalesce URL-only inbound messages with their link-preview balloon again so sharing a bare link no longer drops the URL from agent context. Thanks @vincentkoc.
 - Telegram/media: allow RFC 2544 benchmark-range Telegram CDN resolutions during media downloads, so voice messages, PDFs, and other attachments no longer fail with `Failed to download media`. (#57624) Thanks @MoerAI.
-- ClawFlow: add a small flow runtime substrate for authoring layers with persisted wait targets and output bags, plus bundled skills/Lobster examples and richer `flows show` / `doctor` recovery hints for multi-task flow state. (#58336) Thanks @mbelinky.
 - Sandbox/browser: install `fonts-noto-cjk` in the sandbox browser image so screenshots render Chinese, Japanese, and Korean text correctly instead of tofu boxes. Fixes #35597. Thanks @carrotRakko and @vincentkoc.
 - Memory/FTS: add configurable trigram tokenization plus short-CJK substring fallback so memory search can find Chinese, Japanese, and Korean text without breaking mixed long-and-short queries. Thanks @carrotRakko.
 - Hooks/config: accept runtime channel plugin ids in `hooks.mappings[].channel` (for example `feishu`) instead of rejecting non-core channels during config validation. (#56226) Thanks @AiKrai001.
@@ -156,6 +155,7 @@ Docs: https://docs.openclaw.ai
 - Pairing: enforce pending request limits per account instead of per shared channel queue, so one account's outstanding pairing challenges no longer block new pairing on other accounts. Thanks @smaeljaish771 and @vincentkoc.
 - Exec approvals: unwrap `caffeinate` and `sandbox-exec` before persisting allow-always trust so later shell payload changes still require a fresh approval. Thanks @tdjackey and @vincentkoc.
 - Matrix/DM threads: keep strict unnamed fresh-invite rooms promotable even when Matrix omits the optional direct hint, preserve repair-failed local DM promotions while still revalidating later room metadata, and keep both bound and thread-isolated Matrix sessions reporting the correct route policy. (#58099) Thanks @gumadeiras.
+- ClawFlow: add a small flow runtime substrate for authoring layers with persisted wait targets and output bags, plus bundled skills/Lobster examples and richer `flows show` / `doctor` recovery hints for multi-task flow state. (#58336) Thanks @mbelinky.
 
 ## 2026.3.28
 
