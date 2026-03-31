@@ -3,9 +3,9 @@ import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 describe("appendWorkspaceMountArgs", () => {
   it.each([
-    { access: "rw" as const, expected: "/tmp/workspace:/workspace" },
-    { access: "ro" as const, expected: "/tmp/workspace:/workspace:ro" },
-    { access: "none" as const, expected: "/tmp/workspace:/workspace:ro" },
+    { access: "rw" as const, expected: "/tmp/workspace:/workspace:z" },
+    { access: "ro" as const, expected: "/tmp/workspace:/workspace:ro,z" },
+    { access: "none" as const, expected: "/tmp/workspace:/workspace:ro,z" },
   ])("sets main mount permissions for workspaceAccess=$access", ({ access, expected }) => {
     const args: string[] = [];
     appendWorkspaceMountArgs({
@@ -30,7 +30,7 @@ describe("appendWorkspaceMountArgs", () => {
     });
 
     const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual(["/tmp/workspace:/workspace:ro"]);
+    expect(mounts).toEqual(["/tmp/workspace:/workspace:ro,z"]);
   });
 
   it("omits agent workspace mount when paths are identical", () => {
@@ -44,6 +44,23 @@ describe("appendWorkspaceMountArgs", () => {
     });
 
     const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual(["/tmp/workspace:/workspace"]);
+    expect(mounts).toEqual(["/tmp/workspace:/workspace:z"]);
+  });
+
+  it("marks split agent workspace mounts shared for SELinux", () => {
+    const args: string[] = [];
+    appendWorkspaceMountArgs({
+      args,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/agent-workspace",
+      workdir: "/workspace",
+      workspaceAccess: "ro",
+    });
+
+    const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
+    expect(mounts).toEqual([
+      "/tmp/workspace:/workspace:ro,z",
+      "/tmp/agent-workspace:/agent:ro,z",
+    ]);
   });
 });
