@@ -447,8 +447,11 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Restart the Gateway after plugin changes.
 - If you install plugins (`openclaw plugins install <package>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
+  - OpenClaw runs a built-in dangerous-code scan before install. `critical` findings block by default.
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
+  - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
+  - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
 
 Details: [Plugins](/tools/plugin)
 
@@ -806,7 +809,7 @@ Important boundary note:
 - Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, or `/api/channels/*` as full-access operator secrets for that gateway.
 - On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
 - Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth or `gateway.auth.mode="none"` on a private ingress.
-- `/tools/invoke` is stricter: shared-secret bearer auth is rejected there, and the endpoint only runs when the HTTP request carries a trusted operator identity plus declared scopes.
+- `/tools/invoke` follows the same shared-secret rule: token/password bearer auth is treated as full operator access there too, while identity-bearing modes still honor declared scopes.
 - Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.
 
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.

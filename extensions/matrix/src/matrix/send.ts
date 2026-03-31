@@ -166,6 +166,8 @@ export async function sendMessageMatrix(
         const media = await getCore().media.loadWebMedia(opts.mediaUrl, {
           maxBytes,
           localRoots: opts.mediaLocalRoots,
+          readFile: opts.mediaReadFile,
+          hostReadCapability: Boolean(opts.mediaReadFile),
         });
         const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
           contentType: media.contentType,

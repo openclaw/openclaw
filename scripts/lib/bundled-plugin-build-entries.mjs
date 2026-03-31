@@ -8,6 +8,7 @@ import {
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function readBundledPluginPackageJson(packageJsonPath) {
   if (!fs.existsSync(packageJsonPath)) {
@@ -43,6 +44,10 @@ function collectPluginSourceEntries(packageJson) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
   }
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
+}
+
+function shouldStageBundledPluginRuntimeDependencies(packageJson) {
+  return packageJson?.openclaw?.bundle?.stageRuntimeDependencies === true;
 }
 
 function collectTopLevelPublicSurfaceEntries(pluginDir) {
@@ -132,7 +137,7 @@ export function listBundledPluginBuildEntries(params = {}) {
       sourceEntries.map((entry) => {
         const normalizedEntry = entry.replace(/^\.\//, "");
         const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
-        return [entryKey, path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry)];
+        return [entryKey, toPosixPath(path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry))];
       }),
     ),
   );
@@ -156,4 +161,24 @@ export function listBundledPluginPackArtifacts(params = {}) {
   }
 
   return [...artifacts].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listBundledPluginRuntimeDependencies(params = {}) {
+  const runtimeDependencies = new Set();
+
+  for (const { packageJson } of collectBundledPluginBuildEntries(params)) {
+    if (!shouldStageBundledPluginRuntimeDependencies(packageJson)) {
+      continue;
+    }
+
+    for (const dependencyName of Object.keys(packageJson?.dependencies ?? {})) {
+      runtimeDependencies.add(dependencyName);
+    }
+
+    for (const dependencyName of Object.keys(packageJson?.optionalDependencies ?? {})) {
+      runtimeDependencies.add(dependencyName);
+    }
+  }
+
+  return [...runtimeDependencies].toSorted((left, right) => left.localeCompare(right));
 }

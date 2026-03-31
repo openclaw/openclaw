@@ -1,0 +1,9 @@
+{
+  "id": "tasks",
+  "enabledByDefault": true,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

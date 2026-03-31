@@ -4,6 +4,7 @@ import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plug
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
+import { createAgentScopedHostMediaReadFile } from "../../media/read-capability.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -27,6 +28,7 @@ export type OutboundSendContext = {
   params: Record<string, unknown>;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -67,12 +69,19 @@ async function tryHandleWithPluginAction(params: {
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
     mediaSources: collectActionMediaSources(params.ctx.params),
   });
+  const mediaReadFile =
+    params.ctx.mediaReadFile ??
+    createAgentScopedHostMediaReadFile({
+      cfg: params.ctx.cfg,
+      agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
+    });
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
     action: params.action,
     cfg: params.ctx.cfg,
     params: params.ctx.params,
     mediaLocalRoots,
+    mediaReadFile,
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
