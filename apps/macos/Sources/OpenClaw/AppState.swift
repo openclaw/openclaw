@@ -349,7 +349,9 @@ final class AppState {
         if self.swabbleEnabled, !PermissionManager.voiceWakePermissionsGranted() {
             self.swabbleEnabled = false
         }
-        if self.talkEnabled, !PermissionManager.voiceWakePermissionsGranted() {
+        if self.talkEnabled,
+           !PermissionManager.talkModePermissionsGranted(useExecuTorch: self.talkSttBackend == .executorch)
+        {
             self.talkEnabled = false
         }
 
@@ -705,12 +707,15 @@ final class AppState {
             return
         }
 
-        if PermissionManager.voiceWakePermissionsGranted() {
+        let useExecuTorch = self.talkSttBackend == .executorch
+        if PermissionManager.talkModePermissionsGranted(useExecuTorch: useExecuTorch) {
             await GatewayConnection.shared.talkMode(enabled: true, phase: "enabled")
             return
         }
 
-        let granted = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
+        let granted = await PermissionManager.ensureTalkModePermissions(
+            useExecuTorch: useExecuTorch,
+            interactive: true)
         self.talkEnabled = granted
         await GatewayConnection.shared.talkMode(enabled: granted, phase: granted ? "enabled" : "denied")
     }
