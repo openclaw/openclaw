@@ -240,9 +240,9 @@ Stop the tunnel:
 launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 ```
 
-| Config entry                         | What it does                                                  |
-| ------------------------------------ | ------------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Forwards local port 18789 to remote port 18789                |
-| `ssh -N`                             | SSH without executing remote commands (port-forwarding only)  |
-| `KeepAlive`                          | Automatically restarts the tunnel if it crashes               |
-| `RunAtLoad`                          | Starts the tunnel when the LaunchAgent loads at login         |
+| Config entry                         | What it does                                                 |
+| ------------------------------------ | ------------------------------------------------------------ |
+| `LocalForward 18789 127.0.0.1:18789` | Forwards local port 18789 to remote port 18789               |
+| `ssh -N`                             | SSH without executing remote commands (port-forwarding only) |
+| `KeepAlive`                          | Automatically restarts the tunnel if it crashes              |
+| `RunAtLoad`                          | Starts the tunnel when the LaunchAgent loads at login        |
