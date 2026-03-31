@@ -184,10 +184,15 @@ export class TelegramPollingSession {
           const onRecovery = () => abortController.abort();
           this.opts.abortSignal?.addEventListener("abort", onSessionAbort, { once: true });
           heartbeatRecoveryWake.signal.addEventListener("abort", onRecovery, { once: true });
-          // Re-check after wiring listeners: if recovery already fired between
-          // the outer while-check and the addEventListener, the signal is already
-          // aborted and we should not sleep for a full interval.
-          if (heartbeatSuspended && !heartbeatRecoveryWake.signal.aborted) {
+          // Re-check after wiring listeners: if recovery or session abort fired
+          // between the outer while-check and the addEventListener calls, the
+          // late listener never fires (AbortSignal does not replay), so we must
+          // not sleep for a full interval.
+          if (
+            heartbeatSuspended &&
+            !heartbeatRecoveryWake.signal.aborted &&
+            !this.opts.abortSignal?.aborted
+          ) {
             await sleepWithAbort(HEARTBEAT_INTERVAL_MS, abortController.signal).catch(() => {});
           }
           this.opts.abortSignal?.removeEventListener("abort", onSessionAbort);
