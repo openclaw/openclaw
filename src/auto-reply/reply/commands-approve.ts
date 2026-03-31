@@ -10,7 +10,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const COMMAND_REGEX = /^\/approve(?:\s|$)/i;
+const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {

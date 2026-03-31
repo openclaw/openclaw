@@ -234,6 +234,10 @@ describe("exec approval reply helpers", () => {
       approvalId: "req-1",
       decision: "deny",
     });
+    expect(parseExecApprovalCommandText("approve req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
     expect(parseExecApprovalCommandText("/approve@clover req-1 allow-once")).toEqual({
       approvalId: "req-1",
       decision: "allow-once",
