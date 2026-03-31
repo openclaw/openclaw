@@ -9,6 +9,9 @@
     "extensions/telegram/src/bot-message-dispatch.test.ts": {
       "durationMs": 12600
     },
+    "extensions/discord/src/monitor/acp-bind-here.integration.test.ts": {
+      "durationMs": 15200
+    },
     "extensions/discord/src/monitor/exec-approvals.test.ts": {
       "durationMs": 11300
     },

@@ -570,7 +570,9 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setThinking();
   }
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, ...replyPipeline } = (
+    telegramDeps.createChannelReplyPipeline ?? createChannelReplyPipeline
+  )({
     cfg,
     agentId: route.agentId,
     channel: "telegram",
