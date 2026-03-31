@@ -72,14 +72,12 @@ vi.mock("../session-utils.js", async (importOriginal) => {
           ? mockState.sessionEntry.canonicalKey
           : rawKey || "main",
     }),
-    resolveGatewayModelSupportsImages: vi.fn(
-      async (...args: Parameters<typeof original.resolveGatewayModelSupportsImages>) => {
-        if (mockState.resolveSupportsImagesWait) {
-          await mockState.resolveSupportsImagesWait;
-        }
-        return original.resolveGatewayModelSupportsImages(...args);
-      },
-    ),
+    resolveGatewayModelSupportsImages: vi.fn(async () => {
+      if (mockState.resolveSupportsImagesWait) {
+        await mockState.resolveSupportsImagesWait;
+      }
+      return true;
+    }),
   };
 });
 
@@ -254,6 +252,7 @@ function createChatContext(): Pick<
   | "chatAbortedRuns"
   | "removeChatRun"
   | "dedupe"
+  | "loadGatewayModelCatalog"
   | "registerToolEventRecipient"
   | "logGateway"
 > {
@@ -268,6 +267,13 @@ function createChatContext(): Pick<
     chatAbortedRuns: new Map(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
+    loadGatewayModelCatalog: vi.fn(async () => [
+      {
+        id: "gpt-4.1",
+        provider: "openai",
+        input: ["text", "image"],
+      },
+    ]) as unknown as GatewayRequestContext["loadGatewayModelCatalog"],
     registerToolEventRecipient: vi.fn(),
     logGateway: {
       warn: vi.fn(),
