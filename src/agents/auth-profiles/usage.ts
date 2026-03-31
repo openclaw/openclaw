@@ -85,31 +85,6 @@ export function isProfileInCooldown(
   return unusableUntil ? ts < unusableUntil : false;
 }
 
-export function isProfileInCooldownWithTimestamp(
-  store: AuthProfileStore,
-  profileId: string,
-  now: number,
-  forModel?: string,
-): boolean {
-  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
-    return false;
-  }
-  const stats = store.usageStats?.[profileId];
-  if (!stats) {
-    return false;
-  }
-  // Model-aware bypass: if the cooldown was caused by a model-scoped transient
-  // reason (rate_limit/overloaded) on a
-  // specific model and the caller is requesting a *different* model, allow it.
-  // We still honour any active billing/auth disable (`disabledUntil`) — those
-  // are profile-wide and must not be short-circuited by model scoping.
-  if (shouldBypassModelScopedCooldown(stats, now, forModel)) {
-    return false;
-  }
-  const unusableUntil = resolveProfileUnusableUntil(stats);
-  return unusableUntil ? now < unusableUntil : false;
-}
-
 function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
   return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
 }

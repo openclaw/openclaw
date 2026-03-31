@@ -208,6 +208,9 @@ async function runFallbackCandidate<T>(params: {
     // quickly to other providers without repeated backoff delays.
     const result = shouldRetryCandidate
       ? await retryAsync(runFn, {
+          // Keep this as a coarse ceiling that still allows mixed retry reasons
+          // to consume their independent budgets in one candidate run. The
+          // per-reason counters in `shouldRetry` remain the exact gate.
           attempts: 1 + rateLimitRetryBudget + overloadedRetryBudget + authRetryBudget,
           minDelayMs: 2000,
           maxDelayMs: 30000,
