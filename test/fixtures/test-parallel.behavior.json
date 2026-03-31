@@ -147,6 +147,10 @@
         "reason": "This Matrix startup suite was missing from the extension timing snapshot and repeated heapsnapshots in the shared extensions lane retained large Vite SSR transform strings plus system / Context growth; keep it isolated so the shared Matrix extension worker can recycle immediately after startup coverage."
       },
       {
+        "file": "extensions/matrix/src/matrix/monitor/events.test.ts",
+        "reason": "This Matrix monitor events suite pulls in the verification-routing graph and, when paired in the shared extensions lane, spends ~23s in import time while pushing the worker toward ~1 GiB RSS; keep it isolated so the shared lane can recycle instead of retaining the Matrix monitor runtime graph."
+      },
+      {
         "file": "extensions/nextcloud-talk/src/monitor.replay.test.ts",
         "reason": "The replay-handling regression is green alone but can inherit disturbed global stream/Response state from the shared extensions lane, so keep it in its own forked lane for deterministic CI."
       },
