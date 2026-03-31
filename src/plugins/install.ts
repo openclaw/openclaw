@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  packageNameMatchesId,
   resolveSafeInstallDir,
   safeDirName,
   safePathSegmentHashed,
@@ -8,6 +9,7 @@ import {
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
@@ -48,6 +50,8 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
   NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
+  SECURITY_SCAN_BLOCKED: "security_scan_blocked",
+  SECURITY_SCAN_FAILED: "security_scan_failed",
 } as const;
 
 export type PluginInstallErrorCode =
@@ -209,6 +213,20 @@ function buildDirectoryInstallResult(params: {
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
+  };
+}
+
+function buildBlockedInstallResult(params: {
+  blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
+}): Extract<InstallPluginResult, { ok: false }> {
+  return {
+    ok: false,
+    error: params.blocked.reason,
+    ...(params.blocked.code === "security_scan_failed"
+      ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
+      : params.blocked.code === "security_scan_blocked"
+        ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
+        : {}),
   };
 }
 
@@ -394,12 +412,14 @@ async function installBundleFromSourceDir(
       version: manifestRes.manifest.version,
     });
     if (scanResult?.blocked) {
-      return { ok: false, error: scanResult.blocked.reason };
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
   } catch (err) {
-    logger.warn?.(
-      `Bundle "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
-    );
+    return {
+      ok: false,
+      error: `Bundle "${pluginId}" installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
+    };
   }
 
   return await installPluginDirectoryIntoExtensions({
@@ -527,7 +547,7 @@ async function installPluginFromPackageDir(
     };
   }
 
-  if (manifestPluginId && manifestPluginId !== npmPluginId) {
+  if (manifestPluginId && !packageNameMatchesId(npmPluginId, manifestPluginId)) {
     logger.info?.(
       `Plugin manifest id "${manifestPluginId}" differs from npm package name "${npmPluginId}"; using manifest id as the config key.`,
     );
@@ -573,12 +593,14 @@ async function installPluginFromPackageDir(
       version: typeof manifest.version === "string" ? manifest.version : undefined,
     });
     if (scanResult?.blocked) {
-      return { ok: false, error: scanResult.blocked.reason };
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
   } catch (err) {
-    logger.warn?.(
-      `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
-    );
+    return {
+      ok: false,
+      error: `Plugin "${pluginId}" installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
+    };
   }
 
   const deps = manifest.dependencies ?? {};
@@ -736,12 +758,14 @@ export async function installPluginFromFile(params: {
       requestedSpecifier: installPolicyRequest.requestedSpecifier,
     });
     if (scanResult?.blocked) {
-      return { ok: false, error: scanResult.blocked.reason };
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
   } catch (err) {
-    logger.warn?.(
-      `Plugin file "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
-    );
+    return {
+      ok: false,
+      error: `Plugin file "${pluginId}" installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
+    };
   }
 
   logger.info?.(`Installing to ${targetFile}…`);

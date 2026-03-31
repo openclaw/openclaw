@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createConfigIO: vi.fn().mockReturnValue({
@@ -13,9 +13,12 @@ vi.mock("./io.js", () => ({
 let formatConfigPath: typeof import("./logging.js").formatConfigPath;
 let logConfigUpdated: typeof import("./logging.js").logConfigUpdated;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ formatConfigPath, logConfigUpdated } = await import("./logging.js"));
+});
+
+beforeEach(() => {
+  mocks.createConfigIO.mockClear();
 });
 
 describe("config logging", () => {

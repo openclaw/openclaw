@@ -1038,6 +1038,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     "github-copilot",
                     "bedrock-converse-stream",
                     "ollama",
+                    "azure-openai-responses",
                   ],
                 },
                 injectNumCtxForOpenAICompat: {
@@ -1142,6 +1143,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           "github-copilot",
                           "bedrock-converse-stream",
                           "ollama",
+                          "azure-openai-responses",
                         ],
                       },
                       reasoning: {
@@ -1843,6 +1845,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     items: {
                       type: "string",
                     },
+                  },
+                  qmd: {
+                    type: "object",
+                    properties: {
+                      extraCollections: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            path: {
+                              type: "string",
+                            },
+                            name: {
+                              type: "string",
+                            },
+                            pattern: {
+                              type: "string",
+                            },
+                          },
+                          required: ["path"],
+                          additionalProperties: false,
+                        },
+                      },
+                    },
+                    additionalProperties: false,
                   },
                   multimodal: {
                     type: "object",
@@ -2821,6 +2848,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
+                  requireAgentId: {
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -3438,6 +3468,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "string",
                       },
                     },
+                    qmd: {
+                      type: "object",
+                      properties: {
+                        extraCollections: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              path: {
+                                type: "string",
+                              },
+                              name: {
+                                type: "string",
+                              },
+                              pattern: {
+                                type: "string",
+                              },
+                            },
+                            required: ["path"],
+                            additionalProperties: false,
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                     multimodal: {
                       type: "object",
                       properties: {
@@ -3976,6 +4031,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     thinking: {
                       type: "string",
+                    },
+                    requireAgentId: {
+                      type: "boolean",
                     },
                   },
                   additionalProperties: false,
@@ -13369,6 +13427,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Extra Memory Paths",
       help: "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
       tags: ["storage"],
+    },
+    "agents.defaults.memorySearch.qmd": {
+      label: "Memory Search QMD Collections",
+      help: "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.qmd.extraCollections": {
+      label: "QMD Extra Collections",
+      help: "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.qmd.extraCollections.path": {
+      label: "QMD Extra Collection Path",
+      help: "Use an absolute or workspace-relative filesystem path for the extra QMD collection; keep it pointed at the transcript directory or note folder you actually want this agent to search.",
+      tags: ["storage"],
+    },
+    "agents.defaults.memorySearch.qmd.extraCollections.name": {
+      label: "QMD Extra Collection Name",
+      help: "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent transcript roots that live outside the workspace.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.qmd.extraCollections.pattern": {
+      label: "QMD Extra Collection Pattern",
+      help: "Use a glob pattern to restrict which files inside the collection are indexed; keep the default `**/*.md` unless you need a narrower subset.",
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.multimodal": {
       label: "Memory Search Multimodal",

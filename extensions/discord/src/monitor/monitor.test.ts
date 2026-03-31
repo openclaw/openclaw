@@ -10,7 +10,7 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import {
   buildPluginBindingResolvedTextMock,
@@ -308,8 +308,7 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       createDiscordComponentButton,
       createDiscordComponentStringSelect,
@@ -322,6 +321,9 @@ describe("discord component interactions", () => {
       resolveDiscordModalEntry,
     } = await import("../components-registry.js"));
     sendComponents = await import("../send.components.js");
+  });
+
+  beforeEach(() => {
     editDiscordComponentMessageMock = vi
       .spyOn(sendComponents, "editDiscordComponentMessage")
       .mockResolvedValue({
@@ -676,7 +678,16 @@ describe("discord component interactions", () => {
       duplicate: false,
     });
 
-    const button = createDiscordComponentButton(createComponentContext());
+    const button = createDiscordComponentButton(
+      createComponentContext({
+        discordConfig: createDiscordConfig({
+          dm: {
+            groupEnabled: true,
+            groupChannels: ["group-dm-1"],
+          },
+        }),
+      }),
+    );
     const { interaction } = createComponentButtonInteraction({
       rawData: {
         channel_id: "group-dm-1",
@@ -690,14 +701,86 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          conversationId: "channel:group-dm-1",
-          senderId: "123456789",
+    await vi.waitFor(() => {
+      expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({
+            conversationId: "channel:group-dm-1",
+            senderId: "123456789",
+          }),
+        }),
+      );
+    });
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("marks built-in Group DM component fallbacks with group metadata", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry()],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(
+      createComponentContext({
+        discordConfig: createDiscordConfig({
+          dm: {
+            groupEnabled: true,
+            groupChannels: ["group-dm-1"],
+          },
         }),
       }),
     );
+    const { interaction, reply } = createComponentButtonInteraction({
+      rawData: {
+        channel_id: "group-dm-1",
+        id: "interaction-group-dm-fallback",
+      } as unknown as ButtonInteraction["rawData"],
+      channel: {
+        id: "group-dm-1",
+        type: ChannelType.GroupDM,
+        name: "incident-room",
+      } as unknown as ButtonInteraction["channel"],
+    });
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx).toMatchObject({
+      From: "discord:group:group-dm-1",
+      ChatType: "group",
+      ConversationLabel: "Group DM #incident-room channel id:group-dm-1",
+    });
+  });
+
+  it("blocks Group DM modal triggers before showing the modal", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ kind: "modal-trigger", modalId: "mdl_1" })],
+      modals: [createModalEntry()],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const showModal = vi.fn().mockResolvedValue(undefined);
+    const { interaction, reply } = createComponentButtonInteraction({
+      rawData: {
+        channel_id: "group-dm-1",
+        id: "interaction-group-dm-modal-trigger",
+      } as unknown as ButtonInteraction["rawData"],
+      channel: {
+        id: "group-dm-1",
+        type: ChannelType.GroupDM,
+        name: "incident-room",
+      } as unknown as ButtonInteraction["channel"],
+      showModal,
+    });
+
+    await button.run(interaction, { cid: "btn_1", mid: "mdl_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({
+      content: "Group DM interactions are disabled.",
+      ephemeral: true,
+    });
+    expect(showModal).not.toHaveBeenCalled();
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 

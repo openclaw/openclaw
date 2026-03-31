@@ -210,6 +210,12 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ## How tasks relate to other systems
 
+### Tasks and ClawFlow
+
+ClawFlow is the flow layer above tasks. A flow groups one or more task runs into a single job, owns the parent session context, and gives you a higher-level control surface for blocked or multi-step work.
+
+See [ClawFlow](/automation/clawflow) for the flow overview and [CLI: flows](/cli/flows) for the command surface.
+
 ### Tasks and cron
 
 A cron job **definition** lives in `~/.openclaw/cron/jobs.json`. **Every** cron execution creates a task record — both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
@@ -233,7 +239,9 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 ## Related
 
 - [Automation Overview](/automation) — all automation mechanisms at a glance
+- [ClawFlow](/automation/clawflow) — job-level orchestration above tasks
 - [Cron Jobs](/automation/cron-jobs) — scheduling background work
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [CLI: flows](/cli/flows) — flow inspection and control commands
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference
