@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -21,10 +21,12 @@ function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string
   };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
-  gatewayMocks.callGatewayTool.mockReset();
+beforeAll(async () => {
   ({ listNodes, resolveNodeIdFromList } = await import("./nodes-utils.js"));
+});
+
+beforeEach(() => {
+  gatewayMocks.callGatewayTool.mockReset();
 });
 
 describe("resolveNodeIdFromList defaults", () => {

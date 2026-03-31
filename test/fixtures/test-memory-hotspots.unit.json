@@ -4,7 +4,7 @@
   "defaultMinDeltaKb": 262144,
   "lane": "unit-fast, unit-*",
   "files": {
-    "src/infra/outbound/targets.channel-resolution.test.ts": {
+    "src/infra/outbound/channel-resolution.test.ts": {
       "deltaKb": 1111491,
       "sources": ["openclaw-test-memory-trace:unit-heavy-2"]
     },
