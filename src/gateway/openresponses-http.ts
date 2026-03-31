@@ -424,6 +424,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  skillsOverride?: string[];
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -442,6 +443,7 @@ async function runResponsesAgentCommand(params: {
       // HTTP API callers are authenticated operator clients for this gateway context.
       senderIsOwner: true,
       allowModelOverride: true,
+      skillsOverride: params.skillsOverride,
     },
     defaultRuntime,
     params.deps,
@@ -659,6 +661,8 @@ export async function handleOpenResponsesHttpRequest(
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
 
+  const skillsOverride = payload.skills !== undefined ? payload.skills : undefined;
+
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
 
@@ -739,6 +743,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        skillsOverride,
         deps,
       });
 
@@ -1109,6 +1114,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        skillsOverride,
         deps,
       });
 

@@ -78,6 +78,7 @@ import {
   resolveThinkingDefault,
 } from "./model-selection.js";
 import { buildWorkspaceSkillSnapshot } from "./skills.js";
+import { normalizeSkillFilter } from "./skills/filter.js";
 import { getSkillsSnapshotVersion } from "./skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -497,9 +498,13 @@ async function agentCommandInternal(
       });
     }
 
-    const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
+    const hasPerRequestSkillsOverride = opts.skillsOverride !== undefined;
+    const needsSkillsSnapshot =
+      isNewSession || !sessionEntry?.skillsSnapshot || hasPerRequestSkillsOverride;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    const skillFilter = hasPerRequestSkillsOverride
+      ? normalizeSkillFilter(opts.skillsOverride)
+      : resolveAgentSkillsFilter(cfg, sessionAgentId);
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
@@ -509,7 +514,16 @@ async function agentCommandInternal(
         })
       : sessionEntry?.skillsSnapshot;
 
-    if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+    // Persist the snapshot only when it comes from agent config, not from a
+    // per-request override.  Per-request overrides are ephemeral and should not
+    // mutate the session's persisted skill state.
+    if (
+      skillsSnapshot &&
+      sessionStore &&
+      sessionKey &&
+      needsSkillsSnapshot &&
+      !hasPerRequestSkillsOverride
+    ) {
       const current = sessionEntry ?? {
         sessionId,
         updatedAt: Date.now(),
