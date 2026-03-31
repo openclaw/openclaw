@@ -117,4 +117,239 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
+
+  it("moves image-bearing tool results out of function_call_output payloads", () => {
+    const payload: Record<string, unknown> = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [
+            { type: "input_text", text: "Read image" },
+            {
+              type: "input_image",
+              detail: "auto",
+              image_url: "data:image/png;base64,QUJDRA==",
+            },
+          ],
+        },
+      ],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload, {} as Model<"openai-responses">);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4-fast",
+        input: ["text", "image"],
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "Read image",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Attached image(s) from tool result:" },
+          {
+            type: "input_image",
+            detail: "auto",
+            image_url: "data:image/png;base64,QUJDRA==",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("replays source-based input_image parts from tool results", () => {
+    const payload: Record<string, unknown> = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [
+            { type: "input_text", text: "Read image" },
+            {
+              type: "input_image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "QUJDRA==",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload, {} as Model<"openai-responses">);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4-fast",
+        input: ["text", "image"],
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "Read image",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Attached image(s) from tool result:" },
+          {
+            type: "input_image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "QUJDRA==",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps multiple tool outputs contiguous before replaying collected images", () => {
+    const payload: Record<string, unknown> = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [
+            { type: "input_text", text: "first" },
+            {
+              type: "input_image",
+              detail: "auto",
+              image_url: "data:image/png;base64,QUFBQQ==",
+            },
+          ],
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_2",
+          output: [
+            { type: "input_text", text: "second" },
+            {
+              type: "input_image",
+              detail: "auto",
+              image_url: "data:image/png;base64,QkJCQg==",
+            },
+          ],
+        },
+      ],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload, {} as Model<"openai-responses">);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4-fast",
+        input: ["text", "image"],
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "first",
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_2",
+        output: "second",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Attached image(s) from tool result:" },
+          {
+            type: "input_image",
+            detail: "auto",
+            image_url: "data:image/png;base64,QUFBQQ==",
+          },
+          {
+            type: "input_image",
+            detail: "auto",
+            image_url: "data:image/png;base64,QkJCQg==",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("drops image blocks and uses fallback text for models without image input", () => {
+    const payload: Record<string, unknown> = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [
+            {
+              type: "input_image",
+              detail: "auto",
+              image_url: "data:image/png;base64,QUJDRA==",
+            },
+          ],
+        },
+      ],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload, {} as Model<"openai-responses">);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4-fast",
+        input: ["text"],
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "(see attached image)",
+      },
+    ]);
+  });
 });
