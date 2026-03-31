@@ -25,12 +25,14 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
   }),
 );
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const runFfmpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
 const mockedFetchRemoteMedia = fetchRemoteMediaMock;
+const mockedRunFfmpeg = runFfmpegMock;
 const mockedRunExec = runExecMock;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
@@ -255,6 +257,9 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../media/fetch.js", () => ({
       fetchRemoteMedia: fetchRemoteMediaMock,
     }));
+    vi.doMock("../media/ffmpeg-exec.js", () => ({
+      runFfmpeg: runFfmpegMock,
+    }));
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
@@ -304,6 +309,7 @@ describe("applyMediaUnderstanding", () => {
     });
     hasAvailableAuthForProviderMock.mockClear();
     mockedFetchRemoteMedia.mockClear();
+    mockedRunFfmpeg.mockReset();
     mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
@@ -699,6 +705,65 @@ describe("applyMediaUnderstanding", () => {
     expect(mockedRunExec).toHaveBeenCalledWith(
       "whisper-cli",
       expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("transcodes non-wav audio before auto-detected whisper-cli runs", async () => {
+    const binDir = await createTempMediaDir();
+    const modelDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "whisper-cli");
+    const modelPath = path.join(modelDir, "tiny.bin");
+    await fs.writeFile(modelPath, "model");
+
+    const ctx = await createAudioCtx({
+      fileName: "telegram-voice.ogg",
+      mediaType: "audio/ogg",
+      content: createSafeAudioFixtureBuffer(2048),
+    });
+    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+
+    mockedRunFfmpeg.mockImplementationOnce(async (args: string[]) => {
+      const wavPath = args.at(-1);
+      if (typeof wavPath !== "string") {
+        throw new Error("missing wav path");
+      }
+      await fs.writeFile(wavPath, Buffer.from("RIFF"));
+      return "";
+    });
+    mockedRunExec.mockResolvedValueOnce({
+      stdout: "whisper cpp ogg ok\n",
+      stderr: "",
+    });
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        WHISPER_CPP_MODEL: modelPath,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(true);
+      },
+    );
+
+    expect(ctx.Transcript).toBe("whisper cpp ogg ok");
+    expect(mockedRunFfmpeg).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        "-i",
+        expect.stringMatching(/telegram-voice\.ogg$/),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        expect.stringMatching(/telegram-voice\.wav$/),
+      ]),
+    );
+    expect(mockedRunExec).toHaveBeenCalledWith(
+      "whisper-cli",
+      expect.arrayContaining([expect.stringMatching(/telegram-voice\.wav$/)]),
       expect.any(Object),
     );
   });
