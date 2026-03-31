@@ -186,6 +186,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
   const replyToMode = opts.replyToMode ?? accountConfig.replyToMode ?? "off";
   const threadReplies = accountConfig.threadReplies ?? "inbound";
+  const dmThreadReplies = accountConfig.dm?.threadReplies;
   const threadBindingIdleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg,
     channel: "matrix",
@@ -244,6 +245,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     groupPolicy,
     replyToMode,
     threadReplies,
+    dmThreadReplies,
     streaming,
     dmEnabled,
     dmPolicy,
