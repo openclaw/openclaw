@@ -83,6 +83,10 @@ export function resolveCronSession(params: {
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      // Clear stale sessionFile so resolveSessionFilePath recomputes from the
+      // new sessionId — otherwise the old path leaks and transcripts land in
+      // the previous session's file (#58304).
+      sessionFile: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };

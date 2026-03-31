@@ -219,6 +219,39 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
     });
 
+    it("clears stale sessionFile when rolling to a new sessionId (#58304)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          sessionFile: "/old/path/old-session-id.jsonl",
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+      // sessionFile must be cleared so resolveSessionFilePath recomputes from
+      // the new sessionId rather than reusing the old path.
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
+    it("clears stale sessionFile when forceNew is true (#58304)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          sessionFile: "/old/path/existing-session-id.jsonl",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
     it("preserves delivery routing metadata when reusing fresh session", () => {
       const result = resolveWithStoredEntry({
         entry: {
@@ -246,6 +279,23 @@ describe("resolveCronSession", () => {
         to: "channel:C0XXXXXXXXX",
         threadId: "1737500000.123456",
       });
+    });
+
+    it("preserves sessionFile when reusing fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-101",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          sessionFile: "/data/sessions/existing-session-id-101.jsonl",
+        },
+        fresh: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionEntry.sessionFile).toBe(
+        "/data/sessions/existing-session-id-101.jsonl",
+      );
     });
 
     it("creates new sessionId when entry exists but has no sessionId", () => {
