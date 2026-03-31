@@ -30,6 +30,14 @@ function waitFor(ws, predicate, timeoutMs = 20000) {
   });
 }
 
+async function waitForOptional(ws, predicate, timeoutMs = 1200) {
+  try {
+    return await waitFor(ws, predicate, timeoutMs);
+  } catch {
+    return null;
+  }
+}
+
 function sendReq(ws, id, method, params) {
   ws.send(JSON.stringify({ type: 'req', id, method, params }));
 }
@@ -40,7 +48,11 @@ await new Promise((resolve, reject) => {
   ws.once('error', reject);
 });
 
-const challenge = await waitFor(ws, (o) => o?.type === 'event' && o?.event === 'connect.challenge');
+const challenge = await waitForOptional(
+  ws,
+  (o) => o?.type === 'event' && o?.event === 'connect.challenge',
+  2000,
+);
 const nonce = challenge?.payload?.nonce;
 
 sendReq(ws, 'c1', 'connect', {
@@ -75,7 +87,7 @@ if (!connectRes?.ok) {
 
 sendReq(ws, 's1', 'chat.send', {
   sessionKey: 'main',
-  message: '请调用 abb_robot_real 工具：先 scan_controllers 与 connect，再读取当前关节角，然后用同一组关节执行一次 movj（speed=5）做web控制链路验证，并返回每一步结果。',
+  message: '请调用 abb_robot_real 进行严格测试：先直接 connect(host=127.0.0.1, allowVirtualController=true)，若连接成功再 get_status、get_joints，并用同一组关节执行 movj(speed=5)。同时输出 scan_controllers 结果和每一步原始返回。',
   idempotencyKey: runId,
   deliver: false,
 });
