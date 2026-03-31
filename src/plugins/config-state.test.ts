@@ -3,6 +3,7 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
+  resolveMemorySlotDecision,
 } from "./config-state.js";
 
 function normalizeVoiceCallEntry(entry: Record<string, unknown>) {
@@ -265,5 +266,59 @@ describe("resolveEnableState", () => {
         reason: "workspace plugin (disabled by default)",
       },
     });
+  });
+});
+
+describe("resolveMemorySlotDecision", () => {
+  it("disables a memory-only plugin when slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "old-memory",
+      kind: "memory",
+      slot: "new-memory",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(false);
+  });
+
+  it("keeps a dual-kind plugin enabled when memory slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: "new-memory",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.selected).toBeUndefined();
+  });
+
+  it("selects a dual-kind plugin when it owns the memory slot", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: "dual-plugin",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.selected).toBe(true);
+  });
+
+  it("keeps a dual-kind plugin enabled when memory slot is null", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: null,
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+  });
+
+  it("disables a memory-only plugin when memory slot is null", () => {
+    const result = resolveMemorySlotDecision({
+      id: "old-memory",
+      kind: "memory",
+      slot: null,
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(false);
   });
 });

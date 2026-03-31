@@ -5,7 +5,8 @@ import {
   BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
 } from "./bundled-capability-metadata.js";
 import type { PluginRecord } from "./registry.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, hasKind } from "./slots.js";
+import type { PluginKind } from "./types.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -312,30 +313,33 @@ export function resolveEffectiveEnableState(params: {
 
 export function resolveMemorySlotDecision(params: {
   id: string;
-  kind?: string;
+  kind?: string | string[];
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (params.kind !== "memory") {
+  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
     return { enabled: true };
   }
+  // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
+  // memory slot must stay enabled so its other slot role can still load.
+  const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
   if (params.slot === null) {
-    return { enabled: false, reason: "memory slot disabled" };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: "memory slot disabled" };
   }
   if (typeof params.slot === "string") {
     if (params.slot === params.id) {
       return { enabled: true, selected: true };
     }
-    return {
-      enabled: false,
-      reason: `memory slot set to "${params.slot}"`,
-    };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
   }
   if (params.selectedId && params.selectedId !== params.id) {
-    return {
-      enabled: false,
-      reason: `memory slot already filled by "${params.selectedId}"`,
-    };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: `memory slot already filled by "${params.selectedId}"` };
   }
   return { enabled: true, selected: true };
 }

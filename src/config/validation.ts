@@ -10,6 +10,7 @@ import {
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { hasKind } from "../plugins/slots.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -847,7 +848,7 @@ function validateConfigObjectWithPluginsBase(
         enabled = false;
         reason = memoryDecision.reason;
       }
-      if (memoryDecision.selected && record.kind === "memory") {
+      if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = pluginId;
       }
     }
