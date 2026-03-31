@@ -167,8 +167,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     // With the fix, fallbacksOverride should be an explicit empty array
     // (not undefined), which prevents the agent primary from being appended
     // as a silent fallback.
-    expect(capturedFallbacksOverride).toBeDefined();
-    expect(Array.isArray(capturedFallbacksOverride)).toBe(true);
+    expect(capturedFallbacksOverride).toEqual([]);
   });
 
   it("preserves agent fallbacks when no cron payload model is set", async () => {
