@@ -1,17 +1,25 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } = vi.hoisted(() => ({
+const {
+  createLineBotMock,
+  createLineNodeWebhookHandlerMock,
+  registerPluginHttpRouteMock,
+  unregisterHttpMock,
+} = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
     account: { accountId: "default" },
     handleWebhook: vi.fn(),
   })),
+  createLineNodeWebhookHandlerMock: vi.fn(() => vi.fn()),
   registerPluginHttpRouteMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
+let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./bot.js", () => ({
   createLineBot: createLineBotMock,
@@ -42,7 +50,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
 }));
 
 vi.mock("./webhook-node.js", () => ({
-  createLineNodeWebhookHandler: vi.fn(() => vi.fn()),
+  createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
 }));
 
 vi.mock("./auto-reply-delivery.js", () => ({
@@ -83,10 +91,24 @@ describe("monitorLineProvider lifecycle", () => {
       account: { accountId: "default" },
       handleWebhook: vi.fn(),
     });
+    innerLineWebhookHandlerMock = vi.fn(async () => {});
+    createLineNodeWebhookHandlerMock.mockReset().mockReturnValue(innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
     ({ monitorLineProvider } = await import("./monitor.js"));
   });
+
+  const createRouteResponse = () => {
+    const resObj = {
+      statusCode: 0,
+      headersSent: false,
+      setHeader: vi.fn(),
+      end: vi.fn(() => {
+        resObj.headersSent = true;
+      }),
+    };
+    return resObj as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> };
+  };
 
   it("waits for abort before resolving", async () => {
     const abort = new AbortController();
@@ -141,6 +163,60 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
     monitor.stop();
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects webhook requests above the shared in-flight limit before body handling", async () => {
+    const releaseRequests: Array<() => void> = [];
+    let reachLimit!: () => void;
+    const reachedLimit = new Promise<void>((resolve) => {
+      reachLimit = resolve;
+    });
+
+    innerLineWebhookHandlerMock.mockImplementation(
+      async (_req: IncomingMessage, res: ServerResponse) => {
+        if (releaseRequests.length === 7) {
+          reachLimit();
+        }
+        await new Promise<void>((resolve) => {
+          releaseRequests.push(resolve);
+        });
+        res.statusCode = 200;
+        res.end();
+      },
+    );
+
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    const route = registerPluginHttpRouteMock.mock.calls[0]?.[0] as
+      | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
+      | undefined;
+    expect(route).toBeDefined();
+    const createPostRequest = () =>
+      ({
+        method: "POST",
+        headers: {},
+      }) as IncomingMessage;
+
+    const firstEight = Array.from({ length: 8 }, () =>
+      route!.handler(createPostRequest(), createRouteResponse()),
+    );
+    await reachedLimit;
+
+    const overflowResponse = createRouteResponse();
+    await route!.handler(createPostRequest(), overflowResponse);
+
+    expect(innerLineWebhookHandlerMock).toHaveBeenCalledTimes(8);
+    expect(overflowResponse.statusCode).toBe(429);
+    expect(overflowResponse.end).toHaveBeenCalledWith("Too Many Requests");
+
+    releaseRequests.splice(0).forEach((release) => release());
+    await Promise.all(firstEight);
+    monitor.stop();
   });
 
   it("rejects startup when channel secret is missing", async () => {
