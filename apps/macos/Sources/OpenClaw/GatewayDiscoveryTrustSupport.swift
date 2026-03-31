@@ -138,6 +138,9 @@ enum GatewayDiscoveryTrustSupport {
                     "OpenClaw could not read the TLS fingerprint for \(endpoint.host):\(endpoint.port). Try again after verifying the gateway is reachable.")
                 return false
             }
+            guard !Task.isCancelled else {
+                return false
+            }
             if existingFingerprint == fingerprint {
                 return true
             }
@@ -148,6 +151,9 @@ enum GatewayDiscoveryTrustSupport {
                 fingerprint: fingerprint,
                 replacesExistingTrust: existingFingerprint != nil))
             else {
+                return false
+            }
+            guard !Task.isCancelled else {
                 return false
             }
             deps.saveTLSFingerprint(storeKey, fingerprint)

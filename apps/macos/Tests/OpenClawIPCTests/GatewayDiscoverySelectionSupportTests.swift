@@ -15,6 +15,14 @@ struct GatewayDiscoverySelectionSupportTests {
         var saves: [RecordedSave] = []
     }
 
+    private final class FlagBox: @unchecked Sendable {
+        var value = false
+    }
+
+    private final class ProbeContinuationBox: @unchecked Sendable {
+        var continuation: CheckedContinuation<String?, Never>?
+    }
+
     private func makeGateway(
         serviceHost: String?,
         servicePort: Int?,
@@ -247,5 +255,48 @@ struct GatewayDiscoverySelectionSupportTests {
                 RecordedSave(storeKey: "\(tailnetHost):443", fingerprint: "new-pin"),
             ])
         }
+    }
+
+    @Test func `canceling direct trust while fingerprint probe is in flight skips prompt and save`() async {
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let recordedSaves = RecordedSaveBox()
+        let didPrompt = FlagBox()
+        let continuationBox = ProbeContinuationBox()
+        let gateway = self.makeGateway(
+            serviceHost: tailnetHost,
+            servicePort: 443,
+            tailnetDns: tailnetHost,
+            stableID: "tailscale-serve|\(tailnetHost)")
+
+        let task = Task {
+            await GatewayDiscoveryTrustSupport.confirmSelection(
+                gateway: gateway,
+                transport: .direct,
+                deps: GatewayDiscoveryTrustSupport.Deps(
+                    confirmSSHSelection: { _ in true },
+                    probeTLSFingerprint: { _ in
+                        await withCheckedContinuation { continuation in
+                            continuationBox.continuation = continuation
+                        }
+                    },
+                    confirmDirectSelection: { _ in
+                        didPrompt.value = true
+                        return true
+                    },
+                    saveTLSFingerprint: { storeKey, savedFingerprint in
+                        recordedSaves.saves.append(RecordedSave(storeKey: storeKey, fingerprint: savedFingerprint))
+                    },
+                    loadTLSFingerprint: { _ in nil },
+                    showSelectionFailure: { _, _ in }))
+        }
+
+        await Task.yield()
+        task.cancel()
+        continuationBox.continuation?.resume(returning: "abc123")
+        let confirmed = await task.value
+
+        #expect(!confirmed)
+        #expect(!didPrompt.value)
+        #expect(recordedSaves.saves.isEmpty)
     }
 }
