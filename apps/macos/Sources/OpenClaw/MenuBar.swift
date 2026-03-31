@@ -103,6 +103,8 @@ struct OpenClawApp: App {
             return
         }
         Task {
+            // `--attach-only` is an explicit user/developer request to disable launchd
+            // management, so this path intentionally uninstalls the gateway LaunchAgent.
             _ = await GatewayLaunchAgentManager.set(
                 enabled: false,
                 bundlePath: Bundle.main.bundlePath,
@@ -286,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             Task { @MainActor in
                 let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                WebChatManager.shared.show(sessionKey: sessionKey)
+                await WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
     }

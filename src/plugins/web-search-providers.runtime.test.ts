@@ -526,7 +526,7 @@ describe("resolvePluginWebSearchProviders", () => {
             hint: "Brave runtime provider",
             envVar: "BRAVE_API_KEY",
             signupUrl: "https://example.com/brave",
-            credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+            credentialPath: "tools.web.search.brave.apiKey",
           }),
         );
         setActivePluginRegistry(registry, cacheKey);

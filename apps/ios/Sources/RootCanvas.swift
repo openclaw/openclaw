@@ -450,6 +450,7 @@ private struct HomeCanvasAgentCard: Codable {
 
 private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @State private var showGatewayActions: Bool = false
@@ -515,6 +516,12 @@ private struct CanvasContent: View {
         }
         .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
+            savedGateways: self.savedGateways,
+            currentGatewayProfileID: self.currentGatewayProfileID,
+            onSwitchGateway: { gateway in
+                Task { await self.gatewayController.connectSavedProfile(gateway) }
+            },
+            onAddGateway: { self.openSettings() },
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.openSettings() })
         .onAppear {
@@ -531,6 +538,24 @@ private struct CanvasContent: View {
             voiceWakeEnabled: self.voiceWakeEnabled,
             cameraHUDText: self.cameraHUDText,
             cameraHUDKind: self.cameraHUDKind)
+    }
+
+    private var savedGateways: [GatewaySettingsStore.SavedGatewayProfile] {
+        GatewaySettingsStore.loadSavedGatewayProfiles()
+    }
+
+    private var currentGatewayProfileID: String? {
+        let stableID = (self.appModel.connectedGatewayID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = self.appModel.activeGatewayConnectConfig?.url.host
+        let port = self.appModel.activeGatewayConnectConfig?.url.port
+        let useTLS = self.appModel.activeGatewayConnectConfig?.url.scheme?.lowercased() == "wss"
+
+        return GatewaySettingsStore.findSavedGatewayProfile(
+            stableID: stableID.isEmpty ? nil : stableID,
+            hosts: host.map { [$0] } ?? [],
+            port: port,
+            useTLS: useTLS
+        )?.id
     }
 }
 

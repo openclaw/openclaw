@@ -70,7 +70,12 @@ private struct ChatBubbleShape: InsettableShape {
             to: baseBottom,
             control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY + baseH * 0.15),
             control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
-        self.addBottomEdge(path: &path, bubbleMinX: bubbleMinX, bubbleMaxX: bubbleMaxX, bubbleMaxY: bubbleMaxY, radius: r)
+        self.addBottomEdge(
+            path: &path,
+            bubbleMinX: bubbleMinX,
+            bubbleMaxX: bubbleMaxX,
+            bubbleMaxY: bubbleMaxY,
+            radius: r)
         path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
@@ -102,7 +107,12 @@ private struct ChatBubbleShape: InsettableShape {
             to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
             control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
-        self.addBottomEdge(path: &path, bubbleMinX: bubbleMinX, bubbleMaxX: bubbleMaxX, bubbleMaxY: bubbleMaxY, radius: r)
+        self.addBottomEdge(
+            path: &path,
+            bubbleMinX: bubbleMinX,
+            bubbleMaxX: bubbleMaxX,
+            bubbleMaxY: bubbleMaxY,
+            radius: r)
         path.addLine(to: baseBottom)
         path.addCurve(
             to: tip,

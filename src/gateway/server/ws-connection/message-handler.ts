@@ -2,10 +2,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
-import {
-  revokeDeviceBootstrapToken,
-  verifyDeviceBootstrapToken,
-} from "../../../infra/device-bootstrap.js";
+import { verifyDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
@@ -755,7 +752,6 @@ export function attachGatewayWsMessageHandler(params: {
           };
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
-            existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
           ) => {
             const pairingStateAllowsRequestedAccess = (
               pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
@@ -790,23 +786,11 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
-            // QR bootstrap onboarding is node-only and single-use. When a fresh device presents
-            // a valid bootstrap token for the baseline node profile, complete pairing in the same
-            // handshake so iOS does not get stuck retrying with an already-consumed bootstrap token.
-            const allowSilentBootstrapPairing =
-              authMethod === "bootstrap-token" &&
-              reason === "not-paired" &&
-              role === "node" &&
-              scopes.length === 0 &&
-              !existingPairedDevice;
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
-              silent:
-                reason === "scope-upgrade"
-                  ? false
-                  : allowSilentLocalPairing || allowSilentBootstrapPairing,
+              silent: reason === "scope-upgrade" ? false : allowSilentLocalPairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -831,16 +815,6 @@ export function attachGatewayWsMessageHandler(params: {
                 callerScopes: scopes,
               });
               if (approved?.status === "approved") {
-                if (allowSilentBootstrapPairing && bootstrapTokenCandidate) {
-                  const revoked = await revokeDeviceBootstrapToken({
-                    token: bootstrapTokenCandidate,
-                  });
-                  if (!revoked.removed) {
-                    logGateway.warn(
-                      `bootstrap token revoke skipped after silent auto-approval device=${approved.device.deviceId}`,
-                    );
-                  }
-                }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
@@ -905,7 +879,7 @@ export function attachGatewayWsMessageHandler(params: {
           const paired = await getPairedDevice(device.id);
           const isPaired = paired?.publicKey === devicePublicKey;
           if (!isPaired) {
-            const ok = await requirePairing("not-paired", paired);
+            const ok = await requirePairing("not-paired");
             if (!ok) {
               return;
             }
@@ -925,7 +899,7 @@ export function attachGatewayWsMessageHandler(params: {
               logGateway.warn(
                 `security audit: device metadata upgrade requested reason=metadata-upgrade device=${device.id} ip=${reportedClientIp ?? "unknown-ip"} auth=${authMethod} payload=${deviceAuthPayloadVersion ?? "unknown"} claimedPlatform=${claimedPlatform ?? "<none>"} pinnedPlatform=${pairedPlatform ?? "<none>"} claimedDeviceFamily=${claimedDeviceFamily ?? "<none>"} pinnedDeviceFamily=${pairedDeviceFamily ?? "<none>"} client=${connectParams.client.id} conn=${connId}`,
               );
-              const ok = await requirePairing("metadata-upgrade", paired);
+              const ok = await requirePairing("metadata-upgrade");
               if (!ok) {
                 return;
               }
@@ -946,13 +920,13 @@ export function attachGatewayWsMessageHandler(params: {
             const allowedRoles = new Set(pairedRoles);
             if (allowedRoles.size === 0) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
-              const ok = await requirePairing("role-upgrade", paired);
+              const ok = await requirePairing("role-upgrade");
               if (!ok) {
                 return;
               }
             } else if (!allowedRoles.has(role)) {
               logUpgradeAudit("role-upgrade", pairedRoles, pairedScopes);
-              const ok = await requirePairing("role-upgrade", paired);
+              const ok = await requirePairing("role-upgrade");
               if (!ok) {
                 return;
               }
@@ -961,7 +935,7 @@ export function attachGatewayWsMessageHandler(params: {
             if (scopes.length > 0) {
               if (pairedScopes.length === 0) {
                 logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                const ok = await requirePairing("scope-upgrade", paired);
+                const ok = await requirePairing("scope-upgrade");
                 if (!ok) {
                   return;
                 }
@@ -973,7 +947,7 @@ export function attachGatewayWsMessageHandler(params: {
                 });
                 if (!scopesAllowed) {
                   logUpgradeAudit("scope-upgrade", pairedRoles, pairedScopes);
-                  const ok = await requirePairing("scope-upgrade", paired);
+                  const ok = await requirePairing("scope-upgrade");
                   if (!ok) {
                     return;
                   }

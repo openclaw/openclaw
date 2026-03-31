@@ -40,6 +40,7 @@ struct SettingsTab: View {
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
     @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") private var hasConnectedOnce: Bool = false
+    @AppStorage("gateway.addAnotherMode") private var addAnotherGatewayMode: Bool = false
 
     @State private var connectingGatewayID: String?
     @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
@@ -155,6 +156,12 @@ struct SettingsTab: View {
                                         }
                                     }
                                 }
+                            }
+
+                            Button {
+                                self.requestAddAnotherGateway()
+                            } label: {
+                                Label("Add Another Gateway", systemImage: "plus.circle")
                             }
 
                             Button("Disconnect", role: .destructive) {
@@ -597,6 +604,14 @@ struct SettingsTab: View {
         return trimmed.isEmpty ? "Not connected" : trimmed
     }
 
+    private func requestAddAnotherGateway() {
+        self.onboardingComplete = true
+        self.hasConnectedOnce = true
+        self.addAnotherGatewayMode = true
+        self.onboardingRequestID &+= 1
+        self.dismiss()
+    }
+
     private func featureToggle(
         _ title: String,
         isOn: Binding<Bool>,
@@ -1008,11 +1023,6 @@ struct SettingsTab: View {
 
         // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
         GatewaySettingsStore.clearLastGatewayConnection()
-        GatewaySettingsStore.clearPreferredGatewayStableID()
-        GatewaySettingsStore.clearLastDiscoveredGatewayStableID()
-        // Resetting onboarding should also forget trusted gateway TLS fingerprints.
-        // Otherwise a restarted dev gateway can stay stuck in a local TLS cancel loop.
-        GatewayTLSStore.clearAllFingerprints()
         OnboardingStateStore.reset()
 
         // RootCanvas also short-circuits onboarding when these are true.

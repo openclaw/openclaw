@@ -174,6 +174,8 @@ struct OnboardingView: View {
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: "onboarding",
-                transport: MacGatewayChatTransport()))
+                transport: MacGatewayChatTransport(
+                    connection: GatewayConnection.shared,
+                    profileName: "Onboarding")))
     }
 }

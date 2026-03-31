@@ -749,7 +749,9 @@ enum ChatComposerPasteSupport {
         return preferredType == .fileURL
     }
 
-    private static func matchesImageType(_ preferredType: NSPasteboard.PasteboardType) -> Bool {
+    private static func matchesImageType(
+        _ preferredType: NSPasteboard.PasteboardType)
+    -> Bool {
         self.preferredImagePasteboardTypes.contains { $0.type == preferredType }
     }
 

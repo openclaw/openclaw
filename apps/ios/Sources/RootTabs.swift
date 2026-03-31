@@ -3,6 +3,7 @@ import SwiftUI
 struct RootTabs: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @State private var selectedTab: Int = 0
@@ -72,6 +73,12 @@ struct RootTabs: View {
         }
         .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
+            savedGateways: self.savedGateways,
+            currentGatewayProfileID: self.currentGatewayProfileID,
+            onSwitchGateway: { gateway in
+                Task { await self.gatewayController.connectSavedProfile(gateway) }
+            },
+            onAddGateway: { self.selectedTab = 2 },
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.selectedTab = 2 })
     }
@@ -86,5 +93,23 @@ struct RootTabs: View {
             voiceWakeEnabled: self.voiceWakeEnabled,
             cameraHUDText: self.appModel.cameraHUDText,
             cameraHUDKind: self.appModel.cameraHUDKind)
+    }
+
+    private var savedGateways: [GatewaySettingsStore.SavedGatewayProfile] {
+        GatewaySettingsStore.loadSavedGatewayProfiles()
+    }
+
+    private var currentGatewayProfileID: String? {
+        let stableID = (self.appModel.connectedGatewayID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = self.appModel.activeGatewayConnectConfig?.url.host
+        let port = self.appModel.activeGatewayConnectConfig?.url.port
+        let useTLS = self.appModel.activeGatewayConnectConfig?.url.scheme?.lowercased() == "wss"
+
+        return GatewaySettingsStore.findSavedGatewayProfile(
+            stableID: stableID.isEmpty ? nil : stableID,
+            hosts: host.map { [$0] } ?? [],
+            port: port,
+            useTLS: useTLS
+        )?.id
     }
 }

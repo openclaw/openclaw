@@ -206,8 +206,6 @@ export function startAcpSpawnParentStreamRelay(params: {
   const emitStartNotice = () => {
     recordTaskRunProgressByRunId({
       runId,
-      runtime: "acp",
-      sessionKey: params.childSessionKey,
       lastEventAt: Date.now(),
       eventSummary: "Started.",
     });
@@ -275,8 +273,6 @@ export function startAcpSpawnParentStreamRelay(params: {
     stallNotified = true;
     recordTaskRunProgressByRunId({
       runId,
-      runtime: "acp",
-      sessionKey: params.childSessionKey,
       lastEventAt: Date.now(),
       eventSummary: `No output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for input.`,
     });
@@ -323,8 +319,6 @@ export function startAcpSpawnParentStreamRelay(params: {
         stallNotified = false;
         recordTaskRunProgressByRunId({
           runId,
-          runtime: "acp",
-          sessionKey: params.childSessionKey,
           lastEventAt: Date.now(),
           eventSummary: "Resumed output.",
         });

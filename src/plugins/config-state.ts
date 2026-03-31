@@ -324,7 +324,9 @@ export function resolveMemorySlotDecision(params: {
   // memory slot must stay enabled so its other slot role can still load.
   const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
   if (params.slot === null) {
-    return isMultiKind ? { enabled: true } : { enabled: false, reason: "memory slot disabled" };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: "memory slot disabled" };
   }
   if (typeof params.slot === "string") {
     if (params.slot === params.id) {

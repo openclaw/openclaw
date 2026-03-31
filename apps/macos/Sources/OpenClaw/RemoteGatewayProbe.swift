@@ -150,12 +150,16 @@ enum RemoteGatewayProbe {
         let transport = AppStateStore.shared.remoteTransport
 
         if transport == .direct {
-            let trimmedUrl = AppStateStore.shared.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedUrl.isEmpty else {
-                return .failed("Set a gateway URL first")
+            let trimmedHost = AppStateStore.shared.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedPort = AppStateStore.shared.remotePort.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedHost.isEmpty else {
+                return .failed("Set a gateway host first")
             }
-            guard self.isValidWsUrl(trimmedUrl) else {
-                return .failed("Gateway URL must use wss:// for remote hosts (ws:// only for localhost)")
+            guard let port = Int(trimmedPort), port > 0, port <= 65535 else {
+                return .failed("Gateway port must be a valid TCP port")
+            }
+            guard self.isValidWsUrl("wss://\(trimmedHost):\(port)") else {
+                return .failed("Gateway host/port is invalid")
             }
         } else {
             let trimmedTarget = settings.target.trimmingCharacters(in: .whitespacesAndNewlines)

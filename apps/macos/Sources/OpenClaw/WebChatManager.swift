@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 
 /// A borderless panel that can still accept key focus (needed for typing).
 final class WebChatPanel: NSPanel {
@@ -26,38 +27,51 @@ enum WebChatPresentation {
 final class WebChatManager {
     static let shared = WebChatManager()
 
-    private var windowController: WebChatSwiftUIWindowController?
-    private var windowSessionKey: String?
+    private var windowControllers: [String: WebChatSwiftUIWindowController] = [:]
+    private var windowSessionKeys: [String: String] = [:]
     private var panelController: WebChatSwiftUIWindowController?
     private var panelSessionKey: String?
-    private var cachedPreferredSessionKey: String?
+    private var cachedPreferredSessionKeys: [String: String] = [:]
 
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
     var activeSessionKey: String? {
-        self.panelSessionKey ?? self.windowSessionKey
+        self.panelSessionKey ?? self.windowSessionKeys.values.first
     }
 
-    func show(sessionKey: String) {
+    func show(sessionKey: String, profile: GatewayProfile? = nil) async {
         self.closePanel()
-        if let controller = self.windowController {
-            if self.windowSessionKey == sessionKey {
+        let profileID = profile?.id ?? "shared-default"
+        if let controller = self.windowControllers[profileID] {
+            if self.windowSessionKeys[profileID] == sessionKey {
                 controller.show()
                 return
             }
 
             controller.close()
-            self.windowController = nil
-            self.windowSessionKey = nil
+            self.windowControllers.removeValue(forKey: profileID)
+            self.windowSessionKeys.removeValue(forKey: profileID)
         }
-        let controller = WebChatSwiftUIWindowController(sessionKey: sessionKey, presentation: .window)
+
+        let controller: WebChatSwiftUIWindowController
+        if let profile {
+            let connection = await GatewayChatConnectionRegistry.shared.connection(for: profile)
+            controller = WebChatSwiftUIWindowController(
+                sessionKey: sessionKey,
+                presentation: .window,
+                profileName: profile.displayName,
+                transport: MacGatewayChatTransport(connection: connection, profileName: profile.displayName))
+        } else {
+            controller = WebChatSwiftUIWindowController(sessionKey: sessionKey, presentation: .window)
+        }
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }
-        self.windowController = controller
-        self.windowSessionKey = sessionKey
+        self.windowControllers[profileID] = controller
+        self.windowSessionKeys[profileID] = sessionKey
         controller.show()
     }
+
 
     func togglePanel(sessionKey: String, anchorProvider: @escaping () -> NSRect?) {
         if let controller = self.panelController {
@@ -93,21 +107,30 @@ final class WebChatManager {
         self.panelController?.close()
     }
 
-    func preferredSessionKey() async -> String {
-        if let cachedPreferredSessionKey { return cachedPreferredSessionKey }
-        let key = await GatewayConnection.shared.mainSessionKey()
-        self.cachedPreferredSessionKey = key
+    func preferredSessionKey(profile: GatewayProfile? = nil) async -> String {
+        let profileID = profile?.id ?? "shared-default"
+        if let cached = self.cachedPreferredSessionKeys[profileID] { return cached }
+        let key: String
+        if let profile {
+            let connection = await GatewayChatConnectionRegistry.shared.connection(for: profile)
+            key = await connection.mainSessionKey()
+        } else {
+            key = await GatewayConnection.shared.mainSessionKey()
+        }
+        self.cachedPreferredSessionKeys[profileID] = key
         return key
     }
 
     func resetTunnels() {
-        self.windowController?.close()
-        self.windowController = nil
-        self.windowSessionKey = nil
+        for controller in self.windowControllers.values {
+            controller.close()
+        }
+        self.windowControllers.removeAll()
+        self.windowSessionKeys.removeAll()
         self.panelController?.close()
         self.panelController = nil
         self.panelSessionKey = nil
-        self.cachedPreferredSessionKey = nil
+        self.cachedPreferredSessionKeys.removeAll()
     }
 
     func close() {

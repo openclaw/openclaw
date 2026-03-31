@@ -100,9 +100,6 @@ final class GatewayConnectionController {
         if instanceId.isEmpty {
             return "Missing instanceId (node.instanceId). Try restarting the app."
         }
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         // Resolve the service endpoint (SRV/A/AAAA). TXT is unauthenticated; do not route via TXT.
         guard let target = await self.resolveServiceEndpoint(gateway.endpoint) else {
@@ -110,6 +107,20 @@ final class GatewayConnectionController {
         }
 
         let stableID = gateway.stableID
+        let savedProfile = self.savedGatewayProfile(
+            stableID: stableID,
+            hosts: [gateway.lanHost, gateway.tailnetDns, target.host].compactMap { $0 },
+            port: target.port,
+            useTLS: true)
+        _ = GatewaySettingsStore.upsertSavedGatewayProfile(
+            profileID: savedProfile?.id,
+            stableID: stableID,
+            displayName: gateway.name,
+            host: savedProfile?.host ?? gateway.lanHost ?? gateway.tailnetDns ?? target.host,
+            port: savedProfile?.port ?? target.port,
+            useTLS: true,
+            preserveExistingCredentials: true)
+        let credentials = self.resolveGatewayCredentials(profile: savedProfile, instanceId: instanceId)
         // Discovery is a LAN operation; refuse unauthenticated plaintext connects.
         let tlsRequired = true
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
@@ -151,9 +162,9 @@ final class GatewayConnectionController {
             url: url,
             gatewayStableID: stableID,
             tls: tlsParams,
-            token: token,
-            bootstrapToken: bootstrapToken,
-            password: password)
+            token: credentials.token,
+            bootstrapToken: credentials.bootstrapToken,
+            password: credentials.password)
         return nil
     }
 
@@ -164,13 +175,23 @@ final class GatewayConnectionController {
     func connectManual(host: String, port: Int, useTLS: Bool) async {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
+        let savedProfile = self.savedGatewayProfile(
+            stableID: stableID,
+            hosts: [host],
+            port: resolvedPort,
+            useTLS: resolvedUseTLS)
+        _ = GatewaySettingsStore.upsertSavedGatewayProfile(
+            profileID: savedProfile?.id,
+            stableID: stableID,
+            host: host,
+            port: resolvedPort,
+            useTLS: resolvedUseTLS,
+            preserveExistingCredentials: true)
+        let credentials = self.resolveGatewayCredentials(profile: savedProfile, instanceId: instanceId)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
             guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
@@ -210,9 +231,13 @@ final class GatewayConnectionController {
             url: url,
             gatewayStableID: stableID,
             tls: tlsParams,
-            token: token,
-            bootstrapToken: bootstrapToken,
-            password: password)
+            token: credentials.token,
+            bootstrapToken: credentials.bootstrapToken,
+            password: credentials.password)
+    }
+
+    func connectSavedProfile(_ profile: GatewaySettingsStore.SavedGatewayProfile) async {
+        await self.connectManual(host: profile.host, port: profile.port, useTLS: profile.useTLS)
     }
 
     func connectLastKnown() async {
@@ -270,9 +295,13 @@ final class GatewayConnectionController {
 
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let credentials = self.resolveGatewayCredentials(
+            profile: self.savedGatewayProfile(
+                stableID: pending.stableID,
+                hosts: [prompt.host],
+                port: prompt.port,
+                useTLS: true),
+            instanceId: instanceId)
         let tlsParams = GatewayTLSParams(
             required: true,
             expectedFingerprint: prompt.fingerprintSha256,
@@ -284,14 +313,49 @@ final class GatewayConnectionController {
             url: pending.url,
             gatewayStableID: pending.stableID,
             tls: tlsParams,
-            token: token,
-            bootstrapToken: bootstrapToken,
-            password: password)
+            token: credentials.token,
+            bootstrapToken: credentials.bootstrapToken,
+            password: credentials.password)
     }
 
     func declinePendingTrustPrompt() {
         self.clearPendingTrustPrompt()
         self.appModel?.gatewayStatusText = "Offline"
+    }
+
+    private struct GatewayCredentials {
+        let token: String?
+        let bootstrapToken: String?
+        let password: String?
+    }
+
+    private func savedGatewayProfile(
+        stableID: String?,
+        hosts: [String],
+        port: Int,
+        useTLS: Bool
+    ) -> GatewaySettingsStore.SavedGatewayProfile? {
+        GatewaySettingsStore.findSavedGatewayProfile(
+            stableID: stableID,
+            hosts: hosts,
+            port: port,
+            useTLS: useTLS)
+    }
+
+    private func resolveGatewayCredentials(
+        profile: GatewaySettingsStore.SavedGatewayProfile?,
+        instanceId: String
+    ) -> GatewayCredentials {
+        let token = profile?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bootstrapToken = profile?.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = profile?.password?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return GatewayCredentials(
+            token: token?.isEmpty == false ? token : GatewaySettingsStore.loadGatewayToken(instanceId: instanceId),
+            bootstrapToken: bootstrapToken?.isEmpty == false
+                ? bootstrapToken
+                : GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId),
+            password: password?.isEmpty == false ? password : GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId))
     }
 
     private func updateFromDiscovery() {
@@ -330,10 +394,6 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !instanceId.isEmpty else { return }
 
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-
         if manualEnabled {
             let manualHost = defaults.string(forKey: "gateway.manual.host")?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -349,6 +409,13 @@ final class GatewayConnectionController {
             else { return }
 
             let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
+            let credentials = self.resolveGatewayCredentials(
+                profile: self.savedGatewayProfile(
+                    stableID: stableID,
+                    hosts: [manualHost],
+                    port: resolvedPort,
+                    useTLS: resolvedUseTLS),
+                instanceId: instanceId)
             let tlsParams = self.resolveManualTLSParams(
                 stableID: stableID,
                 tlsEnabled: resolvedUseTLS,
@@ -365,15 +432,22 @@ final class GatewayConnectionController {
                 url: url,
                 gatewayStableID: stableID,
                 tls: tlsParams,
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password)
+                token: credentials.token,
+                bootstrapToken: credentials.bootstrapToken,
+                password: credentials.password)
             return
         }
 
         if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
             if case let .manual(host, port, useTLS, stableID) = lastKnown {
                 let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
+                let credentials = self.resolveGatewayCredentials(
+                    profile: self.savedGatewayProfile(
+                        stableID: stableID,
+                        hosts: [host],
+                        port: port,
+                        useTLS: resolvedUseTLS),
+                    instanceId: instanceId)
                 let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
                 let tlsParams = stored.map { fp in
                     GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
@@ -392,9 +466,9 @@ final class GatewayConnectionController {
                     url: url,
                     gatewayStableID: stableID,
                     tls: tlsParams,
-                    token: token,
-                    bootstrapToken: bootstrapToken,
-                    password: password)
+                    token: credentials.token,
+                    bootstrapToken: credentials.bootstrapToken,
+                    password: credentials.password)
                 return
             }
         }
@@ -1060,7 +1134,8 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
     }
 
     private func finish(_ fingerprint: String?) {
-        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> (Bool, URLSessionWebSocketTask?, URLSession?) in
+        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock {
+            s -> (Bool, URLSessionWebSocketTask?, URLSession?) in
             guard !s.didFinish else { return (false, nil, nil) }
             s.didFinish = true
             let task = s.task

@@ -6,7 +6,6 @@ import {
 } from "../agents/model-selection.js";
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginWebSearchConfig } from "../config/legacy-web-search.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -184,22 +183,22 @@ function collectConfiguredActivationIds(config: OpenClawConfig): Set<string> {
   }
 
   addResolvedActivationId({
-    raw: resolvePluginWebSearchConfig(config, "google")?.model as string | undefined,
+    raw: config.tools?.web?.search?.gemini?.model,
     activationIds,
     aliasIndex,
   });
   addResolvedActivationId({
-    raw: resolvePluginWebSearchConfig(config, "xai")?.model as string | undefined,
+    raw: config.tools?.web?.search?.grok?.model,
     activationIds,
     aliasIndex,
   });
   addResolvedActivationId({
-    raw: resolvePluginWebSearchConfig(config, "moonshot")?.model as string | undefined,
+    raw: config.tools?.web?.search?.kimi?.model,
     activationIds,
     aliasIndex,
   });
   addResolvedActivationId({
-    raw: resolvePluginWebSearchConfig(config, "perplexity")?.model as string | undefined,
+    raw: config.tools?.web?.search?.perplexity?.model,
     activationIds,
     aliasIndex,
   });

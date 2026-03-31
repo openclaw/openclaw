@@ -72,7 +72,6 @@ function hasEntryCredential(
   provider: Pick<
     PluginWebSearchProviderEntry,
     | "credentialPath"
-    | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getCredentialValue"
@@ -84,12 +83,9 @@ function hasEntryCredential(
   if (!providerRequiresCredential(provider)) {
     return true;
   }
-  const configuredValue = provider.getConfiguredCredentialValue?.(config);
   const rawValue =
-    configuredValue ??
-    (provider.id === "brave"
-      ? provider.getCredentialValue(search as Record<string, unknown> | undefined)
-      : undefined);
+    provider.getConfiguredCredentialValue?.(config) ??
+    provider.getCredentialValue(search as Record<string, unknown> | undefined);
   const configuredRef = resolveSecretInputRef({
     value: rawValue,
   }).ref;

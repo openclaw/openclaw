@@ -133,12 +133,14 @@ final class GatewayProcessManager {
         if CommandResolver.connectionModeIsRemote() {
             return
         }
-        let bundlePath = Bundle.main.bundleURL.path
+
+        // Important: a normal runtime stop must NOT uninstall the user's launchd job.
+        // The LaunchAgent provides persistent local-mode startup and should only be
+        // removed by an explicit user action (for example attach-only / uninstall).
+        // Here we only disconnect app-side gateway clients and leave launchd intact.
         Task {
-            _ = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: bundlePath,
-                port: GatewayEnvironment.gatewayPort())
+            await GatewayConnection.shared.shutdown()
+            await ControlChannel.shared.disconnect()
         }
     }
 

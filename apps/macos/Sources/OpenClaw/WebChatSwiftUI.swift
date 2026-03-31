@@ -18,13 +18,16 @@ private enum WebChatSwiftUILayout {
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
+    let connection: GatewayConnection
+    let profileName: String
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
+        try await self.connection.chatHistory(sessionKey: sessionKey)
     }
 
     func listModels() async throws -> [OpenClawChatModelChoice] {
         do {
-            let data = try await GatewayConnection.shared.request(
+            let data = try await self.connection.request(
                 method: "models.list",
                 params: [:],
                 timeoutMs: 15000)
@@ -38,7 +41,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.connection.request(
             method: "chat.abort",
             params: [
                 "sessionKey": AnyCodable(sessionKey),
@@ -55,12 +58,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         if let limit {
             params["limit"] = AnyCodable(limit)
         }
-        let data = try await GatewayConnection.shared.request(
+        let data = try await self.connection.request(
             method: "sessions.list",
             params: params,
             timeoutMs: 15000)
         let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
-        let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
+        let mainSessionKey = await self.connection.cachedMainSessionKey()
         let defaults = decoded.defaults.map {
             OpenClawChatSessionsDefaults(
                 model: $0.model,
@@ -83,7 +86,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "key": AnyCodable(sessionKey),
         ]
         params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.connection.request(
             method: "sessions.patch",
             params: params,
             timeoutMs: 15000)
@@ -94,7 +97,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "key": AnyCodable(sessionKey),
             "thinkingLevel": AnyCodable(thinkingLevel),
         ]
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.connection.request(
             method: "sessions.patch",
             params: params,
             timeoutMs: 15000)
@@ -107,27 +110,28 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await GatewayConnection.shared.chatSend(
+        try await self.connection.chatSend(
             sessionKey: sessionKey,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
-            attachments: attachments)
+            attachments: attachments,
+            timeoutMs: 600_000)
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
-        try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+        try await self.connection.healthOK(timeoutMs: timeoutMs)
     }
 
     func resetSession(sessionKey: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.connection.request(
             method: "sessions.reset",
             params: ["key": AnyCodable(sessionKey)],
             timeoutMs: 10000)
     }
 
     func compactSession(sessionKey: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        _ = try await self.connection.request(
             method: "sessions.compact",
             params: ["key": AnyCodable(sessionKey)],
             timeoutMs: 10000)
@@ -137,12 +141,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         AsyncStream { continuation in
             let task = Task {
                 do {
-                    try await GatewayConnection.shared.refresh()
+                    try await self.connection.refresh()
                 } catch {
                     webChatSwiftLogger.error("gateway refresh failed \(error.localizedDescription, privacy: .public)")
                 }
 
-                let stream = await GatewayConnection.shared.subscribe()
+                let stream = await self.connection.subscribe()
                 for await push in stream {
                     if Task.isCancelled { return }
                     if let evt = Self.mapPushToTransportEvent(push) {
@@ -217,6 +221,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
+    private let profileName: String
     private let hosting: NSHostingController<OpenClawChatView>
     private let contentController: NSViewController
     private var window: NSWindow?
@@ -224,13 +229,25 @@ final class WebChatSwiftUIWindowController {
     var onClosed: (() -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
 
-    convenience init(sessionKey: String, presentation: WebChatPresentation) {
-        self.init(sessionKey: sessionKey, presentation: presentation, transport: MacGatewayChatTransport())
+    convenience init(sessionKey: String, presentation: WebChatPresentation, profileName: String = "Gateway") {
+        self.init(
+            sessionKey: sessionKey,
+            presentation: presentation,
+            profileName: profileName,
+            transport: MacGatewayChatTransport(
+                connection: GatewayConnection.shared,
+                profileName: profileName))
     }
 
-    init(sessionKey: String, presentation: WebChatPresentation, transport: any OpenClawChatTransport) {
+    init(
+        sessionKey: String,
+        presentation: WebChatPresentation,
+        profileName: String,
+        transport: any OpenClawChatTransport)
+    {
         self.sessionKey = sessionKey
         self.presentation = presentation
+        self.profileName = profileName
         let vm = OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
@@ -244,7 +261,10 @@ final class WebChatSwiftUIWindowController {
             showsSessionSwitcher: true,
             userAccent: accent))
         self.contentController = Self.makeContentController(for: presentation, hosting: self.hosting)
-        self.window = Self.makeWindow(for: presentation, contentViewController: self.contentController)
+        self.window = Self.makeWindow(
+            for: presentation,
+            title: "OpenClaw Chat — \(profileName)",
+            contentViewController: self.contentController)
     }
 
     deinit {}
@@ -348,6 +368,7 @@ final class WebChatSwiftUIWindowController {
 
     private static func makeWindow(
         for presentation: WebChatPresentation,
+        title: String,
         contentViewController: NSViewController) -> NSWindow
     {
         switch presentation {
@@ -357,7 +378,7 @@ final class WebChatSwiftUIWindowController {
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
-            window.title = "OpenClaw Chat"
+            window.title = title
             window.contentViewController = contentViewController
             window.isReleasedWhenClosed = false
             window.titleVisibility = .visible

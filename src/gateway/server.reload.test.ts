@@ -385,23 +385,14 @@ describe("gateway hot reload", () => {
       configPath,
       `${JSON.stringify(
         {
-          plugins: {
-            entries: {
-              google: {
-                enabled: true,
-                config: {
-                  webSearch: {
-                    apiKey: "gemini-startup-key",
-                  },
-                },
-              },
-            },
-          },
           tools: {
             web: {
               search: {
                 enabled: true,
                 provider: "gemini",
+                gemini: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+                },
               },
             },
           },
@@ -657,18 +648,19 @@ describe("gateway hot reload", () => {
     });
   });
 
-  it("does not emit secrets reloader events for web search secret reload transitions", async () => {
+  it("emits one-shot degraded and recovered system events for web search secret reload transitions", async () => {
     await writeWebSearchGeminiRefConfig();
+    process.env.GEMINI_API_KEY = "gemini-startup-key"; // pragma: allowlist secret
 
     await withGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
       const sessionKey = resolveMainSessionKeyFromConfig();
       const plan = {
-        changedPaths: ["plugins.entries.google.config.webSearch.apiKey"],
+        changedPaths: ["tools.web.search.gemini.apiKey"],
         restartGateway: false,
         restartReasons: [],
-        hotReasons: ["plugins.entries.google.config.webSearch.apiKey"],
+        hotReasons: ["tools.web.search.gemini.apiKey"],
         reloadHooks: false,
         restartGmailWatcher: false,
         restartCron: false,
@@ -676,42 +668,14 @@ describe("gateway hot reload", () => {
         restartChannels: new Set(),
         noopPaths: [],
       };
-      const degradedConfig = {
+      const nextConfig = {
         tools: {
           web: {
             search: {
               enabled: true,
               provider: "gemini",
-            },
-          },
-        },
-        plugins: {
-          entries: {
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "OPENCLAW_TEST_MISSING_GEMINI_API_KEY",
-                  },
-                },
-              },
-            },
-          },
-        },
-      };
-      const recoveredConfig = {
-        tools: degradedConfig.tools,
-        plugins: {
-          entries: {
-            google: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: "gemini-recovered-key",
-                },
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
               },
             },
           },
@@ -719,13 +683,17 @@ describe("gateway hot reload", () => {
       };
 
       delete process.env.GEMINI_API_KEY;
-      delete process.env.OPENCLAW_TEST_MISSING_GEMINI_API_KEY;
-      expect(drainSystemEvents(sessionKey)).toEqual([]);
-      await expect(onHotReload?.(plan, degradedConfig)).resolves.toBeUndefined();
-      expect(drainSystemEvents(sessionKey)).toEqual([]);
+      await expectOneShotSecretReloadEvents({
+        applyReload: () => onHotReload?.(plan, nextConfig),
+        sessionKey,
+        expectedError: "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
+      });
 
-      await expect(onHotReload?.(plan, recoveredConfig)).resolves.toBeUndefined();
-      expect(drainSystemEvents(sessionKey)).toEqual([]);
+      process.env.GEMINI_API_KEY = "gemini-recovered-key"; // pragma: allowlist secret
+      await expectSecretReloadRecovered({
+        applyReload: () => onHotReload?.(plan, nextConfig),
+        sessionKey,
+      });
     });
   });
 

@@ -1464,8 +1464,7 @@ describe("/acp command", () => {
     });
     createTaskRecord({
       runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      requesterSessionKey: "agent:main:main",
       childSessionKey: defaultAcpSessionKey,
       runId: "acp-run-1",
       task: "Inspect ACP backlog",

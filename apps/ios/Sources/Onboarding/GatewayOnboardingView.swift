@@ -107,8 +107,11 @@ private struct ManualEntryStep: View {
     @State private var manualHost: String = ""
     @State private var manualPortText: String = ""
     @State private var manualUseTLS: Bool = true
+    @State private var manualBootstrapToken: String = ""
     @State private var manualToken: String = ""
     @State private var manualPassword: String = ""
+    @State private var savedGatewayProfiles: [GatewaySettingsStore.SavedGatewayProfile] = []
+    @State private var selectedSavedGatewayID: String?
 
     @State private var connectingGatewayID: String?
     @State private var connectStatusText: String?
@@ -155,6 +158,37 @@ private struct ManualEntryStep: View {
                     .autocorrectionDisabled()
             }
 
+            if !self.savedGatewayProfiles.isEmpty {
+                Section("Saved gateways") {
+                    ForEach(self.savedGatewayProfiles) { profile in
+                        VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(profile.resolvedName)
+                                    .font(.body.weight(.semibold))
+                                Text(profile.addressLabel)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            HStack {
+                                Button("Use") {
+                                    self.loadSavedGatewayProfile(profile)
+                                }
+                                Spacer()
+                                Button("Connect") {
+                                    Task {
+                                        self.loadSavedGatewayProfile(profile)
+                                        await self.connectManual()
+                                    }
+                                }
+                                .disabled(self.connectingGatewayID != nil)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+
             gatewayConnectionStatusSection(
                 appModel: self.appModel,
                 gatewayController: self.gatewayController,
@@ -187,6 +221,9 @@ private struct ManualEntryStep: View {
             }
         }
         .navigationTitle("Manual entry")
+        .onAppear {
+            self.refreshSavedGatewayProfiles()
+        }
     }
 
     private func connectManual() async {
@@ -210,13 +247,17 @@ private struct ManualEntryStep: View {
         if let instanceId = defaults.string(forKey: "node.instanceId")?.trimmingCharacters(in: .whitespacesAndNewlines),
            !instanceId.isEmpty
         {
-            let trimmedToken = self.manualToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedPassword = self.manualPassword.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedToken.isEmpty {
-                GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: instanceId)
-            }
-            GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: instanceId)
+            GatewaySettingsStore.saveGatewayToken(
+                self.manualToken.trimmingCharacters(in: .whitespacesAndNewlines),
+                instanceId: instanceId)
+            GatewaySettingsStore.saveGatewayBootstrapToken(
+                self.manualBootstrapToken.trimmingCharacters(in: .whitespacesAndNewlines),
+                instanceId: instanceId)
+            GatewaySettingsStore.saveGatewayPassword(
+                self.manualPassword.trimmingCharacters(in: .whitespacesAndNewlines),
+                instanceId: instanceId)
         }
+        self.saveCurrentGatewayProfile()
 
         self.connectingGatewayID = "manual"
         defer { self.connectingGatewayID = nil }
@@ -238,8 +279,10 @@ private struct ManualEntryStep: View {
         self.manualHost = ""
         self.manualPortText = ""
         self.manualUseTLS = true
+        self.manualBootstrapToken = ""
         self.manualToken = ""
         self.manualPassword = ""
+        self.selectedSavedGatewayID = nil
     }
 
     private func applySetupCode() {
@@ -289,8 +332,11 @@ private struct ManualEntryStep: View {
         if !trimmedInstanceId.isEmpty {
             let trimmedBootstrapToken =
                 payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            self.manualBootstrapToken = trimmedBootstrapToken
             GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
+
+        self.saveCurrentGatewayProfile(preserveExistingCredentials: false)
 
         self.setupStatusText = "Setup code applied."
     }
@@ -312,6 +358,37 @@ private struct ManualEntryStep: View {
     }
 
     // (GatewaySetupCode) decode raw setup codes.
+
+    private func refreshSavedGatewayProfiles() {
+        self.savedGatewayProfiles = GatewaySettingsStore.loadSavedGatewayProfiles()
+    }
+
+    private func loadSavedGatewayProfile(_ profile: GatewaySettingsStore.SavedGatewayProfile) {
+        self.selectedSavedGatewayID = profile.id
+        self.manualHost = profile.host
+        self.manualPortText = String(profile.port)
+        self.manualUseTLS = profile.useTLS
+        self.manualBootstrapToken = profile.bootstrapToken ?? ""
+        self.manualToken = profile.token ?? ""
+        self.manualPassword = profile.password ?? ""
+    }
+
+    private func saveCurrentGatewayProfile(preserveExistingCredentials: Bool = true) {
+        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let port = self.manualPortValue(), !host.isEmpty else { return }
+        let profile = GatewaySettingsStore.upsertSavedGatewayProfile(
+            profileID: self.selectedSavedGatewayID,
+            stableID: "manual|\(host.lowercased())|\(port)",
+            host: host,
+            port: port,
+            useTLS: self.manualUseTLS,
+            token: self.manualToken,
+            bootstrapToken: self.manualBootstrapToken,
+            password: self.manualPassword,
+            preserveExistingCredentials: preserveExistingCredentials)
+        self.selectedSavedGatewayID = profile?.id
+        self.refreshSavedGatewayProfiles()
+    }
 }
 
 @MainActor

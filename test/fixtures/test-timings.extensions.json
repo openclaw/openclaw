@@ -4,11 +4,11 @@
   "defaultDurationMs": 1000,
   "files": {
     "extensions/bluebubbles/src/monitor.webhook-auth.test.ts": {
-      "durationMs": 93900,
+      "durationMs": 30106,
       "testCount": 19
     },
     "extensions/matrix/src/plugin-entry.runtime.test.ts": {
-      "durationMs": 6500,
+      "durationMs": 62700,
       "testCount": 1
     },
     "extensions/matrix/src/matrix/monitor/index.test.ts": {

@@ -156,7 +156,8 @@ enum ChatMarkdownPreprocessor {
                 break
             }
 
-            if !inMetaBlock && self.inboundContextHeaders.contains(currentLine.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            let trimmedCurrentLine = currentLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !inMetaBlock && self.inboundContextHeaders.contains(trimmedCurrentLine) {
                 let nextLine = index + 1 < lines.count ? lines[index + 1] : nil
                 if nextLine?.trimmingCharacters(in: .whitespacesAndNewlines) != "```json" {
                     outputLines.append(currentLine)

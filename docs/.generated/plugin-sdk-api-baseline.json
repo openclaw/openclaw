@@ -55,7 +55,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 146,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -64,7 +64,7 @@
           "exportName": "ChannelAgentTool",
           "kind": "type",
           "source": {
-            "line": 19,
+            "line": 18,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -73,7 +73,7 @@
           "exportName": "ChannelAgentToolFactory",
           "kind": "type",
           "source": {
-            "line": 24,
+            "line": 23,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -82,7 +82,7 @@
           "exportName": "ChannelCapabilities",
           "kind": "type",
           "source": {
-            "line": 233,
+            "line": 232,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -109,7 +109,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 653,
+            "line": 650,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -118,7 +118,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 658,
+            "line": 655,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 674,
+            "line": 671,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -136,7 +136,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 271,
+            "line": 268,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -145,7 +145,7 @@
           "exportName": "ChannelId",
           "kind": "type",
           "source": {
-            "line": 14,
+            "line": 13,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -154,7 +154,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 529,
+            "line": 526,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -163,7 +163,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 493,
+            "line": 492,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -190,7 +190,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 62,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -199,7 +199,7 @@
           "exportName": "ChannelSetupInput",
           "kind": "type",
           "source": {
-            "line": 64,
+            "line": 63,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -226,7 +226,7 @@
           "exportName": "ChannelStatusIssue",
           "kind": "type",
           "source": {
-            "line": 102,
+            "line": 101,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -253,7 +253,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1636,
+            "line": 1637,
             "path": "src/plugins/types.ts"
           }
         },
@@ -397,7 +397,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1279,
+            "line": 1280,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1681,
             "path": "src/plugins/types.ts"
           }
         },
@@ -424,7 +424,7 @@
           "exportName": "OpenClawPluginConfigSchema",
           "kind": "type",
           "source": {
-            "line": 101,
+            "line": 102,
             "path": "src/plugins/types.ts"
           }
         },
@@ -433,7 +433,7 @@
           "exportName": "PluginLogger",
           "kind": "type",
           "source": {
-            "line": 72,
+            "line": 73,
             "path": "src/plugins/types.ts"
           }
         },
@@ -451,7 +451,7 @@
           "exportName": "ProviderAuthContext",
           "kind": "type",
           "source": {
-            "line": 176,
+            "line": 177,
             "path": "src/plugins/types.ts"
           }
         },
@@ -460,7 +460,7 @@
           "exportName": "ProviderAuthResult",
           "kind": "type",
           "source": {
-            "line": 161,
+            "line": 162,
             "path": "src/plugins/types.ts"
           }
         },
@@ -469,7 +469,7 @@
           "exportName": "ProviderRuntimeModel",
           "kind": "type",
           "source": {
-            "line": 317,
+            "line": 318,
             "path": "src/plugins/types.ts"
           }
         },
@@ -496,7 +496,7 @@
           "exportName": "RuntimeLogger",
           "kind": "type",
           "source": {
-            "line": 7,
+            "line": 19,
             "path": "src/plugins/runtime/types-core.ts"
           }
         },
@@ -523,7 +523,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1254,
+            "line": 1255,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1170,7 +1170,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 572,
+            "line": 569,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1179,7 +1179,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 578,
+            "line": 575,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1188,7 +1188,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 146,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1197,7 +1197,7 @@
           "exportName": "ChannelAgentTool",
           "kind": "type",
           "source": {
-            "line": 19,
+            "line": 18,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1206,7 +1206,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 662,
+            "line": 659,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1215,7 +1215,7 @@
           "exportName": "ChannelGroupContext",
           "kind": "type",
           "source": {
-            "line": 219,
+            "line": 218,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1224,7 +1224,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 529,
+            "line": 526,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1233,7 +1233,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 493,
+            "line": 492,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1242,7 +1242,7 @@
           "exportName": "ChannelMessageActionDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 31,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1260,7 +1260,7 @@
           "exportName": "ChannelMessageToolDiscovery",
           "kind": "type",
           "source": {
-            "line": 57,
+            "line": 56,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1269,7 +1269,7 @@
           "exportName": "ChannelMessageToolSchemaContribution",
           "kind": "type",
           "source": {
-            "line": 52,
+            "line": 51,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1278,7 +1278,7 @@
           "exportName": "ChannelStatusIssue",
           "kind": "type",
           "source": {
-            "line": 102,
+            "line": 101,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1287,7 +1287,7 @@
           "exportName": "ChannelThreadingContext",
           "kind": "type",
           "source": {
-            "line": 368,
+            "line": 367,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1296,7 +1296,7 @@
           "exportName": "ChannelThreadingToolContext",
           "kind": "type",
           "source": {
-            "line": 382,
+            "line": 381,
             "path": "src/channels/plugins/types.core.ts"
           }
         }
@@ -1752,7 +1752,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 572,
+            "line": 569,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1761,7 +1761,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 578,
+            "line": 575,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1770,7 +1770,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 146,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1779,7 +1779,7 @@
           "exportName": "ChannelAccountState",
           "kind": "type",
           "source": {
-            "line": 110,
+            "line": 109,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1788,7 +1788,7 @@
           "exportName": "ChannelActionAvailabilityState",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 31,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1797,7 +1797,7 @@
           "exportName": "ChannelAgentPromptAdapter",
           "kind": "type",
           "source": {
-            "line": 466,
+            "line": 465,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1806,7 +1806,7 @@
           "exportName": "ChannelAgentTool",
           "kind": "type",
           "source": {
-            "line": 19,
+            "line": 18,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1815,7 +1815,7 @@
           "exportName": "ChannelAgentToolFactory",
           "kind": "type",
           "source": {
-            "line": 24,
+            "line": 23,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1824,7 +1824,7 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 597,
+            "line": 594,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1833,7 +1833,7 @@
           "exportName": "ChannelApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 591,
+            "line": 588,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1842,7 +1842,7 @@
           "exportName": "ChannelApprovalForwardTarget",
           "kind": "type",
           "source": {
-            "line": 39,
+            "line": 38,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1851,7 +1851,7 @@
           "exportName": "ChannelApprovalInitiatingSurfaceState",
           "kind": "type",
           "source": {
-            "line": 37,
+            "line": 36,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1860,7 +1860,7 @@
           "exportName": "ChannelAuthAdapter",
           "kind": "type",
           "source": {
-            "line": 395,
+            "line": 392,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1869,7 +1869,7 @@
           "exportName": "ChannelCapabilities",
           "kind": "type",
           "source": {
-            "line": 233,
+            "line": 232,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1878,7 +1878,7 @@
           "exportName": "ChannelCapabilitiesDiagnostics",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 53,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1887,7 +1887,7 @@
           "exportName": "ChannelCapabilitiesDisplayLine",
           "kind": "type",
           "source": {
-            "line": 49,
+            "line": 48,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1896,7 +1896,7 @@
           "exportName": "ChannelCapabilitiesDisplayTone",
           "kind": "type",
           "source": {
-            "line": 47,
+            "line": 46,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1905,7 +1905,7 @@
           "exportName": "ChannelCommandAdapter",
           "kind": "type",
           "source": {
-            "line": 492,
+            "line": 489,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1914,7 +1914,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 662,
+            "line": 659,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1923,7 +1923,7 @@
           "exportName": "ChannelConfigAdapter",
           "kind": "type",
           "source": {
-            "line": 98,
+            "line": 97,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1932,7 +1932,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 653,
+            "line": 650,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1941,7 +1941,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 658,
+            "line": 655,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1950,7 +1950,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 674,
+            "line": 671,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1959,7 +1959,7 @@
           "exportName": "ChannelConversationBindingSupport",
           "kind": "type",
           "source": {
-            "line": 690,
+            "line": 687,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1968,7 +1968,7 @@
           "exportName": "ChannelDirectoryAdapter",
           "kind": "type",
           "source": {
-            "line": 454,
+            "line": 451,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1977,7 +1977,7 @@
           "exportName": "ChannelDirectoryEntry",
           "kind": "type",
           "source": {
-            "line": 480,
+            "line": 479,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1986,7 +1986,7 @@
           "exportName": "ChannelDirectoryEntryKind",
           "kind": "type",
           "source": {
-            "line": 478,
+            "line": 477,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1995,7 +1995,7 @@
           "exportName": "ChannelElevatedAdapter",
           "kind": "type",
           "source": {
-            "line": 485,
+            "line": 482,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2004,7 +2004,7 @@
           "exportName": "ChannelGatewayAdapter",
           "kind": "type",
           "source": {
-            "line": 379,
+            "line": 376,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2013,7 +2013,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 271,
+            "line": 268,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2022,7 +2022,7 @@
           "exportName": "ChannelGroupAdapter",
           "kind": "type",
           "source": {
-            "line": 129,
+            "line": 128,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2031,7 +2031,7 @@
           "exportName": "ChannelGroupContext",
           "kind": "type",
           "source": {
-            "line": 219,
+            "line": 218,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2040,7 +2040,7 @@
           "exportName": "ChannelHeartbeatAdapter",
           "kind": "type",
           "source": {
-            "line": 420,
+            "line": 417,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2049,7 +2049,7 @@
           "exportName": "ChannelHeartbeatDeps",
           "kind": "type",
           "source": {
-            "line": 118,
+            "line": 117,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2058,7 +2058,7 @@
           "exportName": "ChannelId",
           "kind": "type",
           "source": {
-            "line": 14,
+            "line": 13,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2067,7 +2067,7 @@
           "exportName": "ChannelLifecycleAdapter",
           "kind": "type",
           "source": {
-            "line": 497,
+            "line": 494,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2076,7 +2076,7 @@
           "exportName": "ChannelLoginWithQrStartResult",
           "kind": "type",
           "source": {
-            "line": 350,
+            "line": 347,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2085,7 +2085,7 @@
           "exportName": "ChannelLoginWithQrWaitResult",
           "kind": "type",
           "source": {
-            "line": 355,
+            "line": 352,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2094,7 +2094,7 @@
           "exportName": "ChannelLogoutContext",
           "kind": "type",
           "source": {
-            "line": 360,
+            "line": 357,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2103,7 +2103,7 @@
           "exportName": "ChannelLogoutResult",
           "kind": "type",
           "source": {
-            "line": 344,
+            "line": 341,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2112,7 +2112,7 @@
           "exportName": "ChannelLogSink",
           "kind": "type",
           "source": {
-            "line": 212,
+            "line": 211,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2121,7 +2121,7 @@
           "exportName": "ChannelMentionAdapter",
           "kind": "type",
           "source": {
-            "line": 263,
+            "line": 262,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2130,7 +2130,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 529,
+            "line": 526,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2139,7 +2139,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 493,
+            "line": 492,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2148,7 +2148,7 @@
           "exportName": "ChannelMessageActionDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 31,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2175,7 +2175,7 @@
           "exportName": "ChannelMessageToolDiscovery",
           "kind": "type",
           "source": {
-            "line": 57,
+            "line": 56,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2184,7 +2184,7 @@
           "exportName": "ChannelMessageToolSchemaContribution",
           "kind": "type",
           "source": {
-            "line": 52,
+            "line": 51,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2193,7 +2193,7 @@
           "exportName": "ChannelMessagingAdapter",
           "kind": "type",
           "source": {
-            "line": 398,
+            "line": 397,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2202,7 +2202,7 @@
           "exportName": "ChannelMeta",
           "kind": "type",
           "source": {
-            "line": 124,
+            "line": 123,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2211,7 +2211,7 @@
           "exportName": "ChannelOutboundAdapter",
           "kind": "type",
           "source": {
-            "line": 175,
+            "line": 172,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2220,7 +2220,7 @@
           "exportName": "ChannelOutboundContext",
           "kind": "type",
           "source": {
-            "line": 135,
+            "line": 134,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2229,7 +2229,7 @@
           "exportName": "ChannelOutboundPayloadHint",
           "kind": "type",
           "source": {
-            "line": 160,
+            "line": 157,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2238,7 +2238,7 @@
           "exportName": "ChannelOutboundTargetMode",
           "kind": "type",
           "source": {
-            "line": 16,
+            "line": 15,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2247,7 +2247,7 @@
           "exportName": "ChannelOutboundTargetRef",
           "kind": "type",
           "source": {
-            "line": 164,
+            "line": 161,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2256,7 +2256,7 @@
           "exportName": "ChannelPairingAdapter",
           "kind": "type",
           "source": {
-            "line": 368,
+            "line": 365,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2274,7 +2274,7 @@
           "exportName": "ChannelPollContext",
           "kind": "type",
           "source": {
-            "line": 560,
+            "line": 557,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2283,7 +2283,7 @@
           "exportName": "ChannelPollResult",
           "kind": "type",
           "source": {
-            "line": 551,
+            "line": 548,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2292,7 +2292,7 @@
           "exportName": "ChannelResolveKind",
           "kind": "type",
           "source": {
-            "line": 465,
+            "line": 462,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2301,7 +2301,7 @@
           "exportName": "ChannelResolverAdapter",
           "kind": "type",
           "source": {
-            "line": 475,
+            "line": 472,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2310,7 +2310,7 @@
           "exportName": "ChannelResolveResult",
           "kind": "type",
           "source": {
-            "line": 467,
+            "line": 464,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2319,7 +2319,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 721,
+            "line": 718,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2328,7 +2328,7 @@
           "exportName": "ChannelSecurityContext",
           "kind": "type",
           "source": {
-            "line": 257,
+            "line": 256,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2337,7 +2337,7 @@
           "exportName": "ChannelSecurityDmPolicy",
           "kind": "type",
           "source": {
-            "line": 248,
+            "line": 247,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2346,7 +2346,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 62,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2355,7 +2355,7 @@
           "exportName": "ChannelSetupInput",
           "kind": "type",
           "source": {
-            "line": 64,
+            "line": 63,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2364,7 +2364,7 @@
           "exportName": "ChannelStatusAdapter",
           "kind": "type",
           "source": {
-            "line": 217,
+            "line": 214,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2373,7 +2373,7 @@
           "exportName": "ChannelStatusIssue",
           "kind": "type",
           "source": {
-            "line": 102,
+            "line": 101,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2382,7 +2382,7 @@
           "exportName": "ChannelStreamingAdapter",
           "kind": "type",
           "source": {
-            "line": 282,
+            "line": 281,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2391,7 +2391,7 @@
           "exportName": "ChannelStructuredComponents",
           "kind": "type",
           "source": {
-            "line": 291,
+            "line": 290,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2400,7 +2400,7 @@
           "exportName": "ChannelThreadingAdapter",
           "kind": "type",
           "source": {
-            "line": 325,
+            "line": 324,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2409,7 +2409,7 @@
           "exportName": "ChannelThreadingContext",
           "kind": "type",
           "source": {
-            "line": 368,
+            "line": 367,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2418,7 +2418,7 @@
           "exportName": "ChannelThreadingToolContext",
           "kind": "type",
           "source": {
-            "line": 382,
+            "line": 381,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2427,7 +2427,7 @@
           "exportName": "ChannelToolSend",
           "kind": "type",
           "source": {
-            "line": 522,
+            "line": 519,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2627,7 +2627,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 62,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2645,7 +2645,7 @@
           "exportName": "ChannelSetupInput",
           "kind": "type",
           "source": {
-            "line": 64,
+            "line": 63,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2683,7 +2683,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 1075,
+            "line": 1073,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2692,7 +2692,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 1084,
+            "line": 1082,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2728,7 +2728,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 870,
+            "line": 868,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -3441,7 +3441,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 137,
+            "line": 167,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -3738,7 +3738,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 493,
+            "line": 492,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3747,7 +3747,7 @@
           "exportName": "ChannelMessagingAdapter",
           "kind": "type",
           "source": {
-            "line": 398,
+            "line": 397,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3756,7 +3756,7 @@
           "exportName": "ChannelOutboundSessionRoute",
           "kind": "type",
           "source": {
-            "line": 312,
+            "line": 311,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3801,7 +3801,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1279,
+            "line": 1280,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3819,7 +3819,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1681,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3828,7 +3828,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1398,
+            "line": 1399,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3837,7 +3837,7 @@
           "exportName": "OpenClawPluginConfigSchema",
           "kind": "type",
           "source": {
-            "line": 101,
+            "line": 102,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3846,7 +3846,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1662,
+            "line": 1663,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3855,7 +3855,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1629,
+            "line": 1630,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3864,7 +3864,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1621,
+            "line": 1622,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3873,7 +3873,7 @@
           "exportName": "OpenClawPluginToolContext",
           "kind": "type",
           "source": {
-            "line": 116,
+            "line": 117,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3882,7 +3882,7 @@
           "exportName": "OpenClawPluginToolFactory",
           "kind": "type",
           "source": {
-            "line": 141,
+            "line": 142,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3891,7 +3891,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1294,
+            "line": 1295,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3900,7 +3900,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1427,
+            "line": 1428,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3909,7 +3909,7 @@
           "exportName": "PluginLogger",
           "kind": "type",
           "source": {
-            "line": 72,
+            "line": 73,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3927,7 +3927,7 @@
           "exportName": "ProviderAugmentModelCatalogContext",
           "kind": "type",
           "source": {
-            "line": 710,
+            "line": 711,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3936,7 +3936,7 @@
           "exportName": "ProviderAuthContext",
           "kind": "type",
           "source": {
-            "line": 176,
+            "line": 177,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3945,7 +3945,7 @@
           "exportName": "ProviderAuthDoctorHintContext",
           "kind": "type",
           "source": {
-            "line": 514,
+            "line": 515,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3954,7 +3954,7 @@
           "exportName": "ProviderAuthMethod",
           "kind": "type",
           "source": {
-            "line": 255,
+            "line": 256,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3963,7 +3963,7 @@
           "exportName": "ProviderAuthMethodNonInteractiveContext",
           "kind": "type",
           "source": {
-            "line": 239,
+            "line": 240,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3972,7 +3972,7 @@
           "exportName": "ProviderAuthResult",
           "kind": "type",
           "source": {
-            "line": 161,
+            "line": 162,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3981,7 +3981,7 @@
           "exportName": "ProviderBuildMissingAuthMessageContext",
           "kind": "type",
           "source": {
-            "line": 622,
+            "line": 623,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3990,7 +3990,7 @@
           "exportName": "ProviderBuildUnknownModelHintContext",
           "kind": "type",
           "source": {
-            "line": 638,
+            "line": 639,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3999,7 +3999,7 @@
           "exportName": "ProviderBuiltInModelSuppressionContext",
           "kind": "type",
           "source": {
-            "line": 654,
+            "line": 655,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4008,7 +4008,7 @@
           "exportName": "ProviderBuiltInModelSuppressionResult",
           "kind": "type",
           "source": {
-            "line": 663,
+            "line": 664,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4017,7 +4017,7 @@
           "exportName": "ProviderCacheTtlEligibilityContext",
           "kind": "type",
           "source": {
-            "line": 610,
+            "line": 611,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4026,7 +4026,7 @@
           "exportName": "ProviderCatalogContext",
           "kind": "type",
           "source": {
-            "line": 276,
+            "line": 277,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4035,7 +4035,7 @@
           "exportName": "ProviderCatalogResult",
           "kind": "type",
           "source": {
-            "line": 299,
+            "line": 300,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4044,7 +4044,7 @@
           "exportName": "ProviderDefaultThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 687,
+            "line": 688,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4053,7 +4053,7 @@
           "exportName": "ProviderDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 726,
+            "line": 727,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4062,7 +4062,7 @@
           "exportName": "ProviderFetchUsageSnapshotContext",
           "kind": "type",
           "source": {
-            "line": 495,
+            "line": 496,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4071,7 +4071,7 @@
           "exportName": "ProviderModernModelPolicyContext",
           "kind": "type",
           "source": {
-            "line": 697,
+            "line": 698,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4080,7 +4080,7 @@
           "exportName": "ProviderNormalizeResolvedModelContext",
           "kind": "type",
           "source": {
-            "line": 360,
+            "line": 361,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4089,7 +4089,7 @@
           "exportName": "ProviderPreparedRuntimeAuth",
           "kind": "type",
           "source": {
-            "line": 442,
+            "line": 443,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4098,7 +4098,7 @@
           "exportName": "ProviderPrepareDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 351,
+            "line": 352,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4107,7 +4107,7 @@
           "exportName": "ProviderPrepareExtraParamsContext",
           "kind": "type",
           "source": {
-            "line": 528,
+            "line": 529,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4116,7 +4116,7 @@
           "exportName": "ProviderPrepareRuntimeAuthContext",
           "kind": "type",
           "source": {
-            "line": 421,
+            "line": 422,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4125,7 +4125,7 @@
           "exportName": "ProviderResolvedUsageAuth",
           "kind": "type",
           "source": {
-            "line": 482,
+            "line": 483,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4134,7 +4134,7 @@
           "exportName": "ProviderResolveDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 334,
+            "line": 335,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4143,7 +4143,7 @@
           "exportName": "ProviderResolveUsageAuthContext",
           "kind": "type",
           "source": {
-            "line": 463,
+            "line": 464,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4152,7 +4152,7 @@
           "exportName": "ProviderRuntimeModel",
           "kind": "type",
           "source": {
-            "line": 317,
+            "line": 318,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4161,7 +4161,7 @@
           "exportName": "ProviderThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 675,
+            "line": 676,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4179,7 +4179,7 @@
           "exportName": "ProviderWrapStreamFnContext",
           "kind": "type",
           "source": {
-            "line": 561,
+            "line": 562,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4224,7 +4224,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1254,
+            "line": 1255,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4289,7 +4289,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 137,
+            "line": 167,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -4316,7 +4316,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1279,
+            "line": 1280,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4334,7 +4334,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1681,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4343,7 +4343,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1398,
+            "line": 1399,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4352,7 +4352,7 @@
           "exportName": "OpenClawPluginConfigSchema",
           "kind": "type",
           "source": {
-            "line": 101,
+            "line": 102,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4361,7 +4361,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1662,
+            "line": 1663,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4370,7 +4370,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1629,
+            "line": 1630,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4379,7 +4379,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1621,
+            "line": 1622,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4388,7 +4388,7 @@
           "exportName": "OpenClawPluginToolContext",
           "kind": "type",
           "source": {
-            "line": 116,
+            "line": 117,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4397,7 +4397,7 @@
           "exportName": "OpenClawPluginToolFactory",
           "kind": "type",
           "source": {
-            "line": 141,
+            "line": 142,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4406,7 +4406,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1294,
+            "line": 1295,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4415,7 +4415,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1427,
+            "line": 1428,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4424,8 +4424,134 @@
           "exportName": "PluginLogger",
           "kind": "type",
           "source": {
-            "line": 72,
+            "line": 73,
             "path": "src/plugins/types.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationAuditFinding = PluginOperationAuditFinding;",
+          "exportName": "PluginOperationAuditFinding",
+          "kind": "type",
+          "source": {
+            "line": 117,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationAuditQuery = PluginOperationAuditQuery;",
+          "exportName": "PluginOperationAuditQuery",
+          "kind": "type",
+          "source": {
+            "line": 132,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationAuditSeverity = PluginOperationAuditSeverity;",
+          "exportName": "PluginOperationAuditSeverity",
+          "kind": "type",
+          "source": {
+            "line": 115,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationAuditSummary = PluginOperationAuditSummary;",
+          "exportName": "PluginOperationAuditSummary",
+          "kind": "type",
+          "source": {
+            "line": 125,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationDispatchEvent = PluginOperationDispatchEvent;",
+          "exportName": "PluginOperationDispatchEvent",
+          "kind": "type",
+          "source": {
+            "line": 97,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationDispatchResult = PluginOperationDispatchResult;",
+          "exportName": "PluginOperationDispatchResult",
+          "kind": "type",
+          "source": {
+            "line": 102,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationListQuery = PluginOperationListQuery;",
+          "exportName": "PluginOperationListQuery",
+          "kind": "type",
+          "source": {
+            "line": 26,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationMaintenanceQuery = PluginOperationMaintenanceQuery;",
+          "exportName": "PluginOperationMaintenanceQuery",
+          "kind": "type",
+          "source": {
+            "line": 138,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationMaintenanceSummary = PluginOperationMaintenanceSummary;",
+          "exportName": "PluginOperationMaintenanceSummary",
+          "kind": "type",
+          "source": {
+            "line": 143,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationPatchEvent = PluginOperationPatchEvent;",
+          "exportName": "PluginOperationPatchEvent",
+          "kind": "type",
+          "source": {
+            "line": 84,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationRecord = PluginOperationRecord;",
+          "exportName": "PluginOperationRecord",
+          "kind": "type",
+          "source": {
+            "line": 3,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationsCancelResult = PluginOperationsCancelResult;",
+          "exportName": "PluginOperationsCancelResult",
+          "kind": "type",
+          "source": {
+            "line": 108,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationsRuntime = PluginOperationsRuntime;",
+          "exportName": "PluginOperationsRuntime",
+          "kind": "type",
+          "source": {
+            "line": 149,
+            "path": "src/plugins/operations-state.ts"
+          }
+        },
+        {
+          "declaration": "export type PluginOperationSummary = PluginOperationSummary;",
+          "exportName": "PluginOperationSummary",
+          "kind": "type",
+          "source": {
+            "line": 37,
+            "path": "src/plugins/operations-state.ts"
           }
         },
         {
@@ -4433,7 +4559,7 @@
           "exportName": "ProviderAugmentModelCatalogContext",
           "kind": "type",
           "source": {
-            "line": 710,
+            "line": 711,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4442,7 +4568,7 @@
           "exportName": "ProviderAuthContext",
           "kind": "type",
           "source": {
-            "line": 176,
+            "line": 177,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4451,7 +4577,7 @@
           "exportName": "ProviderAuthDoctorHintContext",
           "kind": "type",
           "source": {
-            "line": 514,
+            "line": 515,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4460,7 +4586,7 @@
           "exportName": "ProviderAuthMethod",
           "kind": "type",
           "source": {
-            "line": 255,
+            "line": 256,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4469,7 +4595,7 @@
           "exportName": "ProviderAuthMethodNonInteractiveContext",
           "kind": "type",
           "source": {
-            "line": 239,
+            "line": 240,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4478,7 +4604,7 @@
           "exportName": "ProviderAuthResult",
           "kind": "type",
           "source": {
-            "line": 161,
+            "line": 162,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4487,7 +4613,7 @@
           "exportName": "ProviderBuildMissingAuthMessageContext",
           "kind": "type",
           "source": {
-            "line": 622,
+            "line": 623,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4496,7 +4622,7 @@
           "exportName": "ProviderBuildUnknownModelHintContext",
           "kind": "type",
           "source": {
-            "line": 638,
+            "line": 639,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4505,7 +4631,7 @@
           "exportName": "ProviderBuiltInModelSuppressionContext",
           "kind": "type",
           "source": {
-            "line": 654,
+            "line": 655,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4514,7 +4640,7 @@
           "exportName": "ProviderBuiltInModelSuppressionResult",
           "kind": "type",
           "source": {
-            "line": 663,
+            "line": 664,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4523,7 +4649,7 @@
           "exportName": "ProviderCacheTtlEligibilityContext",
           "kind": "type",
           "source": {
-            "line": 610,
+            "line": 611,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4532,7 +4658,7 @@
           "exportName": "ProviderCatalogContext",
           "kind": "type",
           "source": {
-            "line": 276,
+            "line": 277,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4541,7 +4667,7 @@
           "exportName": "ProviderCatalogResult",
           "kind": "type",
           "source": {
-            "line": 299,
+            "line": 300,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4550,7 +4676,7 @@
           "exportName": "ProviderDefaultThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 687,
+            "line": 688,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4559,7 +4685,7 @@
           "exportName": "ProviderDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 726,
+            "line": 727,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4568,7 +4694,7 @@
           "exportName": "ProviderFetchUsageSnapshotContext",
           "kind": "type",
           "source": {
-            "line": 495,
+            "line": 496,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4577,7 +4703,7 @@
           "exportName": "ProviderModernModelPolicyContext",
           "kind": "type",
           "source": {
-            "line": 697,
+            "line": 698,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4586,7 +4712,7 @@
           "exportName": "ProviderNormalizeConfigContext",
           "kind": "type",
           "source": {
-            "line": 386,
+            "line": 387,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4595,7 +4721,7 @@
           "exportName": "ProviderNormalizeModelIdContext",
           "kind": "type",
           "source": {
-            "line": 375,
+            "line": 376,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4604,7 +4730,7 @@
           "exportName": "ProviderNormalizeResolvedModelContext",
           "kind": "type",
           "source": {
-            "line": 360,
+            "line": 361,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4613,7 +4739,7 @@
           "exportName": "ProviderNormalizeTransportContext",
           "kind": "type",
           "source": {
-            "line": 398,
+            "line": 399,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4622,7 +4748,7 @@
           "exportName": "ProviderPreparedRuntimeAuth",
           "kind": "type",
           "source": {
-            "line": 442,
+            "line": 443,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4631,7 +4757,7 @@
           "exportName": "ProviderPrepareDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 351,
+            "line": 352,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4640,7 +4766,7 @@
           "exportName": "ProviderPrepareExtraParamsContext",
           "kind": "type",
           "source": {
-            "line": 528,
+            "line": 529,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4649,7 +4775,7 @@
           "exportName": "ProviderPrepareRuntimeAuthContext",
           "kind": "type",
           "source": {
-            "line": 421,
+            "line": 422,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4658,7 +4784,7 @@
           "exportName": "ProviderResolveConfigApiKeyContext",
           "kind": "type",
           "source": {
-            "line": 410,
+            "line": 411,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4667,7 +4793,7 @@
           "exportName": "ProviderResolvedUsageAuth",
           "kind": "type",
           "source": {
-            "line": 482,
+            "line": 483,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4676,7 +4802,7 @@
           "exportName": "ProviderResolveDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 334,
+            "line": 335,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4685,7 +4811,7 @@
           "exportName": "ProviderResolveUsageAuthContext",
           "kind": "type",
           "source": {
-            "line": 463,
+            "line": 464,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4694,7 +4820,7 @@
           "exportName": "ProviderRuntimeModel",
           "kind": "type",
           "source": {
-            "line": 317,
+            "line": 318,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4703,7 +4829,7 @@
           "exportName": "ProviderThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 675,
+            "line": 676,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4712,7 +4838,7 @@
           "exportName": "ProviderWrapStreamFnContext",
           "kind": "type",
           "source": {
-            "line": 561,
+            "line": 562,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4721,7 +4847,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1254,
+            "line": 1255,
             "path": "src/plugins/types.ts"
           }
         }
@@ -5366,11 +5492,11 @@
           }
         },
         {
-          "declaration": "export function createSlackOutboundPayloadHarness(params: { payload: ReplyPayload; sendResults?: { messageId: string; }[] | undefined; }): SlackOutboundPayloadHarness;",
+          "declaration": "export function createSlackOutboundPayloadHarness(params: { payload: ReplyPayload; sendResults?: { messageId: string; }[] | undefined; }): { run: () => Promise<OutboundDeliveryResult>; sendMock: Mock<...>; to: string; };",
           "exportName": "createSlackOutboundPayloadHarness",
           "kind": "function",
           "source": {
-            "line": 126,
+            "line": 118,
             "path": "src/channels/plugins/contracts/suites.ts"
           }
         },
@@ -5397,7 +5523,7 @@
           "exportName": "expectChannelInboundContextContract",
           "kind": "function",
           "source": {
-            "line": 856,
+            "line": 848,
             "path": "src/channels/plugins/contracts/suites.ts"
           }
         },
@@ -5483,11 +5609,11 @@
           }
         },
         {
-          "declaration": "export function primeChannelOutboundSendMock<TArgs extends unknown[]>(sendMock: Mock<(...args: TArgs) => Promise<unknown>>, fallbackResult: Record<string, unknown>, sendResults?: Record<string, unknown>[]): void;",
+          "declaration": "export function primeChannelOutboundSendMock(sendMock: Mock, fallbackResult: Record<string, unknown>, sendResults?: SendResultLike[]): void;",
           "exportName": "primeChannelOutboundSendMock",
           "kind": "function",
           "source": {
-            "line": 804,
+            "line": 796,
             "path": "src/channels/plugins/contracts/suites.ts"
           }
         },
@@ -5667,7 +5793,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 146,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -5676,7 +5802,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 271,
+            "line": 268,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },

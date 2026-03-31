@@ -113,29 +113,68 @@ struct MenuContent: View {
             } label: {
                 Label("Open Dashboard", systemImage: "gauge")
             }
-            Button {
-                Task { @MainActor in
-                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                    WebChatManager.shared.show(sessionKey: sessionKey)
+            Menu {
+                Section("Open chat") {
+                    Button {
+                        Task { @MainActor in
+                            let profile = GatewayProfile.local()
+                            let sessionKey = await WebChatManager.shared.preferredSessionKey(profile: profile)
+                            await WebChatManager.shared.show(sessionKey: sessionKey, profile: profile)
+                        }
+                    } label: {
+                        Label("Local gateway", systemImage: "desktopcomputer")
+                    }
+
+                    ForEach(self.state.remoteGateways) { gateway in
+                        Button {
+                            Task { @MainActor in
+                                guard let profile = GatewayProfile.remoteDirect(from: gateway) else { return }
+                                let sessionKey = await WebChatManager.shared.preferredSessionKey(profile: profile)
+                                await WebChatManager.shared.show(sessionKey: sessionKey, profile: profile)
+                            }
+                        } label: {
+                            Label(gateway.displayName, systemImage: "network")
+                        }
+                    }
+                }
+
+                Section("Gateway status") {
+                    ForEach(GatewayChatStatusStore.shared.entries) { entry in
+                        Label(
+                            entry.profile.displayName + " — " + entry.detail,
+                            systemImage: (entry.lastKnownHealthy == true) ? "checkmark.circle.fill" : ((entry.lastKnownHealthy == false) ? "xmark.circle" : "clock"))
+                    }
                 }
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
             if self.state.canvasEnabled {
-                Button {
-                    Task { @MainActor in
-                        if self.state.canvasPanelVisible {
-                            CanvasManager.shared.hideAll()
-                        } else {
-                            let sessionKey = await GatewayConnection.shared.mainSessionKey()
-                            // Don't force a navigation on re-open: preserve the current web view state.
-                            _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
+                Menu {
+                    Button {
+                        Task { @MainActor in
+                            let profile = GatewayProfile.local()
+                            let manager = GatewayCanvasRegistry.shared.manager(for: profile)
+                            let sessionKey = await WebChatManager.shared.preferredSessionKey(profile: profile)
+                            _ = try? manager.show(sessionKey: sessionKey, path: nil)
+                        }
+                    } label: {
+                        Label("Local gateway", systemImage: "desktopcomputer")
+                    }
+
+                    ForEach(self.state.remoteGateways) { gateway in
+                        Button {
+                            Task { @MainActor in
+                                guard let profile = GatewayProfile.remoteDirect(from: gateway) else { return }
+                                let manager = GatewayCanvasRegistry.shared.manager(for: profile)
+                                let sessionKey = await WebChatManager.shared.preferredSessionKey(profile: profile)
+                                _ = try? manager.show(sessionKey: sessionKey, path: nil)
+                            }
+                        } label: {
+                            Label(gateway.displayName, systemImage: "network")
                         }
                     }
                 } label: {
-                    Label(
-                        self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
-                        systemImage: "rectangle.inset.filled.on.rectangle")
+                    Label("Open Canvas", systemImage: "rectangle.inset.filled.on.rectangle")
                 }
             }
             Button {
@@ -168,6 +207,12 @@ struct MenuContent: View {
         }
         .task(id: self.state.connectionMode) {
             await self.loadBrowserControlEnabled()
+        }
+        .task(id: self.state.remoteGateways.count) {
+            await MainActor.run { GatewayChatStatusStore.shared.refresh(from: self.state) }
+        }
+        .onAppear {
+            GatewayChatStatusStore.shared.refresh(from: self.state)
         }
         .onAppear {
             MicRefreshSupport.startObserver(self.micObserver) {

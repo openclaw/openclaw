@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -21,25 +20,6 @@ function removePathIfExists(targetPath) {
 
 function makeTempDir(parentDir, prefix) {
   return fs.mkdtempSync(path.join(parentDir, prefix));
-}
-
-function sanitizeTempPrefixSegment(value) {
-  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/-+/g, "-");
-  return normalized.length > 0 ? normalized : "plugin";
-}
-
-function replaceDir(targetPath, sourcePath) {
-  removePathIfExists(targetPath);
-  try {
-    fs.renameSync(sourcePath, targetPath);
-    return;
-  } catch (error) {
-    if (error?.code !== "EXDEV") {
-      throw error;
-    }
-  }
-  fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
-  removePathIfExists(sourcePath);
 }
 
 function listBundledPluginRuntimeDirs(repoRoot) {
@@ -240,10 +220,7 @@ function installPluginRuntimeDeps(params) {
   const { fingerprint, packageJson, pluginDir, pluginId } = params;
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
-  const tempInstallDir = makeTempDir(
-    os.tmpdir(),
-    `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}-`,
-  );
+  const tempInstallDir = makeTempDir(pluginDir, ".runtime-deps-");
   const npmRunner = resolveNpmRunner({
     npmArgs: [
       "install",
@@ -278,7 +255,8 @@ function installPluginRuntimeDeps(params) {
       );
     }
 
-    replaceDir(nodeModulesDir, stagedNodeModulesDir);
+    removePathIfExists(nodeModulesDir);
+    fs.renameSync(stagedNodeModulesDir, nodeModulesDir);
     writeJson(stampPath, {
       fingerprint,
       generatedAt: new Date().toISOString(),

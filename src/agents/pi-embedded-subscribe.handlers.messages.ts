@@ -524,14 +524,6 @@ export function handleMessageEnd(
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
-  if (
-    !ctx.params.silentExpected &&
-    ctx.state.blockReplyBreak === "message_end" &&
-    ctx.params.onBlockReplyFlush
-  ) {
-    void ctx.params.onBlockReplyFlush();
-  }
-
   ctx.state.deltaBuffer = "";
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();

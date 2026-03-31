@@ -273,19 +273,74 @@ struct GeneralSettings: View {
     }
 
     private var remoteDirectRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            self.remoteSavedGatewaysRow
             HStack(alignment: .center, spacing: 10) {
                 Text("Gateway")
                     .font(.callout.weight(.semibold))
                     .frame(width: self.remoteLabelWidth, alignment: .leading)
-                TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                TextField("gateway.example.ts.net", text: self.$state.remoteHost)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
+                TextField("443", text: self.$state.remotePort)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 90)
                 self.remoteTestButton(
-                    disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    disabled: self.state.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(
                 "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, self.remoteLabelWidth + 10)
+        }
+    }
+
+    private var remoteSavedGatewaysRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Saved gateways")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                Picker(
+                    "Saved gateways",
+                    selection: Binding<String>(
+                        get: { self.state.selectedRemoteGatewayID?.uuidString ?? "" },
+                        set: { newValue in
+                            if newValue.isEmpty {
+                                self.state.startNewRemoteGatewayDraft(clearFields: false)
+                            } else {
+                                self.state.selectRemoteGateway(UUID(uuidString: newValue))
+                            }
+                        }))
+                {
+                    Text("Current unsaved").tag("")
+                    ForEach(self.state.remoteGateways) { gateway in
+                        Text(gateway.displayName).tag(gateway.id.uuidString)
+                    }
+                }
+                 .frame(maxWidth: .infinity)
+
+                Button("New") {
+                    self.state.startNewRemoteGatewayDraft(clearFields: true)
+                }
+
+                Button("Save") {
+                    self.state.saveCurrentRemoteGateway()
+                }
+                .frame(maxWidth: .infinity)
+
+                Button("Save") {
+                    self.state.saveCurrentRemoteGateway()
+                }
+                .disabled(self.state.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button("Delete") {
+                    self.state.deleteSelectedRemoteGateway()
+                }
+                .disabled(self.state.selectedRemoteGatewayID == nil)
+            }
+            Text("Save multiple direct remote gateways locally and switch between them without editing the shared config file.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)
@@ -298,7 +353,7 @@ struct GeneralSettings: View {
                 Text("Gateway token")
                     .font(.callout.weight(.semibold))
                     .frame(width: self.remoteLabelWidth, alignment: .leading)
-                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
+                SecureField("remote gateway auth token", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
             }
@@ -308,7 +363,7 @@ struct GeneralSettings: View {
                 .padding(.leading, self.remoteLabelWidth + 10)
             if self.state.remoteTokenUnsupported {
                 Text(
-                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                    "The saved token must be plain text so the macOS app can connect directly to the remote gateway.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.leading, self.remoteLabelWidth + 10)

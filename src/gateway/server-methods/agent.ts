@@ -197,8 +197,7 @@ function dispatchAgentRunFromGateway(params: {
       createRunningTaskRun({
         runtime: "cli",
         sourceId: params.runId,
-        ownerKey: params.ingressOpts.sessionKey,
-        scopeKind: "session",
+        requesterSessionKey: params.ingressOpts.sessionKey,
         requesterOrigin: normalizeDeliveryContext({
           channel: params.ingressOpts.channel,
           to: params.ingressOpts.to,

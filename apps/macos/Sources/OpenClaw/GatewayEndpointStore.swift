@@ -45,6 +45,11 @@ actor GatewayEndpointStore {
             token: {
                 let root = OpenClawConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
+                if isRemote {
+                    let stored = UserDefaults.standard.string(forKey: remoteTokenKey)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let stored, !stored.isEmpty { return stored }
+                }
                 return GatewayEndpointStore.resolveGatewayToken(
                     isRemote: isRemote,
                     root: root,
@@ -307,16 +312,24 @@ actor GatewayEndpointStore {
         case .remote:
             let root = OpenClawConfigFile.loadDict()
             if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
-                guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
+                do {
+                    guard let url = try self.resolveDirectRemoteURL() else {
+                        self.cancelRemoteEnsure()
+                        self.setState(.unavailable(
+                            mode: .remote,
+                            reason: "remote gateway host/port missing or invalid for direct transport"))
+                        return
+                    }
+                    self.cancelRemoteEnsure()
+                    self.setState(.ready(mode: .remote, url: url, token: token, password: password))
+                    return
+                } catch {
                     self.cancelRemoteEnsure()
                     self.setState(.unavailable(
                         mode: .remote,
-                        reason: "gateway.remote.url missing or invalid for direct transport"))
+                        reason: error.localizedDescription))
                     return
                 }
-                self.cancelRemoteEnsure()
-                self.setState(.ready(mode: .remote, url: url, token: token, password: password))
-                return
             }
             let port = await self.deps.remotePortIfRunning()
             guard let port else {
@@ -471,11 +484,16 @@ actor GatewayEndpointStore {
     private func resolveDirectRemoteURL() throws -> URL? {
         let root = OpenClawConfigFile.loadDict()
         guard GatewayRemoteConfig.resolveTransport(root: root) == .direct else { return nil }
-        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
+        let host = UserDefaults.standard.string(forKey: remoteHostKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = UserDefaults.standard.string(forKey: remotePortKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = host.isEmpty ? "" : "wss://\(host):\((Int(port) ?? 443))"
+        guard let url = GatewayRemoteConfig.normalizeGatewayUrl(raw) else {
             throw NSError(
                 domain: "GatewayEndpoint",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
+                userInfo: [NSLocalizedDescriptionKey: "remote gateway host/port missing or invalid"])
         }
         return url
     }

@@ -1008,7 +1008,8 @@ final class TalkModeManager: NSObject {
                 self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
             }
 
-            let configuredKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? self.apiKey : nil
+            let trimmedAPIKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let configuredKey = trimmedAPIKey?.isEmpty == false ? self.apiKey : nil
             #if DEBUG
             let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
             #else
@@ -1514,7 +1515,8 @@ final class TalkModeManager: NSObject {
                 "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
         }
 
-        let configuredKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? self.apiKey : nil
+        let trimmedAPIKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configuredKey = trimmedAPIKey?.isEmpty == false ? self.apiKey : nil
         #if DEBUG
         let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
         #else

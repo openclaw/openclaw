@@ -13,6 +13,7 @@ private let talkService = "ai.openclaw.talk"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
+private let savedProfilesEntry = KeychainEntry(service: gatewayService, account: "savedGatewayProfiles")
 private let talkAcmeProviderEntry = KeychainEntry(service: talkService, account: "provider.apiKey.acme")
 private let bootstrapDefaultsKeys = [
     "node.instanceId",
@@ -92,6 +93,12 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         restoreDefaults(defaultsSnapshot)
         restoreKeychain(keychainSnapshot)
     }
+    body()
+}
+
+private func withSavedProfilesSnapshot(_ body: () -> Void) {
+    let keychainSnapshot = snapshotKeychain([savedProfilesEntry])
+    defer { restoreKeychain(keychainSnapshot) }
     body()
 }
 
@@ -199,5 +206,73 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
 
         GatewaySettingsStore.saveTalkProviderApiKey(nil, provider: "acme")
         #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == nil)
+    }
+
+    @Test func savedGatewayProfiles_roundTripAndMatchByStableID() {
+        withSavedProfilesSnapshot {
+            _ = KeychainStore.delete(service: gatewayService, account: savedProfilesEntry.account)
+
+            let saved = GatewaySettingsStore.upsertSavedGatewayProfile(
+                stableID: "gw|one",
+                displayName: "Gateway One",
+                host: "gateway-one.example",
+                port: 443,
+                useTLS: true,
+                token: "token-1",
+                bootstrapToken: "bootstrap-1",
+                password: "password-1")
+
+            #expect(saved != nil)
+            #expect(GatewaySettingsStore.loadSavedGatewayProfiles().count == 1)
+
+            let matched = GatewaySettingsStore.findSavedGatewayProfile(
+                stableID: "gw|one",
+                hosts: [],
+                port: 443,
+                useTLS: true)
+            #expect(matched?.displayName == "Gateway One")
+            #expect(matched?.token == "token-1")
+            #expect(matched?.bootstrapToken == "bootstrap-1")
+            #expect(matched?.password == "password-1")
+        }
+    }
+
+    @Test func savedGatewayProfiles_updatesMetadataWithoutDroppingSecrets() {
+        withSavedProfilesSnapshot {
+            _ = KeychainStore.delete(service: gatewayService, account: savedProfilesEntry.account)
+
+            let initial = GatewaySettingsStore.upsertSavedGatewayProfile(
+                stableID: nil,
+                displayName: nil,
+                host: "10.0.0.20",
+                port: 18789,
+                useTLS: true,
+                token: "token-2",
+                bootstrapToken: "bootstrap-2",
+                password: "password-2")
+
+            let updated = GatewaySettingsStore.upsertSavedGatewayProfile(
+                profileID: initial?.id,
+                stableID: "gw|two",
+                displayName: "Living Room Gateway",
+                host: "10.0.0.20",
+                port: 18789,
+                useTLS: true,
+                preserveExistingCredentials: true)
+
+            #expect(updated?.id == initial?.id)
+            #expect(updated?.stableID == "gw|two")
+            #expect(updated?.displayName == "Living Room Gateway")
+            #expect(updated?.token == "token-2")
+            #expect(updated?.bootstrapToken == "bootstrap-2")
+            #expect(updated?.password == "password-2")
+
+            let matched = GatewaySettingsStore.findSavedGatewayProfile(
+                stableID: "gw|two",
+                hosts: ["10.0.0.20"],
+                port: 18789,
+                useTLS: true)
+            #expect(matched?.id == initial?.id)
+        }
     }
 }

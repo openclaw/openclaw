@@ -3,13 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveCloudflareAiGatewayBaseUrl } from "../plugin-sdk/cloudflare-ai-gateway.js";
 import { captureEnv } from "../test-utils/env.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-
-function expectedCloudflareGatewayBaseUrl(accountId: string, gatewayId: string): string {
-  return `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/anthropic`;
-}
 
 describe("cloudflare-ai-gateway profile provenance", () => {
   it("prefers env keyRef marker over runtime plaintext for persistence", async () => {
@@ -111,7 +108,10 @@ describe("cloudflare-ai-gateway profile provenance", () => {
     const providers = await resolveImplicitProvidersForTest({ agentDir });
     expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe("sk-second");
     expect(providers?.["cloudflare-ai-gateway"]?.baseUrl).toBe(
-      expectedCloudflareGatewayBaseUrl("acct_456", "gateway_789"),
+      resolveCloudflareAiGatewayBaseUrl({
+        accountId: "acct_456",
+        gatewayId: "gateway_789",
+      }),
     );
   });
 
@@ -147,7 +147,10 @@ describe("cloudflare-ai-gateway profile provenance", () => {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe("CLOUDFLARE_AI_GATEWAY_API_KEY");
       expect(providers?.["cloudflare-ai-gateway"]?.baseUrl).toBe(
-        expectedCloudflareGatewayBaseUrl("acct_123", "gateway_456"),
+        resolveCloudflareAiGatewayBaseUrl({
+          accountId: "acct_123",
+          gatewayId: "gateway_456",
+        }),
       );
     } finally {
       envSnapshot.restore();

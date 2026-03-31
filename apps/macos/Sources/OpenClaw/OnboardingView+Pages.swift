@@ -128,7 +128,10 @@ extension OnboardingView {
         .onChange(of: self.state.remoteTarget) { _, _ in
             self.resetRemoteProbeFeedback()
         }
-        .onChange(of: self.state.remoteUrl) { _, _ in
+        .onChange(of: self.state.remoteHost) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remotePort) { _, _ in
             self.resetRemoteProbeFeedback()
         }
     }
@@ -223,12 +226,17 @@ extension OnboardingView {
                     }
                     if self.state.remoteTransport == .direct {
                         GridRow {
-                            Text("Gateway URL")
+                            Text("Gateway")
                                 .font(.callout.weight(.semibold))
                                 .frame(width: labelWidth, alignment: .leading)
-                            TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: fieldWidth)
+                            HStack(spacing: 8) {
+                                TextField("gateway.example.ts.net", text: self.$state.remoteHost)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: max(180, fieldWidth - 88))
+                                TextField("443", text: self.$state.remotePort)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 80)
+                            }
                         }
                     }
                     if self.state.remoteTransport == .ssh {
@@ -316,12 +324,13 @@ extension OnboardingView {
     private var remoteProbePreflightMessage: String? {
         switch self.state.remoteTransport {
         case .direct:
-            let trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedUrl.isEmpty {
-                return "Select a nearby gateway or open Advanced to enter a gateway URL."
+            let trimmedHost = self.state.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedPort = self.state.remotePort.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedHost.isEmpty {
+                return "Select a nearby gateway or open Advanced to enter a gateway host."
             }
-            if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return "Gateway URL must use wss:// for remote hosts (ws:// only for localhost)."
+            if Int(trimmedPort).map({ $0 > 0 && $0 <= 65535 }) != true {
+                return "Gateway port must be a valid TCP port."
             }
             return nil
         case .ssh:
@@ -389,7 +398,7 @@ extension OnboardingView {
                 Text("Gateway token")
                     .font(.callout.weight(.semibold))
                     .frame(width: 110, alignment: .leading)
-                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
+                SecureField("remote gateway auth token", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 320)
             }
@@ -398,7 +407,7 @@ extension OnboardingView {
                 .foregroundStyle(.secondary)
             if self.state.remoteTokenUnsupported {
                 Text(
-                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                    "The saved token must be plain text so the macOS app can connect directly to the remote gateway.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

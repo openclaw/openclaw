@@ -26,6 +26,7 @@ enum GatewaySettingsStore {
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
     private static let lastGatewayConnectionAccount = "lastConnection"
+    private static let savedGatewayProfilesAccount = "savedGatewayProfiles"
     private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
     static func bootstrapPersistence() {
@@ -69,13 +70,6 @@ enum GatewaySettingsStore {
             account: self.preferredGatewayStableIDAccount)
     }
 
-    static func clearPreferredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(
-            service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount)
-        defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
-    }
-
     static func loadLastDiscoveredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
@@ -94,13 +88,6 @@ enum GatewaySettingsStore {
             stableID,
             service: self.gatewayService,
             account: self.lastDiscoveredGatewayStableIDAccount)
-    }
-
-    static func clearLastDiscoveredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(
-            service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount)
-        defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
     }
 
     static func loadGatewayToken(instanceId: String) -> String? {
@@ -133,12 +120,6 @@ enum GatewaySettingsStore {
             account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }
 
-    static func clearGatewayBootstrapToken(instanceId: String) {
-        _ = KeychainStore.delete(
-            service: self.gatewayService,
-            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
-    }
-
     static func loadGatewayPassword(instanceId: String) -> String? {
         KeychainStore.loadString(
             service: self.gatewayService,
@@ -151,6 +132,140 @@ enum GatewaySettingsStore {
             password,
             service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: instanceId))
+    }
+
+    struct SavedGatewayProfile: Codable, Sendable, Equatable, Identifiable {
+        let id: String
+        var stableID: String?
+        var displayName: String?
+        var host: String
+        var port: Int
+        var useTLS: Bool
+        var token: String?
+        var bootstrapToken: String?
+        var password: String?
+        var updatedAtMs: Int
+
+        var resolvedName: String {
+            let trimmed = self.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? self.host : trimmed
+        }
+
+        var addressLabel: String {
+            "\(self.host):\(self.port)"
+        }
+    }
+
+    static func loadSavedGatewayProfiles() -> [SavedGatewayProfile] {
+        self.loadSavedGatewayProfilesRaw()
+            .sorted { lhs, rhs in
+                if lhs.updatedAtMs == rhs.updatedAtMs {
+                    return lhs.resolvedName.localizedCaseInsensitiveCompare(rhs.resolvedName) == .orderedAscending
+                }
+                return lhs.updatedAtMs > rhs.updatedAtMs
+            }
+    }
+
+    static func upsertSavedGatewayProfile(
+        profileID: String? = nil,
+        stableID: String? = nil,
+        displayName: String? = nil,
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil,
+        preserveExistingCredentials: Bool = true
+    ) -> SavedGatewayProfile? {
+        let normalizedHost = self.normalizeGatewayHost(host)
+        guard !normalizedHost.isEmpty, (1...65535).contains(port) else { return nil }
+
+        let normalizedProfileID = self.normalizeGatewayField(profileID)
+        let normalizedStableID = self.normalizeGatewayField(stableID)
+        let normalizedDisplayName = self.normalizeGatewayField(displayName)
+
+        var profiles = self.loadSavedGatewayProfilesRaw()
+        let existingIndex = profiles.firstIndex { profile in
+            if let normalizedProfileID, profile.id == normalizedProfileID {
+                return true
+            }
+            if let normalizedStableID,
+               profile.stableID?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedStableID
+            {
+                return true
+            }
+            return self.normalizeGatewayHost(profile.host) == normalizedHost && profile.port == port
+        }
+
+        let existing = existingIndex.flatMap { profiles[safe: $0] }
+        let next = SavedGatewayProfile(
+            id: existing?.id ?? UUID().uuidString,
+            stableID: normalizedStableID ?? existing?.stableID,
+            displayName: normalizedDisplayName ?? existing?.displayName,
+            host: normalizedHost,
+            port: port,
+            useTLS: useTLS,
+            token: self.mergeGatewaySecret(
+                incoming: token,
+                existing: existing?.token,
+                preserveExisting: preserveExistingCredentials),
+            bootstrapToken: self.mergeGatewaySecret(
+                incoming: bootstrapToken,
+                existing: existing?.bootstrapToken,
+                preserveExisting: preserveExistingCredentials),
+            password: self.mergeGatewaySecret(
+                incoming: password,
+                existing: existing?.password,
+                preserveExisting: preserveExistingCredentials),
+            updatedAtMs: self.nowMillis())
+
+        if let existingIndex {
+            profiles[existingIndex] = next
+        } else {
+            profiles.append(next)
+        }
+
+        guard self.saveSavedGatewayProfilesRaw(profiles) else { return nil }
+        return next
+    }
+
+    static func deleteSavedGatewayProfile(id: String) {
+        let normalizedID = self.normalizeGatewayField(id)
+        guard let normalizedID else { return }
+        var profiles = self.loadSavedGatewayProfilesRaw()
+        profiles.removeAll { $0.id == normalizedID }
+        if profiles.isEmpty {
+            _ = KeychainStore.delete(service: self.gatewayService, account: self.savedGatewayProfilesAccount)
+            return
+        }
+        _ = self.saveSavedGatewayProfilesRaw(profiles)
+    }
+
+    static func findSavedGatewayProfile(
+        stableID: String? = nil,
+        hosts: [String] = [],
+        port: Int? = nil,
+        useTLS: Bool? = nil
+    ) -> SavedGatewayProfile? {
+        let normalizedStableID = self.normalizeGatewayField(stableID)
+        let normalizedHosts = Set(hosts.map(self.normalizeGatewayHost).filter { !$0.isEmpty })
+
+        return self.loadSavedGatewayProfiles().first { profile in
+            if let normalizedStableID,
+               profile.stableID?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedStableID
+            {
+                return true
+            }
+
+            if let port, profile.port != port {
+                return false
+            }
+            if let useTLS, profile.useTLS != useTLS {
+                return false
+            }
+            return normalizedHosts.contains(self.normalizeGatewayHost(profile.host))
+        }
     }
 
     enum LastGatewayConnection: Equatable {
@@ -292,9 +407,12 @@ enum GatewaySettingsStore {
         let port = defaults.object(forKey: self.lastGatewayPortDefaultsKey) as? Int
 
         let payload = LastGatewayConnectionData(
-            kind: kind, stableID: stableID, useTLS: useTLS,
+            kind: kind,
+            stableID: stableID,
+            useTLS: useTLS,
             host: kind == .manual ? host : nil,
             port: kind == .manual ? port : nil)
+
         guard self.saveLastGatewayConnectionData(payload) else { return }
         self.removeLastGatewayDefaults(defaults)
     }
@@ -386,6 +504,52 @@ enum GatewaySettingsStore {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func normalizeGatewayField(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalizeGatewayHost(_ host: String) -> String {
+        host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func mergeGatewaySecret(
+        incoming: String?,
+        existing: String?,
+        preserveExisting: Bool
+    ) -> String? {
+        if let incoming = incoming {
+            return self.normalizeGatewayField(incoming)
+        }
+        return preserveExisting ? existing : nil
+    }
+
+    private static func loadSavedGatewayProfilesRaw() -> [SavedGatewayProfile] {
+        guard let json = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.savedGatewayProfilesAccount
+        ),
+            let data = json.data(using: .utf8),
+            let profiles = try? JSONDecoder().decode([SavedGatewayProfile].self, from: data)
+        else { return [] }
+        return profiles
+    }
+
+    @discardableResult
+    private static func saveSavedGatewayProfilesRaw(_ profiles: [SavedGatewayProfile]) -> Bool {
+        guard let data = try? JSONEncoder().encode(profiles),
+              let json = String(data: data, encoding: .utf8)
+        else { return false }
+        return KeychainStore.saveString(
+            json,
+            service: self.gatewayService,
+            account: self.savedGatewayProfilesAccount)
+    }
+
+    private static func nowMillis() -> Int {
+        Int(Date().timeIntervalSince1970 * 1000)
+    }
+
     private static func ensureStableInstanceID() {
         let defaults = UserDefaults.standard
 
@@ -445,6 +609,13 @@ enum GatewaySettingsStore {
         }
     }
 
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard self.indices.contains(index) else { return nil }
+        return self[index]
+    }
 }
 
 enum GatewayDiagnostics {

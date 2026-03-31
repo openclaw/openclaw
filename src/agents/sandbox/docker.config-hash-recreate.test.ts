@@ -3,8 +3,8 @@ import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { collectDockerFlagValues } from "./test-args.js";
-import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+import type { SandboxConfig } from "./types.js";
 
 type SpawnCall = {
   command: string;
@@ -336,8 +336,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       (call) => call.command === "docker" && call.args[0] === "create",
     );
     expect(createCall).toBeDefined();
-    expect(createCall?.args).toContain(
-      `openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`,
-    );
+    expect(createCall?.args).toContain(`openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
   });
 });

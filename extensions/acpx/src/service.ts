@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -46,9 +45,6 @@ export function createAcpxRuntimeService(
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
-      if (ctx.workspaceDir?.trim()) {
-        await fs.mkdir(ctx.workspaceDir, { recursive: true });
-      }
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
         pluginConfig,

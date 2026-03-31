@@ -36,7 +36,9 @@ extension CronSettings {
         Button("Run now") { Task { await self.store.runJob(id: job.id, force: true) } }
         if let transcriptSessionKey = job.transcriptSessionKey {
             Button("Open transcript") {
-                WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                Task { @MainActor in
+                    await WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                }
             }
         }
         Divider()
@@ -77,7 +79,9 @@ extension CronSettings {
                     .buttonStyle(.borderedProminent)
                 if let transcriptSessionKey = job.transcriptSessionKey {
                     Button("Transcript") {
-                        WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                        Task { @MainActor in
+                            await WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                        }
                     }
                     .buttonStyle(.bordered)
                 }

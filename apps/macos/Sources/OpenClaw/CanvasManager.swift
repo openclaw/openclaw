@@ -10,12 +10,23 @@ final class CanvasManager {
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "CanvasManager")
 
+    private let profileName: String
+    private let connectionProvider: @Sendable () async -> GatewayConnection
+    private let autoNavigateToGatewayHost: Bool
+
     private var panelController: CanvasWindowController?
     private var panelSessionKey: String?
     private var lastAutoA2UIUrl: String?
     private var gatewayWatchTask: Task<Void, Never>?
 
-    private init() {
+    init(
+        profileName: String = "Gateway",
+        connectionProvider: @escaping @Sendable () async -> GatewayConnection = { GatewayConnection.shared },
+        autoNavigateToGatewayHost: Bool = true)
+    {
+        self.profileName = profileName
+        self.connectionProvider = connectionProvider
+        self.autoNavigateToGatewayHost = autoNavigateToGatewayHost
         self.startGatewayObserver()
     }
 
@@ -88,7 +99,8 @@ final class CanvasManager {
         let controller = try CanvasWindowController(
             sessionKey: session,
             root: Self.canvasRoot,
-            presentation: .panel(anchorProvider: anchorProvider))
+            presentation: .panel(anchorProvider: anchorProvider),
+            title: "OpenClaw Canvas — \(self.profileName)")
         Self.logger.debug("showDetailed CanvasWindowController init done")
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
@@ -99,10 +111,16 @@ final class CanvasManager {
 
         // New session: default to "/" so the user sees either the welcome page or `index.html`.
         let effectiveTarget = normalizedTarget ?? "/"
-        Self.logger.debug("showDetailed showCanvas effectiveTarget=\(effectiveTarget, privacy: .public)")
-        controller.showCanvas(path: effectiveTarget)
-        Self.logger.debug("showDetailed showCanvas done")
-        if normalizedTarget == nil {
+        if Self.directURL(for: effectiveTarget) != nil {
+            Self.logger.debug("showDetailed load direct target=\(effectiveTarget, privacy: .public)")
+            controller.load(target: effectiveTarget)
+            Self.logger.debug("showDetailed direct load done")
+        } else {
+            Self.logger.debug("showDetailed showCanvas effectiveTarget=\(effectiveTarget, privacy: .public)")
+            controller.showCanvas(path: effectiveTarget)
+            Self.logger.debug("showDetailed showCanvas done")
+        }
+        if normalizedTarget == nil, self.autoNavigateToGatewayHost {
             self.maybeAutoNavigateToA2UIAsync(controller: controller)
         }
         self.refreshDebugStatus()
@@ -143,7 +161,8 @@ final class CanvasManager {
         self.gatewayWatchTask?.cancel()
         self.gatewayWatchTask = Task { [weak self] in
             guard let self else { return }
-            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 1)
+            let connection = await self.connectionProvider()
+            let stream = await connection.subscribe(bufferingNewest: 1)
             for await push in stream {
                 self.handleGatewayPush(push)
             }
@@ -159,6 +178,7 @@ final class CanvasManager {
             Self.logger.debug("canvas host url snapshot=\(raw, privacy: .public)")
         }
         let a2uiUrl = Self.resolveA2UIHostUrl(from: raw)
+        if !self.autoNavigateToGatewayHost { return }
         if a2uiUrl == nil, !raw.isEmpty {
             Self.logger.debug("canvas host url invalid; cannot resolve A2UI")
         }
@@ -195,7 +215,8 @@ final class CanvasManager {
     }
 
     private func resolveA2UIHostUrl() async -> String? {
-        let raw = await GatewayConnection.shared.canvasHostUrl()
+        let connection = await self.connectionProvider()
+        let raw = await connection.canvasHostUrl()
         return Self.resolveA2UIHostUrl(from: raw)
     }
 

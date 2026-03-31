@@ -23,7 +23,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
-    init(sessionKey: String, root: URL, presentation: CanvasPresentation) throws {
+    init(sessionKey: String, root: URL, presentation: CanvasPresentation, title: String? = nil) throws {
         self.sessionKey = sessionKey
         self.root = root
         self.presentation = presentation
@@ -149,6 +149,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
         self.container = HoverChromeContainerView(containing: self.webView)
         let window = Self.makeWindow(for: presentation, contentView: self.container)
+        if let title {
+            window.title = title
+        }
         canvasWindowLogger.debug("CanvasWindowController init makeWindow done")
         super.init(window: window)
 
@@ -221,19 +224,28 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
                 return
             }
             if scheme == "file" {
-                canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
+                canvasWindowLogger.debug("canvas load file request \(url.absoluteString, privacy: .public)")
+                if self.loadLocalFileViaCanvasScheme(url) {
+                    return
+                }
+                canvasWindowLogger.debug("canvas load file fallback direct \(url.absoluteString, privacy: .public)")
                 self.loadFile(url)
                 return
             }
         }
 
         // Convenience: absolute file paths resolve as local files when they exist.
-        // (Avoid treating Canvas routes like "/" as filesystem paths.)
+        // Prefer serving them through the trusted in-app canvas scheme so behavior
+        // matches normal Canvas content and avoids auth-gated web paths.
         if trimmed.hasPrefix("/") {
             var isDir: ObjCBool = false
             if FileManager().fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
                 let url = URL(fileURLWithPath: trimmed)
-                canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
+                canvasWindowLogger.debug("canvas load absolute file request \(url.absoluteString, privacy: .public)")
+                if self.loadLocalFileViaCanvasScheme(url) {
+                    return
+                }
+                canvasWindowLogger.debug("canvas load absolute file fallback direct \(url.absoluteString, privacy: .public)")
                 self.loadFile(url)
                 return
             }
@@ -250,6 +262,78 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         }
         canvasWindowLogger.debug("canvas load canvas \(url.absoluteString, privacy: .public)")
         self.webView.load(URLRequest(url: url))
+    }
+
+    @discardableResult
+    private func loadLocalFileViaCanvasScheme(_ fileURL: URL) -> Bool {
+        guard fileURL.isFileURL else { return false }
+
+        let standardizedFile = fileURL.standardizedFileURL
+        let standardizedSessionDir = self.sessionDir.standardizedFileURL
+        let sessionRootPath = standardizedSessionDir.path.hasSuffix("/")
+            ? standardizedSessionDir.path
+            : standardizedSessionDir.path + "/"
+        let filePath = standardizedFile.path
+
+        let relativePath: String
+        if filePath == standardizedSessionDir.path || filePath.hasPrefix(sessionRootPath) {
+            if filePath == standardizedSessionDir.path {
+                relativePath = "/"
+            } else {
+                relativePath = "/" + String(filePath.dropFirst(sessionRootPath.count))
+            }
+        } else {
+            // External local files are copied into the session directory first so they
+            // can be served through the trusted canvas scheme and avoid brittle WKWebView
+            // read-access rules across unrelated directories.
+            guard let mirrored = self.mirrorExternalFileIntoSession(fileURL: standardizedFile) else {
+                return false
+            }
+            let mirroredPath = mirrored.standardizedFileURL.path
+            guard mirroredPath.hasPrefix(sessionRootPath) else { return false }
+            relativePath = "/" + String(mirroredPath.dropFirst(sessionRootPath.count))
+        }
+
+        guard let canvasURL = CanvasScheme.makeURL(
+            session: CanvasWindowController.sanitizeSessionKey(self.sessionKey),
+            path: relativePath)
+        else {
+            return false
+        }
+
+        canvasWindowLogger.debug(
+            "canvas remap local file via scheme file=\(standardizedFile.absoluteString, privacy: .public) canvas=\(canvasURL.absoluteString, privacy: .public)")
+        self.webView.load(URLRequest(url: canvasURL))
+        return true
+    }
+
+    private func mirrorExternalFileIntoSession(fileURL: URL) -> URL? {
+        let fm = FileManager()
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: fileURL.path, isDirectory: &isDir), !isDir.boolValue else {
+            return nil
+        }
+
+        let mirroredRoot = self.sessionDir.appendingPathComponent("_external", isDirectory: true)
+        do {
+            try fm.createDirectory(at: mirroredRoot, withIntermediateDirectories: true)
+
+            let ext = fileURL.pathExtension
+            let base = fileURL.deletingPathExtension().lastPathComponent
+            let safeBase = Self.sanitizeSessionKey(base).isEmpty ? "file" : Self.sanitizeSessionKey(base)
+            let uniqueName = ext.isEmpty ? "\(safeBase)-\(UUID().uuidString)" : "\(safeBase)-\(UUID().uuidString).\(ext)"
+            let destination = mirroredRoot.appendingPathComponent(uniqueName, isDirectory: false)
+
+            if fm.fileExists(atPath: destination.path) {
+                try fm.removeItem(at: destination)
+            }
+            try fm.copyItem(at: fileURL, to: destination)
+            return destination
+        } catch {
+            canvasWindowLogger.error(
+                "canvas external file mirror failed src=\(fileURL.absoluteString, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     func updateDebugStatus(enabled: Bool, title: String?, subtitle: String?) {

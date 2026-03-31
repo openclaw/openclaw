@@ -301,7 +301,7 @@
       "durationMs": 282
     },
     "extensions/discord/src/send.webhook-activity.test.ts": {
-      "durationMs": 19380
+      "durationMs": 31110
     },
     "src/browser/routes/basic.existing-session.test.ts": {
       "durationMs": 221

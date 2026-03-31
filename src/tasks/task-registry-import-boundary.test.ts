@@ -6,9 +6,12 @@ const TASK_ROOT = path.resolve(import.meta.dirname);
 const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
 const ALLOWED_IMPORTERS = new Set([
-  "auto-reply/reply/commands-status.ts",
-  "tasks/runtime-internal.ts",
-  "tasks/task-owner-access.ts",
+  "agents/tools/session-status-tool.ts",
+  "auto-reply/reply/commands-acp/runtime-options.ts",
+  "auto-reply/reply/commands-subagents/action-info.ts",
+  "commands/tasks.ts",
+  "tasks/task-executor.ts",
+  "tasks/task-registry.maintenance.ts",
 ]);
 
 async function listSourceFiles(root: string): Promise<string[]> {
@@ -29,7 +32,7 @@ async function listSourceFiles(root: string): Promise<string[]> {
 }
 
 describe("task registry import boundary", () => {
-  it("keeps direct task-registry imports behind the approved task access seams", async () => {
+  it("keeps direct task-registry imports on the approved read-model seam", async () => {
     const importers: string[] = [];
     for (const file of await listSourceFiles(SRC_ROOT)) {
       const relative = path.relative(SRC_ROOT, file).replaceAll(path.sep, "/");

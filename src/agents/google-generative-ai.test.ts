@@ -5,9 +5,9 @@ import {
   resolveGoogleGenerativeAiApiOrigin,
   resolveGoogleGenerativeAiTransport,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
-} from "./api.js";
+} from "../plugin-sdk/google.js";
 
-describe("google generative ai helpers", () => {
+describe("google-generative-ai helpers", () => {
   it("detects the Google Generative AI transport id", () => {
     expect(isGoogleGenerativeAiApi("google-generative-ai")).toBe(true);
     expect(isGoogleGenerativeAiApi("google-gemini-cli")).toBe(false);

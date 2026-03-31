@@ -681,7 +681,9 @@ public final class OpenClawChatViewModel {
         self.latestThinkingLevelsBySession[sessionKey] = next
 
         do {
-            try await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: next)
+            try await self.transport.setSessionThinking(
+                sessionKey: sessionKey,
+                thinkingLevel: next)
             guard requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey] else {
                 let latest = self.latestThinkingLevelsBySession[sessionKey] ?? next
                 guard latest != next else { return }
@@ -848,7 +850,8 @@ public final class OpenClawChatViewModel {
 
     private func applySuccessfulModelSelection(_ selectionID: String, sessionKey: String, syncSelection: Bool) {
         self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = selectionID
-        let resolved = self.resolvedSessionModelIdentity(forSelectionID: selectionID)
+        let resolved = self.resolvedSessionModelIdentity(
+            forSelectionID: selectionID)
         self.updateCurrentSessionModel(
             modelID: resolved.modelID,
             modelProvider: resolved.modelProvider,

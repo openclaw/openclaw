@@ -84,8 +84,9 @@ final class MacNodeModeCoordinator {
                     onConnected: { [weak self] in
                         guard let self else { return }
                         self.logger.info("mac node connected to gateway")
-                        let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
-                        await self.runtime.updateMainSessionKey(mainSessionKey)
+                        // Avoid querying a second shared gateway connection during the
+                        // node transport's connect callback. Keep the runtime on its
+                        // default/cached main session until the broader app state updates.
                         await self.runtime.setEventSender { [weak self] event, payload in
                             guard let self else { return }
                             await self.session.sendEvent(event: event, payloadJSON: payload)

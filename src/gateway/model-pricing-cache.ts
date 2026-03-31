@@ -8,7 +8,6 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginWebSearchConfig } from "../config/legacy-web-search.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import {
@@ -290,26 +289,10 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
     }
   }
 
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "google")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "xai")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "moonshot")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "perplexity")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
+  addResolvedModelRef({ raw: config.tools?.web?.search?.gemini?.model, aliasIndex, refs });
+  addResolvedModelRef({ raw: config.tools?.web?.search?.grok?.model, aliasIndex, refs });
+  addResolvedModelRef({ raw: config.tools?.web?.search?.kimi?.model, aliasIndex, refs });
+  addResolvedModelRef({ raw: config.tools?.web?.search?.perplexity?.model, aliasIndex, refs });
 
   for (const entry of config.tools?.media?.models ?? []) {
     addProviderModelPair({ provider: entry.provider, model: entry.model, refs });

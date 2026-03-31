@@ -16,7 +16,6 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
-import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -100,26 +99,9 @@ function applyMessageProviderToolPolicy(
 
 function applyModelProviderToolPolicy(
   tools: AnyAgentTool[],
-  params?: {
-    config?: OpenClawConfig;
-    modelProvider?: string;
-    modelApi?: string;
-    modelId?: string;
-    agentDir?: string;
-    modelCompat?: ModelCompatConfig;
-  },
+  params?: { modelCompat?: ModelCompatConfig },
 ): AnyAgentTool[] {
-  if (
-    shouldSuppressManagedWebSearchTool({
-      config: params?.config,
-      modelProvider: params?.modelProvider,
-      modelApi: params?.modelApi,
-      agentDir: params?.agentDir,
-    })
-  ) {
-    return tools.filter((tool) => tool.name !== "web_search");
-  }
-
+  void params;
   return tools;
 }
 
@@ -252,8 +234,6 @@ export function createOpenClawCodingTools(options?: {
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */
   modelId?: string;
-  /** Model API for the current provider (used for provider-native tool arbitration). */
-  modelApi?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
@@ -598,11 +578,6 @@ export function createOpenClawCodingTools(options?: {
     options?.messageProvider,
   );
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
-    config: options?.config,
-    modelProvider: options?.modelProvider,
-    modelApi: options?.modelApi,
-    modelId: options?.modelId,
-    agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)

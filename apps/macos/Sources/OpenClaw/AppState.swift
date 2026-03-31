@@ -7,6 +7,31 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppState {
+    struct SavedRemoteGateway: Codable, Equatable, Identifiable {
+        var id: UUID
+        var name: String
+        var host: String
+        var port: String
+        var token: String
+
+        init(id: UUID = UUID(), name: String, host: String, port: String, token: String) {
+            self.id = id
+            self.name = name
+            self.host = host
+            self.port = port
+            self.token = token
+        }
+
+        var displayName: String {
+            let trimmed = self.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+            let host = self.host.trimmingCharacters(in: .whitespacesAndNewlines)
+            let port = self.port.trimmingCharacters(in: .whitespacesAndNewlines)
+            if host.isEmpty { return "Unnamed gateway" }
+            return port.isEmpty ? host : "\(host):\(port)"
+        }
+    }
+
     private let isPreview: Bool
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
@@ -210,16 +235,47 @@ final class AppState {
         }
     }
 
+    var remoteGateways: [SavedRemoteGateway] {
+        didSet { self.persistRemoteGateways() }
+    }
+
+    var selectedRemoteGatewayID: UUID? {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.selectedRemoteGatewayID?.uuidString, forKey: remoteGatewaySelectedIDKey)
+            }
+        }
+    }
+
+    var remoteHost: String {
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.remoteHost, forKey: remoteHostKey) }
+            self.syncSelectedRemoteGatewayFromFields()
+        }
+    }
+
+    var remotePort: String {
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.remotePort, forKey: remotePortKey) }
+            self.syncSelectedRemoteGatewayFromFields()
+        }
+    }
+
     var remoteUrl: String {
-        didSet { self.syncGatewayConfigIfNeeded() }
+        get { Self.directRemoteURLString(host: self.remoteHost, port: self.remotePort) }
+        set {
+            let parts = Self.directRemoteHostPort(from: newValue)
+            self.remoteHost = parts.host
+            self.remotePort = parts.port
+        }
     }
 
     var remoteToken: String {
         didSet {
             guard !self.isApplyingRemoteTokenConfig else { return }
-            self.remoteTokenDirty = true
+            self.ifNotPreview { UserDefaults.standard.set(self.remoteToken, forKey: remoteTokenKey) }
             self.remoteTokenUnsupported = false
-            self.syncGatewayConfigIfNeeded()
+            self.syncSelectedRemoteGatewayFromFields()
         }
     }
 
@@ -294,11 +350,20 @@ final class AppState {
 
         let configRoot = OpenClawConfigFile.loadDict()
         let configRemoteUrl = GatewayRemoteConfig.resolveUrlString(root: configRoot)
-        let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
         let configRemoteTransport = GatewayRemoteConfig.resolveTransport(root: configRoot)
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
+
+        let loadedRemoteGateways = Self.loadRemoteGateways()
+        let loadedSelectedRemoteGatewayID: UUID?
+        if let rawSelected = UserDefaults.standard.string(forKey: remoteGatewaySelectedIDKey) {
+            loadedSelectedRemoteGatewayID = UUID(uuidString: rawSelected)
+        } else {
+            loadedSelectedRemoteGatewayID = loadedRemoteGateways.first?.id
+        }
+        self.remoteGateways = loadedRemoteGateways
+        self.selectedRemoteGatewayID = loadedSelectedRemoteGatewayID
 
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
@@ -310,10 +375,30 @@ final class AppState {
         } else {
             self.remoteTarget = storedRemoteTarget
         }
-        self.remoteUrl = configRemoteUrl ?? ""
-        self.remoteToken = configRemoteToken.textFieldValue
+        let storedRemoteHost = UserDefaults.standard.string(forKey: remoteHostKey) ?? ""
+        let storedRemotePort = UserDefaults.standard.string(forKey: remotePortKey) ?? ""
+        let storedRemoteToken = UserDefaults.standard.string(forKey: remoteTokenKey) ?? ""
+        let selectedRemoteGateway = loadedSelectedRemoteGatewayID.flatMap { selectedID in
+            loadedRemoteGateways.first(where: { $0.id == selectedID })
+        }
+        if let selected = selectedRemoteGateway {
+            self.remoteHost = selected.host
+            self.remotePort = selected.port
+            self.remoteToken = selected.token
+        } else if !storedRemoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !storedRemotePort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            self.remoteHost = storedRemoteHost
+            self.remotePort = storedRemotePort
+            self.remoteToken = storedRemoteToken
+        } else {
+            let parts = Self.directRemoteHostPort(from: configRemoteUrl ?? "")
+            self.remoteHost = parts.host
+            self.remotePort = parts.port
+            self.remoteToken = storedRemoteToken
+        }
         self.remoteTokenDirty = false
-        self.remoteTokenUnsupported = configRemoteToken.isUnsupportedNonString
+        self.remoteTokenUnsupported = false
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
@@ -364,6 +449,112 @@ final class AppState {
         return host
     }
 
+    private static func directRemoteHostPort(from urlString: String) -> (host: String, port: String) {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return ("", "") }
+        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = url.port.map(String.init) ?? (url.scheme?.lowercased() == "wss" ? "443" : "18789")
+        return (host, host.isEmpty ? "" : port)
+    }
+
+    private static func directRemoteURLString(host: String, port: String) -> String {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else { return "" }
+        let trimmedPort = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        let portInt = Int(trimmedPort) ?? 443
+        return "wss://\(trimmedHost):\(portInt)"
+    }
+
+    var selectedRemoteGateway: SavedRemoteGateway? {
+        get {
+            guard let id = self.selectedRemoteGatewayID else { return nil }
+            return self.remoteGateways.first(where: { $0.id == id })
+        }
+    }
+
+    func selectRemoteGateway(_ id: UUID?) {
+        self.selectedRemoteGatewayID = id
+        guard let gateway = self.selectedRemoteGateway else { return }
+        self.isApplyingRemoteTokenConfig = true
+        self.remoteHost = gateway.host
+        self.remotePort = gateway.port
+        self.remoteToken = gateway.token
+        self.isApplyingRemoteTokenConfig = false
+    }
+
+    func startNewRemoteGatewayDraft(clearFields: Bool = true) {
+        self.selectedRemoteGatewayID = nil
+        guard clearFields else { return }
+        self.isApplyingRemoteTokenConfig = true
+        self.remoteHost = ""
+        self.remotePort = "443"
+        self.remoteToken = ""
+        self.isApplyingRemoteTokenConfig = false
+    }
+
+    func saveCurrentRemoteGateway(named proposedName: String? = nil) {
+        let host = self.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        let port = self.remotePort.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return }
+        let token = self.remoteToken
+        let fallbackName = port.isEmpty ? host : "\(host):\(port)"
+        let name = (proposedName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let entryName = name.isEmpty ? fallbackName : name
+
+        if let id = self.selectedRemoteGatewayID,
+           let index = self.remoteGateways.firstIndex(where: { $0.id == id })
+        {
+            self.remoteGateways[index].name = entryName
+            self.remoteGateways[index].host = host
+            self.remoteGateways[index].port = port
+            self.remoteGateways[index].token = token
+        } else {
+            let entry = SavedRemoteGateway(name: entryName, host: host, port: port, token: token)
+            self.remoteGateways.append(entry)
+            self.selectedRemoteGatewayID = entry.id
+        }
+    }
+
+    func deleteSelectedRemoteGateway() {
+        guard let id = self.selectedRemoteGatewayID,
+              let index = self.remoteGateways.firstIndex(where: { $0.id == id }) else { return }
+        self.remoteGateways.remove(at: index)
+        let next = self.remoteGateways.indices.contains(index) ? self.remoteGateways[index].id : self.remoteGateways.last?.id
+        self.selectedRemoteGatewayID = next
+        if let next {
+            self.selectRemoteGateway(next)
+        }
+    }
+
+    private static func loadRemoteGateways() -> [SavedRemoteGateway] {
+        guard let data = UserDefaults.standard.data(forKey: remoteGatewaysKey),
+              let decoded = try? JSONDecoder().decode([SavedRemoteGateway].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+
+    private func persistRemoteGateways() {
+        guard !self.isPreview else { return }
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(self.remoteGateways) else { return }
+        UserDefaults.standard.set(data, forKey: remoteGatewaysKey)
+    }
+
+    private func syncSelectedRemoteGatewayFromFields() {
+        guard !self.isInitializing,
+              !self.isApplyingRemoteTokenConfig,
+              let id = self.selectedRemoteGatewayID,
+              let index = self.remoteGateways.firstIndex(where: { $0.id == id }) else { return }
+        self.remoteGateways[index].host = self.remoteHost
+        self.remoteGateways[index].port = self.remotePort
+        self.remoteGateways[index].token = self.remoteToken
+        let existingName = self.remoteGateways[index].name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existingName.isEmpty {
+            self.remoteGateways[index].name = self.remoteGateways[index].displayName
+        }
+    }
+
     private static func sanitizeSSHTarget(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("ssh ") {
@@ -392,17 +583,7 @@ final class AppState {
     }
 
     private func applyRemoteTokenState(_ tokenValue: GatewayRemoteConfig.TokenValue) {
-        let nextToken = tokenValue.textFieldValue
-        let unsupported = tokenValue.isUnsupportedNonString
-        guard self.remoteToken != nextToken || self.remoteTokenDirty || self.remoteTokenUnsupported != unsupported
-        else {
-            return
-        }
-        self.isApplyingRemoteTokenConfig = true
-        self.remoteToken = nextToken
-        self.isApplyingRemoteTokenConfig = false
-        self.remoteTokenDirty = false
-        self.remoteTokenUnsupported = unsupported
+        _ = tokenValue
     }
 
     private static func updatedRemoteGatewayConfig(
@@ -424,35 +605,19 @@ final class AppState {
                 &remote,
                 key: "transport",
                 value: RemoteTransport.direct.rawValue) || changed
-
-            let trimmedUrl = remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedUrl.isEmpty {
-                changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
-            } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
-                changed = Self.updateGatewayString(&remote, key: "url", value: normalizedUrl) || changed
-            }
-
         case .ssh:
             changed = Self.updateGatewayString(&remote, key: "transport", value: nil) || changed
-
-            if let host = remoteHost {
-                let existingUrl = (remote["url"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
-                let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
-                let port = parsedExisting?.port ?? 18789
-                let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
-                changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
-            }
-
             let sanitizedTarget = Self.sanitizeSSHTarget(remoteTarget)
             changed = Self.updateGatewayString(&remote, key: "sshTarget", value: sanitizedTarget) || changed
             changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: remoteIdentity) || changed
         }
 
-        if remoteTokenDirty {
-            changed = Self.updateGatewayString(&remote, key: "token", value: remoteToken) || changed
-        }
+        // Intentionally do not persist remote direct host/port/token in the shared
+        // gateway config file; those are app-local macOS settings.
+        _ = remoteUrl
+        _ = remoteHost
+        _ = remoteToken
+        _ = remoteTokenDirty
 
         return (remote, changed)
     }
@@ -476,7 +641,6 @@ final class AppState {
         let gateway = root["gateway"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteUrl = GatewayRemoteConfig.resolveUrlString(root: root)
-        let remoteToken = GatewayRemoteConfig.resolveTokenValue(root: root)
         let hasRemoteUrl = !(remoteUrl?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty ?? true)
@@ -505,10 +669,12 @@ final class AppState {
             self.remoteTransport = remoteTransport
         }
         let remoteUrlText = remoteUrl ?? ""
-        if remoteUrlText != self.remoteUrl {
+        if self.remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           self.remotePort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !remoteUrlText.isEmpty
+        {
             self.remoteUrl = remoteUrlText
         }
-        self.applyRemoteTokenState(remoteToken)
 
         let targetMode = desiredMode ?? self.connectionMode
         if targetMode == .remote,

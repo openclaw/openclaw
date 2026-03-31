@@ -51,14 +51,18 @@ struct OnboardingWizardView: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.discovery.domain") private var discoveryDomain: String = ""
     @AppStorage("onboarding.developerMode") private var developerModeEnabled: Bool = false
+    @AppStorage("gateway.addAnotherMode") private var addAnotherGatewayMode: Bool = false
     @State private var step: OnboardingStep
     @State private var selectedMode: OnboardingConnectionMode?
     @State private var manualHost: String = ""
     @State private var manualPort: Int = 18789
     @State private var manualPortText: String = "18789"
     @State private var manualTLS: Bool = true
+    @State private var gatewayBootstrapToken: String = ""
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
+    @State private var savedGatewayProfiles: [GatewaySettingsStore.SavedGatewayProfile] = []
+    @State private var selectedSavedGatewayID: String?
     @State private var connectMessage: String?
     @State private var statusLine: String = "In your OpenClaw chat, run /pair qr, then scan the code here."
     @State private var connectingGatewayID: String?
@@ -69,9 +73,6 @@ struct OnboardingWizardView: View {
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
     @State private var selectedPhoto: PhotosPickerItem?
-    @State private var lastPairingAutoResumeAttemptAt: Date?
-    private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
-
     let allowSkip: Bool
     let onClose: () -> Void
 
@@ -245,10 +246,10 @@ struct OnboardingWizardView: View {
             }
         }
         .onChange(of: self.gatewayToken) { _, newValue in
-            self.saveGatewayCredentials(token: newValue, password: self.gatewayPassword)
+            self.saveCurrentGatewayProfile()
         }
         .onChange(of: self.gatewayPassword) { _, newValue in
-            self.saveGatewayCredentials(token: self.gatewayToken, password: newValue)
+            self.saveCurrentGatewayProfile()
         }
         .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
             let next = GatewayConnectionIssue.detect(from: newValue)
@@ -293,13 +294,6 @@ struct OnboardingWizardView: View {
                 self.didMarkCompleted = true
             }
             self.onClose()
-        }
-        .onChange(of: self.scenePhase) { _, newValue in
-            guard newValue == .active else { return }
-            self.attemptAutomaticPairingResumeIfNeeded()
-        }
-        .onReceive(Self.pairingAutoResumeTicker) { _ in
-            self.attemptAutomaticPairingResumeIfNeeded()
         }
     }
 
@@ -506,6 +500,8 @@ struct OnboardingWizardView: View {
     @ViewBuilder
     private var connectStep: some View {
         if let selectedMode {
+            self.savedGatewaysSection
+
             Section {
                 LabeledContent("Mode", value: selectedMode.title)
                 LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
@@ -645,7 +641,7 @@ struct OnboardingWizardView: View {
                             + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
                             + "2) `/pair approve` in your OpenClaw chat\n"
                             + "\(requestLine)\n"
-                            + "OpenClaw will also retry automatically when you return to this app.")
+                            + "After approval, tap Resume After Approval.")
                 }
             }
 
@@ -713,6 +709,43 @@ struct OnboardingWizardView: View {
     }
 
     @ViewBuilder
+    private var savedGatewaysSection: some View {
+        if !self.savedGatewayProfiles.isEmpty {
+            Section {
+                ForEach(self.savedGatewayProfiles) { profile in
+                    VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(profile.resolvedName)
+                                .font(.body.weight(.semibold))
+                            Text(profile.addressLabel)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Button("Use") {
+                                self.loadSavedGatewayProfile(profile)
+                            }
+
+                            Spacer()
+
+                            Button("Connect") {
+                                Task { await self.connectSavedGateway(profile) }
+                            }
+                            .disabled(self.connectingGatewayID != nil)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } header: {
+                Text("Saved Gateways")
+            } footer: {
+                Text("Each scanned or manually entered gateway is stored separately.")
+            }
+        }
+    }
+
+    @ViewBuilder
     private func manualConnectionFieldsSection(title: String) -> some View {
         Section(title) {
             TextField("Host", text: self.$manualHost)
@@ -756,7 +789,7 @@ struct OnboardingWizardView: View {
         self.manualPort = link.port
         self.manualTLS = link.tls
         let trimmedBootstrapToken = link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.saveGatewayBootstrapToken(trimmedBootstrapToken)
+        self.gatewayBootstrapToken = trimmedBootstrapToken ?? ""
         if let token = link.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
             self.gatewayToken = token
         } else if trimmedBootstrapToken?.isEmpty == false {
@@ -767,7 +800,7 @@ struct OnboardingWizardView: View {
         } else if trimmedBootstrapToken?.isEmpty == false {
             self.gatewayPassword = ""
         }
-        self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
+        self.saveCurrentGatewayProfile(preserveExistingCredentials: false)
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code…"
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)…"
@@ -800,28 +833,6 @@ struct OnboardingWizardView: View {
         self.connectMessage = "Retrying after approval…"
         self.statusLine = "Retrying after approval…"
         Task { await self.retryLastAttempt() }
-    }
-
-    private func resumeAfterPairingApprovalInBackground() {
-        // Keep the pairing issue sticky to avoid visual flicker while we probe for approval.
-        self.appModel.gatewayAutoReconnectEnabled = true
-        self.appModel.gatewayPairingPaused = false
-        self.appModel.gatewayPairingRequestId = nil
-        Task { await self.retryLastAttempt(silent: true) }
-    }
-
-    private func attemptAutomaticPairingResumeIfNeeded() {
-        guard self.scenePhase == .active else { return }
-        guard self.step == .auth else { return }
-        guard self.issue.needsPairing else { return }
-        guard self.connectingGatewayID == nil else { return }
-
-        let now = Date()
-        if let last = self.lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
-            return
-        }
-        self.lastPairingAutoResumeAttemptAt = now
-        self.resumeAfterPairingApprovalInBackground()
     }
 
     private func detectQRCode(from data: Data) -> String? {
@@ -858,6 +869,9 @@ struct OnboardingWizardView: View {
     }
 
     private func initializeState() {
+        let addingAnotherGateway = self.addAnotherGatewayMode
+        self.addAnotherGatewayMode = false
+        self.refreshSavedGatewayProfiles()
         if self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let last = GatewaySettingsStore.loadLastGatewayConnection() {
                 switch last {
@@ -885,13 +899,23 @@ struct OnboardingWizardView: View {
             self.manualTLS = false
         }
 
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedInstanceId.isEmpty {
-            self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
-            self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+        if addingAnotherGateway {
+            self.selectedSavedGatewayID = nil
+            self.gatewayBootstrapToken = ""
+            self.gatewayToken = ""
+            self.gatewayPassword = ""
+        } else if let matchingProfile = self.matchingSavedGatewayProfile() ?? self.savedGatewayProfiles.first {
+            self.loadSavedGatewayProfile(matchingProfile)
+        } else {
+            let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedInstanceId.isEmpty {
+                self.gatewayBootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: trimmedInstanceId) ?? ""
+                self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
+                self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+            }
         }
 
-        let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil
+        let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil || !self.savedGatewayProfiles.isEmpty
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !hasSavedGateway, !hasToken, !hasPassword {
@@ -908,20 +932,33 @@ struct OnboardingWizardView: View {
         }
     }
 
-    private func saveGatewayCredentials(token: String, password: String) {
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedInstanceId.isEmpty else { return }
-        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
-        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
-    }
+    private func saveCurrentGatewayProfile(preserveExistingCredentials: Bool = true) {
+        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
 
-    private func saveGatewayBootstrapToken(_ token: String?) {
+        let stableID = self.manualStableID(host: host, port: self.manualPort)
+        let profile = GatewaySettingsStore.upsertSavedGatewayProfile(
+            profileID: self.selectedSavedGatewayID,
+            stableID: stableID,
+            host: host,
+            port: self.manualPort,
+            useTLS: self.manualTLS,
+            token: self.gatewayToken,
+            bootstrapToken: self.gatewayBootstrapToken,
+            password: self.gatewayPassword,
+            preserveExistingCredentials: preserveExistingCredentials)
+        self.selectedSavedGatewayID = profile?.id
+        self.refreshSavedGatewayProfiles()
+
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
-        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        GatewaySettingsStore.saveGatewayBootstrapToken(trimmedToken, instanceId: trimmedInstanceId)
+        GatewaySettingsStore.saveGatewayToken(self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines), instanceId: trimmedInstanceId)
+        GatewaySettingsStore.saveGatewayBootstrapToken(
+            self.gatewayBootstrapToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            instanceId: trimmedInstanceId)
+        GatewaySettingsStore.saveGatewayPassword(
+            self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines),
+            instanceId: trimmedInstanceId)
     }
 
     private func connectDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
@@ -968,6 +1005,7 @@ struct OnboardingWizardView: View {
     private func connectManual() async {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
+        self.saveCurrentGatewayProfile()
         self.connectingGatewayID = "manual"
         self.issue = .none
         self.connectMessage = "Connecting to \(host)…"
@@ -985,6 +1023,40 @@ struct OnboardingWizardView: View {
         }
         defer { self.connectingGatewayID = nil }
         await self.gatewayController.connectLastKnown()
+    }
+
+    private func refreshSavedGatewayProfiles() {
+        self.savedGatewayProfiles = GatewaySettingsStore.loadSavedGatewayProfiles()
+    }
+
+    private func loadSavedGatewayProfile(_ profile: GatewaySettingsStore.SavedGatewayProfile) {
+        self.selectedSavedGatewayID = profile.id
+        self.manualHost = profile.host
+        self.manualPort = profile.port
+        self.manualTLS = profile.useTLS
+        self.gatewayBootstrapToken = profile.bootstrapToken ?? ""
+        self.gatewayToken = profile.token ?? ""
+        self.gatewayPassword = profile.password ?? ""
+    }
+
+    private func connectSavedGateway(_ profile: GatewaySettingsStore.SavedGatewayProfile) async {
+        self.loadSavedGatewayProfile(profile)
+        await self.connectManual()
+    }
+
+    private func matchingSavedGatewayProfile() -> GatewaySettingsStore.SavedGatewayProfile? {
+        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, self.manualPort > 0 else { return nil }
+        let stableID = self.manualStableID(host: host, port: self.manualPort)
+        return GatewaySettingsStore.findSavedGatewayProfile(
+            stableID: stableID,
+            hosts: [host],
+            port: self.manualPort,
+            useTLS: self.manualTLS)
+    }
+
+    private func manualStableID(host: String, port: Int) -> String {
+        "manual|\(host.lowercased())|\(port)"
     }
 }
 

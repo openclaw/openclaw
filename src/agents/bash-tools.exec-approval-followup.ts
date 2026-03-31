@@ -1,6 +1,4 @@
 import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
-import { sendMessage } from "../infra/outbound/message.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -53,7 +51,7 @@ export async function sendExecApprovalFollowup(
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const resultText = params.resultText.trim();
-  if (!resultText) {
+  if (!sessionKey || !resultText) {
     return false;
   }
 
@@ -68,31 +66,6 @@ export async function sendExecApprovalFollowup(
     normalizedTurnSourceChannel && isGatewayMessageChannel(normalizedTurnSourceChannel)
       ? normalizedTurnSourceChannel
       : undefined;
-
-  if (deliveryTarget.deliver) {
-    const requesterAgentId = sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined;
-    await sendMessage({
-      channel: deliveryTarget.channel,
-      to: deliveryTarget.to ?? "",
-      accountId: deliveryTarget.accountId,
-      threadId: deliveryTarget.threadId,
-      content: resultText,
-      agentId: requesterAgentId,
-      idempotencyKey: `exec-approval-followup:${params.approvalId}`,
-      mirror: sessionKey
-        ? {
-            sessionKey,
-            agentId: requesterAgentId,
-            idempotencyKey: `exec-approval-followup:${params.approvalId}`,
-          }
-        : undefined,
-    });
-    return true;
-  }
-
-  if (!sessionKey) {
-    throw new Error("Session key or deliverable origin route is required");
-  }
 
   await callGatewayTool(
     "agent",
