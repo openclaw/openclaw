@@ -288,6 +288,8 @@ Docs: https://docs.openclaw.ai
 - TTS: Restore 3.28 schema compatibility and fallback observability. (#57953) Thanks @joshavant.
 - TUI/chat: keep optimistic outbound user messages visible during active runs by deferring local-run binding until the first gateway chat event reveals the real run id, preventing premature history reloads from wiping pending local sends. (#54722) Thanks @seanturner001.
 - TUI/model picker: keep searchable `/model` and `/models` input mode from hijacking `j`/`k` as navigation keys, and harden width bounds under `m`-filtered model lists so search no longer crashes on long rows. (#30156) Thanks @briannicholls.
+- Discord/exec approvals: stop mixing native interactive approvals with extra plain `/approve` narration, so Discord approval prompts stay button-driven instead of showing both manual and interactive flows. Thanks @vincentkoc.
+- Telegram/exec approvals: normalize 1:1 approval routing and suppress duplicate approval prompts, so Telegram direct chats show a single working interactive approval instead of multiple conflicting approval messages. Thanks @vincentkoc.
 - Voice Call/media stream: cap inbound WebSocket frame size before `start` validation so oversized pre-start frames are dropped before JSON parsing. Thanks @Kazamayc and @vincentkoc.
 - Voice call/Plivo: pin stored callback bases to the configured public webhook URL so later call-control redirects stay on the intended origin even if webhook transport metadata differs. Thanks @zsxsoft and @vincentkoc.
 - Web UI/markdown: stop bare auto-links from swallowing adjacent CJK text while preserving valid mixed-script path and query characters in rendered links. (#48410) Thanks @jnuyao.
