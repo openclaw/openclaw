@@ -1,4 +1,8 @@
 import { existsSync } from "node:fs";
+import {
+  createEmptyTaskAuditSummary,
+  createEmptyTaskRegistrySummary,
+} from "openclaw/plugin-sdk/tasks-empty-summary";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -172,6 +176,8 @@ function buildColdStartStatusSummary(): Awaited<ReturnType<typeof getStatusSumma
     },
     channelSummary: [],
     queuedSystemEvents: [],
+    tasks: createEmptyTaskRegistrySummary(),
+    taskAudit: createEmptyTaskAuditSummary(),
     sessions: {
       paths: [],
       count: 0,

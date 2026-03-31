@@ -29,6 +29,7 @@ export {
   type GroupPolicy,
   type WhatsAppAccountConfig,
 } from "openclaw/plugin-sdk/whatsapp-shared";
+export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/whatsapp";
 export {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,

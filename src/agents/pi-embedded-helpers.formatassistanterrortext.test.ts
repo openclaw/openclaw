@@ -204,6 +204,15 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: network connection was interrupted.",
     );
   });
+
+  it("sanitizes invalid streaming event order errors", () => {
+    const msg = makeAssistantError(
+      'Unexpected event order, got message_start before receiving "message_stop"',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider returned an invalid streaming response. Please try again.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -226,6 +235,10 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi("500 Internal Server Error")).toBe(
       "HTTP 500: Internal Server Error",
     );
+  });
+
+  it("formats colon-delimited HTTP status lines", () => {
+    expect(formatRawAssistantErrorForUi("HTTP 410: No body")).toBe("HTTP 410: No body");
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {

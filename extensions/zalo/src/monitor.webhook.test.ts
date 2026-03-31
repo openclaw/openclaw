@@ -1,16 +1,16 @@
 import type { RequestListener } from "node:http";
+import { createEmptyPluginRegistry } from "openclaw/plugin-sdk/testing";
+import { setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { withServer } from "../../../test/helpers/http-test-server.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,
   createTextUpdate,
   expectImageLifecycleDelivery,
   postWebhookReplay,
-} from "../../../test/helpers/extensions/zalo-lifecycle.js";
-import { withServer } from "../../../test/helpers/http-test-server.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+} from "../test-support/lifecycle-test-support.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
@@ -235,6 +235,62 @@ describe("handleZaloWebhookRequest", () => {
       });
     } finally {
       unregister();
+    }
+  });
+
+  it("keeps replay dedupe isolated per authenticated target", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    const unregisterA = registerTarget({
+      path: "/hook-replay-scope",
+      secret: "secret-a",
+      statusSink: sinkA,
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-replay-scope",
+      secret: "secret-b",
+      statusSink: sinkB,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "work",
+      },
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-replay-scope-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-a",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-b",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sinkA).toHaveBeenCalledTimes(1);
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
+      unregisterB();
     }
   });
 

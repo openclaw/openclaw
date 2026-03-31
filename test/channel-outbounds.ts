@@ -1,6 +1,30 @@
-export { discordOutbound } from "../extensions/discord/test-api.js";
-export { imessageOutbound } from "../extensions/imessage/src/outbound-adapter.js";
-export { signalOutbound } from "../extensions/signal/test-api.js";
-export { slackOutbound } from "../extensions/slack/test-api.js";
-export { telegramOutbound } from "../extensions/telegram/test-api.js";
-export { whatsappOutbound } from "../extensions/whatsapp/test-api.js";
+import type { ChannelOutboundAdapter } from "../src/channels/plugins/types.js";
+import {
+  loadBundledPluginPublicSurfaceSync,
+  loadBundledPluginTestApiSync,
+} from "../src/test-utils/bundled-plugin-public-surface.js";
+
+export const { discordOutbound } = loadBundledPluginTestApiSync<{
+  discordOutbound: ChannelOutboundAdapter;
+}>("discord");
+export const { imessageOutbound } = loadBundledPluginPublicSurfaceSync<{
+  imessageOutbound: ChannelOutboundAdapter;
+}>({
+  pluginId: "imessage",
+  artifactBasename: "src/outbound-adapter.js",
+});
+export const { signalOutbound } = loadBundledPluginTestApiSync<{
+  signalOutbound: ChannelOutboundAdapter;
+}>("signal");
+export const { slackOutbound } = loadBundledPluginTestApiSync<{
+  slackOutbound: ChannelOutboundAdapter;
+}>("slack");
+export const { telegramOutbound } = loadBundledPluginPublicSurfaceSync<{
+  telegramOutbound: ChannelOutboundAdapter;
+}>({
+  pluginId: "telegram",
+  artifactBasename: "src/outbound-adapter.js",
+});
+export const { whatsappOutbound } = loadBundledPluginTestApiSync<{
+  whatsappOutbound: ChannelOutboundAdapter;
+}>("whatsapp");

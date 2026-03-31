@@ -49,6 +49,7 @@ capabilities.
 openclaw plugins install <package>                      # ClawHub first, then npm
 openclaw plugins install clawhub:<package>              # ClawHub only
 openclaw plugins install <package> --pin                # pin version
+openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
 openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
@@ -56,6 +57,17 @@ openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
+
+`--dangerously-force-unsafe-install` is a break-glass option for false positives
+in the built-in dangerous-code scanner. It allows the install to continue even
+when the built-in scanner reports `critical` findings, but it does **not**
+bypass plugin `before_install` hook policy blocks and does **not** bypass scan
+failures.
+
+This CLI flag applies to `openclaw plugins install`. Gateway-backed skill
+dependency installs use the matching `dangerouslyForceUnsafeInstall` request
+override, while `openclaw skills install` remains a separate ClawHub skill
+download/install flow.
 
 `plugins install` is also the install surface for hook packs that expose
 `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook
@@ -161,7 +173,7 @@ the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
 For active memory plugins, the memory slot resets to `memory-core`.
 
 By default, uninstall also removes the plugin install directory under the active
-state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
+state-dir plugin root. Use
 `--keep-files` to keep files on disk.
 
 `--keep-config` is supported as a deprecated alias for `--keep-files`.

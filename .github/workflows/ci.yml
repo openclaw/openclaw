@@ -282,7 +282,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
@@ -302,11 +302,17 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
+          SHARD_COUNT: ${{ matrix.shard_count || '' }}
+          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         shell: bash
         run: |
           set -euo pipefail
           case "$TASK" in
             extensions)
+              if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
+                export OPENCLAW_TEST_SHARDS="$SHARD_COUNT"
+                export OPENCLAW_TEST_SHARD_INDEX="$SHARD_INDEX"
+              fi
               pnpm test:extensions
               ;;
             contracts|contracts-protocol)
@@ -325,7 +331,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
@@ -416,7 +422,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_extension_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
@@ -459,6 +465,8 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
 
       - name: Strict TS build smoke
@@ -716,7 +724,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.

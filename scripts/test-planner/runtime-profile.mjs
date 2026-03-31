@@ -87,6 +87,14 @@ const scaleConcurrencyForLoad = (value, loadBand) => {
   return Math.max(1, Math.floor(value * scale));
 };
 
+const scaleBatchTargetForLoad = (value, loadBand) => {
+  if (value === null || value === undefined || value <= 0) {
+    return value;
+  }
+  const scale = loadBand === "busy" ? 0.75 : loadBand === "saturated" ? 0.5 : 1;
+  return Math.max(5_000, Math.floor(value * scale));
+};
+
 const LOCAL_MEMORY_BUDGETS = {
   constrained: {
     vitestCap: 2,
@@ -325,6 +333,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     vitestMaxWorkers: scaleForLoad(baseBudget.vitestMaxWorkers, runtime.loadBand),
     unitSharedWorkers: scaleForLoad(baseBudget.unitSharedWorkers, runtime.loadBand),
     channelSharedWorkers: scaleForLoad(baseBudget.channelSharedWorkers, runtime.loadBand),
+    unitIsolatedWorkers: scaleForLoad(baseBudget.unitIsolatedWorkers, runtime.loadBand),
     unitHeavyWorkers: scaleForLoad(baseBudget.unitHeavyWorkers, runtime.loadBand),
     extensionWorkers: scaleForLoad(baseBudget.extensionWorkers, runtime.loadBand),
     gatewayWorkers: scaleForLoad(baseBudget.gatewayWorkers, runtime.loadBand),
@@ -338,6 +347,10 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     ),
     topLevelParallelLimitIsolated: scaleConcurrencyForLoad(
       baseBudget.topLevelParallelLimitIsolated,
+      runtime.loadBand,
+    ),
+    unitFastBatchTargetMs: scaleBatchTargetForLoad(
+      baseBudget.unitFastBatchTargetMs,
       runtime.loadBand,
     ),
     deferredRunConcurrency:

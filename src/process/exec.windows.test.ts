@@ -31,6 +31,8 @@ function createMockChild(params?: {
   closeCode?: number | null;
   closeSignal?: NodeJS.Signals | null;
   exitCode?: number | null;
+  exitCodeAfterClose?: number | null;
+  exitCodeAfterCloseDelayMs?: number;
   signal?: NodeJS.Signals | null;
 }): MockChild {
   const child = new EventEmitter() as MockChild;
@@ -47,6 +49,11 @@ function createMockChild(params?: {
   child.killed = false;
   queueMicrotask(() => {
     child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
+    if (params?.exitCodeAfterClose !== undefined) {
+      setTimeout(() => {
+        child.exitCode = params.exitCodeAfterClose ?? null;
+      }, params.exitCodeAfterCloseDelayMs ?? 0);
+    }
   });
   return child;
 }
@@ -112,6 +119,64 @@ describe("windows command wrapper behavior", () => {
     try {
       const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
       expect(result.code).toBe(0);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("waits for Windows exitCode settlement after close reports null", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+      exitCodeAfterClose: 0,
+      exitCodeAfterCloseDelayMs: 50,
+    });
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("treats shimmed Windows commands without a reported exit code as success when they close cleanly", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+    });
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      expect(result.signal).toBeNull();
+      expect(result.termination).toBe("exit");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("treats shimmed Windows commands without a reported exit code as success even when child.killed is true", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+    });
+    child.killed = true;
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      expect(result.signal).toBeNull();
+      expect(result.termination).toBe("exit");
     } finally {
       platformSpy.mockRestore();
     }

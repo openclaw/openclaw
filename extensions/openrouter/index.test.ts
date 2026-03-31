@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+} from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -41,7 +41,7 @@ describeLive("openrouter plugin live", () => {
     const resolved = provider.resolveDynamicModel?.({
       provider: "openrouter",
       modelId: LIVE_MODEL_ID,
-      modelRegistry: new ModelRegistry(AuthStorage.inMemory()),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
     if (!resolved) {
       throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);

@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   __testing,
   getSessionBindingService,
@@ -21,6 +21,35 @@ type SessionBindingServiceModule = typeof import("./session-binding-service.js")
 
 const sessionBindingServiceModuleUrl = new URL("./session-binding-service.ts", import.meta.url)
   .href;
+
+function setMinimalCurrentConversationRegistry(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          id: "slack",
+          meta: { aliases: [] },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+          },
+        },
+      },
+      {
+        pluginId: "msteams",
+        source: "test",
+        plugin: {
+          id: "msteams",
+          meta: { aliases: [] },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+          },
+        },
+      },
+    ]),
+  );
+}
 
 async function importSessionBindingServiceModule(
   cacheBust: string,
@@ -53,7 +82,7 @@ function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
 describe("session binding service", () => {
   beforeEach(() => {
     __testing.resetSessionBindingAdaptersForTests();
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalCurrentConversationRegistry();
   });
 
   it("normalizes conversation refs and infers current placement", async () => {

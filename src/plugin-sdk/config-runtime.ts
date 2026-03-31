@@ -1,10 +1,13 @@
 // Shared config/runtime boundary for plugins that need config loading,
 // config writes, or session-store helpers without importing src internals.
 
+export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
+  clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "../config/io.js";
 export { logConfigUpdated } from "../config/logging.js";
@@ -86,9 +89,11 @@ export type {
   TtsProvider,
 } from "../config/types.js";
 export {
+  clearSessionStoreCacheForTest,
   loadSessionStore,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
+  saveSessionStore,
   resolveSessionKey,
   resolveStorePath,
   updateLastRoute,
@@ -97,6 +102,7 @@ export {
   type SessionScope,
 } from "../config/sessions.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
+export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

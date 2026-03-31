@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   __testing,
   bindGenericCurrentConversation,
@@ -10,6 +11,24 @@ import {
   resolveGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
+
+function setMinimalCurrentConversationRegistry(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          id: "slack",
+          meta: { aliases: [] },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+          },
+        },
+      },
+    ]),
+  );
+}
 
 describe("generic current-conversation bindings", () => {
   let previousStateDir: string | undefined;
@@ -19,7 +38,7 @@ describe("generic current-conversation bindings", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-current-bindings-"));
     process.env.OPENCLAW_STATE_DIR = testStateDir;
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalCurrentConversationRegistry();
     __testing.resetCurrentConversationBindingsForTests({
       deletePersistedFile: true,
     });

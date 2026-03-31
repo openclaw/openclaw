@@ -2,7 +2,6 @@ import {
   streamSimple,
   type Api,
   type AssistantMessageEvent,
-  type ThinkingLevel as SimpleThinkingLevel,
   type Message,
   type Model,
 } from "@mariozechner/pi-ai";
@@ -22,7 +21,6 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
-import { mapThinkingLevel } from "./pi-embedded-runner/utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 
@@ -95,13 +93,6 @@ function toSimpleContextMessages(messages: unknown[]): Message[] {
   return stripToolResultDetails(
     contextMessages as Parameters<typeof stripToolResultDetails>[0],
   ) as Message[];
-}
-
-function resolveSimpleThinkingLevel(level?: ThinkLevel): SimpleThinkingLevel | undefined {
-  if (!level || level === "off") {
-    return undefined;
-  }
-  return mapThinkingLevel(level) as SimpleThinkingLevel;
 }
 
 function resolveSessionTranscriptPath(params: {
@@ -312,7 +303,9 @@ export async function runBtwSideQuestion(
     },
     {
       apiKey,
-      reasoning: resolveSimpleThinkingLevel(params.resolvedThinkLevel),
+      // BTW is intentionally a lightweight side question path. Keep provider
+      // reasoning off so we reliably receive answer text instead of thinking-only output.
+      reasoning: undefined,
       signal: params.opts?.abortSignal,
     },
   );

@@ -38,7 +38,7 @@ import {
 } from "./accounts.js";
 import type { SlackActionContext } from "./action-runtime.js";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
-import { parseSlackBlocksInput } from "./blocks-input.js";
+import { slackNativeApprovalAdapter } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
 import { resolveSlackChannelType } from "./channel-type.js";
 import {
@@ -50,6 +50,7 @@ import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { probeSlack, type SlackProbe } from "./probe.js";
+import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -281,6 +282,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       }),
       resolveNames: resolveSlackAllowlistNames,
     },
+    auth: slackNativeApprovalAdapter.auth,
+    approvals: {
+      delivery: slackNativeApprovalAdapter.delivery,
+      native: slackNativeApprovalAdapter.native,
+    },
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
       resolveToolPolicy: resolveSlackGroupToolPolicy,
@@ -294,12 +300,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       enableInteractiveReplies: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId }),
       hasStructuredReplyPayload: ({ payload }) => {
-        const slackData = payload.channelData?.slack;
-        if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-          return false;
-        }
         try {
-          return Boolean(parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks)?.length);
+          return Boolean(resolveSlackReplyBlocks(payload)?.length);
         } catch {
           return false;
         }
