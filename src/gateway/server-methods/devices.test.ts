@@ -2,9 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const { removePairedDeviceMock, revokeDeviceTokenMock } = vi.hoisted(() => ({
+const {
+  getPairedDeviceMock,
+  removePairedDeviceMock,
+  revokeDeviceTokenMock,
+  rotateDeviceTokenMock,
+} = vi.hoisted(() => ({
+  getPairedDeviceMock: vi.fn(),
   removePairedDeviceMock: vi.fn(),
   revokeDeviceTokenMock: vi.fn(),
+  rotateDeviceTokenMock: vi.fn(),
 }));
 
 vi.mock("../../infra/device-pairing.js", async () => {
@@ -13,8 +20,10 @@ vi.mock("../../infra/device-pairing.js", async () => {
   );
   return {
     ...actual,
+    getPairedDevice: getPairedDeviceMock,
     removePairedDevice: removePairedDeviceMock,
     revokeDeviceToken: revokeDeviceTokenMock,
+    rotateDeviceToken: rotateDeviceTokenMock,
   };
 });
 
@@ -97,6 +106,69 @@ describe("deviceHandlers", () => {
     expect(opts.respond).toHaveBeenCalledWith(
       true,
       { deviceId: "device-1", role: "operator", revokedAtMs: 456 },
+      undefined,
+    );
+  });
+
+  it("disconnects active clients after rotating a device token", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      scopes: ["operator.pairing"],
+      tokens: {
+        operator: {
+          token: "old-token",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          createdAtMs: 123,
+        },
+      },
+    });
+    rotateDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: {
+        token: "new-token",
+        role: "operator",
+        scopes: ["operator.pairing"],
+        createdAtMs: 456,
+        rotatedAtMs: 789,
+      },
+    });
+    const opts = createOptions(
+      "device.token.rotate",
+      {
+        deviceId: " device-1 ",
+        role: " operator ",
+        scopes: ["operator.pairing"],
+      },
+      {
+        client: {
+          connect: {
+            scopes: ["operator.pairing"],
+          },
+        } as never,
+      },
+    );
+
+    await deviceHandlers["device.token.rotate"](opts);
+    await Promise.resolve();
+
+    expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: " device-1 ",
+      role: " operator ",
+      scopes: ["operator.pairing"],
+    });
+    expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1", {
+      role: "operator",
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        deviceId: " device-1 ",
+        role: "operator",
+        token: "new-token",
+        scopes: ["operator.pairing"],
+        rotatedAtMs: 789,
+      },
       undefined,
     );
   });
