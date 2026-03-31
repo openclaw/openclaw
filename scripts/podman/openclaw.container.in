@@ -1,7 +1,7 @@
 # OpenClaw gateway — Podman Quadlet (rootless)
 # Installed by scripts/podman/setup.sh into the current user's ~/.config/containers/systemd/
-# {{OPENCLAW_HOME}}, {{OPENCLAW_CONFIG_DIR}}, {{OPENCLAW_WORKSPACE_DIR}},
-# {{IMAGE_NAME}}, and {{CONTAINER_NAME}} are replaced at install time.
+# {{OPENCLAW_CONFIG_DIR}}, {{OPENCLAW_WORKSPACE_DIR}}, {{IMAGE_NAME}}, and
+# {{CONTAINER_NAME}} are replaced at install time.
 
 [Unit]
 Description=OpenClaw gateway (rootless Podman)
@@ -18,11 +18,15 @@ EnvironmentFile={{OPENCLAW_CONFIG_DIR}}/.env
 Environment=HOME=/home/node
 Environment=TERM=xterm-256color
 Environment=NPM_CONFIG_CACHE=/home/node/.openclaw/.npm
+Environment=NPM_CONFIG_PREFIX=/home/node/.openclaw/.npm-global
+Environment=PATH=/home/node/.openclaw/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Prevent the gateway from self-restarting; systemd's Restart=on-failure handles that.
 Environment=OPENCLAW_NO_RESPAWN=1
+# Bind only to loopback so the gateway is not exposed on LAN interfaces by default.
 PublishPort=127.0.0.1:18789:18789
 PublishPort=127.0.0.1:18790:18790
 Pull=never
-Exec=node dist/index.js gateway --bind lan --port 18789
+Exec=node dist/index.js gateway --bind loopback --port 18789
 
 [Service]
 TimeoutStartSec=300

@@ -145,7 +145,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
     fi && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl
+      procps hostname curl git lsof openssl zsh
 
 RUN chown node:node /app
 
@@ -241,6 +241,31 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
 ENV NODE_ENV=production
+
+# Configure zsh for interactive container shells.
+# Completion is pre-generated at build time to avoid startup latency.
+RUN install -d -m 0755 /home/node && \
+    mkdir -p /etc/zsh && \
+    openclaw completion --shell zsh > /etc/zsh/openclaw-completion.zsh 2>/dev/null || \
+      printf '# openclaw completion not available at build time\n' > /etc/zsh/openclaw-completion.zsh && \
+    cat > /home/node/.zshrc <<'ZSHRC' && \
+    chown node:node /home/node/.zshrc && \
+    chmod 0644 /home/node/.zshrc
+export LANG=${LANG:-C.UTF-8}
+export TERM=${TERM:-xterm-256color}
+
+autoload -U compinit
+compinit -i
+
+setopt auto_cd
+setopt interactive_comments
+setopt hist_ignore_dups
+setopt share_history
+
+[[ -r /etc/zsh/openclaw-completion.zsh ]] && source /etc/zsh/openclaw-completion.zsh
+
+PROMPT='%F{cyan}%n@%m%f %F{yellow}%~%f %# '
+ZSHRC
 
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
