@@ -150,6 +150,30 @@ class DeviceHandlerTest {
   }
 
   @Test
+  fun smsTopLevelStatusTreatsDisabledSmsAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = false,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsMissingTelephonyAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = false,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
   fun smsTopLevelPromptableStaysTrueUntilBothSmsPermissionsAreGranted() {
     assertTrue(
       DeviceHandler.isSmsPromptable(
@@ -167,6 +191,39 @@ class DeviceHandlerTest {
         smsReadGranted = true,
       ),
     )
+  }
+
+  @Test
+  fun smsTopLevelPromptableIsFalseWhenSmsCannotExist() {
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = false,
+        telephonyAvailable = true,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = true,
+        telephonyAvailable = false,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
+  }
+
+  @Test
+  fun handleDevicePermissions_marksCallLogUnpromptableWhenFeatureDisabled() {
+    val handler = DeviceHandler(appContext(), callLogEnabled = false)
+
+    val result = handler.handleDevicePermissions(null)
+
+    assertTrue(result.ok)
+    val payload = parsePayload(result.payloadJson)
+    val callLog = payload.getValue("permissions").jsonObject.getValue("callLog").jsonObject
+    assertEquals("denied", callLog.getValue("status").jsonPrimitive.content)
+    assertTrue(!callLog.getValue("promptable").jsonPrimitive.boolean)
   }
 
   @Test

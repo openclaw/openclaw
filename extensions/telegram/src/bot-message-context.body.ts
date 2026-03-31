@@ -171,6 +171,8 @@ export async function resolveTelegramInboundBody(params: {
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
+  const senderAllowedForAudioPreflight =
+    !useAccessGroups || !allowForCommands.hasEntries || senderAllowedForCommands;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
@@ -179,7 +181,8 @@ export async function resolveTelegramInboundBody(params: {
     hasAudio &&
     !hasUserText &&
     mentionRegexes.length > 0 &&
-    !disableAudioPreflight;
+    !disableAudioPreflight &&
+    senderAllowedForAudioPreflight;
 
   if (needsPreflightTranscription) {
     try {

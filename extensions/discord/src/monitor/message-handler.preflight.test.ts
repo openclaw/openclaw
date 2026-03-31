@@ -765,6 +765,66 @@ describe("preflightDiscordMessage", () => {
     expect(result?.wasMentioned).toBe(true);
   });
 
+  it("does not transcribe guild audio from unauthorized members", async () => {
+    const channelId = "channel-audio-unauthorized-1";
+    const guildId = "guild-audio-unauthorized-1";
+    const client = createGuildTextClient(channelId);
+
+    const message = createDiscordMessage({
+      id: "m-audio-unauthorized-1",
+      channelId,
+      content: "",
+      attachments: [
+        {
+          id: "att-1",
+          url: "https://cdn.discordapp.com/attachments/voice.ogg",
+          content_type: "audio/ogg",
+          filename: "voice.ogg",
+        },
+      ],
+      author: {
+        id: "user-2",
+        bot: false,
+        username: "Mallory",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              allow: true,
+              requireMention: true,
+              users: ["user-1"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
   it("drops guild message without mention when channel has configuredBinding and requireMention: true", async () => {
     const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
     const channelId = "ch-binding-1";

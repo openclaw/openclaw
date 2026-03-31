@@ -99,6 +99,7 @@ function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api
     case "openai-codex-responses":
     case "openai-completions":
     case "openai-responses":
+    case "azure-openai-responses":
       return api;
     default:
       return undefined;

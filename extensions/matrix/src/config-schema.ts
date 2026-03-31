@@ -1,6 +1,5 @@
 import {
   AllowFromListSchema,
-  buildNestedDmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
@@ -53,6 +52,7 @@ export const MatrixConfigSchema = z.object({
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  proxy: z.string().optional(),
   userId: z.string().optional(),
   accessToken: buildSecretInputSchema().optional(),
   password: buildSecretInputSchema().optional(),
@@ -79,10 +79,18 @@ export const MatrixConfigSchema = z.object({
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
-  dm: buildNestedDmConfigSchema(),
+  dm: z
+    .object({
+      enabled: z.boolean().optional(),
+      policy: DmPolicySchema.optional(),
+      allowFrom: AllowFromListSchema,
+      threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+    })
+    .optional(),
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,

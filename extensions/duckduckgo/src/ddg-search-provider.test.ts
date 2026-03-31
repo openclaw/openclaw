@@ -15,7 +15,6 @@ describe("duckduckgo web search provider", () => {
   let plugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
     ({ __testing: ddgClientTesting } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
