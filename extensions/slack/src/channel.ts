@@ -45,6 +45,7 @@ import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "./directory-config.js";
+import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -520,6 +521,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       deliveryMode: "direct",
       chunker: null,
       textChunkLimit: SLACK_TEXT_LIMIT,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalSlackExecApprovalPrompt({
+          cfg,
+          accountId,
+          payload,
+        }),
       sendPayload: async (ctx) => {
         const { send, tokenOverride } = resolveSlackSendContext({
           cfg: ctx.cfg,

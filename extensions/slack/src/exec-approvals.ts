@@ -1,5 +1,6 @@
 import {
   doesApprovalRequestMatchChannelAccount,
+  getExecApprovalReplyMetadata,
   matchesApprovalRequestFilters,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
@@ -144,10 +145,8 @@ export function shouldSuppressLocalSlackExecApprovalPrompt(params: {
   accountId?: string | null;
   payload: ReplyPayload;
 }): boolean {
-  void params;
-  // Slack still uses the generic local pending-reply path. Unlike Discord and
-  // Telegram, there is no Slack runtime handler that sends a replacement native
-  // approval prompt via resolveChannelNativeApprovalDeliveryPlan, so suppressing
-  // the local payload can hide the only visible approval prompt.
-  return false;
+  return (
+    isSlackExecApprovalClientEnabled(params) &&
+    getExecApprovalReplyMetadata(params.payload) !== null
+  );
 }

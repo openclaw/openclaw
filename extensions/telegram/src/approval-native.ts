@@ -15,6 +15,7 @@ import {
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
 } from "./exec-approvals.js";
+import { normalizeTelegramChatId } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type TelegramOriginTarget = { to: string; threadId?: number; accountId?: string };
@@ -62,8 +63,9 @@ function resolveTurnSourceTelegramOriginTarget(params: {
   request: ApprovalRequest;
 }): TelegramOriginTarget | null {
   const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-  const turnSourceTo = params.request.request.turnSourceTo?.trim() || "";
+  const rawTurnSourceTo = params.request.request.turnSourceTo?.trim() || "";
   const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || "";
+  const turnSourceTo = normalizeTelegramChatId(rawTurnSourceTo) ?? rawTurnSourceTo;
   if (turnSourceChannel !== "telegram" || !turnSourceTo) {
     return null;
   }
@@ -102,7 +104,7 @@ function resolveSessionTelegramOriginTarget(params: {
     return null;
   }
   return {
-    to: sessionTarget.to,
+    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
     threadId: sessionTarget.threadId,
     accountId: sessionTarget.accountId,
   };
@@ -113,7 +115,9 @@ function telegramTargetsMatch(a: TelegramOriginTarget, b: TelegramOriginTarget):
     !a.accountId ||
     !b.accountId ||
     normalizeAccountId(a.accountId) === normalizeAccountId(b.accountId);
-  return a.to === b.to && a.threadId === b.threadId && accountMatches;
+  const normalizedA = normalizeTelegramChatId(a.to) ?? a.to;
+  const normalizedB = normalizeTelegramChatId(b.to) ?? b.to;
+  return normalizedA === normalizedB && a.threadId === b.threadId && accountMatches;
 }
 
 function resolveTelegramOriginTarget(params: {

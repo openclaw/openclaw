@@ -40,6 +40,7 @@ import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
+import { SlackExecApprovalHandler } from "./exec-approvals.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import {
   formatUnknownError,
@@ -405,9 +406,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     : undefined;
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+  const execApprovalsHandler = slackCfg.execApprovals?.enabled
+    ? new SlackExecApprovalHandler({
+        app,
+        accountId: account.accountId,
+        config: slackCfg.execApprovals,
+        cfg,
+      })
+    : null;
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
   await registerSlackMonitorSlashCommands({ ctx, account });
+  await execApprovalsHandler?.start();
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -613,6 +623,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
+    await execApprovalsHandler?.stop().catch(() => undefined);
     await app.stop().catch(() => undefined);
   }
 }
