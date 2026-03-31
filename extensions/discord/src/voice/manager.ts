@@ -659,6 +659,35 @@ export class DiscordVoiceManager {
       return;
     }
 
+    // --- FORK: streaming TTS for local Kyutai provider ---
+    if (ttsConfig.provider === "kyutai") {
+      try {
+        const { streamKyutaiTts } = await import("./kyutai-streaming.js");
+        const { readable } = await streamKyutaiTts(speakText);
+        logVoiceVerbose(
+          `kyutai stream started (${speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
+        );
+        this.enqueuePlayback(entry, async () => {
+          const voiceSdk = loadDiscordVoiceSdk();
+          const resource = voiceSdk.createAudioResource(readable, {
+            inputType: voiceSdk.StreamType.Arbitrary,
+          });
+          entry.player.play(resource);
+          await voiceSdk
+            .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+            .catch(() => undefined);
+          await voiceSdk
+            .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
+            .catch(() => undefined);
+          logVoiceVerbose(`kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+        });
+        return;
+      } catch (err) {
+        logger.warn(`discord voice: kyutai streaming failed, falling back to batch: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    // --- END FORK ---
+
     const ttsResult = await textToSpeech({
       text: speakText,
       cfg: ttsCfg,
