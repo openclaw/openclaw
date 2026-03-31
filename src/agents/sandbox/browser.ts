@@ -35,7 +35,7 @@ import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
-import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
+import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
@@ -167,6 +167,7 @@ export async function ensureSandboxBrowser(params: {
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
   });
 
   const now = Date.now();
@@ -333,8 +334,8 @@ export async function ensureSandboxBrowser(params: {
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
-          const state = await dockerContainerState(containerName);
-          if (state.exists && !state.running) {
+          const currentState = await dockerContainerState(containerName);
+          if (currentState.exists && !currentState.running) {
             await execDocker(["start", containerName]);
           }
           const ok = await waitForSandboxCdp({
