@@ -37,7 +37,8 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-vi.mock("../agents/models-config.js", () => ({
+vi.mock("../agents/models-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/models-config.js")>()),
   ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
 }));
 
@@ -54,7 +55,7 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
-let describeImageWithModel: typeof import("./image.js").describeImageWithModel;
+const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
@@ -62,31 +63,8 @@ describe("describeImageWithModel", () => {
     vi.restoreAllMocks();
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-      return {
-        ...actual,
-        complete: completeMock,
-      };
-    });
-    vi.doMock("../agents/models-config.js", () => ({
-      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-    }));
-    vi.doMock("../agents/model-auth.js", () => ({
-      getApiKeyForModel: getApiKeyForModelMock,
-      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-      requireApiKey: requireApiKeyMock,
-    }));
-    vi.doMock("../agents/pi-model-discovery-runtime.js", () => ({
-      discoverAuthStorage: () => ({
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      }),
-      discoverModels: discoverModelsMock,
-    }));
-    ({ describeImageWithModel } = await import("./image.js"));
     vi.clearAllMocks();
     fetchMock.mockResolvedValue({
       ok: true,
@@ -248,10 +226,10 @@ describe("describeImageWithModel", () => {
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
-      expect(modelId).toBe("gemini-3-flash-preview");
+      expect(modelId).toBe("gemini-3.1-flash-preview");
       return {
         provider: "google",
-        id: "gemini-3-flash-preview",
+        id: "gemini-3.1-flash-preview",
         input: ["text", "image"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
@@ -261,7 +239,7 @@ describe("describeImageWithModel", () => {
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-flash-preview",
       stopReason: "stop",
       timestamp: Date.now(),
       content: [{ type: "text", text: "flash ok" }],
@@ -282,7 +260,7 @@ describe("describeImageWithModel", () => {
 
     expect(result).toEqual({
       text: "flash ok",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-flash-preview",
     });
     expect(findMock).toHaveBeenCalledOnce();
     expect(getApiKeyForModelMock).toHaveBeenCalledWith(
@@ -296,10 +274,10 @@ describe("describeImageWithModel", () => {
   it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
-      expect(modelId).toBe("gemini-3.1-flash-lite-preview");
+      expect(modelId).toBe("gemini-3.1-flash-lite");
       return {
         provider: "google",
-        id: "gemini-3.1-flash-lite-preview",
+        id: "gemini-3.1-flash-lite",
         input: ["text", "image"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
@@ -309,7 +287,7 @@ describe("describeImageWithModel", () => {
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
       stopReason: "stop",
       timestamp: Date.now(),
       content: [{ type: "text", text: "flash lite ok" }],
@@ -330,7 +308,7 @@ describe("describeImageWithModel", () => {
 
     expect(result).toEqual({
       text: "flash lite ok",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
     });
     expect(findMock).toHaveBeenCalledOnce();
     expect(getApiKeyForModelMock).toHaveBeenCalledWith(

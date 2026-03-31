@@ -58,6 +58,121 @@ const log = createSubsystemLogger("memory");
 const { indexCache: INDEX_CACHE, indexCachePending: INDEX_CACHE_PENDING } =
   getMemoryIndexManagerCacheStore();
 
+type MemoryReadonlyRecoveryState = {
+  closed: boolean;
+  db: DatabaseSync;
+  vectorReady: Promise<boolean> | null;
+  vector: {
+    enabled: boolean;
+    available: boolean | null;
+    extensionPath?: string;
+    loadError?: string;
+    dims?: number;
+  };
+  readonlyRecoveryAttempts: number;
+  readonlyRecoverySuccesses: number;
+  readonlyRecoveryFailures: number;
+  readonlyRecoveryLastError?: string;
+  runSync: (params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) => Promise<void>;
+  openDatabase: () => DatabaseSync;
+  ensureSchema: () => void;
+  readMeta: () => { vectorDims?: number } | undefined;
+};
+
+export function isMemoryReadonlyDbError(err: unknown): boolean {
+  const readonlyPattern =
+    /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
+  const messages = new Set<string>();
+
+  const pushValue = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim();
+    if (!normalized) {
+      return;
+    }
+    messages.add(normalized);
+  };
+
+  pushValue(err instanceof Error ? err.message : String(err));
+  if (err && typeof err === "object") {
+    const record = err as Record<string, unknown>;
+    pushValue(record.message);
+    pushValue(record.code);
+    pushValue(record.name);
+    if (record.cause && typeof record.cause === "object") {
+      const cause = record.cause as Record<string, unknown>;
+      pushValue(cause.message);
+      pushValue(cause.code);
+      pushValue(cause.name);
+    }
+  }
+
+  return [...messages].some((value) => readonlyPattern.test(value));
+}
+
+export function extractMemoryErrorReason(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  if (err && typeof err === "object") {
+    const record = err as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message.trim()) {
+      return record.message;
+    }
+    if (typeof record.code === "string" && record.code.trim()) {
+      return record.code;
+    }
+  }
+  return String(err);
+}
+
+export async function runMemorySyncWithReadonlyRecovery(
+  state: MemoryReadonlyRecoveryState,
+  params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  },
+): Promise<void> {
+  try {
+    await state.runSync(params);
+    return;
+  } catch (err) {
+    if (!isMemoryReadonlyDbError(err) || state.closed) {
+      throw err;
+    }
+    const reason = extractMemoryErrorReason(err);
+    state.readonlyRecoveryAttempts += 1;
+    state.readonlyRecoveryLastError = reason;
+    log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
+    try {
+      state.db.close();
+    } catch {}
+    state.db = state.openDatabase();
+    state.vectorReady = null;
+    state.vector.available = null;
+    state.vector.loadError = undefined;
+    state.ensureSchema();
+    const meta = state.readMeta();
+    state.vector.dims = meta?.vectorDims;
+    try {
+      await state.runSync(params);
+      state.readonlyRecoverySuccesses += 1;
+    } catch (retryErr) {
+      state.readonlyRecoveryFailures += 1;
+      throw retryErr;
+    }
+  }
+}
+
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   const pending = Array.from(INDEX_CACHE_PENDING.values());
   if (pending.length > 0) {
@@ -598,52 +713,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private isReadonlyDbError(err: unknown): boolean {
-    const readonlyPattern =
-      /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
-    const messages = new Set<string>();
-
-    const pushValue = (value: unknown): void => {
-      if (typeof value !== "string") {
-        return;
-      }
-      const normalized = value.trim();
-      if (!normalized) {
-        return;
-      }
-      messages.add(normalized);
-    };
-
-    pushValue(err instanceof Error ? err.message : String(err));
-    if (err && typeof err === "object") {
-      const record = err as Record<string, unknown>;
-      pushValue(record.message);
-      pushValue(record.code);
-      pushValue(record.name);
-      if (record.cause && typeof record.cause === "object") {
-        const cause = record.cause as Record<string, unknown>;
-        pushValue(cause.message);
-        pushValue(cause.code);
-        pushValue(cause.name);
-      }
-    }
-
-    return [...messages].some((value) => readonlyPattern.test(value));
+    return isMemoryReadonlyDbError(err);
   }
 
   private extractErrorReason(err: unknown): string {
-    if (err instanceof Error && err.message.trim()) {
-      return err.message;
-    }
-    if (err && typeof err === "object") {
-      const record = err as Record<string, unknown>;
-      if (typeof record.message === "string" && record.message.trim()) {
-        return record.message;
-      }
-      if (typeof record.code === "string" && record.code.trim()) {
-        return record.code;
-      }
-    }
-    return String(err);
+    return extractMemoryErrorReason(err);
   }
 
   private async runSyncWithReadonlyRecovery(params?: {
@@ -652,35 +726,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    try {
-      await this.runSync(params);
-      return;
-    } catch (err) {
-      if (!this.isReadonlyDbError(err) || this.closed) {
-        throw err;
-      }
-      const reason = this.extractErrorReason(err);
-      this.readonlyRecoveryAttempts += 1;
-      this.readonlyRecoveryLastError = reason;
-      log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
-      try {
-        this.db.close();
-      } catch {}
-      this.db = this.openDatabase();
-      this.vectorReady = null;
-      this.vector.available = null;
-      this.vector.loadError = undefined;
-      this.ensureSchema();
-      const meta = this.readMeta();
-      this.vector.dims = meta?.vectorDims;
-      try {
-        await this.runSync(params);
-        this.readonlyRecoverySuccesses += 1;
-      } catch (retryErr) {
-        this.readonlyRecoveryFailures += 1;
-        throw retryErr;
-      }
-    }
+    await runMemorySyncWithReadonlyRecovery(this, params);
   }
 
   async readFile(params: {
