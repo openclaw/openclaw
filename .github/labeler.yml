@@ -293,6 +293,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qianfan/**"
+"extensions: qnaigc-api":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qnaigc-api/**"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:
