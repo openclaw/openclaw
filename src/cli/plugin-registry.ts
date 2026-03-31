@@ -107,3 +107,9 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
   });
   pluginRegistryLoaded = scope;
 }
+
+export const __testing = {
+  resetPluginRegistryLoadedForTests(): void {
+    pluginRegistryLoaded = "none";
+  },
+};

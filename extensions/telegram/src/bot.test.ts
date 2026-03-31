@@ -42,6 +42,37 @@ let createTelegramBot: (
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 
+function createSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+function waitForNextSetMyCommands() {
+  const synced = createSignal();
+  setMyCommandsSpy.mockImplementationOnce(async () => {
+    synced.resolve();
+    return undefined;
+  });
+  return synced.promise;
+}
+
+function waitForReplyCalls(count: number) {
+  const done = createSignal();
+  let seen = 0;
+  replySpy.mockImplementation(async (_ctx, opts) => {
+    await opts?.onReplyStart?.();
+    seen += 1;
+    if (seen >= count) {
+      done.resolve();
+    }
+    return undefined;
+  });
+  return done.promise;
+}
+
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
   void config;
   return listSkillCommandsForAgents() as NonNullable<
@@ -101,6 +132,7 @@ describe("createTelegramBot", () => {
       },
     };
     loadConfig.mockReturnValue(config);
+    const commandsSynced = waitForNextSetMyCommands();
 
     createTelegramBot({
       token: "tok",
@@ -119,9 +151,7 @@ describe("createTelegramBot", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(setMyCommandsSpy).toHaveBeenCalled();
-    });
+    await commandsSynced;
 
     const registered = setMyCommandsSpy.mock.calls.at(-1)?.[0] as Array<{
       command: string;
@@ -148,6 +178,7 @@ describe("createTelegramBot", () => {
       },
     };
     loadConfig.mockReturnValue(config);
+    const commandsSynced = waitForNextSetMyCommands();
 
     createTelegramBot({
       token: "tok",
@@ -160,9 +191,7 @@ describe("createTelegramBot", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(setMyCommandsSpy).toHaveBeenCalled();
-    });
+    await commandsSynced;
 
     const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
       command: string;
@@ -194,12 +223,11 @@ describe("createTelegramBot", () => {
       },
     };
     loadConfig.mockReturnValue(config);
+    const commandsSynced = waitForNextSetMyCommands();
 
     createTelegramBot({ token: "tok" });
 
-    await vi.waitFor(() => {
-      expect(setMyCommandsSpy).toHaveBeenCalled();
-    });
+    await commandsSynced;
 
     const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
       command: string;
@@ -1316,6 +1344,7 @@ describe("createTelegramBot", () => {
     );
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
+      const replyDelivered = waitForReplyCalls(1);
       createTelegramBot({ token: "tok" });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
@@ -1369,9 +1398,7 @@ describe("createTelegramBot", () => {
       }
       expect(flushTimer).toBeTypeOf("function");
       await flushTimer?.();
-      await vi.waitFor(() => {
-        expect(replySpy).toHaveBeenCalledTimes(1);
-      });
+      await replyDelivered;
 
       expect(getFileSpy).toHaveBeenCalledTimes(1);
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
@@ -1406,6 +1433,7 @@ describe("createTelegramBot", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
+      const repliesDelivered = waitForReplyCalls(2);
       createTelegramBot({ token: "tok" });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
@@ -1450,9 +1478,7 @@ describe("createTelegramBot", () => {
         await flushTimer?.();
       }
 
-      await vi.waitFor(() => {
-        expect(replySpy).toHaveBeenCalledTimes(2);
-      });
+      await repliesDelivered;
       const threadIds = replySpy.mock.calls
         .map(
           (call: [unknown, ...unknown[]]) =>

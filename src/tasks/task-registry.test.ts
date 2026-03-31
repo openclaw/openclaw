@@ -1498,7 +1498,7 @@ describe("task-registry", () => {
   });
 
   it("cancels ACP-backed tasks through the ACP session manager", async () => {
-    await withTaskRegistryTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       const registry = await loadFreshTaskRegistryModulesForControlTest();
       process.env.OPENCLAW_STATE_DIR = root;
       registry.resetTaskRegistryForTests();
@@ -1556,7 +1556,7 @@ describe("task-registry", () => {
   });
 
   it("cancels subagent-backed tasks through subagent control", async () => {
-    await withTaskRegistryTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       const registry = await loadFreshTaskRegistryModulesForControlTest();
       process.env.OPENCLAW_STATE_DIR = root;
       registry.resetTaskRegistryForTests();
