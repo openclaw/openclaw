@@ -917,10 +917,10 @@ description: test skill
       version: 1,
       agents: {
         main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
+          allowlist: [{ pattern: "/usr/bin/python3" }, { pattern: "/usr/bin/awk" }],
         },
         ops: {
-          allowlist: [{ pattern: "/usr/local/bin/awk" }],
+          allowlist: [{ pattern: "/usr/local/bin/node" }, { pattern: "/usr/local/bin/find" }],
         },
       },
     });
@@ -942,7 +942,7 @@ description: test skill
       version: 1,
       agents: {
         main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
+          allowlist: [{ pattern: "/usr/bin/python3" }, { pattern: "/usr/bin/xargs" }],
         },
       },
     });
