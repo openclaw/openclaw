@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { resolveChannelModelOverride } from "./model-overrides.js";
 
 describe("resolveChannelModelOverride", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+  });
+
   it.each([
     {
       name: "matches parent group id when topic suffix is present",

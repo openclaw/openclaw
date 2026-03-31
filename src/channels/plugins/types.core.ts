@@ -397,6 +397,24 @@ export type ChannelThreadingToolContext = {
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  /**
+   * Plugin-owned session conversation grammar.
+   * Use this when the provider encodes thread or scoped-conversation semantics
+   * inside `rawId` (for example Telegram topics or Feishu sender scopes).
+   */
+  resolveSessionConversation?: (params: { kind: "group" | "channel"; rawId: string }) => {
+    id: string;
+    threadId?: string | null;
+    parentConversationCandidates?: string[];
+  } | null;
+  /**
+   * Plugin-owned inheritance chain for channel-specific conversation ids.
+   * Return broader parent ids in priority order, without repeating `rawId`.
+   */
+  resolveParentConversationCandidates?: (params: {
+    kind: "group" | "channel";
+    rawId: string;
+  }) => string[] | null;
   resolveSessionTarget?: (params: {
     kind: "group" | "channel";
     id: string;

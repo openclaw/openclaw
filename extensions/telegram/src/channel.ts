@@ -232,6 +232,18 @@ function normalizeTelegramAcpConversationId(conversationId: string) {
   };
 }
 
+function resolveTelegramSessionConversation(rawId: string) {
+  const parsed = parseTelegramTopicConversation({ conversationId: rawId });
+  if (!parsed) {
+    return null;
+  }
+  return {
+    id: parsed.chatId,
+    threadId: parsed.topicId,
+    parentConversationCandidates: [parsed.chatId],
+  };
+}
+
 function matchTelegramAcpConversation(params: {
   bindingConversationId: string;
   conversationId: string;
@@ -530,6 +542,9 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     messaging: {
       normalizeTarget: normalizeTelegramMessagingTarget,
+      resolveSessionConversation: ({ rawId }) => resolveTelegramSessionConversation(rawId),
+      resolveParentConversationCandidates: ({ rawId }) =>
+        resolveTelegramSessionConversation(rawId)?.parentConversationCandidates ?? null,
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
       formatTargetDisplay: ({ target, display, kind }) => {

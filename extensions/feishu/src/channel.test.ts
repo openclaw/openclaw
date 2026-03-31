@@ -183,6 +183,37 @@ describe("feishuPlugin.pairing.notifyApproval", () => {
   });
 });
 
+describe("feishuPlugin messaging", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+  });
+
+  it("owns sender/topic session inheritance candidates", () => {
+    expect(
+      feishuPlugin.messaging?.resolveSessionConversation?.({
+        kind: "group",
+        rawId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      }),
+    ).toEqual({
+      id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
+    });
+    expect(
+      feishuPlugin.messaging?.resolveParentConversationCandidates?.({
+        kind: "group",
+        rawId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      }),
+    ).toEqual(["oc_group_chat:topic:om_topic_root", "oc_group_chat"]);
+    expect(
+      feishuPlugin.messaging?.resolveParentConversationCandidates?.({
+        kind: "group",
+        rawId: "oc_group_chat:topic:om_topic_root",
+      }),
+    ).toEqual(["oc_group_chat"]);
+  });
+});
+
 describe("feishuPlugin actions", () => {
   const cfg = {
     channels: {

@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -14,6 +16,10 @@ type ToolWithExecute = {
 };
 
 describe("Agent-specific tool filtering", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+  });
+
   const sandboxFsBridgeStub: SandboxFsBridge = {
     resolvePath: () => ({
       hostPath: "/tmp/sandbox",

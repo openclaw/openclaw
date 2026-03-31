@@ -275,6 +275,43 @@ function normalizeFeishuAcpConversationId(conversationId: string) {
   };
 }
 
+function resolveFeishuParentConversationCandidates(rawId: string): string[] {
+  const parsed = parseFeishuConversationId({ conversationId: rawId });
+  if (!parsed) {
+    return [];
+  }
+  switch (parsed.scope) {
+    case "group_topic_sender":
+      return [
+        buildFeishuConversationId({
+          chatId: parsed.chatId,
+          scope: "group_topic",
+          topicId: parsed.topicId,
+        }),
+        parsed.chatId,
+      ];
+    case "group_topic":
+    case "group_sender":
+      return [parsed.chatId];
+    case "group":
+    default:
+      return [];
+  }
+}
+
+function resolveFeishuSessionConversation(rawId: string) {
+  const parsed = parseFeishuConversationId({ conversationId: rawId });
+  if (!parsed) {
+    return null;
+  }
+  return {
+    id: parsed.canonicalConversationId,
+    parentConversationCandidates: resolveFeishuParentConversationCandidates(
+      parsed.canonicalConversationId,
+    ),
+  };
+}
+
 function matchFeishuAcpConversation(params: {
   bindingConversationId: string;
   conversationId: string;
@@ -1068,6 +1105,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       setupWizard: feishuSetupWizard,
       messaging: {
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
+        resolveSessionConversation: ({ rawId }) => resolveFeishuSessionConversation(rawId),
+        resolveParentConversationCandidates: ({ rawId }) =>
+          resolveFeishuParentConversationCandidates(rawId),
         resolveOutboundSessionRoute: (params) => resolveFeishuOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeFeishuId,

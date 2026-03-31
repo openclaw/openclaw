@@ -28,11 +28,18 @@ shared `message` tool in core. Your plugin owns:
 - **Config** — account resolution and setup wizard
 - **Security** — DM policy and allowlists
 - **Pairing** — DM approval flow
+- **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
 - **Threading** — how replies are threaded
 
-Core owns the shared message tool, prompt wiring, session bookkeeping, and
-dispatch.
+Core owns the shared message tool, prompt wiring, the outer session-key shape,
+generic `:thread:` bookkeeping, and dispatch.
+
+If your platform stores extra scope inside conversation ids, keep that parsing
+in the plugin by implementing `messaging.resolveSessionConversation(...)` and
+`messaging.resolveParentConversationCandidates(...)`. Use those hooks for
+platform-specific suffixes or inheritance rules instead of adding provider
+checks to core.
 
 ## Approvals and channel capabilities
 
