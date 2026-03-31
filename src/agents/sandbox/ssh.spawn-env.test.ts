@@ -1,7 +1,10 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -32,18 +35,22 @@ vi.mock("node:child_process", async (importOriginal) => {
 let runSshSandboxCommand: typeof import("./ssh.js").runSshSandboxCommand;
 let uploadDirectoryToSshTarget: typeof import("./ssh.js").uploadDirectoryToSshTarget;
 
-beforeAll(async () => {
-  ({ runSshSandboxCommand, uploadDirectoryToSshTarget } = await import("./ssh.js"));
-});
-
 describe("ssh subprocess env sanitization", () => {
   const originalEnv = { ...process.env };
+  const tempDirs: string[] = [];
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({ runSshSandboxCommand, uploadDirectoryToSshTarget } = await import("./ssh.js"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map(async (dir) => {
+        await fs.rm(dir, { recursive: true, force: true });
+      }),
+    );
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) {
         delete process.env[key];
@@ -104,6 +111,8 @@ describe("ssh subprocess env sanitization", () => {
 
     process.env.ANTHROPIC_API_KEY = "sk-test-secret";
     process.env.NODE_ENV = "test";
+    const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-env-"));
+    tempDirs.push(localDir);
 
     await uploadDirectoryToSshTarget({
       session: {
@@ -111,7 +120,7 @@ describe("ssh subprocess env sanitization", () => {
         configPath: "/tmp/openclaw-test-ssh-config",
         host: "openclaw-sandbox",
       },
-      localDir: "/tmp/workspace",
+      localDir,
       remoteDir: "/remote/workspace",
     });
 
@@ -120,4 +129,47 @@ describe("ssh subprocess env sanitization", () => {
     expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env?.NODE_ENV).toBe("test");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "allows in-workspace symlinks to upload normally",
+    async () => {
+      spawnMock
+        .mockImplementationOnce(
+          (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+            const child = createMockChildProcess();
+            process.nextTick(() => {
+              child.emit("close", 0);
+            });
+            return child as unknown as ChildProcess;
+          },
+        )
+        .mockImplementationOnce(
+          (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+            const child = createMockChildProcess();
+            process.nextTick(() => {
+              child.emit("close", 0);
+            });
+            return child as unknown as ChildProcess;
+          },
+        );
+
+      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-safe-"));
+      tempDirs.push(localDir);
+      await fs.mkdir(path.join(localDir, "real"), { recursive: true });
+      await fs.writeFile(path.join(localDir, "real", "payload.txt"), "ok\n", "utf8");
+      await fs.symlink("real", path.join(localDir, "linked-dir"));
+
+      await uploadDirectoryToSshTarget({
+        session: {
+          command: "ssh",
+          configPath: "/tmp/openclaw-test-ssh-config",
+          host: "openclaw-sandbox",
+        },
+        localDir,
+        remoteDir: "/remote/workspace",
+      });
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    },
+  );
 });
