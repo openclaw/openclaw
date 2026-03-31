@@ -8,6 +8,7 @@ import {
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function readBundledPluginPackageJson(packageJsonPath) {
   if (!fs.existsSync(packageJsonPath)) {
@@ -132,7 +133,7 @@ export function listBundledPluginBuildEntries(params = {}) {
       sourceEntries.map((entry) => {
         const normalizedEntry = entry.replace(/^\.\//, "");
         const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
-        return [entryKey, path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry)];
+        return [entryKey, toPosixPath(path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry))];
       }),
     ),
   );
