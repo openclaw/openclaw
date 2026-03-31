@@ -405,7 +405,7 @@ async function queryHindsight(query: string): Promise<string[]> {
 async function callReviewer(params: {
   model: string;
   systemPrompt: string;
-  threadMessages: Array<{ role: string; text: string }>;
+  threadMessages: Array<{ role: string; text: string; ts?: string }>;
   threadTs: string;
   channelId?: string;
   iteration?: number;
@@ -421,8 +421,15 @@ async function callReviewer(params: {
   const { default: OpenAI } = await import("openai");
   const client = new OpenAI({ apiKey });
 
-  // Send the FULL thread — no truncation. GPT-5.4 has 128k context, use it.
-  const transcript = params.threadMessages.map((m) => `[${m.role}]: ${m.text}`).join("\n\n");
+  // Full thread with human-readable timestamps so the reviewer can gauge recency.
+  const transcript = params.threadMessages
+    .map((m) => {
+      const tag = m.ts
+        ? `@ ${new Date(Number(m.ts) * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+        : "";
+      return `[${m.role} ${tag}]: ${m.text}`;
+    })
+    .join("\n\n");
 
   // Build tool activity section if available (calls + results paired)
   let toolSection = "";
