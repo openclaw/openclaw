@@ -57,6 +57,7 @@ These are frequently reported but are typically closed with no code change:
 - Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
 - Reports that treat the Gateway HTTP compatibility endpoints (`POST /v1/chat/completions`, `POST /v1/responses`) as if they implemented scoped operator auth (`operator.write` vs `operator.admin`). These endpoints authenticate the shared Gateway bearer secret/password and are documented full operator-access surfaces, not per-user/per-scope boundaries.
+- Reports that assume `x-openclaw-scopes` can reduce or redefine shared-secret bearer auth on the OpenAI-compatible HTTP endpoints. For shared-secret auth (`gateway.auth.mode="token"` or `"password"`), those endpoints ignore narrower bearer-declared scopes and restore the full default operator scope set plus owner semantics.
 - Reports that only show differences in heuristic detection/parity (for example obfuscation-pattern detection on one exec path but not another, such as `node.invoke -> system.run` parity gaps) without demonstrating bypass of auth, approvals, allowlist enforcement, sandboxing, or other documented trust boundaries.
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
 - Archive/install extraction claims that require pre-existing local filesystem priming in trusted state (for example planting symlink/hardlink aliases under destination directories such as skills/tools paths) without showing an untrusted path that can create/control that primitive.
@@ -94,6 +95,12 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
 
 - Authenticated Gateway callers are treated as trusted operators for that gateway instance.
 - The HTTP compatibility endpoints (`POST /v1/chat/completions`, `POST /v1/responses`) are in that same trusted-operator bucket. Passing Gateway bearer auth there is equivalent to operator access for that gateway; they do not implement a narrower `operator.write` vs `operator.admin` trust split.
+- Concretely, on the OpenAI-compatible HTTP surface:
+  - shared-secret bearer auth (`token` / `password`) authenticates possession of the gateway operator secret
+  - those requests receive the full default operator scope set (`operator.admin`, `operator.read`, `operator.write`, `operator.approvals`, `operator.pairing`)
+  - chat-turn endpoints (`/v1/chat/completions`, `/v1/responses`) also treat those shared-secret callers as owner senders for owner-only tool policy
+  - narrower `x-openclaw-scopes` headers are ignored for that shared-secret path
+  - only identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"` on private ingress) honor declared per-request operator scopes
 - Session identifiers (`sessionKey`, session IDs, labels) are routing controls, not per-user authorization boundaries.
 - If one operator can view data from another operator on the same gateway, that is expected in this trust model.
 - OpenClaw can technically run multiple gateway instances on one machine, but recommended operations are clean separation by trust boundary.

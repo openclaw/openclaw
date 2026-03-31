@@ -96,6 +96,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
@@ -211,6 +212,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   val context = androidx.compose.ui.platform.LocalContext.current
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val persistedGatewayToken by viewModel.gatewayToken.collectAsState()
@@ -227,6 +229,8 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var manualTls by rememberSaveable { mutableStateOf(false) }
   var gatewayError by rememberSaveable { mutableStateOf<String?>(null) }
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
+  val canFinishOnboarding =
+    isConnected || (gatewayInputMode == GatewayInputMode.SetupCode && isNodeConnected)
 
   val lifecycleOwner = LocalLifecycleOwner.current
   val qrScannerOptions =
@@ -732,7 +736,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             FinalStep(
               parsedGateway = parseGatewayEndpoint(gatewayUrl),
               statusText = statusText,
-              isConnected = isConnected,
+              isConnected = canFinishOnboarding,
               serverName = serverName,
               remoteAddress = remoteAddress,
               attemptedConnect = attemptedConnect,
@@ -848,7 +852,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             }
           }
           OnboardingStep.FinalCheck -> {
-            if (isConnected) {
+            if (canFinishOnboarding) {
               Button(
                 onClick = { viewModel.setOnboardingCompleted(true) },
                 modifier = Modifier.weight(1f).height(52.dp),
@@ -882,7 +886,17 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     viewModel.setGatewayToken("")
                   }
                   viewModel.setGatewayPassword(password)
-                  viewModel.connectManual()
+                  viewModel.connect(
+                    GatewayEndpoint.manual(host = parsed.host, port = parsed.port),
+                    token = token.ifEmpty { null },
+                    bootstrapToken =
+                      if (gatewayInputMode == GatewayInputMode.SetupCode) {
+                        decodeGatewaySetupCode(setupCode)?.bootstrapToken?.trim()?.ifEmpty { null }
+                      } else {
+                        null
+                      },
+                    password = password.ifEmpty { null },
+                  )
                 },
                 modifier = Modifier.weight(1f).height(52.dp),
                 shape = RoundedCornerShape(14.dp),
@@ -1677,21 +1691,22 @@ private fun FinalStep(
               )
             }
           }
+          Text("Status", style = onboardingCaption1Style.copy(fontWeight = FontWeight.Bold), color = onboardingTextSecondary)
+          Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = onboardingCommandBg,
+            border = BorderStroke(1.dp, onboardingCommandBorder),
+          ) {
+            Text(
+              statusLabel,
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+              style = onboardingCalloutStyle.copy(fontFamily = FontFamily.Monospace),
+              color = onboardingCommandText,
+            )
+          }
           if (showDiagnostics) {
             Text("Error", style = onboardingCaption1Style.copy(fontWeight = FontWeight.Bold), color = onboardingTextSecondary)
-            Surface(
-              modifier = Modifier.fillMaxWidth(),
-              shape = RoundedCornerShape(12.dp),
-              color = onboardingCommandBg,
-              border = BorderStroke(1.dp, onboardingCommandBorder),
-            ) {
-              Text(
-                statusLabel,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                style = onboardingCalloutStyle.copy(fontFamily = FontFamily.Monospace),
-                color = onboardingCommandText,
-              )
-            }
             Text(
               "OpenClaw Android ${openClawAndroidVersionLabel()}",
               style = onboardingCaption1Style,

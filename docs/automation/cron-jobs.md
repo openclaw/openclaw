@@ -270,7 +270,7 @@ Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
-- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `irc` / `googlechat` / `line` / `last`, plus extension channels like `msteams` / `mattermost` (plugins).
+- `delivery.channel`: `last` or any deliverable channel id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
 - `delivery.to`: channel-specific recipient target.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
@@ -734,3 +734,11 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - If the announce flow returns `false` (e.g. requester session is busy), the gateway retries up to 3 times with tracking via `announceRetryCount`.
 - Announces older than 5 minutes past `endedAt` are force-expired to prevent stale entries from looping indefinitely.
 - If you see repeated announce deliveries in logs, check the subagent registry for entries with high `announceRetryCount` values.
+
+## Related
+
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — when to use each
+- [Background Tasks](/automation/tasks) — task ledger for cron executions
+- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Troubleshooting](/automation/troubleshooting) — debugging automation issues

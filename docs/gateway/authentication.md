@@ -6,7 +6,11 @@ read_when:
 title: "Authentication"
 ---
 
-# Authentication
+# Authentication (Model Providers)
+
+<Note>
+This page covers **model provider** authentication (API keys, OAuth, setup tokens). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+</Note>
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
 hosts, API keys are usually the most predictable option. Subscription/OAuth
@@ -101,6 +105,7 @@ Auth profile refs are also supported for static credentials:
 
 - `api_key` credentials can use `keyRef: { source, provider, id }`
 - `token` credentials can use `tokenRef: { source, provider, id }`
+- OAuth-mode profiles do not support SecretRef credentials; if `auth.profiles.<id>.mode` is set to `"oauth"`, SecretRef-backed `keyRef`/`tokenRef` input for that profile is rejected.
 
 Automation-friendly check (exit `1` when expired/missing, `2` when expiring):
 
