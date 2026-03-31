@@ -15,6 +15,17 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips leaked tool-call prefixes that start with to=... and JSON args", () => {
+    const input =
+      'to=cron ... {"action":"create","schedule":"in 2 minutes","message":"check reminders"}\nSet.';
+    expect(sanitizeUserFacingText(input)).toBe("Set.");
+  });
+
+  it("does not clobber normal prose that happens to include to=... text", () => {
+    const input = 'Use to=cron as an example string in docs: {"note":"not a tool call"}';
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
