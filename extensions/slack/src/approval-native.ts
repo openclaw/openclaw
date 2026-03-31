@@ -1,14 +1,9 @@
 import {
   createApproverRestrictedNativeApprovalAdapter,
-  resolveExecApprovalSessionTarget,
+  resolveApprovalRequestOriginTarget,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type {
-  ExecApprovalRequest,
-  ExecApprovalSessionTarget,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { listSlackAccountIds } from "./accounts.js";
 import { isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {
@@ -21,30 +16,7 @@ import {
 import { parseSlackTarget } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type SlackOriginTarget = { to: string; threadId?: string; accountId?: string };
-
-function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
-function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
-  if (isExecApprovalRequest(request)) {
-    return request;
-  }
-  return {
-    id: request.id,
-    request: {
-      command: request.request.title,
-      sessionKey: request.request.sessionKey ?? undefined,
-      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
-      turnSourceTo: request.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
-    },
-    createdAtMs: request.createdAtMs,
-    expiresAtMs: request.expiresAtMs,
-  };
-}
+type SlackOriginTarget = { to: string; threadId?: string };
 
 function extractSlackSessionKind(
   sessionKey?: string | null,
@@ -69,38 +41,13 @@ function normalizeSlackThreadMatchKey(threadId?: string): string {
   return leadingEpoch ?? trimmed;
 }
 
-function resolveRequestSessionTarget(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequest;
-}): ExecApprovalSessionTarget | null {
-  const execLikeRequest = toExecLikeRequest(params.request);
-  return resolveExecApprovalSessionTarget({
-    cfg: params.cfg,
-    request: execLikeRequest,
-    turnSourceChannel: execLikeRequest.request.turnSourceChannel ?? undefined,
-    turnSourceTo: execLikeRequest.request.turnSourceTo ?? undefined,
-    turnSourceAccountId: execLikeRequest.request.turnSourceAccountId ?? undefined,
-    turnSourceThreadId: execLikeRequest.request.turnSourceThreadId ?? undefined,
-  });
-}
-
-function resolveTurnSourceSlackOriginTarget(params: {
-  accountId: string;
-  request: ApprovalRequest;
-}): SlackOriginTarget | null {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-  const turnSourceTo = params.request.request.turnSourceTo?.trim() || "";
-  const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || "";
+function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
+  const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const turnSourceTo = request.request.turnSourceTo?.trim() || "";
   if (turnSourceChannel !== "slack" || !turnSourceTo) {
     return null;
   }
-  if (
-    turnSourceAccountId &&
-    normalizeAccountId(turnSourceAccountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return null;
-  }
-  const sessionKind = extractSlackSessionKind(params.request.request.sessionKey ?? undefined);
+  const sessionKind = extractSlackSessionKind(request.request.sessionKey ?? undefined);
   const parsed = parseSlackTarget(turnSourceTo, {
     defaultKind: sessionKind === "direct" ? "user" : "channel",
   });
@@ -108,33 +55,21 @@ function resolveTurnSourceSlackOriginTarget(params: {
     return null;
   }
   const threadId =
-    typeof params.request.request.turnSourceThreadId === "string"
-      ? params.request.request.turnSourceThreadId.trim() || undefined
-      : typeof params.request.request.turnSourceThreadId === "number"
-        ? String(params.request.request.turnSourceThreadId)
+    typeof request.request.turnSourceThreadId === "string"
+      ? request.request.turnSourceThreadId.trim() || undefined
+      : typeof request.request.turnSourceThreadId === "number"
+        ? String(request.request.turnSourceThreadId)
         : undefined;
   return {
     to: `${parsed.kind}:${parsed.id}`,
     threadId,
-    accountId: turnSourceAccountId || undefined,
   };
 }
 
-function resolveSessionSlackOriginTarget(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  request: ApprovalRequest;
-}): SlackOriginTarget | null {
-  const sessionTarget = resolveRequestSessionTarget(params);
-  if (!sessionTarget || sessionTarget.channel !== "slack") {
-    return null;
-  }
-  if (
-    sessionTarget.accountId &&
-    normalizeAccountId(sessionTarget.accountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return null;
-  }
+function resolveSessionSlackOriginTarget(sessionTarget: {
+  to: string;
+  threadId?: string | number | null;
+}): SlackOriginTarget {
   return {
     to: sessionTarget.to,
     threadId:
@@ -143,19 +78,13 @@ function resolveSessionSlackOriginTarget(params: {
         : typeof sessionTarget.threadId === "number"
           ? String(sessionTarget.threadId)
           : undefined,
-    accountId: sessionTarget.accountId ?? undefined,
   };
 }
 
 function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
-  const accountMatches =
-    !a.accountId ||
-    !b.accountId ||
-    normalizeAccountId(a.accountId) === normalizeAccountId(b.accountId);
   return (
     normalizeComparableTarget(a.to) === normalizeComparableTarget(b.to) &&
-    normalizeSlackThreadMatchKey(a.threadId) === normalizeSlackThreadMatchKey(b.threadId) &&
-    accountMatches
+    normalizeSlackThreadMatchKey(a.threadId) === normalizeSlackThreadMatchKey(b.threadId)
   );
 }
 
@@ -167,13 +96,15 @@ function resolveSlackOriginTarget(params: {
   if (!shouldHandleSlackExecApprovalRequest(params)) {
     return null;
   }
-  const turnSourceTarget = resolveTurnSourceSlackOriginTarget(params);
-  const sessionTarget = resolveSessionSlackOriginTarget(params);
-  if (turnSourceTarget && sessionTarget && !slackTargetsMatch(turnSourceTarget, sessionTarget)) {
-    return null;
-  }
-  const target = turnSourceTarget ?? sessionTarget;
-  return target ? { to: target.to, threadId: target.threadId } : null;
+  return resolveApprovalRequestOriginTarget({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "slack",
+    accountId: params.accountId,
+    resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
+    resolveSessionTarget: resolveSessionSlackOriginTarget,
+    targetsMatch: slackTargetsMatch,
+  });
 }
 
 function resolveSlackApproverDmTargets(params: {

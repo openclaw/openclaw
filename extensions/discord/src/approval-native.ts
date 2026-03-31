@@ -1,14 +1,9 @@
 import {
   createApproverRestrictedNativeApprovalAdapter,
-  doesApprovalRequestMatchChannelAccount,
-  resolveApprovalRequestSessionTarget,
+  resolveApprovalRequestOriginTarget,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type {
-  ExecApprovalRequest,
-  ExecApprovalSessionTarget,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   getDiscordExecApprovalApprovers,
@@ -52,70 +47,45 @@ function normalizeDiscordOriginChannelId(value?: string | null): string | null {
   return /^\d+$/.test(trimmed) ? trimmed : null;
 }
 
-function resolveRequestSessionTarget(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequest;
-}): ExecApprovalSessionTarget | null {
-  return resolveApprovalRequestSessionTarget(params);
-}
-
 function resolveDiscordOriginTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ApprovalRequest;
 }) {
-  if (
-    !doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: "discord",
-      accountId: params.accountId,
-    })
-  ) {
-    return null;
-  }
-
   const sessionKind = extractDiscordSessionKind(params.request.request.sessionKey?.trim() || null);
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-  const rawTurnSourceTo = params.request.request.turnSourceTo?.trim() || "";
-  const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
-  const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);
-  const turnSourceTarget =
-    turnSourceChannel === "discord" &&
-    turnSourceTo &&
-    sessionKind !== "dm" &&
-    (hasExplicitOriginTarget || sessionKind === "channel" || sessionKind === "group")
-      ? {
-          to: turnSourceTo,
-        }
-      : null;
-
-  const sessionTarget = resolveRequestSessionTarget(params);
-  if (
-    turnSourceTarget &&
-    sessionTarget?.channel === "discord" &&
-    turnSourceTarget.to !== normalizeDiscordOriginChannelId(sessionTarget.to)
-  ) {
-    return null;
-  }
-
-  if (turnSourceTarget) {
-    return { to: turnSourceTarget.to };
-  }
-  if (sessionKind === "dm") {
-    return null;
-  }
-  if (sessionTarget?.channel === "discord") {
-    const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
-    return targetTo ? { to: targetTo } : null;
-  }
-  const legacyChannelId = extractDiscordChannelId(
-    params.request.request.sessionKey?.trim() || null,
-  );
-  if (legacyChannelId) {
-    return { to: legacyChannelId };
-  }
-  return null;
+  return resolveApprovalRequestOriginTarget({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "discord",
+    accountId: params.accountId,
+    resolveTurnSourceTarget: (request) => {
+      const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+      const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
+      const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
+      const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);
+      if (turnSourceChannel !== "discord" || !turnSourceTo || sessionKind === "dm") {
+        return null;
+      }
+      return hasExplicitOriginTarget || sessionKind === "channel" || sessionKind === "group"
+        ? { to: turnSourceTo }
+        : null;
+    },
+    resolveSessionTarget: (sessionTarget) => {
+      if (sessionKind === "dm") {
+        return null;
+      }
+      const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
+      return targetTo ? { to: targetTo } : null;
+    },
+    targetsMatch: (a, b) => a.to === b.to,
+    resolveFallbackTarget: (request) => {
+      if (sessionKind === "dm") {
+        return null;
+      }
+      const legacyChannelId = extractDiscordChannelId(request.request.sessionKey?.trim() || null);
+      return legacyChannelId ? { to: legacyChannelId } : null;
+    },
+  });
 }
 
 function resolveDiscordApproverDmTargets(params: {
