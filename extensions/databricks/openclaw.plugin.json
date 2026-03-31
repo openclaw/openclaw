@@ -24,6 +24,22 @@
       "label": "Warehouse ID",
       "help": "Default SQL warehouse ID used by databricks_sql_readonly."
     },
+    "allowedCatalogs": {
+      "label": "Allowed Catalogs",
+      "help": "Optional read-only allowlist. When set, SQL calls must provide a catalog in this list."
+    },
+    "allowedSchemas": {
+      "label": "Allowed Schemas",
+      "help": "Optional read-only allowlist. When set, SQL calls must provide a schema in this list."
+    },
+    "pollingIntervalMs": {
+      "label": "Polling Interval (ms)",
+      "help": "Polling interval for pending/running Databricks statements."
+    },
+    "maxPollingWaitMs": {
+      "label": "Max Polling Wait (ms)",
+      "help": "Maximum total wait time for statement polling."
+    },
     "readOnly": {
       "label": "Read-Only Mode",
       "help": "Must remain enabled in this iteration."
@@ -56,6 +72,28 @@
         "minimum": 0,
         "maximum": 3,
         "description": "Retry attempts for transient Databricks request failures."
+      },
+      "pollingIntervalMs": {
+        "type": "number",
+        "minimum": 200,
+        "maximum": 5000,
+        "description": "Polling interval used while statement status is PENDING/RUNNING/QUEUED."
+      },
+      "maxPollingWaitMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 120000,
+        "description": "Maximum total elapsed wait time for statement polling."
+      },
+      "allowedCatalogs": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional allowlist of permitted catalogs for read-only SQL."
+      },
+      "allowedSchemas": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional allowlist of permitted schemas for read-only SQL."
       },
       "readOnly": {
         "type": "boolean",

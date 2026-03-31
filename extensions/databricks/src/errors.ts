@@ -1,8 +1,12 @@
 export type DatabricksErrorCode =
   | "CONFIG_ERROR"
   | "POLICY_VIOLATION"
+  | "ALLOWLIST_VIOLATION"
   | "REQUEST_ERROR"
   | "TIMEOUT"
+  | "STATEMENT_TIMEOUT"
+  | "POLLING_TIMEOUT"
+  | "STATEMENT_PENDING_MAX_WAIT"
   | "UNAUTHORIZED"
   | "RATE_LIMIT"
   | "HTTP_ERROR"
@@ -52,6 +56,18 @@ export class DatabricksPolicyError extends DatabricksError {
       details,
     });
     this.name = "DatabricksPolicyError";
+  }
+}
+
+export class DatabricksAllowlistError extends DatabricksError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super({
+      code: "ALLOWLIST_VIOLATION",
+      message,
+      retryable: false,
+      details,
+    });
+    this.name = "DatabricksAllowlistError";
   }
 }
 

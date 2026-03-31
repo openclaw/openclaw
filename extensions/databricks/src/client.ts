@@ -1,6 +1,11 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/core";
 import type { ResolvedDatabricksRuntimeConfig } from "./config.js";
-import { DatabricksHttpError, normalizeDatabricksError, isRetryableStatus } from "./errors.js";
+import {
+  DatabricksError,
+  DatabricksHttpError,
+  normalizeDatabricksError,
+  isRetryableStatus,
+} from "./errors.js";
 import { logDatabricks } from "./logger.js";
 
 type DatabricksFetch = typeof fetch;
@@ -10,6 +15,16 @@ type DatabricksSqlRequest = {
   warehouseId: string;
   catalog?: string;
   schema?: string;
+};
+
+type DatabricksSqlStatus = "PENDING" | "RUNNING" | "QUEUED" | "SUCCEEDED" | "FAILED" | "CANCELED";
+
+type DatabricksStatementPayload = {
+  statement_id?: string;
+  status?: {
+    state?: string;
+  };
+  [key: string]: unknown;
 };
 
 type RetryOptions = {
@@ -79,6 +94,32 @@ function buildBackoffMs(attempt: number, retry: RetryOptions): number {
   return Math.min(exponential, 2_000);
 }
 
+function getStatementStatus(payload: unknown): DatabricksSqlStatus | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const statusValue = (payload as DatabricksStatementPayload).status?.state;
+  if (typeof statusValue !== "string") {
+    return null;
+  }
+  const normalized = statusValue.toUpperCase();
+  if (
+    normalized === "PENDING" ||
+    normalized === "RUNNING" ||
+    normalized === "QUEUED" ||
+    normalized === "SUCCEEDED" ||
+    normalized === "FAILED" ||
+    normalized === "CANCELED"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function isPendingStatus(status: DatabricksSqlStatus | null): boolean {
+  return status === "PENDING" || status === "RUNNING" || status === "QUEUED";
+}
+
 export class DatabricksSqlClient {
   private readonly fetchImpl: DatabricksFetch;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -144,12 +185,19 @@ export class DatabricksSqlClient {
           }
           throw error;
         }
-        return payload;
+        return this.resolveFinalStatementPayload(payload);
       } catch (error) {
         const normalized = normalizeDatabricksError(
           error,
           `Databricks SQL request timed out after ${this.config.timeoutMs}ms.`,
         );
+        if (normalized.code === "TIMEOUT") {
+          throw new DatabricksError({
+            code: "STATEMENT_TIMEOUT",
+            message: normalized.message,
+            retryable: normalized.retryable,
+          });
+        }
         if (shouldRetry({ attempt, retry }) && normalized.retryable) {
           const delayMs = buildBackoffMs(attempt, retry);
           logDatabricks(this.logger, "warn", "Retrying SQL API request after transient error.", {
@@ -170,6 +218,100 @@ export class DatabricksSqlClient {
       message: "Databricks SQL request exhausted retry attempts.",
       retryable: false,
     });
+  }
+
+  private async pollStatement(statementId: string): Promise<unknown> {
+    const startedAt = Date.now();
+    const endpoint = `${this.config.host}/api/2.0/sql/statements/${encodeURIComponent(statementId)}`;
+
+    while (Date.now() - startedAt <= this.config.maxPollingWaitMs) {
+      const elapsedMs = Date.now() - startedAt;
+      const remainingMs = this.config.maxPollingWaitMs - elapsedMs;
+      const requestTimeoutMs = Math.max(1_000, Math.min(this.config.timeoutMs, remainingMs));
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+      try {
+        const response = await this.fetchImpl(endpoint, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.config.token}`,
+          },
+          signal: controller.signal,
+        });
+        const payload = await parseResponsePayload(response);
+        if (!response.ok) {
+          const message = toErrorMessage(
+            payload,
+            `Databricks statement polling failed with status ${response.status}.`,
+          );
+          throw new DatabricksHttpError({
+            statusCode: response.status,
+            message,
+          });
+        }
+
+        const status = getStatementStatus(payload);
+        if (!isPendingStatus(status)) {
+          return payload;
+        }
+
+        const delayMs = Math.min(this.config.pollingIntervalMs, Math.max(0, remainingMs));
+        logDatabricks(this.logger, "debug", "Polling Databricks statement status.", {
+          statementId,
+          status,
+          delayMs,
+          elapsedMs,
+        });
+        await this.sleep(delayMs);
+      } catch (error) {
+        const normalized = normalizeDatabricksError(
+          error,
+          `Databricks statement polling timed out after ${requestTimeoutMs}ms.`,
+        );
+        if (normalized.code === "TIMEOUT") {
+          throw new DatabricksError({
+            code: "POLLING_TIMEOUT",
+            message: normalized.message,
+            retryable: true,
+          });
+        }
+        throw normalized;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    throw new DatabricksError({
+      code: "STATEMENT_PENDING_MAX_WAIT",
+      message: `Databricks statement is still pending after ${this.config.maxPollingWaitMs}ms.`,
+      retryable: false,
+      details: {
+        maxPollingWaitMs: this.config.maxPollingWaitMs,
+        pollingIntervalMs: this.config.pollingIntervalMs,
+      },
+    });
+  }
+
+  private async resolveFinalStatementPayload(initialPayload: unknown): Promise<unknown> {
+    const status = getStatementStatus(initialPayload);
+    if (!isPendingStatus(status)) {
+      return initialPayload;
+    }
+
+    const statementId =
+      initialPayload && typeof initialPayload === "object"
+        ? (initialPayload as DatabricksStatementPayload).statement_id
+        : undefined;
+    if (!statementId || typeof statementId !== "string") {
+      throw new DatabricksError({
+        code: "POLLING_TIMEOUT",
+        message: "Databricks statement is pending, but statement_id is missing for polling.",
+        retryable: false,
+      });
+    }
+
+    return this.pollStatement(statementId);
   }
 }
 

@@ -36,6 +36,10 @@ describe("databricks sql client", () => {
         warehouseId: "wh-1",
         timeoutMs: 10_000,
         retryCount: 0,
+        pollingIntervalMs: 1_000,
+        maxPollingWaitMs: 30_000,
+        allowedCatalogs: [],
+        allowedSchemas: [],
         readOnly: true,
       },
       logger: createLogger(),
@@ -73,6 +77,10 @@ describe("databricks sql client", () => {
         warehouseId: "wh-1",
         timeoutMs: 10_000,
         retryCount: 1,
+        pollingIntervalMs: 1_000,
+        maxPollingWaitMs: 30_000,
+        allowedCatalogs: [],
+        allowedSchemas: [],
         readOnly: true,
       },
       logger: createLogger(),
@@ -106,6 +114,10 @@ describe("databricks sql client", () => {
         warehouseId: "wh-1",
         timeoutMs: 20,
         retryCount: 0,
+        pollingIntervalMs: 1_000,
+        maxPollingWaitMs: 30_000,
+        allowedCatalogs: [],
+        allowedSchemas: [],
         readOnly: true,
       },
       logger: createLogger(),
@@ -118,7 +130,131 @@ describe("databricks sql client", () => {
         warehouseId: "wh-1",
       }),
     ).rejects.toMatchObject({
-      code: "TIMEOUT",
+      code: "STATEMENT_TIMEOUT",
+    });
+  });
+
+  it("polls until statement reaches terminal status", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-3",
+            status: { state: "PENDING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-3",
+            status: { state: "RUNNING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-3",
+            status: { state: "SUCCEEDED" },
+            result: { data_array: [[1]] },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+
+    const client = new DatabricksSqlClient({
+      config: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test",
+        warehouseId: "wh-1",
+        timeoutMs: 10_000,
+        retryCount: 0,
+        pollingIntervalMs: 1,
+        maxPollingWaitMs: 5_000,
+        allowedCatalogs: [],
+        allowedSchemas: [],
+        readOnly: true,
+      },
+      logger: createLogger(),
+      deps: { fetchImpl, sleep: async () => {} },
+    });
+
+    const result = await client.executeStatement({
+      statement: "SELECT 1",
+      warehouseId: "wh-1",
+    });
+    expect(result).toEqual({
+      statement_id: "stmt-3",
+      status: { state: "SUCCEEDED" },
+      result: { data_array: [[1]] },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails when statement remains pending past max wait", async () => {
+    const fetchImpl = vi.fn();
+    fetchImpl.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          statement_id: "stmt-4",
+          status: { state: "PENDING" },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    fetchImpl.mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          statement_id: "stmt-4",
+          status: { state: "RUNNING" },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+
+    const client = new DatabricksSqlClient({
+      config: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test",
+        warehouseId: "wh-1",
+        timeoutMs: 10_000,
+        retryCount: 0,
+        pollingIntervalMs: 1,
+        maxPollingWaitMs: 1,
+        allowedCatalogs: [],
+        allowedSchemas: [],
+        readOnly: true,
+      },
+      logger: createLogger(),
+      deps: { fetchImpl, sleep: async () => {} },
+    });
+
+    await expect(
+      client.executeStatement({
+        statement: "SELECT 1",
+        warehouseId: "wh-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "STATEMENT_PENDING_MAX_WAIT",
     });
   });
 });

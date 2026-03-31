@@ -11,16 +11,23 @@ Use this skill when the user asks to work with Databricks SQL, notebooks, jobs, 
 - Real execution support:
   - single-statement `SELECT`
   - single-statement `WITH ... SELECT`
+  - status polling for `PENDING` / `RUNNING` / `QUEUED` until terminal state or max wait
 - Enforced limits:
   - read-only only
   - mutating statements blocked
   - multi-statement SQL blocked
+  - optional catalog/schema allowlists enforced conservatively (fail-closed)
 
 ## Not implemented yet
 
 - Jobs API execution
 - Unity Catalog or lineage API calls
 - Mutating SQL workflows
+
+## Allowlist note
+
+If `allowedCatalogs` and/or `allowedSchemas` are configured, pass `catalog` and `schema` explicitly in tool requests.
+When the target cannot be determined safely, execution is rejected.
 
 ## Scope
 

@@ -1,4 +1,4 @@
-import { DatabricksPolicyError } from "./errors.js";
+import { DatabricksAllowlistError, DatabricksPolicyError } from "./errors.js";
 
 const MUTATING_KEYWORDS = [
   "INSERT",
@@ -16,7 +16,7 @@ const MUTATING_KEYWORDS = [
   "REPLACE",
 ] as const;
 
-function stripSqlCommentsAndLiterals(sql: string): string {
+export function stripSqlCommentsAndLiterals(sql: string): string {
   let result = "";
   let index = 0;
 
@@ -82,7 +82,7 @@ function assertSingleStatement(sql: string) {
 }
 
 function assertAllowedStartingClause(sql: string) {
-  const normalized = sql.trim().replace(/\s+/gu, " ").toUpperCase();
+  const normalized = stripSqlCommentsAndLiterals(sql).trim().replace(/\s+/gu, " ").toUpperCase();
   if (normalized.startsWith("SELECT ")) {
     return;
   }
@@ -115,4 +115,46 @@ export function assertReadOnlySqlStatement(rawSql: string): string {
   assertAllowedStartingClause(sql);
   assertNoMutatingKeyword(sql);
   return sql.replace(/;+\s*$/u, "");
+}
+
+export function assertAllowlistTarget(params: {
+  allowedCatalogs: readonly string[];
+  allowedSchemas: readonly string[];
+  catalog?: string;
+  schema?: string;
+}) {
+  const allowedCatalogs = params.allowedCatalogs.map((entry) => entry.toLowerCase());
+  const allowedSchemas = params.allowedSchemas.map((entry) => entry.toLowerCase());
+  const targetCatalog = params.catalog?.trim().toLowerCase();
+  const targetSchema = params.schema?.trim().toLowerCase();
+
+  if (allowedCatalogs.length === 0 && allowedSchemas.length === 0) {
+    return;
+  }
+
+  if (allowedCatalogs.length > 0) {
+    if (!targetCatalog) {
+      throw new DatabricksAllowlistError(
+        "Catalog allowlist is configured, but the query target catalog could not be determined safely.",
+      );
+    }
+    if (!allowedCatalogs.includes(targetCatalog)) {
+      throw new DatabricksAllowlistError(
+        `Catalog "${params.catalog}" is not in the configured allowlist.`,
+      );
+    }
+  }
+
+  if (allowedSchemas.length > 0) {
+    if (!targetSchema) {
+      throw new DatabricksAllowlistError(
+        "Schema allowlist is configured, but the query target schema could not be determined safely.",
+      );
+    }
+    if (!allowedSchemas.includes(targetSchema)) {
+      throw new DatabricksAllowlistError(
+        `Schema "${params.schema}" is not in the configured allowlist.`,
+      );
+    }
+  }
 }

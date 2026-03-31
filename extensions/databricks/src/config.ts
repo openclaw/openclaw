@@ -8,6 +8,8 @@ import { DatabricksConfigError } from "./errors.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRY_COUNT = 1;
+const DEFAULT_POLLING_INTERVAL_MS = 1_000;
+const DEFAULT_MAX_POLLING_WAIT_MS = 30_000;
 
 const DatabricksRuntimeConfigSchema = z.object({
   host: z.string().min(1, { error: "host is required" }),
@@ -23,6 +25,18 @@ const DatabricksRuntimeConfigSchema = z.object({
     .int({ error: "retryCount must be an integer between 0 and 3" })
     .min(0, { error: "retryCount must be >= 0" })
     .max(3, { error: "retryCount must be <= 3" }),
+  pollingIntervalMs: z
+    .number({ error: "pollingIntervalMs must be a number between 200 and 5000" })
+    .int({ error: "pollingIntervalMs must be an integer between 200 and 5000" })
+    .min(200, { error: "pollingIntervalMs must be >= 200" })
+    .max(5_000, { error: "pollingIntervalMs must be <= 5000" }),
+  maxPollingWaitMs: z
+    .number({ error: "maxPollingWaitMs must be a number between 1000 and 120000" })
+    .int({ error: "maxPollingWaitMs must be an integer between 1000 and 120000" })
+    .min(1_000, { error: "maxPollingWaitMs must be >= 1000" })
+    .max(120_000, { error: "maxPollingWaitMs must be <= 120000" }),
+  allowedCatalogs: z.array(z.string().min(1)).default([]),
+  allowedSchemas: z.array(z.string().min(1)).default([]),
   readOnly: z.literal(true, {
     error: "Only readOnly=true is supported in this Databricks runtime iteration.",
   }),
@@ -36,6 +50,10 @@ type DatabricksPluginConfig = {
   warehouseId?: unknown;
   timeoutMs?: unknown;
   retryCount?: unknown;
+  pollingIntervalMs?: unknown;
+  maxPollingWaitMs?: unknown;
+  allowedCatalogs?: unknown;
+  allowedSchemas?: unknown;
   readOnly?: unknown;
 };
 
@@ -78,6 +96,30 @@ function normalizeTimeoutMs(value: unknown): number {
   return Math.floor(value);
 }
 
+function normalizePollingIntervalMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_POLLING_INTERVAL_MS;
+  }
+  return Math.floor(value);
+}
+
+function normalizeMaxPollingWaitMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_MAX_POLLING_WAIT_MS;
+  }
+  return Math.floor(value);
+}
+
+function normalizeAllowlistValues(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
 export function resolveDatabricksPluginRawConfig(
   config?: OpenClawConfig,
 ): DatabricksPluginConfig | undefined {
@@ -118,6 +160,10 @@ export function resolveDatabricksRuntimeConfig(params: {
 
   const timeoutMs = normalizeTimeoutMs(candidate?.timeoutMs);
   const retryCount = normalizeRetryCount(candidate?.retryCount);
+  const pollingIntervalMs = normalizePollingIntervalMs(candidate?.pollingIntervalMs);
+  const maxPollingWaitMs = normalizeMaxPollingWaitMs(candidate?.maxPollingWaitMs);
+  const allowedCatalogs = normalizeAllowlistValues(candidate?.allowedCatalogs);
+  const allowedSchemas = normalizeAllowlistValues(candidate?.allowedSchemas);
   const readOnly =
     typeof candidate?.readOnly === "boolean"
       ? candidate.readOnly
@@ -129,6 +175,10 @@ export function resolveDatabricksRuntimeConfig(params: {
     warehouseId: warehouseId ?? "",
     timeoutMs,
     retryCount,
+    pollingIntervalMs,
+    maxPollingWaitMs,
+    allowedCatalogs,
+    allowedSchemas,
     readOnly,
   });
   if (!parsed.success) {

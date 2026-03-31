@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DatabricksAllowlistError,
   DatabricksError,
   DatabricksHttpError,
   isRetryableStatus,
@@ -39,5 +40,11 @@ describe("databricks errors", () => {
     });
     const normalized = normalizeDatabricksError(original, "fallback");
     expect(normalized).toBe(original);
+  });
+
+  it("creates allowlist violation error", () => {
+    const error = new DatabricksAllowlistError("catalog blocked");
+    expect(error.code).toBe("ALLOWLIST_VIOLATION");
+    expect(error.retryable).toBe(false);
   });
 });

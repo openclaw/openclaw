@@ -16,6 +16,10 @@ describe("databricks config", () => {
     expect(resolved.host).toBe("https://dbc-example.cloud.databricks.com");
     expect(resolved.timeoutMs).toBe(30_000);
     expect(resolved.retryCount).toBe(1);
+    expect(resolved.pollingIntervalMs).toBe(1_000);
+    expect(resolved.maxPollingWaitMs).toBe(30_000);
+    expect(resolved.allowedCatalogs).toEqual([]);
+    expect(resolved.allowedSchemas).toEqual([]);
     expect(resolved.readOnly).toBe(true);
   });
 
@@ -58,5 +62,21 @@ describe("databricks config", () => {
         env: {},
       }),
     ).toThrow("Only readOnly=true is supported");
+  });
+
+  it("normalizes allowlists", () => {
+    const resolved = resolveDatabricksRuntimeConfig({
+      rawConfig: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test-token",
+        warehouseId: "abc123",
+        allowedCatalogs: ["Main", " analytics "],
+        allowedSchemas: ["Public"],
+      },
+      env: {},
+    });
+
+    expect(resolved.allowedCatalogs).toEqual(["main", "analytics"]);
+    expect(resolved.allowedSchemas).toEqual(["public"]);
   });
 });

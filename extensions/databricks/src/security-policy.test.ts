@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DatabricksPolicyError } from "./errors.js";
-import { assertReadOnlySqlStatement } from "./security-policy.js";
+import { DatabricksAllowlistError, DatabricksPolicyError } from "./errors.js";
+import { assertAllowlistTarget, assertReadOnlySqlStatement } from "./security-policy.js";
 
 describe("databricks read-only sql policy", () => {
   it("accepts SELECT", () => {
@@ -31,5 +31,55 @@ describe("databricks read-only sql policy", () => {
     expect(() =>
       assertReadOnlySqlStatement("WITH x AS (SELECT 1) INSERT INTO t VALUES (1)"),
     ).toThrow("disallowed keyword: INSERT");
+  });
+
+  it("accepts sql with comments and unusual whitespace", () => {
+    const sql = assertReadOnlySqlStatement(
+      "  /* lead */\nWITH t AS (\n  SELECT 1 AS id -- row\n)\nSELECT\t*\nFROM t  ; ",
+    );
+    expect(sql).toContain("WITH t AS");
+  });
+
+  it("ignores mutating keywords inside string literals", () => {
+    const sql = assertReadOnlySqlStatement("SELECT 'drop table users' AS note");
+    expect(sql).toBe("SELECT 'drop table users' AS note");
+  });
+
+  it("rejects multiple statements with comments", () => {
+    expect(() => assertReadOnlySqlStatement("SELECT 1; -- comment\nSELECT 2")).toThrow(
+      "single SQL statement",
+    );
+  });
+});
+
+describe("databricks allowlist policy", () => {
+  it("accepts targets inside allowlist", () => {
+    expect(() =>
+      assertAllowlistTarget({
+        allowedCatalogs: ["main"],
+        allowedSchemas: ["public"],
+        catalog: "MAIN",
+        schema: "Public",
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails closed when catalog is required but missing", () => {
+    expect(() =>
+      assertAllowlistTarget({
+        allowedCatalogs: ["main"],
+        allowedSchemas: [],
+      }),
+    ).toThrow(DatabricksAllowlistError);
+  });
+
+  it("rejects non-allowlisted schema", () => {
+    expect(() =>
+      assertAllowlistTarget({
+        allowedCatalogs: [],
+        allowedSchemas: ["public"],
+        schema: "private",
+      }),
+    ).toThrow('Schema "private" is not in the configured allowlist');
   });
 });
