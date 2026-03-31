@@ -33,6 +33,7 @@ import { isCodeFile } from "@/lib/report-utils";
 import { CronDashboard } from "../components/cron/cron-dashboard";
 import { SkillStorePanel } from "../components/skill-store/skill-store-panel";
 import { IntegrationsPanel } from "../components/integrations/integrations-panel";
+import { SettingsPanel } from "../components/settings/settings-panel";
 import { CronJobDetail } from "../components/cron/cron-job-detail";
 import { CronSessionView } from "../components/cron/cron-session-view";
 import type { CronJob, CronJobsResponse } from "../types/cron";
@@ -175,6 +176,7 @@ type ContentState =
   | { kind: "cron-dashboard" }
   | { kind: "skill-store" }
   | { kind: "integrations" }
+  | { kind: "settings"; initialTab?: string }
   | { kind: "cron-job"; jobId: string; job: CronJob }
   | { kind: "cron-session"; jobId: string; job: CronJob; sessionId: string; run: import("../types/cron").CronRunLogEntry }
   | { kind: "duckdb-missing" }
@@ -1156,6 +1158,12 @@ function WorkspacePageInner() {
     [],
   );
 
+  const handleOpenSettings = useCallback((initialTab?: string) => {
+    openTabForNode({ path: "~settings", name: "Settings", type: "folder" });
+    setActivePath("~settings");
+    setContent({ kind: "settings", initialTab });
+  }, [openTabForNode]);
+
   const handleNodeSelect = useCallback(
     (node: TreeNode) => {
       // --- Browse-mode: detect special OpenClaw directories ---
@@ -1228,24 +1236,25 @@ function WorkspacePageInner() {
         setContent({ kind: "cron-dashboard" });
         return;
       }
-      // Clicking the Skills folder opens the skill store
+      // Clicking the Skills folder opens settings on Skills tab
       if (node.path === "~skills") {
-        openTabForNode(node);
-        setActivePath(node.path);
-        setContent({ kind: "skill-store" });
+        handleOpenSettings("skills");
         return;
       }
-      // Clicking the Integrations folder opens the integrations plane
+      // Clicking the Integrations folder opens settings on Integrations tab
       if (node.path === "~integrations") {
-        openTabForNode(node);
-        setActivePath(node.path);
-        setContent({ kind: "integrations" });
+        handleOpenSettings("integrations");
+        return;
+      }
+      // Clicking the Settings entry opens the settings plane
+      if (node.path === "~settings") {
+        handleOpenSettings();
         return;
       }
       openTabForNode(node);
       void loadContent(node);
     },
-    [loadContent, openBlankChatTab, openSessionChatTab, openTabForNode, cronJobs, browseDir, workspaceRoot, openclawDir, setBrowseDir],
+    [loadContent, openBlankChatTab, openSessionChatTab, openTabForNode, cronJobs, browseDir, workspaceRoot, openclawDir, setBrowseDir, handleOpenSettings],
   );
 
   const applyActivatedTab = useCallback((tab: Tab | undefined) => {
@@ -1270,11 +1279,12 @@ function WorkspacePageInner() {
         setActivePath("~cron");
         setContent({ kind: "cron-dashboard" });
       } else if (tab.path === "~skills") {
-        setActivePath("~skills");
-        setContent({ kind: "skill-store" });
+        handleOpenSettings("skills");
       } else if (tab.path === "~integrations") {
-        setActivePath("~integrations");
-        setContent({ kind: "integrations" });
+        handleOpenSettings("integrations");
+      } else if (tab.path === "~settings") {
+        setActivePath("~settings");
+        setContent({ kind: "settings" });
       } else if (tab.path.startsWith("~cron/")) {
         setActivePath(tab.path);
         const jobId = tab.path.slice("~cron/".length);
@@ -1290,7 +1300,7 @@ function WorkspacePageInner() {
         void loadContent(syntheticNode);
       }
     }
-  }, [tree, loadContent, cronJobs]);
+  }, [tree, loadContent, cronJobs, handleOpenSettings]);
 
   // Tab handler callbacks (defined after loadContent is available)
   const handleTabActivate = useCallback((tabId: string) => {
@@ -1557,14 +1567,7 @@ function WorkspacePageInner() {
       children: cronChildren.length > 0 ? cronChildren : undefined,
     };
 
-    const integrationsFolder: TreeNode = {
-      name: "Integrations",
-      path: "~integrations",
-      type: "folder",
-      virtual: true,
-    };
-
-    return [...tree, integrationsFolder, cronFolder];
+    return [...tree, cronFolder];
   }, [tree, cronJobs, browseDir]);
 
   // Compute the effective parentDir for ".." navigation.
@@ -1747,13 +1750,13 @@ function WorkspacePageInner() {
         if (urlState.cronRunFilter) setCronRunFilter(urlState.cronRunFilter);
         if (urlState.cronRun != null) setCronRun(urlState.cronRun);
       } else if (urlState.path === "~skills") {
-        openTabForNode({ path: "~skills", name: "Skills", type: "folder" });
-        setActivePath("~skills");
-        setContent({ kind: "skill-store" });
+        handleOpenSettings("skills");
       } else if (urlState.path === "~integrations") {
-        openTabForNode({ path: "~integrations", name: "Integrations", type: "folder" });
-        setActivePath("~integrations");
-        setContent({ kind: "integrations" });
+        handleOpenSettings("integrations");
+      } else if (urlState.path === "~settings") {
+        openTabForNode({ path: "~settings", name: "Settings", type: "folder" });
+        setActivePath("~settings");
+        setContent({ kind: "settings" });
       } else if (isAbsolutePath(urlState.path) || isHomeRelativePath(urlState.path)) {
         const name = urlState.path.split("/").pop() || urlState.path;
         const syntheticNode: TreeNode = { name, path: urlState.path, type: "file" };
@@ -1838,13 +1841,13 @@ function WorkspacePageInner() {
             setContent({ kind: "cron-dashboard" });
           }
         } else if (urlState.path === "~skills") {
-          openTabForNode({ path: "~skills", name: "Skills", type: "folder" });
-          setActivePath("~skills");
-          setContent({ kind: "skill-store" });
+          handleOpenSettings("skills");
         } else if (urlState.path === "~integrations") {
-          openTabForNode({ path: "~integrations", name: "Integrations", type: "folder" });
-          setActivePath("~integrations");
-          setContent({ kind: "integrations" });
+          handleOpenSettings("integrations");
+        } else if (urlState.path === "~settings") {
+          openTabForNode({ path: "~settings", name: "Settings", type: "folder" });
+          setActivePath("~settings");
+          setContent({ kind: "settings" });
         } else if (isAbsolutePath(urlState.path) || isHomeRelativePath(urlState.path)) {
           const name = urlState.path.split("/").pop() || urlState.path;
           const synNode: TreeNode = { name, path: urlState.path, type: "file" };
@@ -2283,6 +2286,7 @@ function WorkspacePageInner() {
             chatHeartbeatInfo={heartbeatInfo}
             activeTab={sidebarTab}
             onTabChange={setSidebarTab}
+            onOpenSettings={() => { handleOpenSettings(); setSidebarOpen(false); }}
             mobile
             onClose={() => setSidebarOpen(false)}
           />
@@ -2353,6 +2357,7 @@ function WorkspacePageInner() {
                 chatHeartbeatInfo={heartbeatInfo}
                 activeTab={sidebarTab}
                 onTabChange={setSidebarTab}
+                onOpenSettings={() => handleOpenSettings()}
               />
             </div>
           </div>
@@ -3486,6 +3491,9 @@ function ContentRenderer({
 
     case "integrations":
       return <IntegrationsPanel />;
+
+    case "settings":
+      return <SettingsPanel initialTab={content.initialTab} />;
 
     case "cron-job":
       return (

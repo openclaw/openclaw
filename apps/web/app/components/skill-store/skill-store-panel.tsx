@@ -29,7 +29,7 @@ const TABS: { id: SkillStoreTab; label: string }[] = [
   { id: "browse", label: "Browse" },
 ];
 
-export function SkillStorePanel() {
+export function SkillStorePanel({ embedded }: { embedded?: boolean } = {}) {
   const [activeTab, setActiveTab] = useState<SkillStoreTab>("installed");
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,20 +145,22 @@ export function SkillStorePanel() {
   }, [installedSkills, searchQuery]);
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
-      <div className="flex items-end justify-between mb-6">
-        <div>
-          <h1
-            className="font-instrument text-3xl tracking-tight mb-1"
-            style={{ color: "var(--color-text)" }}
-          >
-            Skill Store
-          </h1>
-          <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-            {installedSkills.length} skill{installedSkills.length !== 1 ? "s" : ""} installed
-          </p>
+    <div className={embedded ? "" : "p-6 max-w-5xl mx-auto"}>
+      {!embedded && (
+        <div className="flex items-end justify-between mb-6">
+          <div>
+            <h1
+              className="font-instrument text-3xl tracking-tight mb-1"
+              style={{ color: "var(--color-text)" }}
+            >
+              Skill Store
+            </h1>
+            <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
+              {installedSkills.length} skill{installedSkills.length !== 1 ? "s" : ""} installed
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Tab bar */}
       <div

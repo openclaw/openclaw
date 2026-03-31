@@ -319,17 +319,12 @@ export async function GET(req: Request) {
   const root = resolveWorkspaceRoot();
   if (!root) {
     const tree: TreeNode[] = [];
-    const skillsFolder = await buildSkillsVirtualFolder();
-    if (skillsFolder) {tree.push(skillsFolder);}
     return Response.json({ tree, exists: false, workspaceRoot: null, openclawDir, workspace });
   }
 
   const dbObjects = await loadDbObjects();
 
   const tree = await buildTree(root, "", dbObjects, showHidden);
-
-  const skillsFolder = await buildSkillsVirtualFolder();
-  if (skillsFolder) {tree.push(skillsFolder);}
 
   return Response.json({ tree, exists: true, workspaceRoot: root, openclawDir, workspace });
 }

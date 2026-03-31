@@ -2106,6 +2106,20 @@ async function applyDenchCloudBootstrapConfig(params: {
     value: configPatch.messages.tts.providers.elevenlabs,
     errorMessage: "Failed to configure ElevenLabs TTS via Dench Cloud gateway.",
   });
+
+  if ((configPatch as Record<string, unknown>).mcp) {
+    const mcpPatch = (configPatch as Record<string, unknown>).mcp as Record<string, unknown>;
+    const servers = mcpPatch.servers as Record<string, unknown> | undefined;
+    if (servers?.composio) {
+      await setOpenClawConfigJson({
+        openclawCommand: params.openclawCommand,
+        profile: params.profile,
+        key: "mcp.servers.composio",
+        value: servers.composio,
+        errorMessage: "Failed to configure Composio MCP server via Dench Cloud gateway.",
+      });
+    }
+  }
 }
 
 async function resolveDenchCloudBootstrapSelection(params: {
