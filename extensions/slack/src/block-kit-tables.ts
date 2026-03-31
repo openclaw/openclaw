@@ -1,7 +1,8 @@
 import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
 
 const SLACK_MAX_TABLE_COLUMNS = 20;
-const SLACK_MAX_TABLE_ROWS = 100;
+// Slack silently drops the 100th row in table blocks (confirmed empirically 2026-03-30).
+const SLACK_MAX_TABLE_ROWS = 99;
 const SLACK_MAX_FALLBACK_CELL_WIDTH = 80;
 const SLACK_MAX_FALLBACK_TEXT_LENGTH = 4000;
 
