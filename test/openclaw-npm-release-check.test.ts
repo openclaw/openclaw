@@ -7,6 +7,7 @@ import {
   parseNpmPackJsonOutput,
   parseReleaseTagVersion,
   parseReleaseVersion,
+  resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
   utcCalendarDayDistance,
@@ -112,6 +113,44 @@ describe("resolveNpmPublishPlan", () => {
       channel: "stable",
       publishTag: "latest",
       mirrorDistTags: ["beta"],
+    });
+  });
+});
+
+describe("resolveNpmDistTagMirrorAuth", () => {
+  it("prefers NODE_AUTH_TOKEN when both auth env vars exist", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "node-token",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "node-auth-token",
+    });
+  });
+
+  it("falls back to NPM_TOKEN when NODE_AUTH_TOKEN is missing", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "  ",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "npm-token",
+    });
+  });
+
+  it("reports missing auth when neither token exists", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "",
+        npmToken: undefined,
+      }),
+    ).toEqual({
+      hasAuth: false,
+      source: "none",
     });
   });
 });

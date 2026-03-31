@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   __testing,
   getAcpRuntimeBackend,
@@ -264,5 +267,30 @@ describe("createAcpxRuntimeService", () => {
     expect(second.setSetupErrorSpy).not.toHaveBeenCalledWith(
       "acpx runtime probe failed after local install",
     );
+  });
+
+  it("creates the workspace dir before probing acpx", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-service-workspace-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const { runtime, probeAvailabilitySpy } = createRuntimeStub(true);
+    const service = createAcpxRuntimeService({
+      runtimeFactory: ({ pluginConfig }) => {
+        expect(pluginConfig.cwd).toBe(workspaceDir);
+        return runtime;
+      },
+    });
+    const context = createServiceContext({ workspaceDir });
+
+    try {
+      await service.start(context);
+
+      expect(fs.existsSync(workspaceDir)).toBe(true);
+      await vi.waitFor(() => {
+        expect(probeAvailabilitySpy).toHaveBeenCalledOnce();
+      });
+    } finally {
+      await service.stop?.(context);
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });
