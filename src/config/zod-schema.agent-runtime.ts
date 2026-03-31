@@ -135,7 +135,7 @@ export const SandboxDockerSchema = z
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
-    gpus: z.string().optional(),
+    gpus: z.string().min(1).optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
