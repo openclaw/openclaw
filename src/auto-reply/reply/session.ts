@@ -431,8 +431,9 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
+      // Do not carry over modelOverride/providerOverride — /reset and /new
+      // should revert to config defaults.  The /new <model-name> hint is
+      // applied separately by applyResetModelOverride after session creation.
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
@@ -615,6 +616,10 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
+    // Clear runtime model state so the store spread below does not leak the
+    // previous session's last-used model into the new session (#58302).
+    sessionEntry.model = undefined;
+    sessionEntry.modelProvider = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };

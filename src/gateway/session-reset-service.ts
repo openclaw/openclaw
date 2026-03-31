@@ -50,6 +50,10 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     ...entry,
     model: undefined,
     modelProvider: undefined,
+    // Also clear user-set overrides so resolveSessionModelRef falls back to
+    // config defaults — /reset and /new should not carry the /model selection.
+    modelOverride: undefined,
+    providerOverride: undefined,
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
@@ -336,8 +340,11 @@ export async function performGatewaySessionReset(params: {
       execAsk: currentEntry?.execAsk,
       execNode: currentEntry?.execNode,
       responseUsage: currentEntry?.responseUsage,
-      providerOverride: currentEntry?.providerOverride,
-      modelOverride: currentEntry?.modelOverride,
+      // Do not carry over model overrides — /reset and /new should revert to
+      // config defaults.  The /new <model-name> hint is applied separately by
+      // applyResetModelOverride after session creation.
+      providerOverride: undefined,
+      modelOverride: undefined,
       authProfileOverride: currentEntry?.authProfileOverride,
       authProfileOverrideSource: currentEntry?.authProfileOverrideSource,
       authProfileOverrideCompactionCount: currentEntry?.authProfileOverrideCompactionCount,
