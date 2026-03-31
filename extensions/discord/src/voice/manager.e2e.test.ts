@@ -114,6 +114,7 @@ function createClient() {
     fetchChannel: vi.fn(async (channelId: string) => ({
       id: channelId,
       guildId: "g1",
+      guild: { id: "g1", name: "Guild One" },
       type: ChannelType.GuildVoice,
     })),
     getPlugin: vi.fn(() => ({
@@ -284,6 +285,17 @@ describe("DiscordVoiceManager", () => {
         decryptionFailureTolerance: 8,
       }),
     );
+  });
+
+  it("stores guild metadata on joined voice sessions", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | { guildName?: string }
+      | undefined;
+    expect(entry?.guildName).toBe("Guild One");
   });
 
   it("attempts rejoin after repeated decrypt failures", async () => {

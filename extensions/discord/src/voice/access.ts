@@ -20,6 +20,7 @@ export async function authorizeDiscordVoiceIngress(params: {
   groupPolicy?: "open" | "disabled" | "allowlist";
   useAccessGroups?: boolean;
   guild?: Guild<true> | Guild | null;
+  guildName?: string;
   guildId: string;
   channelId: string;
   channelName?: string;
@@ -39,21 +40,26 @@ export async function authorizeDiscordVoiceIngress(params: {
       groupPolicy: params.discordConfig.groupPolicy,
       defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
     }).groupPolicy;
+  const guild =
+    params.guild ??
+    (params.guildName ? ({ id: params.guildId, name: params.guildName } as Guild) : null);
   const guildInfo = resolveDiscordGuildEntry({
-    guild: params.guild,
+    guild,
     guildId: params.guildId,
     guildEntries: params.discordConfig.guilds,
   });
-  const channelConfig = resolveDiscordChannelConfigWithFallback({
-    guildInfo,
-    channelId: params.channelId,
-    channelName: params.channelName,
-    channelSlug: params.channelSlug,
-    parentId: params.parentId,
-    parentName: params.parentName,
-    parentSlug: params.parentSlug,
-    scope: params.scope,
-  });
+  const channelConfig = params.channelId
+    ? resolveDiscordChannelConfigWithFallback({
+        guildInfo,
+        channelId: params.channelId,
+        channelName: params.channelName,
+        channelSlug: params.channelSlug,
+        parentId: params.parentId,
+        parentName: params.parentName,
+        parentSlug: params.parentSlug,
+        scope: params.scope,
+      })
+    : null;
 
   if (channelConfig?.enabled === false) {
     return { ok: false, message: "This channel is disabled." };

@@ -55,6 +55,7 @@ type VoiceOperationResult = {
 
 type VoiceSessionEntry = {
   guildId: string;
+  guildName?: string;
   channelId: string;
   channelName?: string;
   sessionChannelId: string;
@@ -427,6 +428,13 @@ export class DiscordVoiceManager {
 
     const entry: VoiceSessionEntry = {
       guildId,
+      guildName:
+        channelInfo &&
+        "guild" in channelInfo &&
+        channelInfo.guild &&
+        typeof channelInfo.guild.name === "string"
+          ? channelInfo.guild.name
+          : undefined,
       channelId,
       channelName:
         channelInfo && "name" in channelInfo && typeof channelInfo.name === "string"
@@ -606,6 +614,7 @@ export class DiscordVoiceManager {
     const access = await authorizeDiscordVoiceIngress({
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
+      guildName: entry.guildName,
       guildId: entry.guildId,
       channelId: entry.channelId,
       channelName: entry.channelName,
