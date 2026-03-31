@@ -58,6 +58,53 @@ const bindingServiceMocks = vi.hoisted(() => ({
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
 }));
 
+const pluginMediaProviderMocks = vi.hoisted(() => ({
+  getPluginMediaProviders: vi.fn<() => Record<string, { id: string }> | undefined>(() => undefined),
+}));
+
+vi.mock("../../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => managerMocks,
+}));
+
+vi.mock("../../acp/policy.js", () => ({
+  resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
+    policyMocks.resolveAcpDispatchPolicyError(cfg),
+  resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
+    policyMocks.resolveAcpAgentPolicyError(cfg, agent),
+}));
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
+}));
+
+vi.mock("../../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
+}));
+
+vi.mock("../../tts/tts.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+}));
+
+vi.mock("../../acp/runtime/session-meta.js", () => ({
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
+}));
+
+vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => ({
+    listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
+  }),
+}));
+
+vi.mock("../../media-understanding/apply.js", () => ({
+  applyMediaUnderstanding: (params: unknown) =>
+    mediaUnderstandingMocks.applyMediaUnderstanding(params),
+}));
+
+vi.mock("../../plugins/media-providers.js", () => ({
+  getPluginMediaProviders: () => pluginMediaProviderMocks.getPluginMediaProviders(),
+}));
 const sessionKey = "agent:codex-acp:session-1";
 const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
@@ -284,6 +331,8 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
     globalThis.fetch = originalFetch;
+    pluginMediaProviderMocks.getPluginMediaProviders.mockReset();
+    pluginMediaProviderMocks.getPluginMediaProviders.mockReturnValue(undefined);
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -403,6 +452,25 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("passes plugin media providers into ACP media understanding", async () => {
+    setReadyAcpResolution();
+    const providers = {
+      executorch: { id: "executorch" },
+    };
+    pluginMediaProviderMocks.getPluginMediaProviders.mockReturnValue(providers);
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "voice note",
+    });
+
+    expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers,
+      }),
+    );
   });
 
   it("forwards normalized image attachments into ACP turns", async () => {

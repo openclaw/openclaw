@@ -79,6 +79,20 @@ struct RunnerBox {
   RunnerHandle* handle = nullptr;
 };
 
+struct AsyncCreateRunnerWork {
+  napi_env env = nullptr;
+  napi_async_work work = nullptr;
+  napi_deferred deferred = nullptr;
+  std::string runtime_library_path;
+  std::string model_path;
+  std::string tokenizer_path;
+  std::string data_path;
+  pqt_backend_t backend = PQT_BACKEND_METAL;
+  bool warmup = true;
+  RunnerHandle* handle = nullptr;
+  std::string error;
+};
+
 struct AsyncTranscribeWork {
   napi_env env = nullptr;
   napi_async_work work = nullptr;
@@ -349,47 +363,130 @@ napi_value create_runner(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  RuntimeSymbols symbols;
-  if (!load_runtime_symbols(runtime_library_path, &symbols)) {
-    throw_last_error(env, "failed to load runtime symbols");
-    return nullptr;
-  }
+  auto* work = new AsyncCreateRunnerWork();
+  work->env = env;
+  work->runtime_library_path = runtime_library_path;
+  work->model_path = model_path;
+  work->tokenizer_path = tokenizer_path;
+  work->data_path = data_path;
+  work->backend = parsed_backend;
+  work->warmup = warmup;
 
-  pqt_runner_t* runner = nullptr;
-  pqt_runner_config_t config{
-      model_path.c_str(),
-      tokenizer_path.c_str(),
-      data_path.empty() ? nullptr : data_path.c_str(),
-      parsed_backend,
-      warmup ? 1 : 0};
-
-  pqt_status_t create_status = symbols.runner_create(&config, &runner);
-  if (create_status != PQT_STATUS_OK || runner == nullptr) {
-    const char* runtime_error = symbols.last_error == nullptr ? nullptr : symbols.last_error();
-    set_last_error(
-        runtime_error != nullptr ? runtime_error : "pqt_runner_create failed");
-    close_library(&symbols);
-    throw_last_error(env, "pqt_runner_create failed");
-    return nullptr;
-  }
-
-  auto* handle = new RunnerHandle();
-  handle->symbols = symbols;
-  handle->runner = runner;
-
-  auto* box = new RunnerBox();
-  box->handle = handle;
-
-  napi_value external;
-  status = napi_create_external(env, box, finalize_runner_box, nullptr, &external);
+  napi_value promise;
+  status = napi_create_promise(env, &work->deferred, &promise);
   if (status != napi_ok) {
-    destroy_runner_handle(handle);
-    delete box;
-    napi_throw_error(env, nullptr, "failed to create runner handle");
+    delete work;
+    napi_throw_error(env, nullptr, "failed to create createRunner promise");
     return nullptr;
   }
 
-  return external;
+  napi_value resource_name;
+  status = napi_create_string_utf8(env, "parakeet.createRunner", NAPI_AUTO_LENGTH, &resource_name);
+  if (status != napi_ok) {
+    delete work;
+    napi_throw_error(env, nullptr, "failed to create async resource name");
+    return nullptr;
+  }
+
+  status = napi_create_async_work(
+      env,
+      nullptr,
+      resource_name,
+      [](napi_env /*env*/, void* data) {
+        auto* work = static_cast<AsyncCreateRunnerWork*>(data);
+        if (work == nullptr) {
+          return;
+        }
+
+        RuntimeSymbols symbols;
+        if (!load_runtime_symbols(work->runtime_library_path, &symbols)) {
+          work->error = g_last_error.empty() ? "failed to load runtime symbols" : g_last_error;
+          return;
+        }
+
+        pqt_runner_t* runner = nullptr;
+        pqt_runner_config_t config{
+            work->model_path.c_str(),
+            work->tokenizer_path.c_str(),
+            work->data_path.empty() ? nullptr : work->data_path.c_str(),
+            work->backend,
+            work->warmup ? 1 : 0};
+
+        pqt_status_t create_status = symbols.runner_create(&config, &runner);
+        if (create_status != PQT_STATUS_OK || runner == nullptr) {
+          const char* runtime_error =
+              symbols.last_error == nullptr ? nullptr : symbols.last_error();
+          work->error =
+              runtime_error != nullptr ? runtime_error : "pqt_runner_create failed";
+          close_library(&symbols);
+          return;
+        }
+
+        auto* handle = new RunnerHandle();
+        handle->symbols = symbols;
+        handle->runner = runner;
+        work->handle = handle;
+      },
+      [](napi_env env, napi_status status, void* data) {
+        auto* work = static_cast<AsyncCreateRunnerWork*>(data);
+        if (work == nullptr) {
+          return;
+        }
+
+        if (status != napi_ok && work->error.empty()) {
+          work->error = "createRunner async work failed";
+        }
+
+        if (!work->error.empty()) {
+          napi_value message;
+          napi_create_string_utf8(env, work->error.c_str(), work->error.size(), &message);
+          napi_value error;
+          napi_create_error(env, nullptr, message, &error);
+          napi_reject_deferred(env, work->deferred, error);
+        } else {
+          auto* box = new RunnerBox();
+          box->handle = work->handle;
+
+          napi_value external;
+          napi_status external_status =
+              napi_create_external(env, box, finalize_runner_box, nullptr, &external);
+          if (external_status != napi_ok) {
+            destroy_runner_handle(work->handle);
+            delete box;
+
+            napi_value message;
+            napi_create_string_utf8(
+                env, "failed to create runner handle", NAPI_AUTO_LENGTH, &message);
+            napi_value error;
+            napi_create_error(env, nullptr, message, &error);
+            napi_reject_deferred(env, work->deferred, error);
+          } else {
+            napi_resolve_deferred(env, work->deferred, external);
+          }
+        }
+
+        if (work->work != nullptr) {
+          napi_delete_async_work(env, work->work);
+        }
+        delete work;
+      },
+      work,
+      &work->work);
+  if (status != napi_ok) {
+    delete work;
+    napi_throw_error(env, nullptr, "failed to create async createRunner work");
+    return nullptr;
+  }
+
+  status = napi_queue_async_work(env, work->work);
+  if (status != napi_ok) {
+    napi_delete_async_work(env, work->work);
+    delete work;
+    napi_throw_error(env, nullptr, "failed to queue async createRunner work");
+    return nullptr;
+  }
+
+  return promise;
 }
 
 RunnerBox* get_runner_box(napi_env env, napi_value value) {

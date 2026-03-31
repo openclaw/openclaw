@@ -206,6 +206,11 @@ actor TalkModeRuntime {
         self.logger.info("talk: STT backend falling back to Apple Speech")
     }
 
+    private func handleExecuTorchRecognitionFailure(_ error: Error) async {
+        self.logger.error("talk: ExecuTorch startListening failed: \(error.localizedDescription, privacy: .public)")
+        await self.handleExecuTorchLoadFailure()
+    }
+
     // MARK: - Speech recognition
 
     private struct RecognitionUpdate {
@@ -305,7 +310,9 @@ actor TalkModeRuntime {
             }
             self.logger.info("talk: ExecuTorch startListening returned (offline poll active)")
         } catch {
-            self.logger.error("talk: ExecuTorch startListening failed: \(error.localizedDescription, privacy: .public)")
+            await self.handleExecuTorchRecognitionFailure(error)
+            guard generation == self.recognitionGeneration else { return }
+            await self.startRecognition()
         }
     }
 
@@ -1016,6 +1023,13 @@ extension TalkModeRuntime {
         self.useExecuTorch = true
         await self.etBridge._testSetState(.error("test"))
         await self.handleExecuTorchLoadFailure()
+        return (self.useExecuTorch, await self.etBridge.currentState)
+    }
+
+    func _testHandleExecuTorchRecognitionFailure() async -> (useExecuTorch: Bool, bridgeState: ExecuTorchSTTBridge.State) {
+        self.useExecuTorch = true
+        await self.etBridge._testSetState(.ready)
+        await self.handleExecuTorchRecognitionFailure(ExecuTorchError.audioConversionFailed)
         return (self.useExecuTorch, await self.etBridge.currentState)
     }
 }

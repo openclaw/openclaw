@@ -2,9 +2,14 @@ import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const getPluginMediaProvidersMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginMediaProviders: () => getPluginMediaProvidersMock(),
 }));
 import {
   __testing as sessionBindingTesting,
@@ -261,6 +266,8 @@ describe("preflightDiscordMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
+    getPluginMediaProvidersMock.mockReset();
+    getPluginMediaProvidersMock.mockReturnValue(undefined);
   });
 
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
@@ -612,6 +619,72 @@ describe("preflightDiscordMessage", () => {
     expect(result?.threadParentId).toBe(parentId);
     expect(result?.channelConfig?.allowed).toBe(true);
     expect(result?.shouldRequireMention).toBe(false);
+  });
+
+  it("uses plugin media providers for guild audio preflight mention detection", async () => {
+    getPluginMediaProvidersMock.mockReturnValue({
+      executorch: { id: "executorch" },
+    });
+    transcribeFirstAudioMock.mockResolvedValue("hey openclaw");
+
+    const channelId = "channel-audio-1";
+    const message = createDiscordMessage({
+      id: "m-audio-1",
+      channelId,
+      content: "",
+      attachments: [
+        {
+          id: "att-1",
+          url: "https://cdn.discordapp.com/attachments/voice.ogg",
+          content_type: "audio/ogg",
+          filename: "voice.ogg",
+        },
+      ],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [channelId]: {
+              allow: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+        }),
+        providers: {
+          executorch: { id: "executorch" },
+        },
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(true);
   });
 
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {

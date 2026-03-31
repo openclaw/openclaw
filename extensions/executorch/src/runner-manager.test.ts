@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mockState = vi.hoisted(() => ({
-  createRunner: vi.fn(() => ({ runner: true })),
+  createRunner: vi.fn(async () => ({ runner: true })),
   destroyRunner: vi.fn(),
   transcribe: vi.fn(async () => "mock transcript"),
   ensureRuntimeLibraryLoadable: vi.fn(async () => {
@@ -14,6 +14,7 @@ const mockState = vi.hoisted(() => ({
     }
   }),
   runtimeBarrier: null as Promise<void> | null,
+  createBarrier: null as Promise<void> | null,
 }));
 
 vi.mock("./native-addon.js", () => ({
@@ -64,6 +65,7 @@ describe("RunnerManager", () => {
     mockState.transcribe.mockClear();
     mockState.ensureRuntimeLibraryLoadable.mockClear();
     mockState.runtimeBarrier = null;
+    mockState.createBarrier = null;
     vi.restoreAllMocks();
   });
 
@@ -122,6 +124,41 @@ describe("RunnerManager", () => {
 
       expect(modelChecks).toHaveLength(1);
       expect(tokenizerChecks).toHaveLength(1);
+    } finally {
+      await fs.rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the runner in loading state until cold createRunner finishes", async () => {
+    let releaseBarrier!: () => void;
+    mockState.createBarrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    mockState.createRunner.mockImplementation(async () => {
+      await mockState.createBarrier;
+      return { runner: true };
+    });
+    const fixture = await createRuntimeFixture();
+
+    try {
+      const manager = new RunnerManager({
+        runtimeLibraryPath: fixture.runtimeLibraryPath,
+        backend: "metal",
+        modelPath: fixture.modelPath,
+        tokenizerPath: fixture.tokenizerPath,
+        logger: { info() {}, warn() {}, error() {} },
+      });
+
+      const pendingReady = manager.ensureReady();
+      await waitForExpectation(() => expect(mockState.createRunner).toHaveBeenCalledTimes(1));
+
+      expect(manager.state).toBe("loading");
+
+      releaseBarrier();
+      await pendingReady;
+
+      expect(manager.state).toBe("ready");
+      expect(manager.isAlive).toBe(true);
     } finally {
       await fs.rm(fixture.dir, { recursive: true, force: true });
     }

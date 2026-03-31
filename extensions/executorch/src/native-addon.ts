@@ -22,7 +22,7 @@ type NativeTranscribeOptions = {
 };
 
 export type NativeExecuTorchAddon = {
-  createRunner(config: NativeRunnerCreateConfig): NativeRunnerHandle;
+  createRunner(config: NativeRunnerCreateConfig): Promise<NativeRunnerHandle>;
   destroyRunner(handle: NativeRunnerHandle): void;
   transcribe(
     handle: NativeRunnerHandle,

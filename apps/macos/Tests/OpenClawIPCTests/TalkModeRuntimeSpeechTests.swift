@@ -27,4 +27,11 @@ struct TalkModeRuntimeSpeechTests {
         #expect(result.useExecuTorch == false)
         #expect(result.bridgeState == .idle)
     }
+
+    @Test func `execuTorch start failure fallback resets bridge state`() async {
+        let result = await TalkModeRuntime.shared._testHandleExecuTorchRecognitionFailure()
+
+        #expect(result.useExecuTorch == false)
+        #expect(result.bridgeState == .idle)
+    }
 }

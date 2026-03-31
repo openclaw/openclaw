@@ -34,6 +34,10 @@ To disable auto-detection, set `tools.media.audio.enabled: false`.
 To customize, set `tools.media.audio.models`.
 Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (we expand `~`), or set an explicit CLI model with a full command path.
 
+The optional `executorch` plugin is **not** part of this auto-detection flow. It
+must be enabled explicitly and provisioned once before `provider: "executorch"`
+works. See [ExecuTorch Plugin](/plugins/executorch).
+
 ## Config examples
 
 ### Provider + CLI fallback (OpenAI + Whisper CLI)
@@ -109,6 +113,39 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
+### On-device provider (ExecuTorch Parakeet, macOS Apple Silicon)
+
+The bundled `executorch` plugin registers a local audio provider backed by the
+embedded Parakeet-TDT runtime.
+
+Enable and provision it first:
+
+```bash
+openclaw plugins enable executorch
+openclaw executorch setup --backend metal
+```
+
+Then point audio transcription at the local provider:
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "executorch", model: "parakeet-tdt-0.6b-v3" }],
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `executorch` is a local provider, so no API key is required.
+- This path currently supports `darwin/arm64` with the `metal` backend.
+- For full setup and Talk Mode integration, see [ExecuTorch Plugin](/plugins/executorch).
+
 ### Echo transcript to chat (opt-in)
 
 ```json5
@@ -133,6 +170,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Deepgram setup details: [Deepgram (audio transcription)](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
+- `executorch` is a keyless local provider registered by the bundled ExecuTorch plugin.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Tiny/empty audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.

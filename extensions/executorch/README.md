@@ -4,6 +4,11 @@ https://github.com/user-attachments/assets/cb39ffcd-509e-4205-8ab1-34e7bbdc0c23
 
 On-device speech-to-text (STT) for OpenClaw using an embedded ExecuTorch runtime.
 
+User-facing docs:
+
+- `/plugins/executorch`
+- `/stt`
+
 Current bundled model plugin:
 
 - **Parakeet-TDT** on **Metal**
@@ -68,7 +73,7 @@ pnpm openclaw executorch transcribe /path/to/short.wav
 
 ## Plugin Config (Optional Overrides)
 
-`plugins.entries.executorch` supports:
+`plugins.entries.executorch.config` supports:
 
 - `enabled`: boolean
 - `modelPlugin`: `"parakeet"` (currently only bundled option)
@@ -87,11 +92,13 @@ Example:
     "entries": {
       "executorch": {
         "enabled": true,
-        "modelPlugin": "parakeet",
-        "backend": "metal",
-        "runtimeLibraryPath": "/Users/me/.openclaw/lib/libparakeet_tdt_runtime.dylib",
-        "modelPath": "/Users/me/.openclaw/models/parakeet/parakeet-tdt-metal/model.pte",
-        "tokenizerPath": "/Users/me/.openclaw/models/parakeet/parakeet-tdt-metal/tokenizer.model"
+        "config": {
+          "modelPlugin": "parakeet",
+          "backend": "metal",
+          "runtimeLibraryPath": "/Users/me/.openclaw/lib/libparakeet_tdt_runtime.dylib",
+          "modelPath": "/Users/me/.openclaw/models/parakeet/parakeet-tdt-metal/model.pte",
+          "tokenizerPath": "/Users/me/.openclaw/models/parakeet/parakeet-tdt-metal/tokenizer.model"
+        }
       }
     }
   }

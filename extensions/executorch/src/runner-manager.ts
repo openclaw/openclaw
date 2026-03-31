@@ -142,7 +142,7 @@ export class RunnerManager {
     }
 
     try {
-      this.handle = this.native.createRunner(config);
+      this.handle = await this.native.createRunner(config);
       this._state = "ready";
       this.logger.info("[executorch] Model loaded — embedded runtime ready");
     } catch (error) {

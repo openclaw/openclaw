@@ -168,6 +168,10 @@ To disable auto-detection, set:
 
 Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI is on `PATH` (we expand `~`), or set an explicit CLI model with a full command path.
 
+The optional `executorch` plugin is not part of this auto-detection order. It is
+a plugin-backed local provider that you enable explicitly and then reference with
+`provider: "executorch"`. See [ExecuTorch Plugin](/plugins/executorch).
+
 ### Proxy environment support (provider models)
 
 When provider-based **audio** and **video** media understanding is enabled, OpenClaw
@@ -200,11 +204,11 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                               | Notes                                                                   |
-| ---------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| Image      | OpenAI, Anthropic, Google, MiniMax, Moonshot, Z.AI | Vendor plugins register image support against core media understanding. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral            | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).               |
-| Video      | Google, Moonshot                                   | Provider video understanding via vendor plugins.                        |
+| Capability | Provider integration                                | Notes                                                                   |
+| ---------- | --------------------------------------------------- | ----------------------------------------------------------------------- |
+| Image      | OpenAI, Anthropic, Google, MiniMax, Moonshot, Z.AI  | Vendor plugins register image support against core media understanding. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral, ExecuTorch | Provider transcription (Whisper/Deepgram/Gemini/Voxtral/Parakeet).      |
+| Video      | Google, Moonshot                                    | Provider video understanding via vendor plugins.                        |
 
 ## Model selection guidance
 
@@ -371,6 +375,37 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
   },
 }
 ```
+
+### 5) On-device audio (ExecuTorch Parakeet)
+
+Use this when you want local audio transcription on macOS Apple Silicon without a
+cloud STT API.
+
+```json5
+{
+  plugins: {
+    entries: {
+      executorch: {
+        enabled: true,
+      },
+    },
+  },
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "executorch", model: "parakeet-tdt-0.6b-v3" }],
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Run `openclaw executorch setup --backend metal` before using this provider.
+- `executorch` is a keyless local provider; do not add `models.providers.executorch.apiKey`.
+- For prerequisites and troubleshooting, see [ExecuTorch Plugin](/plugins/executorch).
 
 ## Status output
 

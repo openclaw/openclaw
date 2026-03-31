@@ -60,6 +60,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`daemon`](/cli/daemon) (legacy alias for gateway service commands)
 - [`clawbot`](/cli/clawbot) (legacy alias namespace)
 - [`voicecall`](/cli/voicecall) (plugin; if installed)
+- `executorch` (plugin; if enabled)
 
 ## Global flags
 
@@ -290,7 +291,7 @@ openclaw [--dev] [--profile <name>] <command>
   tui
 ```
 
-Note: plugins can add additional top-level commands (for example `openclaw voicecall`).
+Note: plugins can add additional top-level commands (for example `openclaw voicecall` or `openclaw executorch`).
 
 ## Security
 
