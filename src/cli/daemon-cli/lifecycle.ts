@@ -151,26 +151,30 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   if (!opts.force) {
-    const readiness = evaluateGatewayRestartReadinessGate();
-    if (readiness.blocked) {
-      if (json) {
-        defaultRuntime.log(
-          JSON.stringify(
-            {
-              ok: false,
-              result: "blocked",
-              message: readiness.summary,
-              activeSessions: readiness.activeSessions,
-              activeCronRuns: readiness.activeCronRuns,
-            },
-            null,
-            2,
-          ),
-        );
-      } else {
-        defaultRuntime.log(readiness.summary);
+    try {
+      const readiness = evaluateGatewayRestartReadinessGate();
+      if (readiness.blocked) {
+        if (json) {
+          defaultRuntime.log(
+            JSON.stringify(
+              {
+                ok: false,
+                result: "blocked",
+                message: readiness.summary,
+                activeSessions: readiness.activeSessions,
+                activeCronRuns: readiness.activeCronRuns,
+              },
+              null,
+              2,
+            ),
+          );
+        } else {
+          defaultRuntime.log(readiness.summary);
+        }
+        return false;
       }
-      return false;
+    } catch {
+      // Invalid config is handled by the existing service restart validation path.
     }
   }
   const service = resolveGatewayService();
