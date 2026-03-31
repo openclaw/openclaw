@@ -97,10 +97,14 @@ export async function assertPlaywrightTabTargetAllowed(params: {
   try {
     // Follow-up guards must verify the current Playwright page state, not cached route
     // metadata, or a redirect to a private URL could bypass the check during CDP churn.
-    const page = await params.pw.getPageForTargetId({
-      cdpUrl: params.cdpUrl,
-      targetId: params.targetId,
-    });
+    const page = await params.pw
+      .getPageForTargetId({
+        cdpUrl: params.cdpUrl,
+        targetId: params.targetId,
+      })
+      .catch(() => {
+        throw new SsrFBlockedError("Blocked: unable to verify the current Playwright target URL");
+      });
     const guardUrl = page.url();
     if (typeof guardUrl !== "string" || !guardUrl.trim()) {
       throw new SsrFBlockedError("Blocked: unable to verify the current Playwright target URL");

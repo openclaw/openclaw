@@ -164,7 +164,20 @@ export async function assertBrowserNavigationRedirectChainAllowed(
 }
 
 function isMainFrameNavigationRequest(request: BrowserNavigationInterceptRequestLike): boolean {
-  const frame = request.frame?.();
+  let frame:
+    | {
+        parentFrame?(): unknown;
+      }
+    | null
+    | undefined;
+  try {
+    frame = request.frame?.();
+  } catch {
+    // Some Playwright request types (for example service-worker-originated requests)
+    // have no inspectable frame. Treat them as non-navigation so the guard does not
+    // break otherwise valid page loads before route.continue() can run.
+    return false;
+  }
   if (frame?.parentFrame?.() != null) {
     return false;
   }

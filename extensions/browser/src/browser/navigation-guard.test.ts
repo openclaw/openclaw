@@ -418,6 +418,44 @@ describe("browser navigation guard", () => {
     expect(routeAbort).not.toHaveBeenCalled();
   });
 
+  it("ignores requests whose frame cannot be inspected", async () => {
+    let handler: TestRouteHandler<BrowserNavigationInterceptRequestLike> | undefined;
+    const routeContinue = vi.fn(async () => {});
+    const routeAbort = vi.fn(async () => {});
+    const page: BrowserNavigationRouteInstallerLike = {
+      route: vi.fn(
+        async (
+          _matcher: string,
+          nextHandler: TestRouteHandler<BrowserNavigationInterceptRequestLike>,
+        ) => {
+          handler = nextHandler;
+        },
+      ),
+      unroute: vi.fn(async () => {}),
+    };
+
+    const result = await withRequestTimeBrowserNavigationGuard({
+      page,
+      navigate: async () => {
+        await handler?.(
+          { abort: routeAbort, continue: routeContinue },
+          {
+            url: () => "https://example.com/service-worker.js",
+            isNavigationRequest: () => true,
+            frame: () => {
+              throw new Error("Frame is not available");
+            },
+          },
+        );
+        return "done";
+      },
+    });
+
+    expect(result).toBe("done");
+    expect(routeContinue).toHaveBeenCalledTimes(1);
+    expect(routeAbort).not.toHaveBeenCalled();
+  });
+
   it("does not let unroute errors replace the navigation result", async () => {
     const page = {
       route: vi.fn(async () => {}),
