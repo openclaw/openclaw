@@ -6,8 +6,9 @@ packages:
 
 minimumReleaseAge: 2880
 
-# minimumReleaseAgeExclude:
-#   - "@mariozechner/*"
+minimumReleaseAgeExclude:
+  - "openclaw"
+  - "@mariozechner/*"
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"
