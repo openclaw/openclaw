@@ -120,6 +120,30 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   }
 
+  function expectShellScriptFallbackRejected(command: string) {
+    const { dir, scriptsDir, script, env, safeBins } = createShellScriptFixture();
+    const rcFile = path.join(scriptsDir, "evilrc");
+    fs.writeFileSync(rcFile, "echo blocked\n");
+
+    const { persisted } = resolvePersistedPatterns({
+      command,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command,
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  }
+
   function expectPositionalArgvCarrierRejected(command: string) {
     const dir = makeTempDir();
     const touch = makeExecutable(dir, "touch");
@@ -281,6 +305,32 @@ describe("resolveAllowAlwaysPatterns", () => {
       env,
       safeBins,
     });
+  });
+
+  it("rejects shell rc and init-file options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
+  });
+
+  it("rejects shell rc and init-file equals options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile=scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file=scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file=scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
   });
 
   it("rejects shell-wrapper positional argv carriers", () => {

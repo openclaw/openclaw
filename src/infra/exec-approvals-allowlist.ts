@@ -504,16 +504,19 @@ function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isShellWrapperExecutable);
 }
 
-const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set([
-  "-c",
-  "--command",
-  "-o",
-  "-O",
-  "+O",
+const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set(["-c", "--command", "-o", "-O", "+O"]);
+
+const SHELL_WRAPPER_DISQUALIFYING_SCRIPT_OPTIONS = [
   "--rcfile",
   "--init-file",
   "--startup-file",
-]);
+] as const;
+
+function hasDisqualifyingShellWrapperScriptOption(token: string): boolean {
+  return SHELL_WRAPPER_DISQUALIFYING_SCRIPT_OPTIONS.some(
+    (option) => token === option || token.startsWith(`${option}=`),
+  );
+}
 
 function resolveShellWrapperScriptCandidatePath(params: {
   segment: ExecCommandSegment;
@@ -546,6 +549,9 @@ function resolveShellWrapperScriptCandidatePath(params: {
       return undefined;
     }
     if (token === "-s" || /^-[^-]*s[^-]*$/i.test(token)) {
+      return undefined;
+    }
+    if (hasDisqualifyingShellWrapperScriptOption(token)) {
       return undefined;
     }
     if (SHELL_WRAPPER_OPTIONS_WITH_VALUE.has(token)) {
