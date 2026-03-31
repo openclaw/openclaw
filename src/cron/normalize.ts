@@ -519,7 +519,7 @@ export function normalizeCronJobInput(
       isIsolatedAgentTurn &&
       payloadKind === "agentTurn"
     ) {
-      next.delivery = { mode: "announce" };
+      next.delivery = { mode: "announce", channel: "last" };
     }
   }
 

@@ -281,13 +281,14 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.to).toBe("https://example.invalid/cron");
   });
 
-  it("defaults isolated agentTurn delivery to announce", () => {
+  it("defaults isolated agentTurn delivery to announce with channel=last", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "default-announce",
     });
 
     const delivery = normalized.delivery as Record<string, unknown>;
     expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBe("last");
   });
 
   it("migrates legacy delivery fields to delivery", () => {
