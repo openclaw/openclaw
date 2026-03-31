@@ -112,7 +112,10 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     }
     const name = normalizeToolName(tool.name);
     all.push(name);
-    const pluginId = meta.pluginId.toLowerCase();
+    const pluginId = meta.pluginId.trim().toLowerCase();
+    if (!pluginId) {
+      continue;
+    }
     const list = byPlugin.get(pluginId) ?? [];
     list.push(name);
     byPlugin.set(pluginId, list);
@@ -161,7 +164,7 @@ export function expandPolicyWithPluginGroups(
   };
 }
 
-export function stripPluginOnlyAllowlist(
+export function analyzeAllowlistByToolType(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
   coreTools: Set<string>,

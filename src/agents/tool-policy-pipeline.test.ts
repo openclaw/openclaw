@@ -175,6 +175,58 @@ describe("tool-policy-pipeline", () => {
     expect(warnings).toHaveLength(258);
   });
 
+  test("evicts the oldest warning when the dedupe cache is full", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+
+    for (let i = 0; i < 256; i += 1) {
+      applyToolPolicyPipeline({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        tools: tools as any,
+        // oxlint-disable-next-line typescript/no-explicit-any
+        toolMeta: () => undefined,
+        warn: (msg: string) => warnings.push(msg),
+        steps: [
+          {
+            policy: { allow: [`unknown_${i}`] },
+            label: "tools.allow",
+            stripPluginOnlyAllowlist: true,
+          },
+        ],
+      });
+    }
+
+    warnings.length = 0;
+
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg: string) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["unknown_256"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg: string) => warnings.push(msg),
+      steps: [
+        { policy: { allow: ["unknown_0"] }, label: "tools.allow", stripPluginOnlyAllowlist: true },
+      ],
+    });
+
+    expect(warnings).toHaveLength(2);
+    expect(warnings[1]).toContain("unknown_0");
+  });
+
   test("applies allowlist filtering when core tools are explicitly listed", () => {
     const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({
@@ -186,6 +238,25 @@ describe("tool-policy-pipeline", () => {
       steps: [
         {
           policy: { allow: ["exec"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
+  });
+
+  test("applies deny filtering after allow filtering", () => {
+    const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
+    const filtered = applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["exec", "process"], deny: ["process"] },
           label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
