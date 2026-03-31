@@ -4,7 +4,7 @@ import type {
   GatewayTailscaleConfig,
   OpenClawConfig,
 } from "../config/config.js";
-import { writeConfigFile } from "../config/config.js";
+import { replaceConfigFile } from "../config/config.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
@@ -221,6 +221,7 @@ export async function ensureGatewayStartupAuth(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   persist?: boolean;
+  baseHash?: string;
 }): Promise<{
   cfg: OpenClawConfig;
   auth: ReturnType<typeof resolveGatewayAuth>;
@@ -270,7 +271,10 @@ export async function ensureGatewayStartupAuth(params: {
     resolvedAuth: resolved,
   });
   if (persist) {
-    await writeConfigFile(nextCfg);
+    await replaceConfigFile({
+      nextConfig: nextCfg,
+      baseHash: params.baseHash,
+    });
   }
 
   const nextAuth = resolveGatewayAuthFromConfig({

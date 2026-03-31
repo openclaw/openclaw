@@ -1,6 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { resolveMattermostAccount } from "./accounts.js";
-import { createMattermostClient, fetchMattermostMe, type MattermostClient } from "./client.js";
+import {
+  createMattermostClient,
+  fetchMattermostMe,
+  type MattermostClient,
+  type MattermostFetch,
+} from "./client.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 type Result = { ok: true } | { ok: false; error: string };
 type ReactionParams = {
@@ -8,7 +13,7 @@ type ReactionParams = {
   postId: string;
   emojiName: string;
   accountId?: string | null;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: MattermostFetch;
 };
 type ReactionMutation = (client: MattermostClient, params: MutationPayload) => Promise<void>;
 type MutationPayload = { userId: string; postId: string; emojiName: string };
@@ -38,7 +43,7 @@ export async function addMattermostReaction(params: {
   postId: string;
   emojiName: string;
   accountId?: string | null;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: MattermostFetch;
 }): Promise<Result> {
   return runMattermostReaction(params, {
     action: "add",
@@ -51,7 +56,7 @@ export async function removeMattermostReaction(params: {
   postId: string;
   emojiName: string;
   accountId?: string | null;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: MattermostFetch;
 }): Promise<Result> {
   return runMattermostReaction(params, {
     action: "remove",
@@ -81,6 +86,7 @@ async function runMattermostReaction(
     baseUrl,
     botToken,
     fetchImpl: params.fetchImpl,
+    allowPrivateNetwork: resolved.config?.allowPrivateNetwork === true,
   });
 
   const cacheKey = `${baseUrl}:${botToken}`;

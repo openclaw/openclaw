@@ -1,31 +1,39 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { resolveUserPath } from "../utils.js";
+import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  loadPluginManifest,
+  type PluginManifest,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
-import type { PluginDiagnostic, PluginOrigin } from "./types.js";
+import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
+import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 
 export type PluginCandidate = {
   idHint: string;
   source: string;
+  setupSource?: string;
   rootDir: string;
   origin: PluginOrigin;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
   workspaceDir?: string;
   packageName?: string;
   packageVersion?: string;
   packageDescription?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
+  bundledManifest?: PluginManifest;
+  bundledManifestPath?: string;
 };
 
 export type PluginDiscoveryResult = {
@@ -69,18 +77,18 @@ function buildDiscoveryCacheKey(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
+  env: NodeJS.ProcessEnv;
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  const configExtensionsRoot = path.join(resolveConfigDir(), "extensions");
-  const bundledRoot = resolveBundledPluginsDir() ?? "";
-  const normalizedExtraPaths = (params.extraPaths ?? [])
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => resolveUserPath(entry))
-    .toSorted();
+  const { roots, loadPaths } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    loadPaths: params.extraPaths,
+    env: params.env,
+  });
+  const workspaceKey = roots.workspace ?? "";
+  const configExtensionsRoot = roots.global ?? "";
+  const bundledRoot = roots.stock ?? "";
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(normalizedExtraPaths)}`;
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
 }
 
 function currentUid(overrideUid?: number | null): number | null {
@@ -153,7 +161,7 @@ function checkPathStatAndPermissions(params: {
       continue;
     }
     seen.add(normalized);
-    const stat = safeStatSync(targetPath);
+    let stat = safeStatSync(targetPath);
     if (!stat) {
       return {
         reason: "path_stat_failed",
@@ -162,7 +170,28 @@ function checkPathStatAndPermissions(params: {
         targetPath,
       };
     }
-    const modeBits = stat.mode & 0o777;
+    let modeBits = stat.mode & 0o777;
+    if ((modeBits & 0o002) !== 0 && params.origin === "bundled") {
+      // npm/global installs can create package-managed extension dirs without
+      // directory entries in the tarball, which may widen them to 0777.
+      // Tighten bundled dirs in place before applying the normal safety gate.
+      try {
+        fs.chmodSync(targetPath, modeBits & ~0o022);
+        const repairedStat = safeStatSync(targetPath);
+        if (!repairedStat) {
+          return {
+            reason: "path_stat_failed",
+            sourcePath: params.source,
+            rootPath: params.rootDir,
+            targetPath,
+          };
+        }
+        stat = repairedStat;
+        modeBits = repairedStat.mode & 0o777;
+      } catch {
+        // Fall through to the normal block path below when repair is not possible.
+      }
+    }
     if ((modeBits & 0o002) !== 0) {
       return {
         reason: "path_world_writable",
@@ -298,10 +327,15 @@ function readPackageManifest(dir: string, rejectHardlinks = true): PackageManife
 
 function deriveIdHint(params: {
   filePath: string;
+  manifestId?: string;
   packageName?: string;
   hasMultipleExtensions: boolean;
 }): string {
   const base = path.basename(params.filePath, path.extname(params.filePath));
+  const rawManifestId = params.manifestId?.trim();
+  if (rawManifestId) {
+    return params.hasMultipleExtensions ? `${rawManifestId}/${base}` : rawManifestId;
+  }
   const rawPackageName = params.packageName?.trim();
   if (!rawPackageName) {
     return base;
@@ -312,11 +346,20 @@ function deriveIdHint(params: {
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
+  const normalizedPackageId =
+    unscoped.endsWith("-provider") && unscoped.length > "-provider".length
+      ? unscoped.slice(0, -"-provider".length)
+      : unscoped;
 
   if (!params.hasMultipleExtensions) {
-    return unscoped;
+    return normalizedPackageId;
   }
-  return `${unscoped}/${base}`;
+  return `${normalizedPackageId}/${base}`;
+}
+
+function resolveIdHintManifestId(rootDir: string, rejectHardlinks: boolean): string | undefined {
+  const manifest = loadPluginManifest(rootDir, rejectHardlinks);
+  return manifest.ok ? manifest.manifest.id : undefined;
 }
 
 function addCandidate(params: {
@@ -325,12 +368,17 @@ function addCandidate(params: {
   seen: Set<string>;
   idHint: string;
   source: string;
+  setupSource?: string;
   rootDir: string;
   origin: PluginOrigin;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
   ownershipUid?: number | null;
   workspaceDir?: string;
   manifest?: PackageManifest | null;
   packageDir?: string;
+  bundledManifest?: PluginManifest;
+  bundledManifestPath?: string;
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
@@ -353,15 +401,62 @@ function addCandidate(params: {
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
+    setupSource: params.setupSource,
     rootDir: resolvedRoot,
     origin: params.origin,
+    format: params.format ?? "openclaw",
+    bundleFormat: params.bundleFormat,
     workspaceDir: params.workspaceDir,
     packageName: manifest?.name?.trim() || undefined,
     packageVersion: manifest?.version?.trim() || undefined,
     packageDescription: manifest?.description?.trim() || undefined,
     packageDir: params.packageDir,
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
+    bundledManifest: params.bundledManifest,
+    bundledManifestPath: params.bundledManifestPath,
   });
+}
+
+function discoverBundleInRoot(params: {
+  rootDir: string;
+  origin: PluginOrigin;
+  ownershipUid?: number | null;
+  workspaceDir?: string;
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+  seen: Set<string>;
+}): "added" | "invalid" | "none" {
+  const bundleFormat = detectBundleManifestFormat(params.rootDir);
+  if (!bundleFormat) {
+    return "none";
+  }
+  const bundleManifest = loadBundleManifest({
+    rootDir: params.rootDir,
+    bundleFormat,
+    rejectHardlinks: params.origin !== "bundled",
+  });
+  if (!bundleManifest.ok) {
+    params.diagnostics.push({
+      level: "error",
+      message: bundleManifest.error,
+      source: bundleManifest.manifestPath,
+    });
+    return "invalid";
+  }
+  addCandidate({
+    candidates: params.candidates,
+    diagnostics: params.diagnostics,
+    seen: params.seen,
+    idHint: bundleManifest.manifest.id,
+    source: params.rootDir,
+    rootDir: params.rootDir,
+    origin: params.origin,
+    format: "bundle",
+    bundleFormat,
+    ownershipUid: params.ownershipUid,
+    workspaceDir: params.workspaceDir,
+  });
+  return "added";
 }
 
 function resolvePackageEntrySource(params: {
@@ -372,19 +467,77 @@ function resolvePackageEntrySource(params: {
   rejectHardlinks?: boolean;
 }): string | null {
   const source = path.resolve(params.packageDir, params.entryPath);
+  const rejectHardlinks = params.rejectHardlinks ?? true;
+  const candidates = [source];
+  if (!rejectHardlinks) {
+    const builtCandidate = source.replace(/\.[^.]+$/u, ".js");
+    if (builtCandidate !== source) {
+      candidates.push(builtCandidate);
+    }
+  }
+
+  for (const candidate of new Set(candidates)) {
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+    const opened = openBoundaryFileSync({
+      absolutePath: candidate,
+      rootPath: params.packageDir,
+      boundaryLabel: "plugin package directory",
+      rejectHardlinks,
+    });
+    if (!opened.ok) {
+      return matchBoundaryFileOpenFailure(opened, {
+        path: () => null,
+        io: () => {
+          params.diagnostics.push({
+            level: "warn",
+            message: `extension entry unreadable (I/O error): ${params.entryPath}`,
+            source: params.sourceLabel,
+          });
+          return null;
+        },
+        fallback: () => {
+          params.diagnostics.push({
+            level: "error",
+            message: `extension entry escapes package directory: ${params.entryPath}`,
+            source: params.sourceLabel,
+          });
+          return null;
+        },
+      });
+    }
+    const safeSource = opened.path;
+    fs.closeSync(opened.fd);
+    return safeSource;
+  }
+
   const opened = openBoundaryFileSync({
     absolutePath: source,
     rootPath: params.packageDir,
     boundaryLabel: "plugin package directory",
-    rejectHardlinks: params.rejectHardlinks ?? true,
+    rejectHardlinks,
   });
   if (!opened.ok) {
-    params.diagnostics.push({
-      level: "error",
-      message: `extension entry escapes package directory: ${params.entryPath}`,
-      source: params.sourceLabel,
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => null,
+      io: () => {
+        params.diagnostics.push({
+          level: "warn",
+          message: `extension entry unreadable (I/O error): ${params.entryPath}`,
+          source: params.sourceLabel,
+        });
+        return null;
+      },
+      fallback: () => {
+        params.diagnostics.push({
+          level: "error",
+          message: `extension entry escapes package directory: ${params.entryPath}`,
+          source: params.sourceLabel,
+        });
+        return null;
+      },
     });
-    return null;
   }
   const safeSource = opened.path;
   fs.closeSync(opened.fd);
@@ -399,6 +552,7 @@ function discoverInDirectory(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  skipDirectories?: Set<string>;
 }) {
   if (!fs.existsSync(params.dir)) {
     return;
@@ -436,6 +590,9 @@ function discoverInDirectory(params: {
     if (!entry.isDirectory()) {
       continue;
     }
+    if (params.skipDirectories?.has(entry.name)) {
+      continue;
+    }
     if (shouldIgnoreScannedDirectory(entry.name)) {
       continue;
     }
@@ -444,6 +601,18 @@ function discoverInDirectory(params: {
     const manifest = readPackageManifest(fullPath, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
+    const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks);
+    const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
+    const setupSource =
+      typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
+        ? resolvePackageEntrySource({
+            packageDir: fullPath,
+            entryPath: setupEntryPath,
+            sourceLabel: fullPath,
+            diagnostics: params.diagnostics,
+            rejectHardlinks,
+          })
+        : null;
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
@@ -463,10 +632,12 @@ function discoverInDirectory(params: {
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: resolved,
+            manifestId,
             packageName: manifest?.name,
             hasMultipleExtensions: extensions.length > 1,
           }),
           source: resolved,
+          ...(setupSource ? { setupSource } : {}),
           rootDir: fullPath,
           origin: params.origin,
           ownershipUid: params.ownershipUid,
@@ -475,6 +646,19 @@ function discoverInDirectory(params: {
           packageDir: fullPath,
         });
       }
+      continue;
+    }
+
+    const bundleDiscovery = discoverBundleInRoot({
+      rootDir: fullPath,
+      origin: params.origin,
+      ownershipUid: params.ownershipUid,
+      workspaceDir: params.workspaceDir,
+      candidates: params.candidates,
+      diagnostics: params.diagnostics,
+      seen: params.seen,
+    });
+    if (bundleDiscovery === "added") {
       continue;
     }
 
@@ -488,6 +672,7 @@ function discoverInDirectory(params: {
         seen: params.seen,
         idHint: entry.name,
         source: indexFile,
+        ...(setupSource ? { setupSource } : {}),
         rootDir: fullPath,
         origin: params.origin,
         ownershipUid: params.ownershipUid,
@@ -504,11 +689,12 @@ function discoverFromPath(params: {
   origin: PluginOrigin;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
 }) {
-  const resolved = resolveUserPath(params.rawPath);
+  const resolved = resolveUserPath(params.rawPath, params.env);
   if (!fs.existsSync(resolved)) {
     params.diagnostics.push({
       level: "error",
@@ -547,6 +733,18 @@ function discoverFromPath(params: {
     const manifest = readPackageManifest(resolved, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
+    const manifestId = resolveIdHintManifestId(resolved, rejectHardlinks);
+    const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
+    const setupSource =
+      typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
+        ? resolvePackageEntrySource({
+            packageDir: resolved,
+            entryPath: setupEntryPath,
+            sourceLabel: resolved,
+            diagnostics: params.diagnostics,
+            rejectHardlinks,
+          })
+        : null;
 
     if (extensions.length > 0) {
       for (const extPath of extensions) {
@@ -566,10 +764,12 @@ function discoverFromPath(params: {
           seen: params.seen,
           idHint: deriveIdHint({
             filePath: source,
+            manifestId,
             packageName: manifest?.name,
             hasMultipleExtensions: extensions.length > 1,
           }),
           source,
+          ...(setupSource ? { setupSource } : {}),
           rootDir: resolved,
           origin: params.origin,
           ownershipUid: params.ownershipUid,
@@ -578,6 +778,19 @@ function discoverFromPath(params: {
           packageDir: resolved,
         });
       }
+      return;
+    }
+
+    const bundleDiscovery = discoverBundleInRoot({
+      rootDir: resolved,
+      origin: params.origin,
+      ownershipUid: params.ownershipUid,
+      workspaceDir: params.workspaceDir,
+      candidates: params.candidates,
+      diagnostics: params.diagnostics,
+      seen: params.seen,
+    });
+    if (bundleDiscovery === "added") {
       return;
     }
 
@@ -592,6 +805,7 @@ function discoverFromPath(params: {
         seen: params.seen,
         idHint: path.basename(resolved),
         source: indexFile,
+        ...(setupSource ? { setupSource } : {}),
         rootDir: resolved,
         origin: params.origin,
         ownershipUid: params.ownershipUid,
@@ -628,6 +842,7 @@ export function discoverOpenClawPlugins(params: {
     workspaceDir: params.workspaceDir,
     extraPaths: params.extraPaths,
     ownershipUid: params.ownershipUid,
+    env,
   });
   if (cacheEnabled) {
     const cached = discoveryCache.get(cacheKey);
@@ -640,6 +855,8 @@ export function discoverOpenClawPlugins(params: {
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
   const workspaceDir = params.workspaceDir?.trim();
+  const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
+  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
 
   const extra = params.extraPaths ?? [];
   for (const extraPath of extra) {
@@ -655,31 +872,27 @@ export function discoverOpenClawPlugins(params: {
       origin: "config",
       ownershipUid: params.ownershipUid,
       workspaceDir: workspaceDir?.trim() || undefined,
+      env,
       candidates,
       diagnostics,
       seen,
     });
   }
-  if (workspaceDir) {
-    const workspaceRoot = resolveUserPath(workspaceDir);
-    const workspaceExtDirs = [path.join(workspaceRoot, ".openclaw", "extensions")];
-    for (const dir of workspaceExtDirs) {
-      discoverInDirectory({
-        dir,
-        origin: "workspace",
-        ownershipUid: params.ownershipUid,
-        workspaceDir: workspaceRoot,
-        candidates,
-        diagnostics,
-        seen,
-      });
-    }
+  if (roots.workspace && workspaceRoot) {
+    discoverInDirectory({
+      dir: roots.workspace,
+      origin: "workspace",
+      ownershipUid: params.ownershipUid,
+      workspaceDir: workspaceRoot,
+      candidates,
+      diagnostics,
+      seen,
+    });
   }
 
-  const bundledDir = resolveBundledPluginsDir();
-  if (bundledDir) {
+  if (roots.stock) {
     discoverInDirectory({
-      dir: bundledDir,
+      dir: roots.stock,
       origin: "bundled",
       ownershipUid: params.ownershipUid,
       candidates,
@@ -690,9 +903,8 @@ export function discoverOpenClawPlugins(params: {
 
   // Keep auto-discovered global extensions behind bundled plugins.
   // Users can still intentionally override via plugins.load.paths (origin=config).
-  const globalDir = path.join(resolveConfigDir(), "extensions");
   discoverInDirectory({
-    dir: globalDir,
+    dir: roots.global,
     origin: "global",
     ownershipUid: params.ownershipUid,
     candidates,

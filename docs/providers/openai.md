@@ -36,6 +36,12 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
 OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
+OpenClaw intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
+because direct OpenAI API calls reject it in live traffic.
+
+OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
+API path. `pi-ai` still ships a built-in row for that model, but live OpenAI API
+requests currently reject it. Spark is treated as Codex-only in OpenClaw.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -62,6 +68,18 @@ openclaw models auth login --provider openai-codex
 
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
+
+If your Codex account is entitled to Codex Spark, OpenClaw also supports:
+
+- `openai-codex/gpt-5.3-codex-spark`
+
+OpenClaw treats Codex Spark as Codex-only. It does not expose a direct
+`openai/gpt-5.3-codex-spark` API-key path.
+
+OpenClaw also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
+discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
+separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
+ChatGPT account.
 
 ### Transport default
 
@@ -141,11 +159,11 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
 }
 ```
 
-### OpenAI priority processing
+### OpenAI and Codex priority processing
 
 OpenAI's API exposes priority processing via `service_tier=priority`. In
-OpenClaw, set `agents.defaults.models["openai/<model>"].params.serviceTier` to
-pass that field through on direct `openai/*` Responses requests.
+OpenClaw, set `agents.defaults.models["<provider>/<model>"].params.serviceTier`
+to pass that field through on native OpenAI/Codex Responses endpoints.
 
 ```json5
 {
@@ -157,6 +175,11 @@ pass that field through on direct `openai/*` Responses requests.
             serviceTier: "priority",
           },
         },
+        "openai-codex/gpt-5.4": {
+          params: {
+            serviceTier: "priority",
+          },
+        },
       },
     },
   },
@@ -164,6 +187,57 @@ pass that field through on direct `openai/*` Responses requests.
 ```
 
 Supported values are `auto`, `default`, `flex`, and `priority`.
+
+OpenClaw forwards `params.serviceTier` to both direct `openai/*` Responses
+requests and `openai-codex/*` Codex Responses requests when those models point
+at the native OpenAI/Codex endpoints.
+
+Important behavior:
+
+- direct `openai/*` must target `api.openai.com`
+- `openai-codex/*` must target `chatgpt.com/backend-api`
+- if you route either provider through another base URL or proxy, OpenClaw leaves `service_tier` untouched
+
+### OpenAI fast mode
+
+OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
+`openai-codex/*` sessions:
+
+- Chat/UI: `/fast status|on|off`
+- Config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+
+When fast mode is enabled, OpenClaw maps it to OpenAI priority processing:
+
+- direct `openai/*` Responses calls to `api.openai.com` send `service_tier = "priority"`
+- `openai-codex/*` Responses calls to `chatgpt.com/backend-api` also send `service_tier = "priority"`
+- existing payload `service_tier` values are preserved
+- fast mode does not rewrite `reasoning` or `text.verbosity`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+        "openai-codex/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Session overrides win over config. Clearing the session override in the Sessions UI
+returns the session to the configured default.
 
 ### OpenAI Responses server-side compaction
 

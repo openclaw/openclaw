@@ -4,7 +4,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { writeBase64ToFile } from "../nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
-import { parseTimeoutMs } from "../nodes-run.js";
+import { parseTimeoutMs } from "../parse-timeout.js";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
@@ -65,9 +65,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           await writeBase64ToFile(filePath, payload.base64);
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify({ file: { path: filePath, format: payload.format } }, null, 2),
-            );
+            defaultRuntime.writeJson({ file: { path: filePath, format: payload.format } });
             return;
           }
           defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);
@@ -169,7 +167,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
             javaScript: js,
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(raw, null, 2));
+            defaultRuntime.writeJson(raw);
             return;
           }
           const payload =

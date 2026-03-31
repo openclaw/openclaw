@@ -22,7 +22,10 @@ export function registerNodesCli(program: Command) {
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw nodes status", "List known nodes with live status."],
           ["openclaw nodes pairing pending", "Show pending node pairing requests."],
-          ['openclaw nodes run --node <id> --raw "uname -a"', "Run a shell command on a node."],
+          [
+            'openclaw nodes invoke --node <id> --command system.which --params \'{"name":"uname"}\'',
+            "Invoke a node command directly.",
+          ],
           ["openclaw nodes camera snap --node <id>", "Capture a photo from a node camera."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/nodes", "docs.openclaw.ai/cli/nodes")}\n`,
     );

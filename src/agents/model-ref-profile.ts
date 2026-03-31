@@ -8,9 +8,18 @@ export function splitTrailingAuthProfile(raw: string): {
   }
 
   const lastSlash = trimmed.lastIndexOf("/");
-  const profileDelimiter = trimmed.indexOf("@", lastSlash + 1);
+  let profileDelimiter = trimmed.indexOf("@", lastSlash + 1);
   if (profileDelimiter <= 0) {
     return { model: trimmed };
+  }
+
+  const versionSuffix = trimmed.slice(profileDelimiter + 1);
+  if (/^\d{8}(?:@|$)/.test(versionSuffix)) {
+    const nextDelimiter = trimmed.indexOf("@", profileDelimiter + 9);
+    if (nextDelimiter < 0) {
+      return { model: trimmed };
+    }
+    profileDelimiter = nextDelimiter;
   }
 
   const model = trimmed.slice(0, profileDelimiter).trim();

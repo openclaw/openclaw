@@ -65,10 +65,10 @@ struct SettingsTab: View {
                     DisclosureGroup(isExpanded: self.$gatewayExpanded) {
                         if !self.isGatewayConnected {
                             Text(
-                                "1. Open Telegram and message your bot: /pair\n"
+                                "1. Open a chat with your OpenClaw agent and send /pair\n"
                                     + "2. Copy the setup code it returns\n"
                                     + "3. Paste here and tap Connect\n"
-                                    + "4. Back in Telegram, run /pair approve")
+                                    + "4. Back in that chat, run /pair approve")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
@@ -340,9 +340,9 @@ struct SettingsTab: View {
                                     .foregroundStyle(.secondary)
                             }
                             self.featureToggle(
-                                "Show Talk Button",
+                                "Show Talk Control",
                                 isOn: self.$talkButtonEnabled,
-                                help: "Shows the floating Talk button in the main interface.")
+                                help: "Shows the Talk control in the main toolbar.")
                             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
                                 .lineLimit(2 ... 6)
                                 .textInputAutocapitalization(.sentences)
@@ -767,11 +767,21 @@ struct SettingsTab: View {
         }
 
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBootstrapToken =
+            payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedInstanceId.isEmpty {
+            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
+        }
         if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
             self.gatewayToken = trimmedToken
             if !trimmedInstanceId.isEmpty {
                 GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
+            }
+        } else if !trimmedBootstrapToken.isEmpty {
+            self.gatewayToken = ""
+            if !trimmedInstanceId.isEmpty {
+                GatewaySettingsStore.saveGatewayToken("", instanceId: trimmedInstanceId)
             }
         }
         if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -779,6 +789,11 @@ struct SettingsTab: View {
             self.gatewayPassword = trimmedPassword
             if !trimmedInstanceId.isEmpty {
                 GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
+            }
+        } else if !trimmedBootstrapToken.isEmpty {
+            self.gatewayPassword = ""
+            if !trimmedInstanceId.isEmpty {
+                GatewaySettingsStore.saveGatewayPassword("", instanceId: trimmedInstanceId)
             }
         }
 
@@ -896,7 +911,7 @@ struct SettingsTab: View {
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
         if lower.contains("pairing required") {
-            return "Pairing required. Go back to Telegram and run /pair approve, then tap Connect again."
+            return "Pairing required. Go back to your OpenClaw chat and run /pair approve, then tap Connect again."
         }
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
             return "Secure handshake failed. Make sure Tailscale is connected, then tap Connect again."
@@ -993,6 +1008,12 @@ struct SettingsTab: View {
 
         // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
         GatewaySettingsStore.clearLastGatewayConnection()
+        GatewaySettingsStore.clearPreferredGatewayStableID()
+        GatewaySettingsStore.clearLastDiscoveredGatewayStableID()
+        // Resetting onboarding should also forget trusted gateway TLS fingerprints.
+        // Otherwise a restarted dev gateway can stay stuck in a local TLS cancel loop.
+        GatewayTLSStore.clearAllFingerprints()
+        OnboardingStateStore.reset()
 
         // RootCanvas also short-circuits onboarding when these are true.
         self.onboardingComplete = false

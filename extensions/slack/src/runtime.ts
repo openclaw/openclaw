@@ -1,14 +1,9 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/slack";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setSlackRuntime(next: PluginRuntime) {
-  runtime = next;
-}
-
-export function getSlackRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Slack runtime not initialized");
-  }
-  return runtime;
-}
+const {
+  setRuntime: setSlackRuntime,
+  clearRuntime: clearSlackRuntime,
+  getRuntime: getSlackRuntime,
+} = createPluginRuntimeStore<PluginRuntime>("Slack runtime not initialized");
+export { clearSlackRuntime, getSlackRuntime, setSlackRuntime };

@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  createResolvedEmbeddedRunnerModel,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -19,17 +23,25 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
-  runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-}));
+vi.mock("./pi-embedded-runner/run/attempt.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded-runner/run/attempt.js")>();
+  return {
+    ...actual,
+    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+  };
+});
 
-vi.mock("../infra/backoff.js", () => ({
-  computeBackoff: (
-    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-    attempt: number,
-  ) => computeBackoffMock(policy, attempt),
-  sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
-}));
+vi.mock("../infra/backoff.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+  return {
+    ...actual,
+    computeBackoff: (
+      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      attempt: number,
+    ) => computeBackoffMock(policy, attempt),
+    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
+  };
+});
 
 vi.mock("./models-config.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./models-config.js")>();
@@ -39,9 +51,38 @@ vi.mock("./models-config.js", async (importOriginal) => {
   };
 });
 
+const installRunEmbeddedMocks = () => {
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: vi.fn(() => undefined),
+  }));
+  vi.doMock("../context-engine/index.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+    resolveContextEngine: vi.fn(async () => ({
+      dispose: async () => undefined,
+    })),
+  }));
+  vi.doMock("./runtime-plugins.js", () => ({
+    ensureRuntimePluginsLoaded: vi.fn(),
+  }));
+  vi.doMock("./pi-embedded-runner/model.js", () => ({
+    resolveModelAsync: async (provider: string, modelId: string) =>
+      createResolvedEmbeddedRunnerModel(provider, modelId),
+  }));
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    };
+  });
+};
+
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 
 beforeAll(async () => {
+  vi.resetModules();
+  installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
 });
 
@@ -51,48 +92,8 @@ beforeEach(() => {
   sleepWithAbortMock.mockClear();
 });
 
-const baseUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
-
-const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-  role: "assistant",
-  content: [],
-  api: "openai-responses",
-  provider: "openai",
-  model: "mock-1",
-  usage: baseUsage,
-  stopReason: "stop",
-  timestamp: Date.now(),
-  ...overrides,
-});
-
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
-  aborted: false,
-  timedOut: false,
-  timedOutDuringCompaction: false,
-  promptError: null,
-  sessionIdUsed: "session:test",
-  systemPromptReport: undefined,
-  messagesSnapshot: [],
-  assistantTexts: [],
-  toolMetas: [],
-  lastAssistant: undefined,
-  didSendViaMessagingTool: false,
-  messagingToolSentTexts: [],
-  messagingToolSentMediaUrls: [],
-  messagingToolSentTargets: [],
-  cloudCodeAssistFormatError: false,
-  ...overrides,
-});
 
 function makeConfig(): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
@@ -207,6 +208,7 @@ async function runEmbeddedFallback(params: {
     cfg,
     provider: "openai",
     model: "mock-1",
+    runId: params.runId,
     agentDir: params.agentDir,
     run: (provider, model, options) =>
       runEmbeddedPiAgent({
@@ -224,6 +226,7 @@ async function runEmbeddedFallback(params: {
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,
+        enqueue: async (task) => await task(),
       }),
   });
 }
@@ -236,9 +239,9 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: [],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: "openai",
           model: "mock-1",
           stopReason: "error",
@@ -247,9 +250,9 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
       });
     }
     if (attemptParams.provider === "groq") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: ["fallback ok"],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: "groq",
           model: "mock-2",
           stopReason: "stop",
@@ -280,9 +283,9 @@ function mockAllProvidersOverloaded() {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai" || attemptParams.provider === "groq") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: [],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: attemptParams.provider,
           model: attemptParams.provider === "openai" ? "mock-1" : "mock-2",
           stopReason: "error",
@@ -474,6 +477,91 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
         | { provider?: string }
         | undefined;
       expect(firstCall?.provider).toBe("openai");
+    });
+  });
+
+  it("caps overloaded profile rotations and escalates to cross-provider fallback (#58348)", async () => {
+    // When a provider has multiple auth profiles and all return overloaded_error,
+    // the runner should not exhaust all profiles before falling back. It should
+    // cap profile rotations at MAX_OVERLOAD_PROFILE_ROTATIONS (1) and escalate
+    // to cross-provider fallback immediately.
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      // Write auth store with multiple profiles for openai
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-openai-2" },
+            "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
+            "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "openai:p2": { lastUsed: 2 },
+            "openai:p3": { lastUsed: 3 },
+            "groq:p1": { lastUsed: 4 },
+          },
+        }),
+      );
+
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as {
+          provider: string;
+          modelId: string;
+          authProfileId?: string;
+        };
+        if (attemptParams.provider === "openai") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: ["fallback ok"],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "groq",
+              model: "mock-2",
+              stopReason: "stop",
+              content: [{ type: "text", text: "fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:overloaded-multi-profile-cap",
+        runId: "run:overloaded-multi-profile-cap",
+      });
+
+      // Should fall back to groq instead of exhausting all 3 openai profiles
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      // With MAX_OVERLOAD_PROFILE_ROTATIONS=1, we expect:
+      // - 1 initial openai attempt (p1)
+      // - 1 rotation to p2 (capped)
+      // - escalation to groq (1 attempt)
+      // Total: 3 attempts, NOT 4 (which would mean all 3 openai profiles tried)
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(2);
+      expect(groqAttempts.length).toBe(1);
     });
   });
 });

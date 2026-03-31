@@ -1,8 +1,9 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
-import { createBlockReplyPayloadKey } from "./block-reply-pipeline.js";
+import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -57,9 +58,6 @@ export function normalizeReplyPayloadDirectives(params: {
   };
 }
 
-const hasRenderableMedia = (payload: ReplyPayload): boolean =>
-  Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;
@@ -73,7 +71,7 @@ export function createBlockReplyDeliveryHandler(params: {
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
-    if (skip && !hasRenderableMedia(payload)) {
+    if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return;
     }
 
@@ -106,7 +104,7 @@ export function createBlockReplyDeliveryHandler(params: {
       ? await params.normalizeMediaPaths(normalized.payload)
       : normalized.payload;
     const blockPayload = params.applyReplyToMode(mediaNormalizedPayload);
-    const blockHasMedia = hasRenderableMedia(blockPayload);
+    const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
     if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
@@ -128,9 +126,15 @@ export function createBlockReplyDeliveryHandler(params: {
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
-      params.directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(blockPayload);
+    } else if (blockHasMedia) {
+      // When block streaming is disabled, text-only block replies are accumulated into the
+      // final response. Media cannot be reconstructed later, so send it immediately and let
+      // the assistant's final text arrive through the normal final-reply path.
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
+      await params.onBlockReply({ ...blockPayload, text: undefined });
     }
-    // When streaming is disabled entirely, blocks are accumulated in final text instead.
+    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };
 }

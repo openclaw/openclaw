@@ -1,39 +1,19 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { inspectDiscordAccount, type InspectedDiscordAccount } from "../discord/account-inspect.js";
-import { inspectSlackAccount, type InspectedSlackAccount } from "../slack/account-inspect.js";
-import {
-  inspectTelegramAccount,
-  type InspectedTelegramAccount,
-} from "../telegram/account-inspect.js";
+import { getChannelPlugin } from "./plugins/registry.js";
 import type { ChannelId } from "./plugins/types.js";
 
-export type ReadOnlyInspectedAccount =
-  | InspectedDiscordAccount
-  | InspectedSlackAccount
-  | InspectedTelegramAccount;
+export type ReadOnlyInspectedAccount = Record<string, unknown>;
 
-export function inspectReadOnlyChannelAccount(params: {
+export async function inspectReadOnlyChannelAccount(params: {
   channelId: ChannelId;
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): ReadOnlyInspectedAccount | null {
-  if (params.channelId === "discord") {
-    return inspectDiscordAccount({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    });
+}): Promise<ReadOnlyInspectedAccount | null> {
+  const inspectAccount = getChannelPlugin(params.channelId)?.config.inspectAccount;
+  if (!inspectAccount) {
+    return null;
   }
-  if (params.channelId === "slack") {
-    return inspectSlackAccount({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    });
-  }
-  if (params.channelId === "telegram") {
-    return inspectTelegramAccount({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    });
-  }
-  return null;
+  return (await Promise.resolve(
+    inspectAccount(params.cfg, params.accountId),
+  )) as ReadOnlyInspectedAccount | null;
 }

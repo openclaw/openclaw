@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/tlon";
+import type { RuntimeEnv } from "../../api.js";
 import type { Foreigns } from "../urbit/foreigns.js";
 import { formatChangesDate } from "./utils.js";
 

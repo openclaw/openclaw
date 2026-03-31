@@ -1,4 +1,6 @@
+import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =
@@ -12,7 +14,7 @@ export type CronSchedule =
       staggerMs?: number;
     };
 
-export type CronSessionTarget = "main" | "isolated";
+export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
@@ -90,6 +92,8 @@ type CronAgentTurnPayloadFields = {
   thinking?: string;
   timeoutSeconds?: number;
   allowUnsafeExternalContent?: boolean;
+  /** Immutable external hook provenance for async dispatch. */
+  externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
   deliver?: boolean;
@@ -105,7 +109,6 @@ type CronAgentTurnPayload = {
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
 } & Partial<CronAgentTurnPayloadFields>;
-
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -115,6 +118,8 @@ export type CronJobState = {
   /** Back-compat alias for lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  /** Classified reason for the last error (when available). */
+  lastErrorReason?: FailoverReason;
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;

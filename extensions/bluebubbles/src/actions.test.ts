@@ -1,7 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { bluebubblesMessageActions } from "./actions.js";
+import { sendBlueBubblesAttachment } from "./attachments.js";
+import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { sendBlueBubblesReaction } from "./reactions.js";
+import type { OpenClawConfig } from "./runtime-api.js";
+import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 
 vi.mock("./accounts.js", async () => {
   const { createBlueBubblesAccountsMockModule } = await import("./test-harness.js");
@@ -40,8 +44,11 @@ vi.mock("./probe.js", () => ({
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
 
+const freshActionsModulePath = "./actions.js?actions-test";
+const { bluebubblesMessageActions } = await import(freshActionsModulePath);
+
 describe("bluebubblesMessageActions", () => {
-  const listActions = bluebubblesMessageActions.listActions!;
+  const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;
   const supportsAction = bluebubblesMessageActions.supportsAction!;
   const extractToolSend = bluebubblesMessageActions.extractToolSend!;
   const handleAction = bluebubblesMessageActions.handleAction!;
@@ -69,12 +76,12 @@ describe("bluebubblesMessageActions", () => {
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
-  describe("listActions", () => {
+  describe("describeMessageTool", () => {
     it("returns empty array when account is not enabled", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: false } },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toEqual([]);
     });
 
@@ -82,7 +89,7 @@ describe("bluebubblesMessageActions", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: true } },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toEqual([]);
     });
 
@@ -96,7 +103,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toContain("react");
     });
 
@@ -111,7 +118,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).not.toContain("react");
       // Other actions should still be present
       expect(actions).toContain("edit");
@@ -129,8 +136,9 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
-      expect(actions).toContain("sendAttachment");
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
+      expect(actions).toContain("upload-file");
+      expect(actions).not.toContain("sendAttachment");
       expect(actions).not.toContain("react");
       expect(actions).not.toContain("reply");
       expect(actions).not.toContain("sendWithEffect");
@@ -160,6 +168,7 @@ describe("bluebubblesMessageActions", () => {
       expect(supportsAction({ action: "removeParticipant" })).toBe(true);
       expect(supportsAction({ action: "leaveGroup" })).toBe(true);
       expect(supportsAction({ action: "sendAttachment" })).toBe(true);
+      expect(supportsAction({ action: "upload-file" })).toBe(true);
     });
 
     it("returns false for unsupported actions", () => {
@@ -199,6 +208,36 @@ describe("bluebubblesMessageActions", () => {
   });
 
   describe("handleAction", () => {
+    it("maps upload-file to the attachment runtime using canonical naming", async () => {
+      const result = await callHandleAction({
+        action: "upload-file",
+        params: {
+          to: "+15551234567",
+          filename: "photo.png",
+          buffer: Buffer.from("img").toString("base64"),
+          message: "caption",
+          contentType: "image/png",
+        },
+        cfg: blueBubblesConfig(),
+        accountId: null,
+      });
+
+      expect(sendBlueBubblesAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+15551234567",
+          filename: "photo.png",
+          caption: "caption",
+          contentType: "image/png",
+        }),
+      );
+      expect(result).toMatchObject({
+        details: {
+          ok: true,
+          messageId: "att-msg-123",
+        },
+      });
+    });
+
     it("throws for unsupported actions", async () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -277,7 +316,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("throws when chatGuid cannot be resolved", async () => {
-      const { resolveChatGuidForTarget } = await import("./send.js");
       vi.mocked(resolveChatGuidForTarget).mockResolvedValueOnce(null);
 
       const cfg: OpenClawConfig = {
@@ -299,8 +337,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("sends reaction successfully with chatGuid", async () => {
-      const { sendBlueBubblesReaction } = await import("./reactions.js");
-
       const result = await runReactAction({
         emoji: "❤️",
         messageId: "msg-123",
@@ -321,8 +357,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("sends reaction removal successfully", async () => {
-      const { sendBlueBubblesReaction } = await import("./reactions.js");
-
       const result = await runReactAction({
         emoji: "❤️",
         messageId: "msg-123",
@@ -342,8 +376,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("resolves chatGuid from to parameter", async () => {
-      const { sendBlueBubblesReaction } = await import("./reactions.js");
-      const { resolveChatGuidForTarget } = await import("./send.js");
       vi.mocked(resolveChatGuidForTarget).mockResolvedValueOnce("iMessage;-;+15559876543");
 
       const cfg: OpenClawConfig = {
@@ -374,8 +406,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("passes partIndex when provided", async () => {
-      const { sendBlueBubblesReaction } = await import("./reactions.js");
-
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {
@@ -404,8 +434,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("uses toolContext currentChannelId when no explicit target is provided", async () => {
-      const { sendBlueBubblesReaction } = await import("./reactions.js");
-      const { resolveChatGuidForTarget } = await import("./send.js");
       vi.mocked(resolveChatGuidForTarget).mockResolvedValueOnce("iMessage;-;+15550001111");
 
       const cfg: OpenClawConfig = {
@@ -442,8 +470,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("resolves short messageId before reacting", async () => {
-      const { resolveBlueBubblesMessageId } = await import("./monitor.js");
-      const { sendBlueBubblesReaction } = await import("./reactions.js");
       vi.mocked(resolveBlueBubblesMessageId).mockReturnValueOnce("resolved-uuid");
 
       const cfg: OpenClawConfig = {
@@ -475,7 +501,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("propagates short-id errors from the resolver", async () => {
-      const { resolveBlueBubblesMessageId } = await import("./monitor.js");
       vi.mocked(resolveBlueBubblesMessageId).mockImplementationOnce(() => {
         throw new Error("short id expired");
       });
@@ -504,8 +529,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("accepts message param for edit action", async () => {
-      const { editBlueBubblesMessage } = await import("./chat.js");
-
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {
@@ -530,8 +553,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("accepts message/target aliases for sendWithEffect", async () => {
-      const { sendMessageBlueBubbles } = await import("./send.js");
-
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {
@@ -563,8 +584,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("passes asVoice through sendAttachment", async () => {
-      const { sendBlueBubblesAttachment } = await import("./attachments.js");
-
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {
@@ -619,8 +638,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("sets group icon successfully with chatGuid and buffer", async () => {
-      const { setGroupIconBlueBubbles } = await import("./chat.js");
-
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {
@@ -658,8 +675,6 @@ describe("bluebubblesMessageActions", () => {
     });
 
     it("uses default filename when not provided for setGroupIcon", async () => {
-      const { setGroupIconBlueBubbles } = await import("./chat.js");
-
       const cfg: OpenClawConfig = {
         channels: {
           bluebubbles: {

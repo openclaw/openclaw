@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
+import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -98,9 +100,31 @@ describe("config schema", () => {
     expect(schema.properties?.$schema).toBeUndefined();
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
-    expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
+    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
+    expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
+  });
+
+  it("includes MCP SSE header schema under mcp.servers entries", () => {
+    const schema = baseSchema.schema as {
+      properties?: Record<string, unknown>;
+    };
+    const mcpNode = schema.properties?.mcp as
+      | {
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+    const serversNode = mcpNode?.properties?.servers as
+      | {
+          additionalProperties?: {
+            properties?: Record<string, unknown>;
+          };
+        }
+      | undefined;
+    expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {
@@ -141,6 +165,8 @@ describe("config schema", () => {
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps?.accessToken).toBeTruthy();
+    expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
+    expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
@@ -200,6 +226,63 @@ describe("config schema", () => {
     expect(tags).toContain("performance");
   });
 
+  it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          readability: true,
+          firecrawl: {
+            enabled: true,
+            apiKey: "firecrawl-test-key",
+            baseUrl: "https://api.firecrawl.dev",
+            onlyMainContent: true,
+            maxAgeMs: 60_000,
+            timeoutSeconds: 15,
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.readability).toBe(true);
+    expect(parsed?.web?.fetch).toMatchObject({
+      firecrawl: {
+        enabled: true,
+        apiKey: "firecrawl-test-key",
+        baseUrl: "https://api.firecrawl.dev",
+        onlyMainContent: true,
+        maxAgeMs: 60_000,
+        timeoutSeconds: 15,
+      },
+    });
+  });
+
+  it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          maxResponseBytes: 2_000_000,
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
+  });
+
+  it("rejects unknown keys inside web fetch firecrawl config", () => {
+    expect(() =>
+      ToolsSchema.parse({
+        web: {
+          fetch: {
+            firecrawl: {
+              enabled: true,
+              nope: true,
+            },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it("keeps tags in the allowed taxonomy", () => {
     const withTags = applyDerivedTags({
       "gateway.auth.token": {},
@@ -216,7 +299,7 @@ describe("config schema", () => {
 
   it("covers core/built-in config paths with tags", () => {
     const schema = baseSchema;
-    const allowed = new Set<string>(CONFIG_TAGS);
+    const allowed = new Set<string>([...CONFIG_TAGS, SENSITIVE_URL_HINT_TAG]);
     for (const [key, hint] of Object.entries(schema.uiHints)) {
       if (!key.includes(".")) {
         continue;

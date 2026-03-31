@@ -29,10 +29,14 @@ import { sandboxListCommand, sandboxRecreateCommand } from "./sandbox.js";
 const NOW = Date.now();
 
 function createContainer(overrides: Partial<SandboxContainerInfo> = {}): SandboxContainerInfo {
+  const containerName = overrides.containerName ?? "openclaw-sandbox-test";
   return {
-    containerName: "openclaw-sandbox-test",
+    containerName,
+    backendId: "docker",
+    runtimeLabel: containerName,
     sessionKey: "test-session",
     image: "openclaw/sandbox:latest",
+    configLabelKind: "Image",
     imageMatch: true,
     running: true,
     createdAtMs: NOW - 3600000,
@@ -104,7 +108,7 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
-      expectLogContains(runtime, "📦 Sandbox Containers");
+      expectLogContains(runtime, "📦 Sandbox Runtimes");
       expectLogContains(runtime, container1.containerName);
       expectLogContains(runtime, container2.containerName);
       expectLogContains(runtime, "Total");
@@ -128,14 +132,14 @@ describe("sandboxListCommand", () => {
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
       expectLogContains(runtime, "⚠️");
-      expectLogContains(runtime, "image mismatch");
+      expectLogContains(runtime, "config mismatch");
       expectLogContains(runtime, "sandbox recreate --all");
     });
 
     it("should display message when no containers found", async () => {
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
-      expect(runtime.log).toHaveBeenCalledWith("No sandbox containers found.");
+      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found.");
     });
   });
 
@@ -161,7 +165,7 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
-      expect(runtime.log).toHaveBeenCalledWith("No sandbox containers found.");
+      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found.");
     });
   });
 });
@@ -295,7 +299,7 @@ describe("sandboxRecreateCommand", () => {
     it("should show message when no containers match", async () => {
       await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
-      expect(runtime.log).toHaveBeenCalledWith("No containers found matching the criteria.");
+      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found matching the criteria.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
     });
 

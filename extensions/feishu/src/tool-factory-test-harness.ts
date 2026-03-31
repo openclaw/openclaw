@@ -1,4 +1,4 @@
-import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
+import type { AnyAgentTool, OpenClawPluginApi } from "../runtime-api.js";
 
 type ToolContextLike = {
   agentAccountId?: string;
@@ -8,7 +8,10 @@ type ToolFactoryLike = (ctx: ToolContextLike) => AnyAgentTool | AnyAgentTool[] |
 
 export type ToolLike = {
   name: string;
-  execute: (toolCallId: string, params: unknown) => Promise<unknown> | unknown;
+  execute: (
+    toolCallId: string,
+    params: unknown,
+  ) => Promise<{ details: Record<string, unknown> }> | { details: Record<string, unknown> };
 };
 
 type RegisteredTool = {

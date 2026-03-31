@@ -23,6 +23,20 @@ describe("schtasks runtime parsing", () => {
       lastRunResult: "0x0",
     });
   });
+
+  it("parses 'Last Result' key variant (without 'Run') (#47726)", () => {
+    const output = [
+      "TaskName: \\OpenClaw Gateway",
+      "Status: Running",
+      "Last Run Time: 2026/3/16 8:34:15",
+      "Last Result: 267009",
+    ].join("\r\n");
+    expect(parseSchtasksQuery(output)).toEqual({
+      status: "Running",
+      lastRunTime: "2026/3/16 8:34:15",
+      lastRunResult: "267009",
+    });
+  });
 });
 
 describe("scheduled task runtime derivation", () => {
@@ -179,6 +193,7 @@ describe("readScheduledTaskCommand", () => {
         const result = await readScheduledTaskCommand(env);
         expect(result).toEqual({
           programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -222,6 +237,7 @@ describe("readScheduledTaskCommand", () => {
             NODE_ENV: "production",
             OPENCLAW_PORT: "18789",
           },
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -245,6 +261,7 @@ describe("readScheduledTaskCommand", () => {
             "--port",
             "18789",
           ],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -268,6 +285,7 @@ describe("readScheduledTaskCommand", () => {
             "--port",
             "18789",
           ],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );
@@ -283,6 +301,7 @@ describe("readScheduledTaskCommand", () => {
         const result = await readScheduledTaskCommand(env);
         expect(result).toEqual({
           programArguments: ["node", "gateway.js", "--from-state-dir"],
+          sourcePath: resolveTaskScriptPath(env),
         });
       },
     );

@@ -18,14 +18,15 @@ import {
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
+  isCliProvider,
+  normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgressTotals } from "../../cli/progress.js";
-import { CONFIG_PATH } from "../../config/config.js";
+import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -37,10 +38,11 @@ import {
   type UsageProviderId,
 } from "../../infra/provider-usage.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
+import { buildProviderAuthRecoveryHint } from "../provider-auth-guidance.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import {
@@ -77,6 +79,7 @@ export async function modelsStatusCommand(
   if (opts.plain && opts.probe) {
     throw new Error("--probe cannot be used with --plain output.");
   }
+  const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
@@ -117,12 +120,12 @@ export async function modelsStatusCommand(
 
   const providersFromStore = new Set(
     Object.values(store.profiles)
-      .map((profile) => profile.provider)
+      .map((profile) => normalizeProviderId(profile.provider))
       .filter((p): p is string => Boolean(p)),
   );
   const providersFromConfig = new Set(
     Object.keys(cfg.models?.providers ?? {})
-      .map((p) => (typeof p === "string" ? p.trim() : ""))
+      .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
       .filter(Boolean),
   );
   const providersFromModels = new Set<string>();
@@ -130,13 +133,13 @@ export async function modelsStatusCommand(
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
-      providersFromModels.add(parsed.provider);
+      providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
-      providersInUse.add(parsed.provider);
+      providersInUse.add(normalizeProviderId(parsed.provider));
     }
   }
 
@@ -188,6 +191,7 @@ export async function modelsStatusCommand(
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
+    .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
   const probeProfileIds = (() => {
@@ -323,49 +327,43 @@ export async function modelsStatusCommand(
   })();
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          configPath: CONFIG_PATH,
-          ...(agentId ? { agentId } : {}),
-          agentDir,
-          defaultModel: defaultLabel,
-          resolvedDefault: resolvedLabel,
-          fallbacks,
-          imageModel: imageModel || null,
-          imageFallbacks,
-          ...(agentId
-            ? {
-                modelConfig: {
-                  defaultSource: agentModelPrimary ? "agent" : "defaults",
-                  fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
-                },
-              }
-            : {}),
-          aliases,
-          allowed,
-          auth: {
-            storePath: resolveAuthStorePathForDisplay(agentDir),
-            shellEnvFallback: {
-              enabled: shellFallbackEnabled,
-              appliedKeys: applied,
+    writeRuntimeJson(runtime, {
+      configPath,
+      ...(agentId ? { agentId } : {}),
+      agentDir,
+      defaultModel: defaultLabel,
+      resolvedDefault: resolvedLabel,
+      fallbacks,
+      imageModel: imageModel || null,
+      imageFallbacks,
+      ...(agentId
+        ? {
+            modelConfig: {
+              defaultSource: agentModelPrimary ? "agent" : "defaults",
+              fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
             },
-            providersWithOAuth: providersWithOauth,
-            missingProvidersInUse,
-            providers: providerAuth,
-            unusableProfiles,
-            oauth: {
-              warnAfterMs: authHealth.warnAfterMs,
-              profiles: authHealth.profiles,
-              providers: authHealth.providers,
-            },
-            probes: probeSummary,
-          },
+          }
+        : {}),
+      aliases,
+      allowed,
+      auth: {
+        storePath: resolveAuthStorePathForDisplay(agentDir),
+        shellEnvFallback: {
+          enabled: shellFallbackEnabled,
+          appliedKeys: applied,
         },
-        null,
-        2,
-      ),
-    );
+        providersWithOAuth: providersWithOauth,
+        missingProvidersInUse,
+        providers: providerAuth,
+        unusableProfiles,
+        oauth: {
+          warnAfterMs: authHealth.warnAfterMs,
+          profiles: authHealth.profiles,
+          providers: authHealth.providers,
+        },
+        probes: probeSummary,
+      },
+    });
     if (opts.check) {
       runtime.exit(checkStatus);
     }
@@ -389,7 +387,7 @@ export async function modelsStatusCommand(
     rawModel && rawModel !== resolvedLabel ? `${resolvedLabel} (from ${rawModel})` : resolvedLabel;
 
   runtime.log(
-    `${label("Config")}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.info, shortenHomePath(CONFIG_PATH))}`,
+    `${label("Config")}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.info, shortenHomePath(configPath))}`,
   );
   runtime.log(
     `${label("Agent dir")}${colorize(rich, theme.muted, ":")} ${colorize(
@@ -535,10 +533,11 @@ export async function modelsStatusCommand(
     runtime.log("");
     runtime.log(colorize(rich, theme.heading, "Missing auth"));
     for (const provider of missingProvidersInUse) {
-      const hint =
-        provider === "anthropic"
-          ? `Run \`claude setup-token\`, then \`${formatCliCommand("openclaw models auth setup-token")}\` or \`${formatCliCommand("openclaw configure")}\`.`
-          : `Run \`${formatCliCommand("openclaw configure")}\` or set an API key env var.`;
+      const hint = buildProviderAuthRecoveryHint({
+        provider,
+        config: cfg,
+        includeEnvVar: true,
+      });
       runtime.log(`- ${theme.heading(provider)} ${hint}`);
     }
   }
@@ -630,7 +629,7 @@ export async function modelsStatusCommand(
     if (probeSummary.results.length === 0) {
       runtime.log(colorize(rich, theme.muted, "- none"));
     } else {
-      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      const tableWidth = getTerminalTableWidth();
       const sorted = sortProbeResults(probeSummary.results);
       const statusColor = (status: string) => {
         if (status === "ok") {

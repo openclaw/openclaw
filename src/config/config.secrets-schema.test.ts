@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  INVALID_EXEC_SECRET_REF_IDS,
+  VALID_EXEC_SECRET_REF_IDS,
+} from "../test-utils/secret-ref-test-vectors.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
 function validateOpenAiApiKeyRef(apiKey: unknown) {
@@ -56,7 +60,7 @@ describe("config secret refs schema", () => {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
             api: "openai-codex-responses",
-            models: [{ id: "gpt-5.3-codex", name: "gpt-5.3-codex" }],
+            models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
           },
         },
       },
@@ -171,6 +175,33 @@ describe("config secret refs schema", () => {
             issue.message.includes("absolute JSON pointer"),
         ),
       ).toBe(true);
+    }
+  });
+
+  it("accepts valid exec secret reference ids", () => {
+    for (const id of VALID_EXEC_SECRET_REF_IDS) {
+      const result = validateOpenAiApiKeyRef({
+        source: "exec",
+        provider: "vault",
+        id,
+      });
+      expect(result.ok, `expected valid exec ref id: ${id}`).toBe(true);
+    }
+  });
+
+  it("rejects invalid exec secret reference ids", () => {
+    for (const id of INVALID_EXEC_SECRET_REF_IDS) {
+      const result = validateOpenAiApiKeyRef({
+        source: "exec",
+        provider: "vault",
+        id,
+      });
+      expect(result.ok, `expected invalid exec ref id: ${id}`).toBe(false);
+      if (!result.ok) {
+        expect(
+          result.issues.some((issue) => issue.path.includes("models.providers.openai.apiKey")),
+        ).toBe(true);
+      }
     }
   });
 });

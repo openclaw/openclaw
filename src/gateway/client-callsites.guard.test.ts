@@ -6,8 +6,8 @@ const GATEWAY_CLIENT_CONSTRUCTOR_PATTERN = /new\s+GatewayClient\s*\(/;
 
 const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "src/acp/server.ts",
-  "src/discord/monitor/exec-approvals.ts",
   "src/gateway/call.ts",
+  "src/gateway/operator-approvals-client.ts",
   "src/gateway/probe.ts",
   "src/node-host/runner.ts",
   "src/tui/gateway-chat.ts",

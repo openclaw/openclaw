@@ -5,9 +5,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
-  type SessionEntry,
   saveSessionStore,
-} from "./sessions.js";
+} from "./sessions/store.js";
+import type { SessionEntry } from "./sessions/types.js";
 
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
