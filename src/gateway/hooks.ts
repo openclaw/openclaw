@@ -201,6 +201,7 @@ export function normalizeWakePayload(
 
 export type HookAgentPayload = {
   message: string;
+  systemPrompt?: string;
   name: string;
   agentId?: string;
   idempotencyKey?: string;

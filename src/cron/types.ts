@@ -85,6 +85,7 @@ export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgen
 
 type CronAgentTurnPayloadFields = {
   message: string;
+  systemPrompt?: string;
   /** Optional model override (provider/model or alias). */
   model?: string;
   /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */

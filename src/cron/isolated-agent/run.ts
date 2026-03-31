@@ -486,6 +486,7 @@ export async function runCronIsolatedAgentTurn(params: {
               timeoutMs,
               runId: cronSession.sessionEntry.sessionId,
               cliSessionId,
+              extraSystemPrompt: agentPayload?.systemPrompt,
               bootstrapPromptWarningSignaturesSeen,
               bootstrapPromptWarningSignature,
             });
@@ -537,6 +538,7 @@ export async function runCronIsolatedAgentTurn(params: {
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            extraSystemPrompt: agentPayload?.systemPrompt,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

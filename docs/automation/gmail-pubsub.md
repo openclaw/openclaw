@@ -48,6 +48,7 @@ that sets `deliver` + optional `channel`/`to`:
         wakeMode: "now",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
+        systemPrompt: "You are processing an incoming email notification. Summarize the content accurately without adding information not present in the email. If action is required, state it clearly. Do not invent details.",
         messageTemplate: "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
         model: "openai/gpt-5.2-mini",
         deliver: true,

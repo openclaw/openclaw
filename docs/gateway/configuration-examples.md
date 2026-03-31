@@ -394,6 +394,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         wakeMode: "now",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
+        systemPrompt: "You are processing an incoming email notification. Summarize the content accurately without adding information not present in the email. If action is required, state it clearly. Do not invent details.",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",
         textTemplate: "{{messages[0].snippet}}",
         deliver: true,

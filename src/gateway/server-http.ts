@@ -684,6 +684,7 @@ export function createHooksRequestHandler(
               sessionKey:
                 mapped.action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
               message: mapped.action.message,
+              systemPrompt: mapped.action.systemPrompt ?? null,
               name: mapped.action.name ?? "Hook",
               wakeMode: mapped.action.wakeMode,
               deliver: resolveHookDeliver(mapped.action.deliver),
@@ -701,6 +702,7 @@ export function createHooksRequestHandler(
           }
           const runId = dispatchAgentHook({
             message: mapped.action.message,
+            systemPrompt: mapped.action.systemPrompt,
             name: mapped.action.name ?? "Hook",
             idempotencyKey,
             agentId: targetAgentId,

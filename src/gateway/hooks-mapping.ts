@@ -13,6 +13,7 @@ export type HookMappingResolved = {
   name?: string;
   agentId?: string;
   sessionKey?: string;
+  systemPrompt?: string;
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
@@ -46,6 +47,7 @@ export type HookAction =
   | {
       kind: "agent";
       message: string;
+      systemPrompt?: string;
       name?: string;
       agentId?: string;
       wakeMode: "now" | "next-heartbeat";
@@ -73,6 +75,8 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
       wakeMode: "now",
       name: "Gmail",
       sessionKey: "hook:gmail:{{messages[0].id}}",
+      systemPrompt:
+        "You are processing an incoming email notification.\nSummarize the content accurately without adding information not present in the email.\nIf action is required, state it clearly.\nDo not invent details.",
       messageTemplate:
         "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
     },
@@ -86,6 +90,7 @@ type HookTransformResult = Partial<{
   text: string;
   mode: "now" | "next-heartbeat";
   message: string;
+  systemPrompt: string;
   agentId: string;
   wakeMode: "now" | "next-heartbeat";
   name: string;
@@ -208,6 +213,7 @@ function normalizeHookMapping(
     name: mapping.name,
     agentId: mapping.agentId?.trim() || undefined,
     sessionKey: mapping.sessionKey,
+    systemPrompt: mapping.systemPrompt,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
     deliver: mapping.deliver,
@@ -252,11 +258,13 @@ function buildActionFromMapping(
     };
   }
   const message = renderTemplate(mapping.messageTemplate ?? "", ctx);
+  const systemPrompt = renderOptional(mapping.systemPrompt, ctx);
   return {
     ok: true,
     action: {
       kind: "agent",
       message,
+      systemPrompt,
       name: renderOptional(mapping.name, ctx),
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
@@ -290,11 +298,16 @@ function mergeAction(
   const baseAgent = base.kind === "agent" ? base : undefined;
   const message =
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
+  const systemPrompt =
+    typeof override.systemPrompt === "string"
+      ? override.systemPrompt
+      : (baseAgent?.systemPrompt ?? undefined);
   const wakeMode =
     override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
     message,
+    systemPrompt,
     wakeMode,
     name: override.name ?? baseAgent?.name,
     agentId: override.agentId ?? baseAgent?.agentId,
