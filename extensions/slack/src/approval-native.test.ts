@@ -168,6 +168,45 @@ describe("slack native approval adapter", () => {
     expect(dmTargets).toEqual([]);
   });
 
+  it("skips native delivery when the request is bound to another Slack account", async () => {
+    const originTarget = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceTo: "channel:C123",
+          turnSourceAccountId: "other",
+          sessionKey: "agent:main:missing",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+    const dmTargets = await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceAccountId: "other",
+          sessionKey: "agent:main:missing",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(originTarget).toBeNull();
+    expect(dmTargets).toEqual([]);
+  });
+
   it("suppresses generic slack fallback only for slack-originated approvals", () => {
     const shouldSuppress = slackNativeApprovalAdapter.delivery.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {

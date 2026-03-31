@@ -1,11 +1,9 @@
 import {
+  doesApprovalRequestMatchChannelAccount,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveSlackAccount } from "./accounts.js";
@@ -47,6 +45,16 @@ export function shouldHandleSlackExecApprovalRequest(params: {
   accountId?: string | null;
   request: ApprovalRequest;
 }): boolean {
+  if (
+    !doesApprovalRequestMatchChannelAccount({
+      cfg: params.cfg,
+      request: params.request,
+      channel: "slack",
+      accountId: params.accountId,
+    })
+  ) {
+    return false;
+  }
   const config = resolveSlackAccount(params).config.execApprovals;
   if (!config?.enabled) {
     return false;

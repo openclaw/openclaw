@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,8 @@ const { STORE_PATH, mockSessionStoreEntries } = vi.hoisted(() => ({
 
 const writeStore = (store: Record<string, unknown>) => {
   mockSessionStoreEntries.value = JSON.parse(JSON.stringify(store)) as Record<string, unknown>;
+  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  clearSessionStoreCacheForTest();
 };
 
 beforeEach(() => {
@@ -522,6 +525,42 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(handler.shouldHandle(createRequest())).toBe(false);
     const matching = createHandler({ enabled: true, approvers: ["123"] }, "secondary");
     expect(matching.shouldHandle(createRequest())).toBe(true);
+  });
+
+  it("filters by discord account from explicit turn-source bindings when the session store misses", () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] }, "default");
+    const matching = createHandler({ enabled: true, approvers: ["123"] }, "secondary");
+
+    expect(
+      handler.shouldHandle(
+        createRequest({
+          sessionKey: "agent:test-agent:missing",
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "secondary",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      matching.shouldHandle(
+        createRequest({
+          sessionKey: "agent:test-agent:missing",
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "secondary",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects requests bound to another channel before account-specific handling", () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] }, "default");
+    expect(
+      handler.shouldHandle(
+        createRequest({
+          turnSourceChannel: "slack",
+          turnSourceAccountId: "default",
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("combines agent and session filters", () => {

@@ -143,4 +143,29 @@ describe("createDiscordNativeApprovalAdapter", () => {
 
     expect(target).toEqual({ to: "987654321" });
   });
+
+  it("rejects origin delivery for requests bound to another Discord account", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+
+    const target = await adapter.native?.resolveOriginTarget?.({
+      cfg: {} as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request: {
+        id: "abc",
+        request: {
+          title: "Plugin approval",
+          description: "Let plugin proceed",
+          turnSourceChannel: "discord",
+          turnSourceTo: "channel:123456789",
+          turnSourceAccountId: "other",
+          sessionKey: "agent:main:missing",
+        },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+    });
+
+    expect(target).toBeNull();
+  });
 });

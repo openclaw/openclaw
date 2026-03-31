@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
+import {
+  doesApprovalRequestMatchChannelAccount,
+  resolveApprovalRequestAccountId,
+  resolveExecApprovalSessionTarget,
+} from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 
 const tempDirs: string[] = [];
@@ -175,4 +179,103 @@ describe("exec approval session target", () => {
       expect(expectResolvedSessionTarget(cfg, request)).toEqual(expected);
     },
   );
+
+  it("prefers explicit turn-source account bindings when session store is missing", () => {
+    const cfg = {} as OpenClawConfig;
+    const request = buildRequest({
+      turnSourceChannel: "slack",
+      turnSourceAccountId: "Work",
+      sessionKey: "agent:main:missing",
+    });
+
+    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBe("work");
+    expect(
+      doesApprovalRequestMatchChannelAccount({
+        cfg,
+        request,
+        channel: "slack",
+        accountId: "work",
+      }),
+    ).toBe(true);
+    expect(
+      doesApprovalRequestMatchChannelAccount({
+        cfg,
+        request,
+        channel: "slack",
+        accountId: "other",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects mismatched channel bindings before account checks", () => {
+    const cfg = {} as OpenClawConfig;
+    const request = buildRequest({
+      turnSourceChannel: "discord",
+      turnSourceAccountId: "work",
+    });
+
+    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBeNull();
+    expect(
+      doesApprovalRequestMatchChannelAccount({
+        cfg,
+        request,
+        channel: "slack",
+        accountId: "work",
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to the session-bound account when no turn-source account is present", () => {
+    const tmpDir = createTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg = writeStoreFile(storePath, {
+      "agent:main:main": {
+        sessionId: "main",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "user:U1",
+        lastAccountId: "ops",
+      },
+    });
+
+    expect(resolveApprovalRequestAccountId({ cfg, request: baseRequest, channel: "slack" })).toBe(
+      "ops",
+    );
+    expect(
+      doesApprovalRequestMatchChannelAccount({
+        cfg,
+        request: baseRequest,
+        channel: "slack",
+        accountId: "ops",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects conflicting turn-source and stale session account bindings", () => {
+    const tmpDir = createTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg = writeStoreFile(storePath, {
+      "agent:main:main": {
+        sessionId: "main",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "user:U1",
+        lastAccountId: "ops",
+      },
+    });
+    const request = buildRequest({
+      turnSourceChannel: "slack",
+      turnSourceAccountId: "work",
+    });
+
+    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBeNull();
+    expect(
+      doesApprovalRequestMatchChannelAccount({
+        cfg,
+        request,
+        channel: "slack",
+        accountId: "work",
+      }),
+    ).toBe(false);
+  });
 });
