@@ -306,6 +306,18 @@ describe("monitorMatrixProvider", () => {
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });
 
+  it("returns immediately when the abort signal is already canceled", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await monitorMatrixProvider({ abortSignal: abortController.signal });
+
+    expect(hoisted.callOrder).toEqual([]);
+    expect(hoisted.resolveTextChunkLimit).not.toHaveBeenCalled();
+    expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
+    expect(hoisted.setActiveMatrixClient).not.toHaveBeenCalled();
+  });
+
   it("registers Matrix thread bindings before starting the client", async () => {
     await startMonitorAndAbortAfterStartup();
 
