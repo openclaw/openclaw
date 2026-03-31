@@ -1,6 +1,6 @@
 {
-  "name": "@kansodata/databricks",
-  "version": "0.0.1",
+  "name": "@openclaw/databricks",
+  "version": "2026.3.27",
   "private": true,
   "description": "Databricks skill pack plugin for OpenClaw.",
   "type": "module",

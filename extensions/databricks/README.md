@@ -5,7 +5,7 @@ Adds a Databricks skill bundle for analytics engineering, SQL operations, and jo
 ## Install
 
 ```bash
-openclaw plugins install @kansodata/databricks
+openclaw plugins install @openclaw/databricks
 ```
 
 ## Enable
