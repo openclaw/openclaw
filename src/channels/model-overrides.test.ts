@@ -211,4 +211,25 @@ describe("resolveChannelModelOverride", () => {
     expect(resolved?.model).toBe("demo-provider/demo-feishu-topic-model");
     expect(resolved?.matchKey).toBe("oc_group_chat:topic:om_topic_root");
   });
+
+  it("prefers parent conversation ids over channel-name fallbacks", () => {
+    const resolved = resolveChannelModelOverride({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            telegram: {
+              "-100123": "demo-provider/demo-parent-model",
+              "#general": "demo-provider/demo-channel-name-model",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      channel: "telegram",
+      groupId: "-100123:topic:99",
+      groupChannel: "#general",
+    });
+
+    expect(resolved?.model).toBe("demo-provider/demo-parent-model");
+    expect(resolved?.matchKey).toBe("-100123");
+  });
 });

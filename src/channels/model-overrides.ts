@@ -79,16 +79,16 @@ function buildChannelCandidates(
     keys: buildChannelKeyCandidates(
       groupId,
       sessionConversation?.rawId,
+      ...(groupConversation?.parentConversationCandidates ?? []),
+      ...(sessionConversation?.parentConversationCandidates ?? []),
+    ),
+    parentKeys: buildChannelKeyCandidates(
       groupChannel,
       channelBare,
       channelSlug,
       groupSubject,
       subjectBare,
       subjectSlug,
-    ),
-    parentKeys: buildChannelKeyCandidates(
-      ...(groupConversation?.parentConversationCandidates ?? []),
-      ...(sessionConversation?.parentConversationCandidates ?? []),
     ),
   };
 }
