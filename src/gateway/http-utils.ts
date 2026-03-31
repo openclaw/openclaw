@@ -17,7 +17,7 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -93,6 +93,10 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   }
   return {
     authMethod: authResult.method,
+    // Shared-secret bearer auth proves possession of the gateway secret, but it
+    // does not prove a narrower per-request operator identity. HTTP endpoints
+    // must opt in explicitly if they want to treat that shared-secret path as a
+    // full trusted-operator surface.
     trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
   };
 }
@@ -126,6 +130,19 @@ export function resolveTrustedHttpOperatorScopes(
     .filter((scope) => scope.length > 0);
 }
 
+export function resolveOpenAiCompatibleHttpOperatorScopes(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): string[] {
+  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
+    // OpenAI-compatible HTTP bearer auth is documented as a trusted-operator
+    // surface. Shared-secret auth does not carry a narrower per-request scope
+    // identity, so restore the normal operator defaults for this surface.
+    return [...CLI_DEFAULT_OPERATOR_SCOPES];
+  }
+  return resolveTrustedHttpOperatorScopes(req, requestAuth);
+}
+
 export function resolveHttpSenderIsOwner(
   req: IncomingMessage,
   authOrRequest?:
@@ -133,6 +150,20 @@ export function resolveHttpSenderIsOwner(
     | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
 ): boolean {
   return resolveTrustedHttpOperatorScopes(req, authOrRequest).includes(ADMIN_SCOPE);
+}
+
+export function resolveOpenAiCompatibleHttpSenderIsOwner(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): boolean {
+  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
+    // The OpenAI-compatible HTTP surface treats shared-secret bearer auth as
+    // trusted operator access for the whole gateway. There is no separate owner
+    // authentication primitive on that path, so owner-only tools remain
+    // available to those compat requests.
+    return true;
+  }
+  return resolveHttpSenderIsOwner(req, requestAuth);
 }
 
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
