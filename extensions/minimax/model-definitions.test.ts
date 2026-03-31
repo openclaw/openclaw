@@ -24,7 +24,7 @@ describe("minimax model definitions", () => {
     });
   });
 
-  it("builds catalog model with name and reasoning from catalog", () => {
+  it("builds catalog model with name and reasoning from catalog for M2.7", () => {
     const model = buildMinimaxModelDefinition({
       id: "MiniMax-M2.7",
       cost: MINIMAX_API_COST,
@@ -35,14 +35,31 @@ describe("minimax model definitions", () => {
       id: "MiniMax-M2.7",
       name: "MiniMax M2.7",
       reasoning: true,
+      input: ["text", "image"], // M2.7 supports images
     });
   });
 
-  it("builds API model definition with standard cost", () => {
+  it("builds non-catalog model with generated name and default reasoning", () => {
+    const model = buildMinimaxModelDefinition({
+      id: "MiniMax-M2.5",
+      cost: MINIMAX_API_COST,
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+    });
+    expect(model).toMatchObject({
+      id: "MiniMax-M2.5",
+      name: "MiniMax MiniMax-M2.5",
+      reasoning: false,
+      input: ["text"], // M2.5 is not image-capable
+    });
+  });
+
+  it("builds API model definition with standard cost for M2.7", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
     expect(model.cost).toEqual(MINIMAX_API_COST);
     expect(model.contextWindow).toBe(DEFAULT_MINIMAX_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
+    expect(model.input).toEqual(["text", "image"]);
   });
 
   it("falls back to generated name for unknown model id", () => {
