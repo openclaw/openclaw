@@ -247,7 +247,7 @@ export function evaluateGatewayRestartReadinessGate(
   const restartConfig = resolveGatewayRestartConfig(cfg);
   const readiness = inspectGatewayRestartReadiness(cfg);
   const blocked =
-    restartConfig.readinessGate && readiness.totalActive > restartConfig.readinessGateThreshold;
+    restartConfig.readinessGate && readiness.totalActive >= restartConfig.readinessGateThreshold;
   const lines = [
     `${readiness.totalActive} active item(s) would be interrupted by gateway restart.`,
   ];
