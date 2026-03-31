@@ -212,6 +212,10 @@ export async function withRequestTimeBrowserNavigationGuard<T>(
   } catch (err) {
     throw blockedError ?? err;
   } finally {
-    await opts.page.unroute("**/*", handler).catch(() => {});
+    try {
+      await opts.page.unroute("**/*", handler);
+    } catch {
+      // Ignore cleanup failures so unroute errors cannot replace the navigation result.
+    }
   }
 }
