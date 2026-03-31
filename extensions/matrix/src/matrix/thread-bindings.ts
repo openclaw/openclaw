@@ -1,12 +1,11 @@
-import type { SessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
 import {
-  readJsonFileWithFallback,
   registerSessionBindingAdapter,
-  resolveAgentIdFromSessionKey,
   resolveThreadBindingFarewellText,
+  type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
-  writeJsonFileAtomically,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
