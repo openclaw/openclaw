@@ -12,17 +12,16 @@ import {
   DEEPSEEK_CHAT_MODEL,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../chat-model.test-helpers.ts";
+import { SKIP_DELETE_CONFIRM_KEY } from "../chat/grouped-render.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
-const DELETE_CONFIRM_STORAGE_KEY = "openclaw:skipDeleteConfirm";
-
 function readDeleteConfirmPreference(): string | null {
   try {
-    return getSafeLocalStorage()?.getItem(DELETE_CONFIRM_STORAGE_KEY) ?? null;
+    return getSafeLocalStorage()?.getItem(SKIP_DELETE_CONFIRM_KEY) ?? null;
   } catch {
     return null;
   }
@@ -30,7 +29,7 @@ function readDeleteConfirmPreference(): string | null {
 
 function clearDeleteConfirmPreference(): void {
   try {
-    getSafeLocalStorage()?.removeItem(DELETE_CONFIRM_STORAGE_KEY);
+    getSafeLocalStorage()?.removeItem(SKIP_DELETE_CONFIRM_KEY);
   } catch {
     /* noop */
   }
@@ -39,10 +38,10 @@ function clearDeleteConfirmPreference(): void {
 function restoreDeleteConfirmPreference(value: string | null): void {
   try {
     if (value === null) {
-      getSafeLocalStorage()?.removeItem(DELETE_CONFIRM_STORAGE_KEY);
+      getSafeLocalStorage()?.removeItem(SKIP_DELETE_CONFIRM_KEY);
       return;
     }
-    getSafeLocalStorage()?.setItem(DELETE_CONFIRM_STORAGE_KEY, value);
+    getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, value);
   } catch {
     /* noop */
   }
