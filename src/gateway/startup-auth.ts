@@ -14,6 +14,7 @@ import {
   readGatewayTokenEnv,
 } from "./credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
+import { setGatewayTokenIssuedAtNow } from "./token-expiry-state.js";
 
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
@@ -40,6 +41,9 @@ export function mergeGatewayAuthConfig(
   }
   if (override.trustedProxy !== undefined) {
     merged.trustedProxy = override.trustedProxy;
+  }
+  if (override.tokenExpiryHours !== undefined) {
+    merged.tokenExpiryHours = override.tokenExpiryHours;
   }
   return merged;
 }
@@ -255,6 +259,7 @@ export async function ensureGatewayStartupAuth(params: {
   }
 
   const generatedToken = crypto.randomBytes(24).toString("hex");
+  setGatewayTokenIssuedAtNow();
   const nextCfg: OpenClawConfig = {
     ...params.cfg,
     gateway: {

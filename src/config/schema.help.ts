@@ -83,6 +83,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
   "gateway.auth.rateLimit":
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
+  "gateway.auth.tokenExpiryHours":
+    "Optional lifetime in hours for an in-process gateway token issue timestamp. When set and the process recorded a token generation time, the gateway may log a non-blocking warning after this interval. Does not block requests or persist metadata.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
   "gateway.trustedProxies":

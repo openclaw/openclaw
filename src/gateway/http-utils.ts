@@ -43,6 +43,19 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   return token || undefined;
 }
 
+export function resolveHttpBrowserOriginPolicy(
+  req: IncomingMessage,
+  cfg = loadConfig(),
+): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
+  return {
+    requestHost: getHeader(req, "host"),
+    origin: getHeader(req, "origin"),
+    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
+    allowHostHeaderOriginFallback:
+      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  };
+}
+
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];

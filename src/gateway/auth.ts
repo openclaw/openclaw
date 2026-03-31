@@ -36,6 +36,7 @@ export type ResolvedGatewayAuth = {
   password?: string;
   allowTailscale: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
+  tokenExpiryHours?: number;
 };
 
 export type GatewayAuthResult = {
@@ -240,6 +241,9 @@ export function resolveGatewayAuth(params: {
     if (authOverride.trustedProxy !== undefined) {
       authConfig.trustedProxy = authOverride.trustedProxy;
     }
+    if (authOverride.tokenExpiryHours !== undefined) {
+      authConfig.tokenExpiryHours = authOverride.tokenExpiryHours;
+    }
   }
   const env = params.env ?? process.env;
   const tokenRef = resolveSecretInputRef({ value: authConfig.token }).ref;
@@ -285,6 +289,7 @@ export function resolveGatewayAuth(params: {
     password,
     allowTailscale,
     trustedProxy,
+    tokenExpiryHours: authConfig.tokenExpiryHours,
   };
 }
 

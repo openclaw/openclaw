@@ -10310,6 +10310,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 required: ["userHeader"],
                 additionalProperties: false,
               },
+              tokenExpiryHours: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
             },
             additionalProperties: false,
           },
@@ -12144,6 +12148,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Gateway Auth Rate Limit",
       help: "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
       tags: ["network", "performance"],
+    },
+    "gateway.auth.tokenExpiryHours": {
+      label: "Gateway Token Expiry Warning (hours)",
+      help: "Optional lifetime in hours for an in-process gateway token issue timestamp. When set and the process recorded a token generation time, the gateway may log a non-blocking warning after this interval. Does not block requests or persist metadata.",
+      tags: ["security", "auth", "network"],
     },
     "gateway.auth.trustedProxy": {
       label: "Gateway Trusted Proxy Auth",

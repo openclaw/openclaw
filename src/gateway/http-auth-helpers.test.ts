@@ -26,10 +26,20 @@ vi.mock("./http-utils.js", () => ({
   })),
 }));
 
+vi.mock("../logger.js", () => ({
+  logWarn: vi.fn(),
+}));
+
+vi.mock("./token-expiry-state.js", () => ({
+  consumeGatewayTokenExpiryWarning: vi.fn(),
+}));
+
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { sendGatewayAuthFailure } = await import("./http-common.js");
 const { getBearerToken, getHeader, resolveHttpBrowserOriginPolicy } =
   await import("./http-utils.js");
+const { logWarn } = await import("../logger.js");
+const { consumeGatewayTokenExpiryWarning } = await import("./token-expiry-state.js");
 
 describe("authorizeGatewayBearerRequestOrReply", () => {
   const bearerAuth = {
@@ -37,6 +47,7 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
     token: "secret",
     password: undefined,
     allowTailscale: true,
+    tokenExpiryHours: 24,
   } satisfies ResolvedGatewayAuth;
 
   const makeAuthorizeParams = () => ({
@@ -47,6 +58,7 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(consumeGatewayTokenExpiryWarning).mockReturnValue(false);
   });
 
   it("disables tailscale header auth for HTTP bearer checks", async () => {
@@ -80,6 +92,29 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
       }),
     );
     expect(vi.mocked(sendGatewayAuthFailure)).not.toHaveBeenCalled();
+  });
+
+  it("logs a non-blocking expiry warning when consume allows (once-per-process gate)", async () => {
+    vi.mocked(getBearerToken).mockReturnValue("abc");
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
+    vi.mocked(consumeGatewayTokenExpiryWarning).mockReturnValue(true);
+
+    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
+
+    expect(ok).toBe(true);
+    expect(vi.mocked(logWarn)).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(logWarn).mock.calls[0]?.[0] ?? "")).toContain("openclaw auth rotate");
+  });
+
+  it("does not log expiry warning when consume declines", async () => {
+    vi.mocked(getBearerToken).mockReturnValue("abc");
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
+    vi.mocked(consumeGatewayTokenExpiryWarning).mockReturnValue(false);
+
+    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
+
+    expect(ok).toBe(true);
+    expect(vi.mocked(logWarn)).not.toHaveBeenCalled();
   });
 
   it("forwards browser-origin policy into HTTP auth", async () => {

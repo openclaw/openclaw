@@ -163,6 +163,11 @@ export type GatewayAuthConfig = {
    * Required when mode is "trusted-proxy".
    */
   trustedProxy?: GatewayTrustedProxyConfig;
+  /**
+   * When set, the gateway may log a non-blocking warning if an in-process
+   * token issue time exists and exceeds this lifetime (hours).
+   */
+  tokenExpiryHours?: number;
 };
 
 export type GatewayAuthRateLimitConfig = {

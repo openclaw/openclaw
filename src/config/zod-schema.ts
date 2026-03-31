@@ -714,6 +714,7 @@ export const OpenClawSchema = z
               })
               .strict()
               .optional(),
+            tokenExpiryHours: z.number().finite().positive().optional(),
           })
           .strict()
           .optional(),
