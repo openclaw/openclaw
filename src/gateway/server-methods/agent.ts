@@ -971,19 +971,6 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
-      // Store an in-flight ack so retries do not spawn a second run.
-      // Session-backed runs prime this entry earlier, before async reset/store work.
-      if (!claimedAbortController) {
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `agent:${idem}`,
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload: accepted,
-          },
-        });
-      }
       respond(true, accepted, undefined, { runId });
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
