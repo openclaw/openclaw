@@ -1682,15 +1682,43 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (allowAny) {
           imageModelIsUsable = true;
         } else {
+          // Determine the image model provider for fallback resolution.
+          // When primary has explicit provider (e.g., "openai/gpt-4o"), providerless
+          // fallbacks should resolve against that provider, not agent default.
+          let imageModelProvider: string | undefined;
+          if (imageModelPrimary) {
+            const primaryTrimmed = imageModelPrimary.trim();
+            if (primaryTrimmed.includes("/")) {
+              // Primary has explicit provider - extract it
+              const slash = primaryTrimmed.indexOf("/");
+              imageModelProvider = primaryTrimmed.slice(0, slash).trim();
+            } else {
+              // Primary is providerless - scan fallbacks for provider
+              for (const fb of imageModelConfigFallbacks) {
+                if (!fb?.trim()) {
+                  continue;
+                }
+                const slash = fb.indexOf("/");
+                if (slash > 0) {
+                  imageModelProvider = fb.slice(0, slash).trim();
+                  break;
+                }
+              }
+            }
+          }
+
+          // Provider context for resolving providerless models
+          const providerContext = imageModelProvider ?? agentDefault.provider;
+          const aliasIndex = buildModelAliasIndex({
+            cfg,
+            defaultProvider: providerContext,
+          });
+
           // Check if primary is in allowlist
           if (imageModelPrimary) {
-            const aliasIndex = buildModelAliasIndex({
-              cfg,
-              defaultProvider: agentDefault.provider,
-            });
             const resolved = resolveModelRefFromString({
               raw: imageModelPrimary.trim(),
-              defaultProvider: agentDefault.provider,
+              defaultProvider: providerContext,
               aliasIndex,
             });
             if (resolved) {
@@ -1704,17 +1732,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
           // Check fallbacks if primary is not in allowlist
           if (!imageModelIsUsable && imageModelConfigFallbacks.length > 0) {
-            const aliasIndex = buildModelAliasIndex({
-              cfg,
-              defaultProvider: agentDefault.provider,
-            });
             for (const fb of imageModelConfigFallbacks) {
               if (!fb?.trim()) {
                 continue;
               }
               const resolved = resolveModelRefFromString({
                 raw: fb.trim(),
-                defaultProvider: agentDefault.provider,
+                defaultProvider: providerContext,
                 aliasIndex,
               });
               if (resolved) {
