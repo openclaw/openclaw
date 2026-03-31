@@ -77,7 +77,7 @@ describe("phase hooks merger", () => {
         },
         {
           pluginId: "low",
-          result: { prependContext: "context B" },
+          result: { prependContext: "context B", systemPrompt: "system B" },
           priority: 1,
         },
       ],

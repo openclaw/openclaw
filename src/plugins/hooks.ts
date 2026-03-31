@@ -201,7 +201,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
-    systemPrompt: lastDefined(acc?.systemPrompt, next.systemPrompt),
+    // Keep the first defined system prompt so higher-priority hooks win.
+    systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
     prependContext: concatOptionalTextSegments({
       left: acc?.prependContext,
       right: next.prependContext,
