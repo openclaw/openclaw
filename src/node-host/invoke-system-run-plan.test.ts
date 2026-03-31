@@ -284,6 +284,15 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
       fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
     },
   },
+  {
+    name: "rejects pnpm dlx invocations with unrecognized flags after a global option terminator",
+    binName: "pnpm",
+    tmpPrefix: "openclaw-pnpm-dlx-global-double-dash-",
+    command: ["pnpm", "--", "dlx", "--future-flag", "tsx", "./run.ts"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
+    },
+  },
 ];
 
 describe("hardenApprovedExecutionPaths", () => {
@@ -521,6 +530,13 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 3,
+    },
+    {
+      name: "pnpm global double-dash dlx tsx file",
+      argv: ["pnpm", "--", "dlx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
     },
     {
       name: "pnpm pre-dlx package-equals tsx file",

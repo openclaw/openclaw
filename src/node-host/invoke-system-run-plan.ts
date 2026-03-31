@@ -847,7 +847,8 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
       continue;
     }
     if (token === "--") {
-      return false;
+      idx += 1;
+      continue;
     }
     if (!token.startsWith("-")) {
       if (token !== "dlx") {
