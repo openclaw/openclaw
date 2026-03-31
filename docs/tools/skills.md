@@ -320,3 +320,10 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 Browse [https://clawhub.com](https://clawhub.com).
 
 ---
+
+## Related
+
+- [Creating Skills](/tools/creating-skills) — building custom skills
+- [Skills Config](/tools/skills-config) — skill configuration reference
+- [Slash Commands](/tools/slash-commands) — all available slash commands
+- [Plugins](/tools/plugin) — plugin system overview

@@ -20,6 +20,7 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Resolution is eager during activation, not lazy on request paths.
 - Startup fails fast when an effectively active SecretRef cannot be resolved.
 - Reload uses atomic swap: full success, or keep the last-known-good snapshot.
+- SecretRef policy violations (for example OAuth-mode auth profiles combined with SecretRef input) fail activation before runtime swap.
 - Runtime requests read from the active in-memory snapshot only.
 - After the first successful config activation/load, runtime code paths keep reading that active in-memory snapshot until a successful reload swaps it.
 - Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
@@ -364,6 +365,7 @@ Runtime-minted or rotating credentials and OAuth refresh material are intentiona
 - Field without a ref: unchanged.
 - Field with a ref: required on active surfaces during activation.
 - If both plaintext and ref are present, ref takes precedence on supported precedence paths.
+- The redaction sentinel `__OPENCLAW_REDACTED__` is reserved for internal config redaction/restore and is rejected as literal submitted config data.
 
 Warning and audit signals:
 
@@ -383,12 +385,14 @@ Secret activation runs on:
 - Config reload hot-apply path
 - Config reload restart-check path
 - Manual reload via `secrets.reload`
+- Gateway config write RPC preflight (`config.set` / `config.apply` / `config.patch`) for active-surface SecretRef resolvability within the submitted config payload before persisting edits
 
 Activation contract:
 
 - Success swaps the snapshot atomically.
 - Startup failure aborts gateway startup.
 - Runtime reload failure keeps the last-known-good snapshot.
+- Write-RPC preflight failure rejects the submitted config and keeps both disk config and active runtime snapshot unchanged.
 - Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
 
 ## Degraded and recovered signals

@@ -9,13 +9,21 @@ import type { FlowRecord } from "./flow-registry.types.js";
 function createStoredFlow(): FlowRecord {
   return {
     flowId: "flow-restored",
+    shape: "linear",
     ownerSessionKey: "agent:main:main",
-    status: "running",
+    status: "blocked",
     notifyPolicy: "done_only",
     goal: "Restored flow",
     currentStep: "spawn_task",
+    waitingOnTaskId: "task-waiting",
+    outputs: {
+      bucket: ["business"],
+    },
+    blockedTaskId: "task-restored",
+    blockedSummary: "Writable session required.",
     createdAt: 100,
     updatedAt: 100,
+    endedAt: 120,
   };
 }
 
@@ -58,7 +66,14 @@ describe("flow-registry store runtime", () => {
 
     expect(getFlowById("flow-restored")).toMatchObject({
       flowId: "flow-restored",
+      shape: "linear",
       goal: "Restored flow",
+      waitingOnTaskId: "task-waiting",
+      outputs: {
+        bucket: ["business"],
+      },
+      blockedTaskId: "task-restored",
+      blockedSummary: "Writable session required.",
     });
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
@@ -87,14 +102,23 @@ describe("flow-registry store runtime", () => {
         goal: "Persisted flow",
         status: "waiting",
         currentStep: "ask_user",
+        waitingOnTaskId: "task-restored",
+        outputs: {
+          bucket: ["personal"],
+        },
       });
 
       resetFlowRegistryForTests({ persist: false });
 
       expect(getFlowById(created.flowId)).toMatchObject({
         flowId: created.flowId,
+        shape: "linear",
         status: "waiting",
         currentStep: "ask_user",
+        waitingOnTaskId: "task-restored",
+        outputs: {
+          bucket: ["personal"],
+        },
       });
     });
   });
@@ -110,7 +134,9 @@ describe("flow-registry store runtime", () => {
       createFlowRecord({
         ownerSessionKey: "agent:main:main",
         goal: "Secured flow",
-        status: "queued",
+        status: "blocked",
+        blockedTaskId: "task-secured",
+        blockedSummary: "Need auth.",
       });
 
       const registryDir = resolveFlowRegistryDir(process.env);

@@ -1144,6 +1144,7 @@ describe("task-registry", () => {
       });
 
       const flow = createFlowRecord({
+        shape: "single_task",
         ownerSessionKey: "agent:flow:owner",
         requesterOrigin: {
           channel: "discord",
@@ -1332,6 +1333,7 @@ describe("task-registry", () => {
       });
 
       const flow = createFlowRecord({
+        shape: "single_task",
         ownerSessionKey: "agent:flow:owner",
         requesterOrigin: {
           channel: "discord",

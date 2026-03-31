@@ -121,7 +121,7 @@ export type OpenClawPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
   browser?: {
     sandboxBridgeUrl?: string;
@@ -1664,7 +1664,7 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
@@ -1753,7 +1753,7 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
@@ -2025,7 +2025,7 @@ export type PluginHookBeforeCompactionEvent = {
   sessionFile?: string;
 };
 
-// before_reset hook — fired when /new or /reset clears a session
+// before_reset hook - fired when /new or /reset clears a session
 export type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
@@ -2145,7 +2145,7 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. */
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
@@ -2185,7 +2185,7 @@ export type PluginHookBeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
-    /** Set automatically by the hook runner — plugins should not set this. */
+    /** Set automatically by the hook runner - plugins should not set this. */
     pluginId?: string;
     /**
      * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.

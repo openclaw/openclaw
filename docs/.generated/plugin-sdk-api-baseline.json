@@ -979,7 +979,7 @@
           "exportName": "buildCatchallMultiAccountChannelSchema",
           "kind": "function",
           "source": {
-            "line": 31,
+            "line": 32,
             "path": "src/channels/plugins/config-schema.ts"
           }
         },
@@ -988,12 +988,12 @@
           "exportName": "buildChannelConfigSchema",
           "kind": "function",
           "source": {
-            "line": 75,
+            "line": 76,
             "path": "src/channels/plugins/config-schema.ts"
           }
         },
         {
-          "declaration": "export function buildNestedDmConfigSchema(): ZodOptional<ZodObject<{ enabled: ZodOptional<ZodBoolean>; policy: ZodOptional<ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: ZodOptional<...>; }, $strip>>;",
+          "declaration": "export function buildNestedDmConfigSchema<TExtraShape extends ZodRawShape = {}>(extraShape?: TExtraShape | undefined): ZodOptional<ZodObject<{ enabled: ZodOptional<ZodBoolean>; policy: ZodOptional<ZodEnum<{ disabled: \"disabled\"; pairing: \"pairing\"; allowlist: \"allowlist\"; open: \"open\"; }>>; allowFrom: ZodOptional<...>; }, $strip>>;",
           "exportName": "buildNestedDmConfigSchema",
           "kind": "function",
           "source": {
@@ -3342,7 +3342,7 @@
           "exportName": "buildChannelConfigSchema",
           "kind": "function",
           "source": {
-            "line": 75,
+            "line": 76,
             "path": "src/channels/plugins/config-schema.ts"
           }
         },

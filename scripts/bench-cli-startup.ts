@@ -26,6 +26,7 @@ type SummaryStats = {
 };
 
 type CaseSummary = {
+  sampleCount: number;
   durationMs: SummaryStats;
   maxRssMb: SummaryStats | null;
   exitSummary: string;
@@ -216,6 +217,7 @@ function summarizeSamples(samples: Sample[]): CaseSummary {
     .map((sample) => sample.maxRssMb)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   return {
+    sampleCount: samples.length,
     durationMs: durations,
     maxRssMb: rssValues.length > 0 ? summarizeNumbers(rssValues) : null,
     exitSummary: collectExitSummary(samples),

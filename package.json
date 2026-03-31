@@ -101,6 +101,14 @@
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"
     },
+    "./plugin-sdk/reply-dispatch-runtime": {
+      "types": "./dist/plugin-sdk/reply-dispatch-runtime.d.ts",
+      "default": "./dist/plugin-sdk/reply-dispatch-runtime.js"
+    },
+    "./plugin-sdk/reply-chunking": {
+      "types": "./dist/plugin-sdk/reply-chunking.d.ts",
+      "default": "./dist/plugin-sdk/reply-chunking.js"
+    },
     "./plugin-sdk/reply-payload": {
       "types": "./dist/plugin-sdk/reply-payload.d.ts",
       "default": "./dist/plugin-sdk/reply-payload.js"
@@ -312,6 +320,10 @@
     "./plugin-sdk/command-auth": {
       "types": "./dist/plugin-sdk/command-auth.d.ts",
       "default": "./dist/plugin-sdk/command-auth.js"
+    },
+    "./plugin-sdk/command-auth-native": {
+      "types": "./dist/plugin-sdk/command-auth-native.d.ts",
+      "default": "./dist/plugin-sdk/command-auth-native.js"
     },
     "./plugin-sdk/collection-runtime": {
       "types": "./dist/plugin-sdk/collection-runtime.d.ts",
@@ -1024,7 +1036,7 @@
     "ios:gen": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate'",
     "ios:open": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
     "ios:run": "bash -lc './scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && cd apps/ios && xcodegen generate && xcodebuild -project OpenClaw.xcodeproj -scheme OpenClaw -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build && xcrun simctl boot \"${IOS_SIM:-iPhone 17}\" || true && xcrun simctl launch booted ai.openclaw.ios'",
-    "lint": "oxlint --type-aware",
+    "lint": "node scripts/run-oxlint.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "pnpm lint && pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node scripts/check-no-pairing-store-group-auth.mjs",
@@ -1034,7 +1046,7 @@
     "lint:extensions:no-plugin-sdk-internal": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal",
     "lint:extensions:no-relative-outside-package": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=relative-outside-package",
     "lint:extensions:no-src-outside-plugin-sdk": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk",
-    "lint:fix": "oxlint --type-aware --fix && pnpm format",
+    "lint:fix": "node scripts/run-oxlint.mjs --fix && pnpm format",
     "lint:plugins:no-extension-imports": "node scripts/check-plugin-extension-import-boundary.mjs",
     "lint:plugins:no-extension-src-imports": "node --import tsx scripts/check-no-extension-src-imports.ts",
     "lint:plugins:no-extension-test-core-imports": "node --import tsx scripts/check-no-extension-test-core-imports.ts",
@@ -1132,7 +1144,7 @@
     "test:serial": "node scripts/test-parallel.mjs --profile serial",
     "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
     "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",
-    "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 1 --warmup 0 --output .artifacts/cli-startup-bench-all.json",
+    "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 5 --warmup 1 --output .artifacts/cli-startup-bench-all.json",
     "test:startup:bench:smoke": "node --import tsx scripts/bench-cli-startup.ts --preset real --case gatewayStatusJson --runs 1 --warmup 0 --output .artifacts/cli-startup-bench-smoke.json",
     "test:startup:bench:update": "node scripts/test-update-cli-startup-bench.mjs",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
@@ -1140,6 +1152,7 @@
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "vitest",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
+    "tsgo": "node scripts/run-tsgo.mjs",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
@@ -1204,7 +1217,7 @@
     "@types/node": "^25.5.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260327.2",
+    "@typescript/native-preview": "7.0.0-dev.20260330.1",
     "@vitest/coverage-v8": "^4.1.2",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.1",
@@ -1237,9 +1250,13 @@
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "minimumReleaseAge": 2880,
+    "minimumReleaseAgeExclude": [
+      "@mariozechner/*"
+    ],
     "overrides": {
       "hono": "4.12.9",
       "@hono/node-server": "1.19.10",
+      "axios": "1.13.6",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
