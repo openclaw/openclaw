@@ -112,6 +112,26 @@ async function handleFileConsentInvoke(
     return false;
   }
 
+  /**
+   * Delete the original FileConsentCard message from the conversation.
+   * The invoke activity's `replyToId` references the consent card message.
+   * Best-effort: failures are logged but do not block the flow.
+   */
+  async function tryDeleteConsentCard(reason: string): Promise<void> {
+    const cardActivityId = activity.replyToId;
+    if (!cardActivityId) return;
+    try {
+      await context.deleteActivity(cardActivityId);
+      log.debug?.("deleted consent card", { activityId: cardActivityId, reason });
+    } catch (err) {
+      log.debug?.("failed to delete consent card (non-fatal)", {
+        activityId: cardActivityId,
+        reason,
+        error: String(err),
+      });
+    }
+  }
+
   const uploadId =
     typeof consentResponse.context?.uploadId === "string"
       ? consentResponse.context.uploadId
@@ -127,7 +147,10 @@ async function handleFileConsentInvoke(
         receivedConversationId: invokeConversationId || undefined,
       });
       if (consentResponse.action === "accept") {
+        await tryDeleteConsentCard("expired-conversation-mismatch");
         await context.sendActivity(expiredUploadMessage);
+      } else {
+        await tryDeleteConsentCard("decline-conversation-mismatch");
       }
       return true;
     }
@@ -149,6 +172,9 @@ async function handleFileConsentInvoke(
           contentType: pendingFile.contentType,
         });
 
+        // Delete the consent card now that upload succeeded
+        await tryDeleteConsentCard("upload-success");
+
         // Send confirmation card
         const fileInfoCard = buildFileInfoCard({
           filename: consentResponse.uploadInfo.name,
@@ -169,17 +195,20 @@ async function handleFileConsentInvoke(
         });
       } catch (err) {
         log.debug?.("file upload failed", { uploadId, error: String(err) });
+        await tryDeleteConsentCard("upload-failed");
         await context.sendActivity(`File upload failed: ${String(err)}`);
       } finally {
         removePendingUpload(uploadId);
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
+      await tryDeleteConsentCard("expired-pending-not-found");
       await context.sendActivity(expiredUploadMessage);
     }
   } else {
     // User declined
     log.debug?.("user declined file consent", { uploadId });
+    await tryDeleteConsentCard("user-declined");
     removePendingUpload(uploadId);
   }
 
