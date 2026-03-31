@@ -328,7 +328,10 @@ export function handleMessageUpdate(
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    ctx.blockChunker?.drain({
+      force: false,
+      emit: (text) => ctx.emitBlockChunk(text, { trigger: "text_end" }),
+    });
   }
 
   if (
@@ -336,7 +339,7 @@ export function handleMessageUpdate(
     evtType === "text_end" &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.flushBlockReplyBuffer();
+    ctx.flushBlockReplyBuffer({ trigger: "text_end" });
   }
 }
 
@@ -426,12 +429,15 @@ export function handleMessageEnd(
   });
 
   const onBlockReply = ctx.params.onBlockReply;
-  const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
+  const emitBlockReplySafely = (
+    payload: Parameters<NonNullable<typeof onBlockReply>>[0],
+    context?: { trigger?: "text_end" | "message_end" },
+  ) => {
     if (!onBlockReply) {
       return;
     }
     void Promise.resolve()
-      .then(() => onBlockReply(payload))
+      .then(() => onBlockReply(payload, context))
       .catch((err) => {
         ctx.log.warn(`block reply callback failed: ${String(err)}`);
       });
@@ -450,7 +456,10 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
+    emitBlockReplySafely(
+      { text: formattedReasoning, isReasoning: true },
+      { trigger: "message_end" },
+    );
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -459,6 +468,7 @@ export function handleMessageEnd(
 
   const emitSplitResultAsBlockReply = (
     splitResult: ReturnType<typeof ctx.consumeReplyDirectives> | null | undefined,
+    trigger: "text_end" | "message_end",
   ) => {
     if (!splitResult || !onBlockReply) {
       return;
@@ -473,14 +483,17 @@ export function handleMessageEnd(
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
     if (hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice })) {
-      ctx.emitBlockReply({
-        text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-        audioAsVoice,
-        replyToId,
-        replyToTag,
-        replyToCurrent,
-      });
+      ctx.emitBlockReply(
+        {
+          text: cleanedText,
+          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+          audioAsVoice,
+          replyToId,
+          replyToTag,
+          replyToCurrent,
+        },
+        { trigger },
+      );
     }
   };
 
@@ -492,7 +505,10 @@ export function handleMessageEnd(
     onBlockReply
   ) {
     if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
+      ctx.blockChunker.drain({
+        force: true,
+        emit: (text) => ctx.emitBlockChunk(text, { trigger: "message_end" }),
+      });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Check for duplicates before emitting (same logic as emitBlockChunk).
@@ -508,7 +524,10 @@ export function handleMessageEnd(
         );
       } else {
         ctx.state.lastBlockReplyText = text;
-        emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+        emitSplitResultAsBlockReply(
+          ctx.consumeReplyDirectives(text, { final: true }),
+          "message_end",
+        );
       }
     }
   }
@@ -521,7 +540,7 @@ export function handleMessageEnd(
   }
 
   if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
-    emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
+    emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }), "text_end");
   }
 
   ctx.state.deltaBuffer = "";

@@ -1808,6 +1808,7 @@ export type PluginHookName =
   | "before_reset"
   | "inbound_claim"
   | "message_received"
+  | "before_block_reply"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
@@ -1837,6 +1838,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_reset",
   "inbound_claim",
   "message_received",
+  "before_block_reply",
   "message_sending",
   "message_sent",
   "before_tool_call",
@@ -2118,6 +2120,19 @@ export type PluginHookMessageReceivedEvent = {
   content: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
+};
+
+// before_block_reply hook
+export type PluginHookBeforeBlockReplyEvent = {
+  text?: string;
+  mediaUrls?: string[];
+  isReasoning?: boolean;
+  trigger?: "tool_start" | "text_end" | "message_end" | "run_end";
+};
+
+export type PluginHookBeforeBlockReplyResult = {
+  text?: string;
+  cancel?: boolean;
 };
 
 // message_sending hook
@@ -2516,6 +2531,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
+  before_block_reply: (
+    event: PluginHookBeforeBlockReplyEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeBlockReplyResult | void> | PluginHookBeforeBlockReplyResult | void;
   message_sending: (
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,

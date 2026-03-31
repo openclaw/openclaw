@@ -100,16 +100,16 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   }
 
-  ctx.flushBlockReplyBuffer();
+  ctx.flushBlockReplyBuffer({ trigger: "run_end" });
   const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
   if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-    ctx.emitBlockReply(pendingToolMediaReply);
+    ctx.emitBlockReply(pendingToolMediaReply, { trigger: "run_end" });
   }
   // Flush the reply pipeline so the response reaches the channel before
   // compaction wait blocks the run.  This mirrors the pattern used by
   // handleToolExecutionStart and ensures delivery is not held hostage to
   // long-running compaction (#35074).
-  void ctx.params.onBlockReplyFlush?.();
+  void ctx.params.onBlockReplyFlush?.({ trigger: "run_end" });
 
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;

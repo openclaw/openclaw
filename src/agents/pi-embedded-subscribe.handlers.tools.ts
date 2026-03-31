@@ -331,9 +331,9 @@ export async function handleToolExecutionStart(
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
-  ctx.flushBlockReplyBuffer();
+  ctx.flushBlockReplyBuffer({ trigger: "tool_start" });
   if (ctx.params.onBlockReplyFlush) {
-    await ctx.params.onBlockReplyFlush();
+    await ctx.params.onBlockReplyFlush({ trigger: "tool_start" });
   }
 
   const rawToolName = String(evt.toolName);

@@ -693,18 +693,43 @@ export async function dispatchReplyFromConfig(params: {
             if (payload.isReasoning === true) {
               return;
             }
+
+            let blockPayload = payload;
+            if (hookRunner?.hasHooks("before_block_reply")) {
+              const hookResult = await hookRunner.runBeforeBlockReply(
+                {
+                  text: blockPayload.text,
+                  mediaUrls: blockPayload.mediaUrls,
+                  isReasoning: blockPayload.isReasoning,
+                  trigger: context?.trigger,
+                },
+                {
+                  agentId: sessionKey
+                    ? resolveSessionAgentId({ sessionKey, config: cfg })
+                    : undefined,
+                  sessionKey,
+                  runId: params.replyOptions?.runId,
+                },
+              );
+              if (hookResult?.cancel === true) {
+                return;
+              }
+              if (hookResult?.text !== undefined) {
+                blockPayload = { ...blockPayload, text: hookResult.text };
+              }
+            }
             // Accumulate block text for TTS generation after streaming.
             // Exclude compaction status notices — they are informational UI
             // signals and must not be synthesised into the spoken reply.
-            if (payload.text && !payload.isCompactionNotice) {
+            if (blockPayload.text && !blockPayload.isCompactionNotice) {
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
-              accumulatedBlockText += payload.text;
+              accumulatedBlockText += blockPayload.text;
               blockCount++;
             }
             const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
+              payload: blockPayload,
               cfg,
               channel: ttsChannel,
               kind: "block",

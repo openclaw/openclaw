@@ -1,11 +1,11 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import type { ReplyPayload } from "../types.js";
+import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
 export type BlockReplyPipeline = {
-  enqueue: (payload: ReplyPayload) => void;
+  enqueue: (payload: ReplyPayload, context?: BlockReplyContext) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
   stop: () => void;
   hasBuffered: () => boolean;
@@ -74,10 +74,7 @@ const withTimeout = async <T>(
 };
 
 export function createBlockReplyPipeline(params: {
-  onBlockReply: (
-    payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<void> | void;
+  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
@@ -95,7 +92,11 @@ export function createBlockReplyPipeline(params: {
   let didStream = false;
   let didLogTimeout = false;
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
+  const sendPayload = (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+    bypassSeenCheck: boolean = false,
+  ) => {
     if (aborted) {
       return;
     }
@@ -124,6 +125,7 @@ export function createBlockReplyPipeline(params: {
             onBlockReply(payload, {
               abortSignal: abortController.signal,
               timeoutMs,
+              trigger: context?.trigger,
             }),
           ),
           timeoutMs,
@@ -164,7 +166,7 @@ export function createBlockReplyPipeline(params: {
         shouldAbort: () => aborted,
         onFlush: (payload) => {
           bufferedKeys.clear();
-          sendPayload(payload, /* bypassSeenCheck */ true);
+          sendPayload(payload, undefined, /* bypassSeenCheck */ true);
         },
       })
     : null;
@@ -195,13 +197,13 @@ export function createBlockReplyPipeline(params: {
     }
     for (const payload of bufferedPayloads) {
       const finalPayload = buffer?.finalize?.(payload) ?? payload;
-      sendPayload(finalPayload, /* bypassSeenCheck */ true);
+      sendPayload(finalPayload, undefined, /* bypassSeenCheck */ true);
     }
     bufferedPayloads.length = 0;
     bufferedPayloadKeys.clear();
   };
 
-  const enqueue = (payload: ReplyPayload) => {
+  const enqueue = (payload: ReplyPayload, context?: BlockReplyContext) => {
     if (aborted) {
       return;
     }
@@ -211,7 +213,11 @@ export function createBlockReplyPipeline(params: {
     const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
     if (hasMedia) {
       void coalescer?.flush({ force: true });
-      sendPayload(payload, /* bypassSeenCheck */ false);
+      sendPayload(payload, context, /* bypassSeenCheck */ false);
+      return;
+    }
+    if (context?.trigger) {
+      sendPayload(payload, context, /* bypassSeenCheck */ false);
       return;
     }
     if (coalescer) {
@@ -224,7 +230,7 @@ export function createBlockReplyPipeline(params: {
       coalescer.enqueue(payload);
       return;
     }
-    sendPayload(payload, /* bypassSeenCheck */ false);
+    sendPayload(payload, context, /* bypassSeenCheck */ false);
   };
 
   const flush = async (options?: { force?: boolean }) => {
