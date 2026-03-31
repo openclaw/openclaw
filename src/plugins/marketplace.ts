@@ -5,7 +5,6 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -622,6 +621,95 @@ function hasStreamingResponseBody(
   );
 }
 
+async function readMarketplaceChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  chunkTimeoutMs: number,
+): Promise<Awaited<ReturnType<typeof reader.read>>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  return await new Promise((resolve, reject) => {
+    const clear = () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      clear();
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`download timed out after ${chunkTimeoutMs}ms`));
+    }, chunkTimeoutMs);
+
+    void reader.read().then(
+      (result) => {
+        clear();
+        if (!timedOut) {
+          resolve(result);
+        }
+      },
+      (err) => {
+        clear();
+        if (!timedOut) {
+          reject(err);
+        }
+      },
+    );
+  });
+}
+
+async function writeMarketplaceChunk(
+  fileHandle: Awaited<ReturnType<typeof fs.open>>,
+  chunk: Uint8Array,
+): Promise<void> {
+  let offset = 0;
+  while (offset < chunk.length) {
+    const { bytesWritten } = await fileHandle.write(chunk, offset, chunk.length - offset);
+    if (bytesWritten <= 0) {
+      throw new Error("failed to write download chunk");
+    }
+    offset += bytesWritten;
+  }
+}
+
+async function streamMarketplaceResponseToFile(params: {
+  response: Response & { body: ReadableStream<Uint8Array> };
+  targetPath: string;
+  maxBytes: number;
+  chunkTimeoutMs: number;
+}): Promise<void> {
+  const reader = params.response.body.getReader();
+  const fileHandle = await fs.open(params.targetPath, "wx");
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await readMarketplaceChunkWithTimeout(reader, params.chunkTimeoutMs);
+      if (done) {
+        return;
+      }
+      if (!value?.length) {
+        continue;
+      }
+
+      const nextTotal = total + value.length;
+      if (nextTotal > params.maxBytes) {
+        throw new Error(`download too large: ${nextTotal} bytes (limit: ${params.maxBytes} bytes)`);
+      }
+
+      await writeMarketplaceChunk(fileHandle, value);
+      total = nextTotal;
+    }
+  } finally {
+    await fileHandle.close().catch(() => undefined);
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+}
+
 async function downloadUrlToTempFile(
   url: string,
   timeoutMs?: number,
@@ -686,14 +774,12 @@ async function downloadUrlToTempFile(
       if (relativeTargetPath === ".." || relativeTargetPath.startsWith(`..${path.sep}`)) {
         throw new Error("invalid download filename");
       }
-      const buffer = await readResponseWithLimit(response, MAX_MARKETPLACE_ARCHIVE_BYTES, {
+      await streamMarketplaceResponseToFile({
+        response,
+        targetPath,
+        maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
         chunkTimeoutMs: downloadTimeoutMs,
-        onOverflow: ({ size, maxBytes }) =>
-          new Error(`download too large: ${size} bytes (limit: ${maxBytes} bytes)`),
-        onIdleTimeout: ({ chunkTimeoutMs }) =>
-          new Error(`download timed out after ${chunkTimeoutMs}ms`),
       });
-      await fs.writeFile(targetPath, buffer);
       return {
         ok: true,
         path: targetPath,

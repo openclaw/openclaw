@@ -539,6 +539,60 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("rejects oversized streamed archive responses without falling back to arrayBuffer", async () => {
+    await withTempDir(async (rootDir) => {
+      const arrayBuffer = vi.fn(async () => new Uint8Array([1, 2, 3]).buffer);
+      const reader = {
+        read: vi
+          .fn()
+          .mockResolvedValueOnce({
+            done: false,
+            value: {
+              length: 256 * 1024 * 1024 + 1,
+            } as Uint8Array,
+          })
+          .mockResolvedValueOnce({ done: true, value: undefined }),
+        cancel: vi.fn(async () => undefined),
+        releaseLock: vi.fn(),
+      };
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => reader,
+          } as unknown as Response["body"],
+          headers: new Headers(),
+          arrayBuffer,
+        } as unknown as Response,
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "failed to download https://example.com/frontend-design.tgz: " +
+          "download too large: 268435457 bytes (limit: 268435456 bytes)",
+      });
+      expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("cleans up a partial download temp dir when streaming the archive fails", async () => {
     await withTempDir(async (rootDir) => {
       const beforeTempDirs = await listMarketplaceDownloadTempDirs();
