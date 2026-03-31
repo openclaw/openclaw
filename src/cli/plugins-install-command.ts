@@ -6,7 +6,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
-import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
+import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -527,10 +527,7 @@ export async function runPluginInstallCommand(params: {
       pluginId: result.pluginId,
       install: {
         source: "clawhub",
-        spec: formatClawHubSpecifier({
-          name: result.clawhub.clawhubPackage,
-          version: result.clawhub.version,
-        }),
+        spec: raw,
         installPath: result.targetDir,
         version: result.version,
         integrity: result.clawhub.integrity,
@@ -559,10 +556,7 @@ export async function runPluginInstallCommand(params: {
         pluginId: clawhubResult.pluginId,
         install: {
           source: "clawhub",
-          spec: formatClawHubSpecifier({
-            name: clawhubResult.clawhub.clawhubPackage,
-            version: clawhubResult.clawhub.version,
-          }),
+          spec: preferredClawHubSpec,
           installPath: clawhubResult.targetDir,
           version: clawhubResult.version,
           integrity: clawhubResult.clawhub.integrity,
