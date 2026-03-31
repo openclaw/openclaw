@@ -87,6 +87,7 @@ enum HostEnvSecurityPolicy {
         "PIP_EXTRA_INDEX_URL",
         "UV_INDEX",
         "UV_INDEX_URL",
+        "UV_EXTRA_INDEX_URL",
         "UV_DEFAULT_INDEX",
         "UV_EXTRA_INDEX_URL",
         "LUA_PATH",
