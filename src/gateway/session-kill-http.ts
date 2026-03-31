@@ -65,18 +65,6 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const { entry, canonicalKey } = loadSessionEntry(sessionKey);
-  if (!entry) {
-    sendJson(res, 404, {
-      ok: false,
-      error: {
-        type: "not_found",
-        message: `Session not found: ${sessionKey}`,
-      },
-    });
-    return true;
-  }
-
   const trustedProxies = opts.trustedProxies ?? cfg.gateway?.trustedProxies;
   const allowRealIpFallback = opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback;
   const requesterSessionKey = req.headers[REQUESTER_SESSION_KEY_HEADER]?.toString().trim();
@@ -103,6 +91,18 @@ export async function handleSessionKillHttpRequest(
       error: {
         type: "forbidden",
         message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
+    return true;
+  }
+
+  const { entry, canonicalKey } = loadSessionEntry(sessionKey);
+  if (!entry) {
+    sendJson(res, 404, {
+      ok: false,
+      error: {
+        type: "not_found",
+        message: `Session not found: ${sessionKey}`,
       },
     });
     return true;
