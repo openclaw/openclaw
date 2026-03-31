@@ -64,6 +64,28 @@ describe("qqbot setup", () => {
     expect(qqbotSetupPlugin.config.describeAccount?.(account!, cfg)?.configured).toBe(true);
   });
 
+  it("keeps the sibling credential when switching only AppSecret to env mode", async () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+          clientSecret: "secret-from-config",
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = await qqbotSetupWizard.credentials[1]!.applyUseEnv!({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+
+    expect(next.channels?.qqbot).toMatchObject({
+      appId: "123456",
+    });
+    expect("clientSecret" in (next.channels?.qqbot ?? {})).toBe(false);
+    expect("clientSecretFile" in (next.channels?.qqbot ?? {})).toBe(false);
+  });
+
   it("normalizes account ids to lowercase", () => {
     const setup = qqbotSetupPlugin.setup;
     expect(setup).toBeDefined();
