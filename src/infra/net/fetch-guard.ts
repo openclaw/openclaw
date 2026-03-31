@@ -2,6 +2,7 @@ import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -55,21 +56,6 @@ type GuardedFetchPresetOptions = Omit<
 >;
 
 const DEFAULT_MAX_REDIRECTS = 3;
-const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([
-  "accept",
-  "accept-encoding",
-  "accept-language",
-  "cache-control",
-  "content-language",
-  "content-type",
-  "if-match",
-  "if-modified-since",
-  "if-none-match",
-  "if-unmodified-since",
-  "pragma",
-  "range",
-  "user-agent",
-]);
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -114,27 +100,14 @@ function isRedirectStatus(status: number): boolean {
 export function retainSafeHeadersForCrossOriginRedirectHeaders(
   headers?: HeadersInit,
 ): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const incoming = new Headers(headers);
-  const safeHeaders = new Headers();
-  for (const [key, value] of incoming.entries()) {
-    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key.toLowerCase())) {
-      safeHeaders.set(key, value);
-    }
-  }
-  return Object.fromEntries(safeHeaders.entries());
+  return retainSafeRedirectHeaders(headers);
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
   if (!init?.headers) {
     return init;
   }
-  return {
-    ...init,
-    headers: retainSafeHeadersForCrossOriginRedirectHeaders(init.headers),
-  };
+  return { ...init, headers: retainSafeRedirectHeaders(init.headers) };
 }
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
