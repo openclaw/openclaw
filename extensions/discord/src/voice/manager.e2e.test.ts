@@ -376,6 +376,63 @@ describe("DiscordVoiceManager", () => {
     expect(client.fetchMember).toHaveBeenCalledTimes(1);
   });
 
+  it("persists full speaker context in cache writes", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Role Speaker",
+      roles: ["role-voice"],
+      user: {
+        id: "u-role",
+        username: "role",
+        globalName: "Role",
+        discriminator: "2222",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                roles: ["role-voice"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-role");
+
+    const cache = (
+      manager as unknown as {
+        speakerContextCache: Map<
+          string,
+          {
+            id?: string;
+            label: string;
+            name?: string;
+            tag?: string;
+            memberRoleIds?: string[];
+            senderIsOwner: boolean;
+            expiresAt: number;
+          }
+        >;
+      }
+    ).speakerContextCache;
+    const cached = cache.get("g1:u-role");
+
+    expect(cached).toEqual(
+      expect.objectContaining({
+        id: "u-role",
+        label: "Role Speaker",
+        memberRoleIds: ["role-voice"],
+      }),
+    );
+  });
+
   it("fetches guild metadata before allowlist checks when the session lacks a guild name", async () => {
     const client = createClient();
     client.fetchGuild.mockResolvedValue({ id: "g1", name: "Guild One" });

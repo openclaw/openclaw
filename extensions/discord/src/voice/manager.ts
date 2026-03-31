@@ -857,7 +857,11 @@ export class DiscordVoiceManager {
   ): void {
     const key = this.resolveSpeakerContextCacheKey(guildId, userId);
     this.speakerContextCache.set(key, {
+      id: context.id,
       label: context.label,
+      name: context.name,
+      tag: context.tag,
+      memberRoleIds: context.memberRoleIds,
       senderIsOwner: context.senderIsOwner,
       expiresAt: Date.now() + SPEAKER_CONTEXT_CACHE_TTL_MS,
     });
