@@ -620,10 +620,6 @@ export class TelegramPollingSession {
         headers: { "Content-Type": "application/json" },
         body: "{}",
         signal: controller.signal,
-        // Prevent redirect-based token exfiltration: the bot token is in the
-        // URL path, so following redirects to attacker infrastructure would
-        // disclose it.
-        redirect: "error",
       });
       const status = response.status;
       await response.body?.cancel().catch(() => {});
