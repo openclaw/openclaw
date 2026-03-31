@@ -75,6 +75,9 @@
     "extensions/slack/src/monitor/slash.test.ts": {
       "durationMs": 12500
     },
+    "extensions/slack/src/outbound-adapter.test.ts": {
+      "durationMs": 4630
+    },
     "extensions/whatsapp/src/send.test.ts": {
       "durationMs": 2700
     },
@@ -190,7 +193,7 @@
       "durationMs": 950
     },
     "extensions/slack/src/send.upload.test.ts": {
-      "durationMs": 923
+      "durationMs": 10010
     },
     "extensions/telegram/src/bot-native-commands.registry.test.ts": {
       "durationMs": 842
