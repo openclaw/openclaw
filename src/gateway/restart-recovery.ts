@@ -193,7 +193,7 @@ export function resolveGatewayRestartConfig(
     sessionRecovery: cfg.gateway?.restart?.sessionRecovery !== false,
     cronRetryOnInterrupt: cfg.gateway?.restart?.cronRetryOnInterrupt !== false,
     readinessGate: cfg.gateway?.restart?.readinessGate !== false,
-    readinessGateThreshold: Math.max(0, cfg.gateway?.restart?.readinessGateThreshold ?? 0),
+    readinessGateThreshold: Math.max(0, cfg.gateway?.restart?.readinessGateThreshold ?? 1),
     drainQueueMessages: cfg.gateway?.restart?.drainQueueMessages !== false,
     manifestPath: resolveRestartManifestPath(cfg),
   };
