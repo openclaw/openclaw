@@ -384,6 +384,8 @@ importers:
 
   extensions/firecrawl: {}
 
+  extensions/fish-audio: {}
+
   extensions/github-copilot: {}
 
   extensions/google: {}

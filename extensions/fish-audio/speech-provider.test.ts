@@ -31,9 +31,7 @@ describe("fish-audio speech provider", () => {
         "abcdef!@#$%^&*()12345678", // special chars
       ];
       for (const v of invalid) {
-        expect(isValidFishAudioVoiceId(v), `expected invalid: ${v}`).toBe(
-          false,
-        );
+        expect(isValidFishAudioVoiceId(v), `expected invalid: ${v}`).toBe(false);
       }
     });
   });
@@ -42,7 +40,16 @@ describe("fish-audio speech provider", () => {
     const provider = buildFishAudioSpeechProvider();
     const parse = provider.parseDirectiveToken!;
 
-    const policy = { allowVoice: true, allowModelId: true, allowVoiceSettings: true, allowProvider: true };
+    const policy = {
+      enabled: true,
+      allowVoice: true,
+      allowModelId: true,
+      allowVoiceSettings: true,
+      allowProvider: true,
+      allowText: true,
+      allowNormalization: true,
+      allowSeed: true,
+    };
 
     it("handles provider-prefixed voice keys", () => {
       const voiceId = "8a2d42279389471993460b85340235c5";
@@ -78,7 +85,20 @@ describe("fish-audio speech provider", () => {
     });
 
     it("does NOT claim generic keys (voice, model, speed)", () => {
-      for (const key of ["voice", "model", "speed", "voiceid", "voice_id", "modelid", "model_id", "latency", "temperature", "temp", "top_p", "topp"]) {
+      for (const key of [
+        "voice",
+        "model",
+        "speed",
+        "voiceid",
+        "voice_id",
+        "modelid",
+        "model_id",
+        "latency",
+        "temperature",
+        "temp",
+        "top_p",
+        "topp",
+      ]) {
         const result = parse({ key, value: "anything", policy, currentOverrides: {} });
         expect(result.handled, `generic key "${key}" should NOT be handled`).toBe(false);
       }
@@ -98,7 +118,12 @@ describe("fish-audio speech provider", () => {
     });
 
     it("rejects invalid latency values with warning instead of silently defaulting", () => {
-      const result = parse({ key: "fishaudio_latency", value: "fast", policy, currentOverrides: {} });
+      const result = parse({
+        key: "fishaudio_latency",
+        value: "fast",
+        policy,
+        currentOverrides: {},
+      });
       expect(result.handled).toBe(true);
       expect(result.warnings?.length).toBeGreaterThan(0);
       expect(result.overrides).toBeUndefined();
