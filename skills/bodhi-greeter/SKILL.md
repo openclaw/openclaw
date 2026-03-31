@@ -25,16 +25,19 @@ To set up your own instance:
 1. You need a machine that stays on — Mac Mini, NUC, old laptop, anything with 4GB+ RAM
 2. Open Telegram, message @BotFather, type /newbot, pick a name
 3. Copy the bot token BotFather gives you
-4. Run the installer:
+4. Clone the repo and run setup:
 
-   curl -fsSL https://raw.githubusercontent.com/Qenjin/OpenBodhi/main/install.sh | bash
+   git clone https://github.com/Qenjin/OpenBodhi.git
+   cd OpenBodhi
+   bash docs/bodhi/scripts/install-openbodhi-cli.sh
+   openbodhi setup
 
 5. Paste your bot token when prompted
 6. Send your first thought to your new bot
 
 Setup takes under 5 minutes. No cloud accounts, no subscriptions, no data leaves your machine.
 
-Source code: github.com/Qenjin/OpenBodhi
+Source code: https://github.com/Qenjin/OpenBodhi
 
 This bot (@openbodhibot) is the project landing page only. It does not store messages or run any AI processing. For your own private instance, follow the steps above.
 ```
