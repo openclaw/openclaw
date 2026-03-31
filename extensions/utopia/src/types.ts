@@ -92,7 +92,7 @@ export function resolveUtopiaAccount(opts: {
     enabled: baseEnabled,
     configured,
     host: utopiaCfg?.host ?? "127.0.0.1",
-    port: utopiaCfg?.port ?? 22659,
+    port: utopiaCfg?.port ?? 20000,
     apiToken,
     wsPort: utopiaCfg?.wsPort ?? 25000,
     useSsl: utopiaCfg?.useSsl ?? false,
