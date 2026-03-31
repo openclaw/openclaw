@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildBeforeModelCallEvent } from "./attempt.js";
+import { buildBeforeModelCallEvent, buildModelCallId } from "./attempt.js";
 
 describe("buildBeforeModelCallEvent", () => {
   it("includes the composed system prompt with the provider request messages", () => {
@@ -68,5 +68,24 @@ describe("buildBeforeModelCallEvent", () => {
     });
     expect(Object.keys(event)).not.toContain("api");
     expect(Object.keys(event)).not.toContain("systemPrompt");
+  });
+});
+
+describe("buildModelCallId", () => {
+  it("includes session identity so retries under the same runId stay unique", () => {
+    expect(
+      buildModelCallId({
+        runId: "run-1",
+        sessionId: "session-a",
+        sequence: 1,
+      }),
+    ).toBe("run-1-session-a-1");
+    expect(
+      buildModelCallId({
+        runId: "run-1",
+        sessionId: "session-b",
+        sequence: 1,
+      }),
+    ).toBe("run-1-session-b-1");
   });
 });

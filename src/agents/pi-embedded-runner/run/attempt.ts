@@ -267,6 +267,10 @@ export function buildBeforeModelCallEvent(params: {
   };
 }
 
+export function buildModelCallId(params: { runId: string; sessionId: string; sequence: number }) {
+  return `${params.runId}-${params.sessionId}-${params.sequence}`;
+}
+
 function resolveBeforeModelCallRequestMessages(params: {
   context: unknown;
   transcriptPolicy: TranscriptPolicy;
@@ -1147,7 +1151,11 @@ export async function runEmbeddedAttempt(
             return innerForHooks(model, context, options);
           }
 
-          const callId = `${params.runId}-${++modelCallCounter}`;
+          const callId = buildModelCallId({
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sequence: ++modelCallCounter,
+          });
           const hookCtxForCall = {
             runId: params.runId,
             agentId: sessionAgentId,
