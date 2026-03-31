@@ -1,8 +1,10 @@
+// Pure channel contract types used by plugin implementations and tests.
 export type {
   BaseProbeResult,
   BaseTokenResolution,
   ChannelAgentTool,
   ChannelAccountSnapshot,
+  ChannelCommandConversationContext,
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,

@@ -2,10 +2,10 @@ import type { RunOptions } from "@grammyjs/runner";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
@@ -91,8 +91,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const activeRunner = pollingSession?.activeRunner;
     if (isNetworkError && isTelegramPollingError && activeRunner && activeRunner.isRunning()) {
       pollingSession?.markForceRestarted();
+      pollingSession?.markTransportDirty();
       pollingSession?.abortActiveFetch();
       void activeRunner.stop().catch(() => {});
+      log("[telegram][diag] marking transport dirty after polling network failure");
       log(
         `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
       );
@@ -179,10 +181,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return;
     }
 
-    // Create transport once to preserve sticky IPv4 fallback state across polling restarts
-    const telegramTransport = resolveTelegramTransport(proxyFetch, {
-      network: account.config.network,
-    });
+    // Preserve sticky IPv4 fallback state across clean/conflict restarts.
+    // Dirty polling cycles rebuild transport inside TelegramPollingSession.
+    const createTelegramTransportForPolling = () =>
+      resolveTelegramTransport(proxyFetch, {
+        network: account.config.network,
+      });
+    const telegramTransport = createTelegramTransportForPolling();
 
     pollingSession = new TelegramPollingSession({
       token,
@@ -196,6 +201,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       persistUpdateId,
       log,
       telegramTransport,
+      createTelegramTransport: createTelegramTransportForPolling,
     });
     await pollingSession.runUntilAbort();
   } finally {

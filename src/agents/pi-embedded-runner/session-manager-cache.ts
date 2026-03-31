@@ -1,14 +1,14 @@
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
-import { isCacheEnabled, resolveCacheTtlMs } from "../../config/cache-utils.js";
+import {
+  createExpiringMapCache,
+  isCacheEnabled,
+  resolveCacheTtlMs,
+} from "../../config/cache-utils.js";
 
-type SessionManagerCacheEntry = {
-  sessionFile: string;
-  loadedAt: number;
-};
-
-const SESSION_MANAGER_CACHE = new Map<string, SessionManagerCacheEntry>();
 const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
+const MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 1_000;
+const MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 30_000;
 
 function getSessionManagerTtl(): number {
   return resolveCacheTtlMs({
@@ -17,53 +17,81 @@ function getSessionManagerTtl(): number {
   });
 }
 
-function isSessionManagerCacheEnabled(): boolean {
-  return isCacheEnabled(getSessionManagerTtl());
+function resolveSessionManagerCachePruneInterval(ttlMs: number): number {
+  return Math.min(
+    Math.max(ttlMs, MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS),
+    MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS,
+  );
 }
+
+export type SessionManagerCache = {
+  clear: () => void;
+  isSessionManagerCached: (sessionFile: string) => boolean;
+  keys: () => string[];
+  prewarmSessionFile: (sessionFile: string) => Promise<void>;
+  trackSessionManagerAccess: (sessionFile: string) => void;
+};
+
+export function createSessionManagerCache(options?: {
+  clock?: () => number;
+  fsModule?: Pick<typeof fs, "open">;
+  ttlMs?: number | (() => number);
+}): SessionManagerCache {
+  const getTtlMs = () =>
+    typeof options?.ttlMs === "function"
+      ? options.ttlMs()
+      : (options?.ttlMs ?? getSessionManagerTtl());
+  const cache = createExpiringMapCache<string, true>({
+    ttlMs: getTtlMs,
+    pruneIntervalMs: resolveSessionManagerCachePruneInterval,
+    clock: options?.clock,
+  });
+  const fsModule = options?.fsModule ?? fs;
+
+  return {
+    clear: () => {
+      cache.clear();
+    },
+    isSessionManagerCached: (sessionFile) => cache.get(sessionFile) === true,
+    keys: () => cache.keys(),
+    prewarmSessionFile: async (sessionFile) => {
+      if (!isCacheEnabled(getTtlMs())) {
+        return;
+      }
+      if (cache.get(sessionFile) === true) {
+        return;
+      }
+
+      try {
+        // Read a small chunk to encourage OS page cache warmup.
+        const handle = await fsModule.open(sessionFile, "r");
+        try {
+          const buffer = Buffer.alloc(4096);
+          await handle.read(buffer, 0, buffer.length, 0);
+        } finally {
+          await handle.close();
+        }
+        cache.set(sessionFile, true);
+      } catch {
+        // File doesn't exist yet, SessionManager will create it
+      }
+    },
+    trackSessionManagerAccess: (sessionFile) => {
+      cache.set(sessionFile, true);
+    },
+  };
+}
+
+const sessionManagerCache = createSessionManagerCache();
 
 export function trackSessionManagerAccess(sessionFile: string): void {
-  if (!isSessionManagerCacheEnabled()) {
-    return;
-  }
-  const now = Date.now();
-  SESSION_MANAGER_CACHE.set(sessionFile, {
-    sessionFile,
-    loadedAt: now,
-  });
+  sessionManagerCache.trackSessionManagerAccess(sessionFile);
 }
 
-function isSessionManagerCached(sessionFile: string): boolean {
-  if (!isSessionManagerCacheEnabled()) {
-    return false;
-  }
-  const entry = SESSION_MANAGER_CACHE.get(sessionFile);
-  if (!entry) {
-    return false;
-  }
-  const now = Date.now();
-  const ttl = getSessionManagerTtl();
-  return now - entry.loadedAt <= ttl;
+export function isSessionManagerCached(sessionFile: string): boolean {
+  return sessionManagerCache.isSessionManagerCached(sessionFile);
 }
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
-  if (!isSessionManagerCacheEnabled()) {
-    return;
-  }
-  if (isSessionManagerCached(sessionFile)) {
-    return;
-  }
-
-  try {
-    // Read a small chunk to encourage OS page cache warmup.
-    const handle = await fs.open(sessionFile, "r");
-    try {
-      const buffer = Buffer.alloc(4096);
-      await handle.read(buffer, 0, buffer.length, 0);
-    } finally {
-      await handle.close();
-    }
-    trackSessionManagerAccess(sessionFile);
-  } catch {
-    // File doesn't exist yet, SessionManager will create it
-  }
+  await sessionManagerCache.prewarmSessionFile(sessionFile);
 }

@@ -1,10 +1,14 @@
 import path from "node:path";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "./scripts/lib/bundled-plugin-paths.mjs";
 
 export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
+  "packages/**/*.test.ts",
   "test/**/*.test.ts",
   "ui/src/ui/app-chat.test.ts",
+  "ui/src/ui/chat/**/*.test.ts",
   "ui/src/ui/views/agents-utils.test.ts",
+  "ui/src/ui/views/channels.test.ts",
   "ui/src/ui/views/chat.test.ts",
   "ui/src/ui/views/usage-render-details.test.ts",
   "ui/src/ui/controllers/agents.test.ts",
@@ -13,12 +17,14 @@ export const unitTestIncludePatterns = [
 
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
-  "extensions/**",
+  `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
   "src/browser/**",
   "src/line/**",
   "src/agents/**",
   "src/auto-reply/**",
   "src/commands/**",
+  "src/channels/plugins/contracts/**",
+  "src/plugins/contracts/**",
 ];
 
 const sharedBaseExcludePatterns = [

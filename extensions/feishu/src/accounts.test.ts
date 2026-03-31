@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  FeishuSecretRefUnavailableError,
+  inspectFeishuCredentials,
   resolveDefaultFeishuAccountId,
   resolveDefaultFeishuAccountSelection,
   resolveFeishuAccount,
   resolveFeishuCredentials,
+  resolveFeishuRuntimeAccount,
 } from "./accounts.js";
 import type { FeishuConfig } from "./types.js";
 
@@ -169,6 +172,18 @@ describe("resolveFeishuCredentials", () => {
     expect(creds).toBeNull();
   });
 
+  it("supports explicit inspect mode for unresolved SecretRefs", () => {
+    const creds = resolveFeishuCredentials(
+      asConfig({
+        appId: "cli_123",
+        appSecret: { source: "file", provider: "default", id: "path/to/secret" } as never,
+      }),
+      { mode: "inspect" },
+    );
+
+    expect(creds).toBeNull();
+  });
+
   it("throws unresolved SecretRef error when env SecretRef points to missing env var", () => {
     const key = "FEISHU_APP_SECRET_MISSING_TEST";
     withEnvVar(key, undefined, () => {
@@ -274,6 +289,24 @@ describe("resolveFeishuCredentials", () => {
       domain: "feishu",
     });
   });
+
+  it("keeps required credentials when optional event SecretRefs are unresolved in inspect mode", () => {
+    const creds = inspectFeishuCredentials(
+      asConfig({
+        appId: "cli_123",
+        appSecret: "secret_456",
+        verificationToken: { source: "file", provider: "default", id: "path/to/token" } as never,
+      }),
+    );
+
+    expect(creds).toEqual({
+      appId: "cli_123",
+      appSecret: "secret_456", // pragma: allowlist secret
+      encryptKey: undefined,
+      verificationToken: undefined,
+      domain: "feishu",
+    });
+  });
 });
 
 describe("resolveFeishuAccount", () => {
@@ -328,9 +361,57 @@ describe("resolveFeishuAccount", () => {
     expect(account.appId).toBe("cli_default");
   });
 
-  it("surfaces unresolved SecretRef errors in account resolution", () => {
-    expect(() =>
-      resolveFeishuAccount({
+  it("treats unresolved SecretRef as not configured in account resolution", () => {
+    const account = resolveFeishuAccount({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: {
+                appId: "cli_123",
+                appSecret: { source: "file", provider: "default", id: "path/to/secret" },
+              } as never,
+            },
+          },
+        },
+      } as never,
+      accountId: "main",
+    });
+    expect(account.configured).toBe(false);
+    expect(account.appSecret).toBeUndefined();
+  });
+
+  it("keeps account configured when optional event SecretRefs are unresolved in inspect mode", () => {
+    const account = resolveFeishuAccount({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: {
+                appId: "cli_123",
+                appSecret: "secret_456",
+                verificationToken: {
+                  source: "file",
+                  provider: "default",
+                  id: "path/to/token",
+                },
+              } as never,
+            },
+          },
+        },
+      } as never,
+      accountId: "main",
+    });
+
+    expect(account.configured).toBe(true);
+    expect(account.appSecret).toBe("secret_456");
+    expect(account.verificationToken).toBeUndefined();
+  });
+
+  it("throws typed SecretRef errors in runtime account resolution", () => {
+    let caught: unknown;
+    try {
+      resolveFeishuRuntimeAccount({
         cfg: {
           channels: {
             feishu: {
@@ -344,8 +425,13 @@ describe("resolveFeishuAccount", () => {
           },
         } as never,
         accountId: "main",
-      }),
-    ).toThrow(/unresolved SecretRef/i);
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(FeishuSecretRefUnavailableError);
+    expect((caught as Error).message).toMatch(/channels\.feishu\.appSecret: unresolved SecretRef/i);
   });
 
   it("does not throw when account name is non-string", () => {

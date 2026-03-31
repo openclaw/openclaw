@@ -1,3 +1,4 @@
+import { waitForTransportReady } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -6,8 +7,6 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { BackoffPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -20,7 +19,11 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createNonExitingRuntime,
+  type BackoffPolicy,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";

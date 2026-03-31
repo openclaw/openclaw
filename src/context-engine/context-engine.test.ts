@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { compactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/compact.runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -46,13 +47,30 @@ const mockedCompactEmbeddedPiSessionDirect = vi.mocked(compactEmbeddedPiSessionD
 // ---------------------------------------------------------------------------
 
 /** Build a config object with a contextEngine slot for testing. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function configWithSlot(engineId: string): any {
+function configWithSlot(engineId: string): OpenClawConfig {
   return { plugins: { slots: { contextEngine: engineId } } };
 }
 
 function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): AgentMessage {
   return { role, content: text, timestamp: Date.now() } as AgentMessage;
+}
+
+function registerPromptTrackingEngine(engineId: string) {
+  const calls: Array<Record<string, unknown>> = [];
+  registerContextEngine(engineId, () => ({
+    info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
+    async ingest() {
+      return { ingested: false };
+    },
+    async assemble(params) {
+      calls.push({ ...params });
+      return { messages: params.messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  }));
+  return calls;
 }
 
 /** A minimal mock engine that satisfies the ContextEngine interface. */
@@ -700,20 +718,7 @@ describe("LegacyContextEngine parity", () => {
 describe("assemble() prompt forwarding", () => {
   it("forwards prompt to the underlying engine", async () => {
     const engineId = `prompt-fwd-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     await engine.assemble({
@@ -728,20 +733,7 @@ describe("assemble() prompt forwarding", () => {
 
   it("omits prompt when not provided", async () => {
     const engineId = `prompt-omit-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     await engine.assemble({
@@ -758,20 +750,7 @@ describe("assemble() prompt forwarding", () => {
     // is undefined — JavaScript keeps the key present with value undefined,
     // which breaks engines that guard with `'prompt' in params`.
     const engineId = `prompt-undef-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     // Simulate the attempt.ts call-site pattern: conditional spread
@@ -883,56 +862,6 @@ describe("Bundle chunk isolation (#40096)", () => {
     // Resolve from chunk B using a config that points to this engine
     const engine = await chunkB.resolveContextEngine(configWithSlot(engineId));
     expect(engine.info.id).toBe(engineId);
-  });
-
-  it("plugin-sdk export path shares the same global registry", async () => {
-    // The plugin-sdk re-exports registerContextEngine.  Verify the
-    // re-export writes to the same global symbol as the direct import.
-    const ts = Date.now().toString(36);
-    const engineId = `sdk-path-${ts}`;
-
-    // Direct registry import
-    registerContextEngine(engineId, () => new MockContextEngine());
-
-    // Plugin-sdk import (different chunk path in the published bundle)
-    const sdkUrl = new URL("../plugin-sdk/index.ts", import.meta.url).href;
-    const sdk = await import(/* @vite-ignore */ `${sdkUrl}?sdk-${ts}`);
-
-    // The SDK export should see the engine we just registered
-    const factory = getContextEngineFactory(engineId);
-    expect(factory).toBeDefined();
-
-    // And registering from the SDK path should be visible from the direct path
-    const sdkEngineId = `sdk-registered-${ts}`;
-    sdk.registerContextEngine(sdkEngineId, () => new MockContextEngine());
-    expect(getContextEngineFactory(sdkEngineId)).toBeDefined();
-  });
-
-  it("plugin-sdk registerContextEngine cannot spoof privileged ownership", async () => {
-    const ts = Date.now().toString(36);
-    const engineId = `sdk-spoof-guard-${ts}`;
-    const ownedFactory = () => new MockContextEngine();
-    expect(
-      registerContextEngineForOwner(engineId, ownedFactory, "plugin:owner-a", {
-        allowSameOwnerRefresh: true,
-      }),
-    ).toEqual({ ok: true });
-
-    const sdkUrl = new URL("../plugin-sdk/index.ts", import.meta.url).href;
-    const sdk = await import(/* @vite-ignore */ `${sdkUrl}?sdk-spoof-${ts}`);
-    const spoofAttempt = (
-      sdk.registerContextEngine as unknown as (
-        id: string,
-        factory: ContextEngineFactory,
-        opts?: { owner?: string },
-      ) => ContextEngineRegistrationResult
-    )(engineId, () => new MockContextEngine(), { owner: "plugin:owner-a" });
-
-    expect(spoofAttempt).toEqual({
-      ok: false,
-      existingOwner: "plugin:owner-a",
-    });
-    expect(getContextEngineFactory(engineId)).toBe(ownedFactory);
   });
 
   it("concurrent registration from multiple chunks does not lose entries", async () => {

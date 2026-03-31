@@ -5,8 +5,11 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/infra-runtime";
 import { createScopedChannelMediaMaxBytesResolver } from "openclaw/plugin-sdk/media-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { markdownToSignalTextChunks } from "./format.js";
 import { sendMessageSignal } from "./send.js";
@@ -68,6 +71,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
     text,
     mediaUrl,
     mediaLocalRoots,
+    mediaReadFile,
     accountId,
     deps,
     abortSignal,
@@ -93,6 +97,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
       textMode: "plain",
       textStyles: formatted.styles,
       mediaLocalRoots,
+      mediaReadFile,
     });
     return attachChannelToResult("signal", result);
   },
@@ -110,7 +115,16 @@ export const signalOutbound: ChannelOutboundAdapter = {
         accountId: accountId ?? undefined,
       });
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      mediaReadFile,
+      accountId,
+      deps,
+    }) => {
       const send = resolveSignalSender(deps);
       const maxBytes = resolveSignalMaxBytes({
         cfg,
@@ -122,6 +136,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
         maxBytes,
         accountId: accountId ?? undefined,
         mediaLocalRoots,
+        mediaReadFile,
       });
     },
   }),

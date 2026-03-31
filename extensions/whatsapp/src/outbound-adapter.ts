@@ -3,7 +3,7 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveSendableOutboundReplyParts,
   sendTextMediaPayload,
@@ -66,6 +66,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       gifPlayback,
@@ -79,6 +80,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         cfg,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         accountId: accountId ?? undefined,
         gifPlayback,
       });

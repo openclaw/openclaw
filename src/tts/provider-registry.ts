@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
 import { buildAzureSpeechProvider } from "./providers/azure.js";
@@ -23,20 +22,14 @@ function trimToUndefined(value: string | undefined): string | undefined {
 export function normalizeSpeechProviderId(
   providerId: string | undefined,
 ): SpeechProviderId | undefined {
-  const normalized = trimToUndefined(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized === "edge" ? "microsoft" : normalized;
+  return trimToUndefined(providerId);
 }
 
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
-  const active = getActivePluginRegistry();
-  const registry =
-    (active?.speechProviders?.length ?? 0) > 0 || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  return registry?.speechProviders?.map((entry) => entry.provider) ?? [];
+  return resolvePluginCapabilityProviders({
+    key: "speechProviders",
+    cfg,
+  });
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {
@@ -60,9 +53,6 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
     }
   };
 
-  for (const buildProvider of BUILTIN_SPEECH_PROVIDER_BUILDERS) {
-    register(buildProvider());
-  }
   for (const provider of resolveSpeechProviderPluginEntries(cfg)) {
     register(provider);
   }
@@ -83,4 +73,15 @@ export function getSpeechProvider(
     return undefined;
   }
   return buildProviderMaps(cfg).aliases.get(normalized);
+}
+
+export function canonicalizeSpeechProviderId(
+  providerId: string | undefined,
+  cfg?: OpenClawConfig,
+): SpeechProviderId | undefined {
+  const normalized = normalizeSpeechProviderId(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  return getSpeechProvider(normalized, cfg)?.id ?? normalized;
 }

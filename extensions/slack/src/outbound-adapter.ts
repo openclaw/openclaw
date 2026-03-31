@@ -3,11 +3,14 @@ import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep, type OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveInteractiveTextFallback,
   type InteractiveReply,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   resolvePayloadMediaUrls,
@@ -16,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
 
 const SLACK_MAX_BLOCKS = 50;
@@ -78,7 +82,12 @@ async function sendSlackOutboundMessage(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
   accountId?: string | null;
   deps?: { [channelId: string]: unknown } | null;
@@ -111,7 +120,12 @@ async function sendSlackOutboundMessage(params: {
     threadTs,
     accountId: params.accountId ?? undefined,
     ...(params.mediaUrl
-      ? { mediaUrl: params.mediaUrl, mediaLocalRoots: params.mediaLocalRoots }
+      ? {
+          mediaUrl: params.mediaUrl,
+          mediaAccess: params.mediaAccess,
+          mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+        }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
@@ -146,7 +160,7 @@ function resolveSlackBlocks(payload: {
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
-  textChunkLimit: 4000,
+  textChunkLimit: SLACK_TEXT_LIMIT,
   sendPayload: async (ctx) => {
     const payload = {
       ...ctx.payload,
@@ -179,7 +193,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
             to: ctx.to,
             text,
             mediaUrl,
+            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             accountId: ctx.accountId,
             deps: ctx.deps,
             replyToId: ctx.replyToId,
@@ -191,7 +207,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
             cfg: ctx.cfg,
             to: ctx.to,
             text: payload.text ?? "",
+            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             blocks,
             accountId: ctx.accountId,
             deps: ctx.deps,
@@ -220,7 +238,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
       to,
       text,
       mediaUrl,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       replyToId,
@@ -232,7 +252,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
         to,
         text,
         mediaUrl,
+        mediaAccess,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         deps,
         replyToId,

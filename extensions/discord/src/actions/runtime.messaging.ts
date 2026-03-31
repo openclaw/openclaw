@@ -64,6 +64,15 @@ export const discordMessagingActionRuntime = {
   unpinMessageDiscord,
 };
 
+function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>).length > 0,
+  );
+}
+
 function parseDiscordMessageLink(link: string) {
   const normalized = link.trim();
   const match = normalized.match(
@@ -87,6 +96,7 @@ export async function handleDiscordMessagingAction(
   isActionEnabled: ActionGate<DiscordActionConfig>,
   options?: {
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
   cfg?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
@@ -299,10 +309,9 @@ export async function handleDiscordMessagingAction(
       const asVoice = params.asVoice === true;
       const silent = params.silent === true;
       const rawComponents = params.components;
-      const componentSpec =
-        rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
-          ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
-          : null;
+      const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
+        ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
+        : null;
       const components: DiscordSendComponents | undefined =
         Array.isArray(rawComponents) || typeof rawComponents === "function"
           ? (rawComponents as DiscordSendComponents)
@@ -378,7 +387,9 @@ export async function handleDiscordMessagingAction(
         ...cfgOptions,
         ...(accountId ? { accountId } : {}),
         mediaUrl,
+        filename: filename ?? undefined,
         mediaLocalRoots: options?.mediaLocalRoots,
+        mediaReadFile: options?.mediaReadFile,
         replyTo,
         components,
         embeds,
@@ -507,6 +518,7 @@ export async function handleDiscordMessagingAction(
           ...(accountId ? { accountId } : {}),
           mediaUrl,
           mediaLocalRoots: options?.mediaLocalRoots,
+          mediaReadFile: options?.mediaReadFile,
           replyTo,
         },
       );

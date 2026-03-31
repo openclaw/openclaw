@@ -29,7 +29,8 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
+import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -78,6 +79,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendFormattedText?: (
@@ -85,6 +87,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult[]>;
   sendFormattedMedia?: (
@@ -93,6 +96,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendText: (
@@ -100,6 +104,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendMedia: (
@@ -108,6 +113,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
 };
@@ -124,7 +130,8 @@ type ChannelHandlerParams = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
-  mediaLocalRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
+  gatewayClientScopes?: readonly string[];
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -159,10 +166,12 @@ function createPluginHandler(
   const resolveCtx = (overrides?: {
     replyToId?: string | null;
     threadId?: string | number | null;
+    audioAsVoice?: boolean;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides?.replyToId ?? baseCtx.replyToId,
     threadId: overrides?.threadId ?? baseCtx.threadId,
+    audioAsVoice: overrides?.audioAsVoice,
   });
   return {
     chunker,
@@ -242,7 +251,10 @@ function createChannelOutboundContextBase(
     forceDocument: params.forceDocument,
     deps: params.deps,
     silent: params.silent,
-    mediaLocalRoots: params.mediaLocalRoots,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaAccess?.localRoots,
+    mediaReadFile: params.mediaAccess?.readFile,
+    gatewayClientScopes: params.gatewayClientScopes,
   };
 }
 
@@ -268,7 +280,16 @@ type DeliverOutboundPayloadsCoreParams = {
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
   silent?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
+
+function collectPayloadMediaSources(payloads: ReplyPayload[]): string[] {
+  const mediaSources: string[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    mediaSources.push(...resolveSendableOutboundReplyParts(payload).mediaUrls);
+  }
+  return mediaSources;
+}
 
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
@@ -335,6 +356,7 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
   return {
     text: parts.text,
     mediaUrls: parts.mediaUrls,
+    audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     interactive: payload.interactive,
     channelData: payload.channelData,
   };
@@ -492,6 +514,7 @@ export async function deliverOutboundPayloads(
         forceDocument: params.forceDocument,
         silent: params.silent,
         mirror: params.mirror,
+        gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
@@ -541,10 +564,11 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
-    params.session?.agentId ?? params.mirror?.agentId,
-  );
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    mediaSources: collectPayloadMediaSources(payloads),
+  });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -558,7 +582,8 @@ async function deliverOutboundPayloadsCore(
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
-    mediaLocalRoots,
+    mediaAccess,
+    gatewayClientScopes: params.gatewayClientScopes,
   });
   const configuredTextLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
@@ -572,7 +597,11 @@ async function deliverOutboundPayloadsCore(
 
   const sendTextChunks = async (
     text: string,
-    overrides?: { replyToId?: string | null; threadId?: string | number | null },
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+      audioAsVoice?: boolean;
+    },
   ) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
@@ -657,6 +686,7 @@ async function deliverOutboundPayloadsCore(
       const sendOverrides = {
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
+        audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
         forceDocument: params.forceDocument,
       };
       if (

@@ -1,5 +1,7 @@
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
+import { slackOutbound } from "../../../../test/channel-outbounds.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type {
   ResolveProviderRuntimeGroupPolicyParams,
@@ -111,6 +113,40 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(["current", "child"]).toContain(binding.placement);
   expect(typeof binding.labelNoun).toBe("string");
   expect(binding.labelNoun.trim()).not.toBe("");
+}
+
+type OutboundSendMock = Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+
+type SlackOutboundPayloadHarness = {
+  run: () => Promise<Record<string, unknown>>;
+  sendMock: OutboundSendMock;
+  to: string;
+};
+
+export function createSlackOutboundPayloadHarness(params: {
+  payload: ReplyPayload;
+  sendResults?: Array<{ messageId: string }>;
+}): SlackOutboundPayloadHarness {
+  const sendSlack: OutboundSendMock = vi.fn();
+  primeChannelOutboundSendMock(
+    sendSlack,
+    { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
+    params.sendResults,
+  );
+  const ctx = {
+    cfg: {},
+    to: "C12345",
+    text: "",
+    payload: params.payload,
+    deps: {
+      sendSlack,
+    },
+  };
+  return {
+    run: async () => await slackOutbound.sendPayload!(ctx),
+    sendMock: sendSlack,
+    to: ctx.to,
+  };
 }
 
 export function installChannelPluginContractSuite(params: {
@@ -765,18 +801,18 @@ export function installChannelOutboundPayloadContractSuite(params: {
   });
 }
 
-export function primeChannelOutboundSendMock(
-  sendMock: Mock,
+export function primeChannelOutboundSendMock<TArgs extends unknown[]>(
+  sendMock: Mock<(...args: TArgs) => Promise<unknown>>,
   fallbackResult: Record<string, unknown>,
-  sendResults: SendResultLike[] = [],
+  sendResults: Record<string, unknown>[] = [],
 ) {
   sendMock.mockReset();
   if (sendResults.length === 0) {
-    sendMock.mockResolvedValue(fallbackResult);
+    sendMock.mockResolvedValue(fallbackResult as never);
     return;
   }
   for (const result of sendResults) {
-    sendMock.mockResolvedValueOnce(result);
+    sendMock.mockResolvedValueOnce(result as never);
   }
 }
 

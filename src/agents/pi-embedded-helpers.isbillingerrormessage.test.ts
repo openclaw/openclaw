@@ -104,6 +104,7 @@ describe("isAuthErrorMessage", () => {
     "No API key found for profile openai.",
     "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
     "Please re-authenticate to continue.",
+    "Failed to extract accountId from token",
   ])("matches auth errors for %j", (sample) => {
     expect(isAuthErrorMessage(sample)).toBe(true);
   });
@@ -557,6 +558,47 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
       ),
     ).toBe("overloaded");
   });
+
+  it("treats generic HTTP 410 responses as retryable timeouts", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410)).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(410, "")).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(410, "No body response")).toBe("timeout");
+  });
+
+  it("treats session-specific HTTP 410 responses as session_expired", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410, "session not found")).toBe("session_expired");
+    expect(classifyFailoverReasonFromHttpStatus(410, "conversation expired")).toBe(
+      "session_expired",
+    );
+  });
+
+  it("preserves explicit billing and auth signals on HTTP 410", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReasonFromHttpStatus(410, "authentication failed")).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(410, "insufficient credits")).toBe("billing");
+  });
+});
+
+describe("classifyFailoverReason", () => {
+  it("treats generic 410 text as retryable timeout", () => {
+    expect(classifyFailoverReason("410")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410")).toBe("timeout");
+    expect(classifyFailoverReason("410 Gone")).toBe("timeout");
+    expect(classifyFailoverReason("410: No body")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410: No body")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410 Gone")).toBe("timeout");
+  });
+
+  it("keeps session-specific 410 text mapped to session_expired", () => {
+    expect(classifyFailoverReason("HTTP 410: session not found")).toBe("session_expired");
+    expect(classifyFailoverReason("410 conversation expired")).toBe("session_expired");
+  });
+
+  it("keeps explicit billing and auth signals on 410 text", () => {
+    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
@@ -793,6 +835,11 @@ describe("classifyFailoverReason", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+      ),
+    ).toBe("timeout");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(
@@ -853,11 +900,78 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
-  it("classifies JSON api_error internal server failures as timeout", () => {
+  it("classifies JSON api_error with transient signal as timeout", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
       ),
     ).toBe("timeout");
+    // MiniMax non-standard message
+    expect(
+      classifyFailoverReason('{"type":"api_error","message":"unknown error, 520 (1000)"}'),
+    ).toBe("timeout");
+    // Overloaded variant
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
+      ),
+    ).toBe("timeout");
+    // Anthropic "unexpected error" variant (#57010)
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"An unexpected error occurred while processing the response"}}',
+      ),
+    ).toBe("timeout");
+  });
+  it("does not classify non-transient api_error payloads as timeout", () => {
+    // Context overflow - not transient
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"Request size exceeds model context window"}}',
+      ),
+    ).not.toBe("timeout");
+    // Schema/validation error - not transient
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"messages.1.content.1.tool_use.id should match pattern"}}',
+      ),
+    ).not.toBe("timeout");
+    // Generic unknown api_error without transient wording - should not be retried
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"invalid input format"}}',
+      ),
+    ).not.toBe("timeout");
+  });
+  it("does not shadow billing errors that carry api_error type", () => {
+    // A provider may wrap a billing error in a JSON payload with "type":"api_error".
+    // The billing classifier must win over the broad api_error transient match.
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"insufficient credits"}}',
+      ),
+    ).toBe("billing");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"Payment required"}}',
+      ),
+    ).toBe("billing");
+  });
+  it("does not shadow auth errors that carry api_error type", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"invalid api key"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"unauthorized"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"permission_error"}}',
+      ),
+    ).toBe("auth_permanent");
   });
 });

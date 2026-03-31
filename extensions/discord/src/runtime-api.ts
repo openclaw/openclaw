@@ -4,7 +4,7 @@ export {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-} from "../../../src/plugin-sdk/discord.js";
+} from "openclaw/plugin-sdk/channel-status";
 export {
   buildChannelConfigSchema,
   getChatChannelMeta,
@@ -19,15 +19,15 @@ export {
   type DiscordActionConfig,
   type DiscordConfig,
   type OpenClawConfig,
-} from "../../../src/plugin-sdk/discord-core.js";
-export { DiscordConfigSchema } from "../../../src/plugin-sdk/discord-core.js";
+} from "openclaw/plugin-sdk/discord-core";
+export { DiscordConfigSchema } from "openclaw/plugin-sdk/discord-core";
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 export {
   assertMediaNotDataUrl,
   parseAvailableTags,
   readReactionParams,
   withNormalizedTimestamp,
-} from "../../../src/plugin-sdk/discord-core.js";
+} from "openclaw/plugin-sdk/discord-core";
 export {
   createHybridChannelConfigAdapter,
   createScopedChannelConfigAdapter,
@@ -40,6 +40,7 @@ export {
   createAccountListHelpers,
 } from "openclaw/plugin-sdk/account-helpers";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/discord";
 export { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 export type {
   ChannelMessageActionAdapter,
@@ -50,3 +51,4 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+export { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";

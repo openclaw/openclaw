@@ -9,6 +9,7 @@ import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  loadAuthProfileStoreForRuntime,
   resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
@@ -19,6 +20,11 @@ import {
   isFailoverError,
   isTimeoutError,
 } from "./failover-error.js";
+import {
+  shouldAllowCooldownProbeForReason,
+  shouldPreserveTransientCooldownProbeSlot,
+  shouldUseTransientCooldownProbeSlot,
+} from "./failover-policy.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
@@ -33,6 +39,32 @@ import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
+
+/**
+ * Structured error thrown when all model fallback candidates have been
+ * exhausted. Carries per-attempt details so callers can build informative
+ * user-facing messages (e.g. "rate-limited, retry in 30 s").
+ */
+export class FallbackSummaryError extends Error {
+  readonly attempts: FallbackAttempt[];
+  readonly soonestCooldownExpiry: number | null;
+
+  constructor(
+    message: string,
+    attempts: FallbackAttempt[],
+    soonestCooldownExpiry: number | null,
+    cause?: Error,
+  ) {
+    super(message, { cause });
+    this.name = "FallbackSummaryError";
+    this.attempts = attempts;
+    this.soonestCooldownExpiry = soonestCooldownExpiry;
+  }
+}
+
+export function isFallbackSummaryError(err: unknown): err is FallbackSummaryError {
+  return err instanceof FallbackSummaryError;
+}
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
@@ -189,18 +221,57 @@ function throwFallbackFailureSummary(params: {
   lastError: unknown;
   label: string;
   formatAttempt: (attempt: FallbackAttempt) => string;
+  soonestCooldownExpiry?: number | null;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
-  throw new Error(
+  throw new FallbackSummaryError(
     `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
-    {
-      cause: params.lastError instanceof Error ? params.lastError : undefined,
-    },
+    params.attempts,
+    params.soonestCooldownExpiry ?? null,
+    params.lastError instanceof Error ? params.lastError : undefined,
   );
+}
+
+function resolveFallbackSoonestCooldownExpiry(params: {
+  authStore: ReturnType<typeof ensureAuthProfileStore> | null;
+  agentDir?: string;
+  cfg: OpenClawConfig | undefined;
+  candidates: ModelCandidate[];
+}): number | null {
+  if (!params.authStore) {
+    return null;
+  }
+
+  // Refresh from persisted state because embedded attempts can update auth
+  // cooldowns through a separate store instance while the fallback loop runs.
+  const refreshedStore = loadAuthProfileStoreForRuntime(params.agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+  });
+  let soonest: number | null = null;
+  for (const candidate of params.candidates) {
+    const ids = resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: refreshedStore,
+      provider: candidate.provider,
+    });
+    const candidateSoonest = getSoonestCooldownExpiry(refreshedStore, ids, {
+      forModel: candidate.model,
+    });
+    if (
+      typeof candidateSoonest === "number" &&
+      Number.isFinite(candidateSoonest) &&
+      (soonest === null || candidateSoonest < soonest)
+    ) {
+      soonest = candidateSoonest;
+    }
+  }
+
+  return soonest;
 }
 
 function resolveImageFallbackCandidates(params: {
@@ -388,6 +459,7 @@ function shouldProbePrimaryDuringCooldown(params: {
   throttleKey: string;
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   profileIds: string[];
+  model: string;
 }): boolean {
   if (!params.isPrimary || !params.hasFallbackCandidates) {
     return false;
@@ -397,7 +469,10 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds);
+  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds, {
+    now: params.now,
+    forModel: params.model,
+  });
   if (soonest === null || !Number.isFinite(soonest)) {
     return true;
   }
@@ -448,6 +523,7 @@ function resolveCooldownDecision(params: {
     throttleKey: params.probeThrottleKey,
     authStore: params.authStore,
     profileIds: params.profileIds,
+    model: params.candidate.model,
   });
 
   const inferredReason =
@@ -548,7 +624,9 @@ export async function runWithModelFallback<T>(params: {
         store: authStore,
         provider: candidate.provider,
       });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+      const isAnyProfileAvailable = profileIds.some(
+        (id) => !isProfileInCooldown(authStore, id, undefined, candidate.model),
+      );
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
@@ -594,19 +672,11 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           markProbeAttempt(now, probeThrottleKey);
         }
-        if (
-          decision.reason === "rate_limit" ||
-          decision.reason === "overloaded" ||
-          decision.reason === "billing" ||
-          decision.reason === "unknown"
-        ) {
+        if (shouldAllowCooldownProbeForReason(decision.reason)) {
           // Probe at most once per provider per fallback run when all profiles
           // are cooldowned. Re-probing every same-provider candidate can stall
           // cross-provider fallback on providers with long internal retries.
-          const isTransientCooldownReason =
-            decision.reason === "rate_limit" ||
-            decision.reason === "overloaded" ||
-            decision.reason === "unknown";
+          const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
             attempts.push({
@@ -693,13 +763,7 @@ export async function runWithModelFallback<T>(params: {
     {
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
-        const shouldPreserveTransientProbeSlot =
-          probeFailureReason === "model_not_found" ||
-          probeFailureReason === "format" ||
-          probeFailureReason === "auth" ||
-          probeFailureReason === "auth_permanent" ||
-          probeFailureReason === "session_expired";
-        if (!shouldPreserveTransientProbeSlot) {
+        if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
           cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
         }
       }
@@ -771,6 +835,12 @@ export async function runWithModelFallback<T>(params: {
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
+    soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+      authStore,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+      candidates,
+    }),
   });
 }
 

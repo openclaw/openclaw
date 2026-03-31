@@ -1,6 +1,5 @@
-import { afterEach, type Mock, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/extensions/fetch-mock.js";
-import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
+import { afterEach, beforeAll, beforeEach, type Mock, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../../test/helpers/plugins/fetch-mock.js";
 
 const resolveTelegramFetch = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
@@ -14,6 +13,9 @@ vi.mock("./fetch.js", () => ({
 vi.mock("./proxy.js", () => ({
   makeProxyFetch,
 }));
+
+let probeTelegram: typeof import("./probe.js").probeTelegram;
+let resetTelegramProbeFetcherCacheForTests: typeof import("./probe.js").resetTelegramProbeFetcherCacheForTests;
 
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
@@ -68,6 +70,11 @@ describe("probeTelegram retry logic", () => {
     } else {
       delete (globalThis as { fetch?: typeof fetch }).fetch;
     }
+  });
+
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ probeTelegram, resetTelegramProbeFetcherCacheForTests } = await import("./probe.js"));
   });
 
   it.each([

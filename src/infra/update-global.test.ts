@@ -2,9 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   canResolveRegistryVersionForPackageTarget,
+  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
@@ -18,6 +21,8 @@ import {
   resolveGlobalRoot,
   type CommandRunner,
 } from "./update-global.js";
+
+const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -93,7 +98,7 @@ describe("update global helpers", () => {
     expect(isExplicitPackageInstallSpec("beta")).toBe(false);
 
     expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
-    expect(canResolveRegistryVersionForPackageTarget("2026.3.14")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("2026.3.22")).toBe(true);
     expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
   });
@@ -184,5 +189,26 @@ describe("update global helpers", () => {
     });
     await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
     await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
+  });
+
+  it("checks bundled runtime sidecars, including Matrix helper-api", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-global-pkg-"));
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+      const absolutePath = path.join(packageRoot, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
+
+    await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+
+    await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
+    await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+      `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+    );
   });
 });

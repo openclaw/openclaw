@@ -1,6 +1,5 @@
-import { rmSync, statSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
-import { EdgeTTS } from "node-edge-tts";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -11,56 +10,35 @@ import {
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-} from "./tts.js";
+import type { ResolvedTtsConfig } from "./tts.js";
 
-const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
-export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
-export function isValidVoiceId(voiceId: string): boolean {
-  return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
+type SummarizeTextDeps = {
+  completeSimple: typeof completeSimple;
+  getApiKeyForModel: typeof getApiKeyForModel;
+  prepareModelForSimpleCompletion: typeof prepareModelForSimpleCompletion;
+  requireApiKey: typeof requireApiKey;
+  resolveModelAsync: typeof resolveModelAsync;
+};
+
+function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
+  return {
+    completeSimple,
+    getApiKeyForModel,
+    prepareModelForSimpleCompletion,
+    requireApiKey,
+    resolveModelAsync,
+  };
 }
 
-function normalizeElevenLabsBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return DEFAULT_ELEVENLABS_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
-
-function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return DEFAULT_OPENAI_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
-
-function trimToUndefined(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function requireInRange(value: number, min: number, max: number, label: string): void {
+export function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}`);
   }
 }
 
-function assertElevenLabsVoiceSettings(settings: ResolvedTtsConfig["elevenlabs"]["voiceSettings"]) {
-  requireInRange(settings.stability, 0, 1, "stability");
-  requireInRange(settings.similarityBoost, 0, 1, "similarityBoost");
-  requireInRange(settings.style, 0, 1, "style");
-  requireInRange(settings.speed, 0.5, 2, "speed");
-}
-
-function normalizeLanguageCode(code?: string): string | undefined {
+export function normalizeLanguageCode(code?: string): string | undefined {
   const trimmed = code?.trim();
   if (!trimmed) {
     return undefined;
@@ -72,7 +50,7 @@ function normalizeLanguageCode(code?: string): string | undefined {
   return normalized;
 }
 
-function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
+export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
   const trimmed = mode?.trim();
   if (!trimmed) {
     return undefined;
@@ -84,7 +62,7 @@ function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" |
   throw new Error("applyTextNormalization must be one of: auto, on, off");
 }
 
-function normalizeSeed(seed?: number): number | undefined {
+export function normalizeSeed(seed?: number): number | undefined {
   if (seed == null) {
     return undefined;
   }
@@ -458,13 +436,16 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
-export async function summarizeText(params: {
-  text: string;
-  targetLength: number;
-  cfg: OpenClawConfig;
-  config: ResolvedTtsConfig;
-  timeoutMs: number;
-}): Promise<SummarizeResult> {
+export async function summarizeText(
+  params: {
+    text: string;
+    targetLength: number;
+    cfg: OpenClawConfig;
+    config: ResolvedTtsConfig;
+    timeoutMs: number;
+  },
+  deps: SummarizeTextDeps = resolveDefaultSummarizeTextDeps(),
+): Promise<SummarizeResult> {
   const { text, targetLength, cfg, config, timeoutMs } = params;
   if (targetLength < 100 || targetLength > 10_000) {
     throw new Error(`Invalid targetLength: ${targetLength}`);
@@ -472,13 +453,13 @@ export async function summarizeText(params: {
 
   const startTime = Date.now();
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const resolved = await resolveModelAsync(ref.provider, ref.model, undefined, cfg);
+  const resolved = await deps.resolveModelAsync(ref.provider, ref.model, undefined, cfg);
   if (!resolved.model) {
     throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
   }
-  const completionModel = prepareModelForSimpleCompletion({ model: resolved.model, cfg });
-  const apiKey = requireApiKey(
-    await getApiKeyForModel({ model: completionModel, cfg }),
+  const completionModel = deps.prepareModelForSimpleCompletion({ model: resolved.model, cfg });
+  const apiKey = deps.requireApiKey(
+    await deps.getApiKeyForModel({ model: completionModel, cfg }),
     ref.provider,
   );
 
@@ -487,7 +468,7 @@ export async function summarizeText(params: {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const res = await completeSimple(
+      const res = await deps.completeSimple(
         completionModel,
         {
           messages: [
@@ -509,7 +490,6 @@ export async function summarizeText(params: {
           signal: controller.signal,
         },
       );
-
       const summary = res.content
         .filter(isTextContentBlock)
         .map((block) => block.text.trim())
@@ -551,178 +531,4 @@ export function scheduleCleanup(
     }
   }, delayMs);
   timer.unref();
-}
-
-export async function elevenLabsTTS(params: {
-  text: string;
-  apiKey: string;
-  baseUrl: string;
-  voiceId: string;
-  modelId: string;
-  outputFormat: string;
-  seed?: number;
-  applyTextNormalization?: "auto" | "on" | "off";
-  languageCode?: string;
-  voiceSettings: ResolvedTtsConfig["elevenlabs"]["voiceSettings"];
-  timeoutMs: number;
-}): Promise<Buffer> {
-  const {
-    text,
-    apiKey,
-    baseUrl,
-    voiceId,
-    modelId,
-    outputFormat,
-    seed,
-    applyTextNormalization,
-    languageCode,
-    voiceSettings,
-    timeoutMs,
-  } = params;
-  if (!isValidVoiceId(voiceId)) {
-    throw new Error("Invalid voiceId format");
-  }
-  assertElevenLabsVoiceSettings(voiceSettings);
-  const normalizedLanguage = normalizeLanguageCode(languageCode);
-  const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
-  const normalizedSeed = normalizeSeed(seed);
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const url = new URL(`${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`);
-    if (outputFormat) {
-      url.searchParams.set("output_format", outputFormat);
-    }
-
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: modelId,
-        seed: normalizedSeed,
-        apply_text_normalization: normalizedNormalization,
-        language_code: normalizedLanguage,
-        voice_settings: {
-          stability: voiceSettings.stability,
-          similarity_boost: voiceSettings.similarityBoost,
-          style: voiceSettings.style,
-          use_speaker_boost: voiceSettings.useSpeakerBoost,
-          speed: voiceSettings.speed,
-        },
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`ElevenLabs API error (${response.status})`);
-    }
-
-    return Buffer.from(await response.arrayBuffer());
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-export async function openaiTTS(params: {
-  text: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  voice: string;
-  speed?: number;
-  instructions?: string;
-  responseFormat: "mp3" | "opus" | "pcm";
-  timeoutMs: number;
-}): Promise<Buffer> {
-  const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
-    params;
-  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions);
-
-  if (!isValidOpenAIModel(model, baseUrl)) {
-    throw new Error(`Invalid model: ${model}`);
-  }
-  if (!isValidOpenAIVoice(voice, baseUrl)) {
-    throw new Error(`Invalid voice: ${voice}`);
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(`${baseUrl}/audio/speech`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-        ...(speed != null && { speed }),
-        ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI TTS API error (${response.status})`);
-    }
-
-    return Buffer.from(await response.arrayBuffer());
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-export function inferEdgeExtension(outputFormat: string): string {
-  const normalized = outputFormat.toLowerCase();
-  if (normalized.includes("webm")) {
-    return ".webm";
-  }
-  if (normalized.includes("ogg")) {
-    return ".ogg";
-  }
-  if (normalized.includes("opus")) {
-    return ".opus";
-  }
-  if (normalized.includes("wav") || normalized.includes("riff") || normalized.includes("pcm")) {
-    return ".wav";
-  }
-  return ".mp3";
-}
-
-export async function edgeTTS(params: {
-  text: string;
-  outputPath: string;
-  config: ResolvedTtsConfig["edge"];
-  timeoutMs: number;
-}): Promise<void> {
-  const { text, outputPath, config, timeoutMs } = params;
-  const tts = new EdgeTTS({
-    voice: config.voice,
-    lang: config.lang,
-    outputFormat: config.outputFormat,
-    saveSubtitles: config.saveSubtitles,
-    proxy: config.proxy,
-    rate: config.rate,
-    pitch: config.pitch,
-    volume: config.volume,
-    timeout: config.timeoutMs ?? timeoutMs,
-  });
-  await tts.ttsPromise(text, outputPath);
-
-  const { size } = statSync(outputPath);
-
-  if (size === 0) {
-    throw new Error("Edge TTS produced empty audio file");
-  }
 }

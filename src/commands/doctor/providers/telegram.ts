@@ -1,17 +1,18 @@
+import { getChannelPlugin } from "../../../channels/plugins/registry.js";
 import {
   inspectTelegramAccount,
   isNumericTelegramUserId,
   listTelegramAccountIds,
-  lookupTelegramChatId,
   normalizeTelegramAllowFromEntry,
-} from "../../../../extensions/telegram/api.js";
+} from "../../../channels/read-only-account-inspect.telegram.js";
 import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
-import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
+import { createNonExitingRuntime } from "../../../runtime.js";
 import { describeUnknownError } from "../../../secrets/shared.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasAllowFromEntries } from "../shared/allowlist.js";
+import type { EmptyAllowlistAccountScanParams } from "../shared/empty-allowlist-scan.js";
 import { asObjectRecord } from "../shared/object.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 
@@ -21,13 +22,6 @@ type TelegramAllowFromListRef = {
   pathLabel: string;
   holder: Record<string, unknown>;
   key: "allowFrom" | "groupAllowFrom";
-};
-
-type ResolvedTelegramLookupAccount = {
-  token: string;
-  apiRoot?: string;
-  proxyUrl?: string;
-  network?: TelegramNetworkConfig;
 };
 
 export function collectTelegramAccountScopes(
@@ -127,6 +121,20 @@ export function scanTelegramAllowFromUsernameEntries(
   return hits;
 }
 
+export function collectTelegramAllowFromUsernameWarnings(params: {
+  hits: TelegramAllowFromUsernameHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sampleEntry = sanitizeForLog(params.hits[0]?.entry ?? "@");
+  return [
+    `- Telegram allowFrom contains ${params.hits.length} non-numeric entries (e.g. ${sampleEntry}); Telegram authorization requires numeric sender IDs.`,
+    `- Run "${params.doctorFixCommand}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+  ];
+}
+
 export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
@@ -147,45 +155,45 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
   });
   const tokenResolutionWarnings: string[] = [];
-  const lookupAccounts: ResolvedTelegramLookupAccount[] = [];
-  const seenLookupAccounts = new Set<string>();
+  const resolverAccountIds: string[] = [];
   for (const accountId of listTelegramAccountIds(resolvedConfig)) {
-    let account: NonNullable<ReturnType<typeof resolveTelegramAccount>>;
+    let inspected: ReturnType<typeof inspectTelegramAccount>;
     try {
-      account = resolveTelegramAccount({ cfg: resolvedConfig, accountId });
+      inspected = inspectTelegramAccount({ cfg: resolvedConfig, accountId });
     } catch (error) {
       tokenResolutionWarnings.push(
         `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
       );
       continue;
     }
-    const token = account.tokenSource === "none" ? "" : account.token.trim();
+    if (inspected.tokenStatus === "configured_unavailable") {
+      tokenResolutionWarnings.push(
+        `- Telegram account ${accountId}: failed to inspect bot token (configured but unavailable in this command path).`,
+      );
+    }
+    const token = inspected.tokenSource === "none" ? "" : inspected.token.trim();
     if (!token) {
       continue;
     }
-    const apiRoot = account.config.apiRoot?.trim() || undefined;
-    const proxyUrl = account.config.proxy?.trim() || undefined;
-    const network = account.config.network;
-    const cacheKey = `${token}::${apiRoot ?? ""}::${proxyUrl ?? ""}::${JSON.stringify(network ?? {})}`;
-    if (seenLookupAccounts.has(cacheKey)) {
-      continue;
-    }
-    seenLookupAccounts.add(cacheKey);
-    lookupAccounts.push({ token, apiRoot, proxyUrl, network });
+    resolverAccountIds.push(accountId);
   }
 
-  if (lookupAccounts.length === 0) {
+  const telegramResolver = getChannelPlugin("telegram")?.resolver?.resolveTargets;
+  if (resolverAccountIds.length === 0 || !telegramResolver) {
     return {
       config: cfg,
       changes: [
         ...tokenResolutionWarnings,
         hasConfiguredUnavailableToken
           ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
-          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
+          : !telegramResolver
+            ? `- Telegram allowFrom contains @username entries, but the Telegram channel resolver is unavailable; cannot auto-resolve in this command path.`
+            : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
       ],
     };
   }
 
+  const resolverRuntime = createNonExitingRuntime();
   const resolveUserId = async (raw: string): Promise<string | null> => {
     const trimmed = raw.trim();
     if (!trimmed) {
@@ -202,25 +210,20 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       return null;
     }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    for (const account of lookupAccounts) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
+    for (const accountId of resolverAccountIds) {
       try {
-        const id = await lookupTelegramChatId({
-          token: account.token,
-          chatId: username,
-          signal: controller.signal,
-          apiRoot: account.apiRoot,
-          proxyUrl: account.proxyUrl,
-          network: account.network,
+        const [resolved] = await telegramResolver({
+          cfg: resolvedConfig,
+          accountId,
+          inputs: [username],
+          kind: "user",
+          runtime: resolverRuntime,
         });
-        if (id) {
-          return id;
+        if (resolved?.resolved && resolved.id) {
+          return resolved.id;
         }
       } catch {
-        // ignore and try next token
-      } finally {
-        clearTimeout(timeout);
+        // ignore and try next configured account
       }
     }
     return null;
@@ -270,10 +273,14 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     holder[key] = deduped;
     if (replaced.length > 0) {
       for (const rep of replaced.slice(0, 5)) {
-        changes.push(`- ${pathLabel}: resolved ${rep.from} -> ${rep.to}`);
+        changes.push(
+          `- ${sanitizeForLog(pathLabel)}: resolved ${sanitizeForLog(rep.from)} -> ${sanitizeForLog(rep.to)}`,
+        );
       }
       if (replaced.length > 5) {
-        changes.push(`- ${pathLabel}: resolved ${replaced.length - 5} more @username entries`);
+        changes.push(
+          `- ${sanitizeForLog(pathLabel)}: resolved ${replaced.length - 5} more @username entries`,
+        );
       }
     }
   };
@@ -338,4 +345,21 @@ export function collectTelegramGroupPolicyWarnings(
   return [
     `- ${params.prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${params.prefix}.groupAllowFrom or ${params.prefix}.allowFrom, or set ${params.prefix}.groupPolicy to "open".`,
   ];
+}
+
+export function collectTelegramEmptyAllowlistExtraWarnings(
+  params: EmptyAllowlistAccountScanParams,
+): string[] {
+  return params.channelName === "telegram" &&
+    ((params.account.groupPolicy as string | undefined) ??
+      (params.parent?.groupPolicy as string | undefined) ??
+      undefined) === "allowlist"
+    ? collectTelegramGroupPolicyWarnings({
+        account: params.account,
+        dmPolicy: params.dmPolicy,
+        effectiveAllowFrom: params.effectiveAllowFrom,
+        parent: params.parent,
+        prefix: params.prefix,
+      })
+    : [];
 }

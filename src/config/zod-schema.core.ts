@@ -195,6 +195,7 @@ export const ModelCompatSchema = z
     thinkingFormat: z
       .union([
         z.literal("openai"),
+        z.literal("openrouter"),
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
@@ -203,9 +204,10 @@ export const ModelCompatSchema = z
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
-    toolSchemaProfile: z.literal("xai").optional(),
+    toolSchemaProfile: z.string().optional(),
+    unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
-    toolCallArgumentsEncoding: z.literal("html-entities").optional(),
+    toolCallArgumentsEncoding: z.string().optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
@@ -365,7 +367,7 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
-export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
 
 export const MarkdownConfigSchema = z
   .object({
@@ -377,18 +379,9 @@ export const MarkdownConfigSchema = z
 export const TtsProviderSchema = z.string().min(1);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
-const TtsMicrosoftConfigSchema = z
+const TtsProviderConfigSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    voice: z.string().optional(),
-    lang: z.string().optional(),
-    outputFormat: z.string().optional(),
-    pitch: z.string().optional(),
-    rate: z.string().optional(),
-    volume: z.string().optional(),
-    saveSubtitles: z.boolean().optional(),
-    proxy: z.string().optional(),
-    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
   })
   .strict()
   .optional();
