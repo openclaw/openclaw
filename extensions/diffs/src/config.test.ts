@@ -552,6 +552,8 @@ describe("viewer assets", () => {
 
     expect(runtime?.contentType).toBe("text/javascript; charset=utf-8");
     expect(String(runtime?.body)).toContain("openclawDiffsReady");
+    expect(String(runtime?.body)).toContain('style.width="24px"');
+    expect(String(runtime?.body)).toContain('style.gap="6px"');
   });
 
   it("returns null for unknown asset paths", async () => {
