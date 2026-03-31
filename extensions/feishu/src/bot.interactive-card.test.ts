@@ -82,4 +82,15 @@ describe("parseFeishuMessageEvent – interactive cards", () => {
     const ctx = parseFeishuMessageEvent(makeInteractiveEvent("not-an-object") as any);
     expect(ctx.content).toBe("[Interactive Card]");
   });
+
+  it("falls back to raw JSON when no readable text can be extracted", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeInteractiveEvent({
+        header: {},
+        elements: [{ tag: "div", text: { content: "   " } }],
+      }) as any,
+    );
+
+    expect(ctx.content).toBe('{"header":{},"elements":[{"tag":"div","text":{"content":"   "}}]}');
+  });
 });

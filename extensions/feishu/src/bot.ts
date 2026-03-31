@@ -364,7 +364,16 @@ function parseInteractiveCardContent(parsed: unknown): string {
     }
   }
 
-  return texts.join("\n").trim() || "[Interactive Card]";
+  const extracted = texts.join("\n").trim();
+  if (extracted) return extracted;
+
+  // If we couldn't extract any readable text, don't drop the context on the floor.
+  // Fall back to the raw card JSON so the agent can still reason about the payload.
+  try {
+    return JSON.stringify(card);
+  } catch {
+    return "[Interactive Card]";
+  }
 }
 
 function parseMessageContent(content: string, messageType: string): string {
@@ -1622,4 +1631,3 @@ export async function handleFeishuMessage(params: {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
 }
-
