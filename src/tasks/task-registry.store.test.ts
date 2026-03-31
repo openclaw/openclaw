@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   createTaskRecord,
   deleteTaskRecordById,
@@ -168,5 +169,87 @@ describe("task-registry store runtime", () => {
 
     resetTaskRegistryForTests();
     rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("migrates legacy ownerless cron rows to system scope", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-legacy-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+    mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(sqlitePath);
+    db.exec(`
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        source_id TEXT,
+        requester_session_key TEXT NOT NULL,
+        child_session_key TEXT,
+        parent_task_id TEXT,
+        agent_id TEXT,
+        run_id TEXT,
+        label TEXT,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        last_event_at INTEGER,
+        cleanup_after INTEGER,
+        error TEXT,
+        progress_summary TEXT,
+        terminal_summary TEXT,
+        terminal_outcome TEXT
+      );
+    `);
+    db.exec(`
+      CREATE TABLE task_delivery_state (
+        task_id TEXT PRIMARY KEY,
+        requester_origin_json TEXT,
+        last_notified_event_at INTEGER
+      );
+    `);
+    db.prepare(`
+      INSERT INTO task_runs (
+        task_id,
+        runtime,
+        source_id,
+        requester_session_key,
+        child_session_key,
+        run_id,
+        task,
+        status,
+        delivery_status,
+        notify_policy,
+        created_at,
+        last_event_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-cron-task",
+      "cron",
+      "nightly-digest",
+      "",
+      "agent:main:cron:nightly-digest",
+      "legacy-cron-run",
+      "Nightly digest",
+      "running",
+      "not_applicable",
+      "silent",
+      100,
+      100,
+    );
+    db.close();
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("legacy-cron-run")).toMatchObject({
+      taskId: "legacy-cron-task",
+      ownerKey: "system:cron:nightly-digest",
+      scopeKind: "system",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
   });
 });

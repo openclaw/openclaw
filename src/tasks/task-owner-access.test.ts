@@ -68,6 +68,24 @@ describe("task owner access", () => {
     ).toBeUndefined();
   });
 
+  it("requires an exact owner-key match", () => {
+    const task = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:MixedCase",
+      scopeKind: "session",
+      runId: "case-sensitive-owner-run",
+      task: "Case-sensitive owner",
+      status: "queued",
+    });
+
+    expect(
+      getTaskByIdForOwner({
+        taskId: task.taskId,
+        callerOwnerKey: "agent:main:mixedcase",
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not expose system-owned tasks through owner-scoped readers", () => {
     const task = createTaskRecord({
       runtime: "cron",

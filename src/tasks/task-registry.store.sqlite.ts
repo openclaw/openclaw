@@ -323,7 +323,7 @@ function migrateLegacyOwnerColumns(db: DatabaseSync) {
   db.exec(`
     UPDATE task_runs
     SET scope_kind = CASE
-      WHEN trim(COALESCE(scope_kind, '')) IN ('session', 'system') THEN trim(scope_kind)
+      WHEN scope_kind = 'system' THEN 'system'
       WHEN owner_key LIKE 'system:%' THEN 'system'
       ELSE 'session'
     END

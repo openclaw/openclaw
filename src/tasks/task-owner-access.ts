@@ -8,7 +8,7 @@ import type { TaskRecord } from "./task-registry.types.js";
 
 function normalizeOwnerKey(ownerKey?: string): string | undefined {
   const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed.toLowerCase() : undefined;
+  return trimmed ? trimmed : undefined;
 }
 
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
