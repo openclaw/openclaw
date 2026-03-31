@@ -142,7 +142,16 @@ async function waitForAcpBackendHealthy(timeoutMs = 60_000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const backend = getAcpRuntimeBackend("acpx");
-    if (backend && (!backend.healthy || backend.healthy())) {
+    if (backend?.healthy?.() ?? false) {
+      return;
+    }
+    const runtime = backend?.runtime as { probeAvailability?: () => Promise<void> } | undefined;
+    if (runtime?.probeAvailability) {
+      await runtime.probeAvailability().catch(() => {});
+      if (backend?.healthy?.() ?? false) {
+        return;
+      }
+    } else if (backend && !backend.healthy) {
       return;
     }
     await sleep(250);
