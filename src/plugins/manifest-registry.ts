@@ -512,26 +512,46 @@ export function loadPluginManifestRegistry(
         }
         continue;
       }
+      const newRank = resolveDuplicatePrecedenceRank({
+        pluginId: manifest.id,
+        candidate,
+        config,
+        env,
+      });
+      const existingRank = resolveDuplicatePrecedenceRank({
+        pluginId: manifest.id,
+        candidate: existing.candidate,
+        config,
+        env,
+      });
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
         source: candidate.source,
         message:
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate,
-            config,
-            env,
-          }) <
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate: existing.candidate,
-            config,
-            env,
-          })
+          newRank < existingRank
             ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
             : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${candidate.source})`,
       });
+      // If the new candidate has higher precedence (lower rank), replace the
+      // existing record so the winner is kept in the registry.
+      if (newRank < existingRank) {
+        records[existing.recordIndex] = isBundleRecord
+          ? buildBundleRecord({
+              manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
+              candidate,
+              manifestPath: manifestRes.manifestPath,
+            })
+          : buildRecord({
+              manifest: manifest as PluginManifest,
+              candidate,
+              manifestPath: manifestRes.manifestPath,
+              schemaCacheKey,
+              configSchema,
+            });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+      }
+      continue;
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

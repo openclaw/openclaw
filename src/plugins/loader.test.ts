@@ -425,26 +425,6 @@ function expectDuplicateRegistrationResult(
   ).toBe(true);
 }
 
-function expectPluginSourcePrecedence(
-  registry: PluginRegistry,
-  scenario: {
-    pluginId: string;
-    expectedLoadedOrigin: string;
-    expectedDisabledOrigin: string;
-    label: string;
-    expectedDisabledError?: string;
-  },
-) {
-  const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
-  const loaded = entries.find((entry) => entry.status === "loaded");
-  const overridden = entries.find((entry) => entry.status === "disabled");
-  expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
-  expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
-  if (scenario.expectedDisabledError) {
-    expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
-  }
-}
-
 function expectPluginOriginAndStatus(params: {
   registry: PluginRegistry;
   pluginId: string;
@@ -3308,8 +3288,16 @@ module.exports = {
           });
         },
         expectedLoadedOrigin: "config",
-        expectedDisabledOrigin: "bundled",
-        assert: expectPluginSourcePrecedence,
+        assert: (
+          registry: PluginRegistry,
+          scenario: { pluginId: string; expectedLoadedOrigin: string; label: string },
+        ) => {
+          const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
+          // Duplicate is now dropped at manifest-registry level; only the winner appears.
+          expect(entries).toHaveLength(1);
+        },
       },
       {
         label: "bundled beats auto-discovered global duplicate",
@@ -3344,9 +3332,15 @@ module.exports = {
           });
         },
         expectedLoadedOrigin: "bundled",
-        expectedDisabledOrigin: "global",
-        expectedDisabledError: "overridden by bundled plugin",
-        assert: expectPluginSourcePrecedence,
+        assert: (
+          registry: PluginRegistry,
+          scenario: { pluginId: string; expectedLoadedOrigin: string; label: string },
+        ) => {
+          const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
+          expect(entries).toHaveLength(1);
+        },
       },
       {
         label: "installed global beats bundled duplicate",
@@ -3387,9 +3381,15 @@ module.exports = {
           });
         },
         expectedLoadedOrigin: "global",
-        expectedDisabledOrigin: "bundled",
-        expectedDisabledError: "overridden by global plugin",
-        assert: expectPluginSourcePrecedence,
+        assert: (
+          registry: PluginRegistry,
+          scenario: { pluginId: string; expectedLoadedOrigin: string; label: string },
+        ) => {
+          const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
+          expect(entries).toHaveLength(1);
+        },
       },
     ] as const;
 
@@ -3526,8 +3526,6 @@ module.exports = {
         label: "bundled plugins stay ahead of trusted workspace duplicates",
         pluginId: "shadowed",
         expectedLoadedOrigin: "bundled",
-        expectedDisabledOrigin: "workspace",
-        expectedDisabledError: "overridden by bundled plugin",
         loadRegistry: () => {
           writeBundledPlugin({
             id: "shadowed",
@@ -3551,13 +3549,13 @@ module.exports = {
           });
         },
         assert: (registry: PluginRegistry) => {
-          expectPluginSourcePrecedence(registry, {
-            pluginId: "shadowed",
-            expectedLoadedOrigin: "bundled",
-            expectedDisabledOrigin: "workspace",
-            expectedDisabledError: "overridden by bundled plugin",
-            label: "bundled plugins stay ahead of trusted workspace duplicates",
-          });
+          const entries = registry.plugins.filter((entry) => entry.id === "shadowed");
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          expect(loaded?.origin, "bundled plugins stay ahead of trusted workspace duplicates").toBe(
+            "bundled",
+          );
+          // Duplicate is now dropped at manifest-registry level; only the winner appears.
+          expect(entries).toHaveLength(1);
         },
       },
     ] as const;
