@@ -358,6 +358,48 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
   });
 
+  it("prompts for exec-capable tools even when the action looks readonly", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-process-list",
+          title: "process: list",
+          status: "pending",
+          rawInput: {
+            name: "process",
+            action: "list",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("process", "process: list");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
+
+  it("prompts for control-plane tools even on readonly-like actions", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-gateway-status",
+          title: "gateway: status",
+          status: "pending",
+          rawInput: {
+            name: "gateway",
+            action: "status",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("gateway", "gateway: status");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
+
   it("auto-approves search without prompting", async () => {
     const prompt = vi.fn(async () => true);
     const res = await resolvePermissionRequest(
@@ -646,7 +688,7 @@ describe("resolvePermissionRequest", () => {
 
     expect(prompt).toHaveBeenCalledWith("exec", 'exec: [permission] Allow "safe"? (y/N) \\nnext');
     expect(log).toHaveBeenCalledWith(
-      '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [other]',
+      '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [exec_capable]',
     );
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
