@@ -958,4 +958,69 @@ describe("workspace lock manager", () => {
 
     await lock.release();
   });
+
+  it("does not delete stale lock when inode changes between validation and unlink", async () => {
+    // Regression: tryRemoveStaleLock previously had a TOCTOU window where the
+    // lock file could be replaced between the second payload read and the rm.
+    // The fix uses open-handle inode comparison to detect replacement.
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "inode-race.txt");
+    const lockPath = await expectedLockPath(target, "file");
+
+    const stalePayload = {
+      token: "stale-token",
+      pid: 999_999,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+      expiresAt: new Date(Date.now() - 30_000).toISOString(),
+      targetPath: target,
+      kind: "file",
+    };
+    const freshPayload = {
+      token: "replacement-token",
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      targetPath: target,
+      kind: "file",
+    };
+
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
+
+    // Intercept fs.open so that after the handle is opened for stale-reclaim
+    // validation, we atomically replace the lock file (simulating a concurrent
+    // refresh/replace that creates a new inode).
+    const originalOpen = fs.open.bind(fs);
+    let replacedOnce = false;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags) => {
+      const handle = await originalOpen(filePath as string, flags as string);
+      if (typeof filePath === "string" && filePath === lockPath && !replacedOnce) {
+        replacedOnce = true;
+        // Replace the file (new inode) with fresh payload while the stale
+        // handle is still open.
+        await fs.rm(lockPath, { force: true });
+        await fs.writeFile(lockPath, JSON.stringify(freshPayload), "utf8");
+      }
+      return handle;
+    });
+
+    try {
+      // The acquisition should NOT succeed because the fresh lock must survive.
+      await expect(
+        acquireWorkspaceLock(target, {
+          kind: "file",
+          timeoutMs: 80,
+          pollIntervalMs: 10,
+          ttlMs: 1,
+        }),
+      ).rejects.toThrow(/workspace lock timeout/);
+
+      // Confirm the fresh lock was preserved.
+      const persisted = JSON.parse(await fs.readFile(lockPath, "utf8")) as { token: string };
+      expect(persisted.token).toBe("replacement-token");
+    } finally {
+      openSpy.mockRestore();
+      await fs.rm(lockPath, { force: true });
+    }
+  });
 });

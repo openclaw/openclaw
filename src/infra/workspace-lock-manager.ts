@@ -262,19 +262,68 @@ async function tryRemoveStaleLock(lockPath: string, ttlMs: number): Promise<bool
       return false;
     }
 
-    return await fs
-      .rm(lockPath, { force: true })
-      .then(() => true)
-      .catch(() => false);
+    // Atomic ownership revalidation at unlink time: open the lock file, re-read
+    // its payload to confirm it still matches the stale snapshot, verify the
+    // inode hasn't changed (i.e. another process hasn't replaced it), then
+    // unlink. This closes the TOCTOU window where a concurrent refresh/replace
+    // could occur between our second read and the rm.
+    let handle: fs.FileHandle | undefined;
+    try {
+      handle = await fs.open(lockPath, "r");
+      const handlePayload = await readPayloadFromHandle(handle);
+      if (!handlePayload || JSON.stringify(handlePayload) !== snapshot) {
+        // Lock payload changed since our validation — another process refreshed it.
+        return false;
+      }
+      if (!(await isStalePayload(handlePayload))) {
+        return false;
+      }
+      // Verify the on-disk inode still matches our open handle so we don't
+      // unlink a replacement file.
+      const [openedStat, pathStat] = await Promise.all([handle.stat(), fs.lstat(lockPath)]);
+      if (openedStat.ino !== pathStat.ino || openedStat.dev !== pathStat.dev) {
+        return false;
+      }
+      await handle.close().catch(() => undefined);
+      handle = undefined;
+      return await fs
+        .rm(lockPath, { force: true })
+        .then(() => true)
+        .catch(() => false);
+    } catch {
+      return false;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
   }
 
   if (!(await isStaleLock(lockPath, ttlMs))) {
     return false;
   }
-  return await fs
-    .rm(lockPath, { force: true })
-    .then(() => true)
-    .catch(() => false);
+  // For payloadless stale locks, also use inode-based validation.
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(lockPath, "r");
+    const [openedStat, pathStat] = await Promise.all([handle.stat(), fs.lstat(lockPath)]);
+    if (openedStat.ino !== pathStat.ino || openedStat.dev !== pathStat.dev) {
+      return false;
+    }
+    // Re-check staleness with the handle's mtime to avoid removing a lock that
+    // was refreshed between the initial check and our open.
+    if (Date.now() - openedStat.mtimeMs <= ttlMs) {
+      return false;
+    }
+    await handle.close().catch(() => undefined);
+    handle = undefined;
+    return await fs
+      .rm(lockPath, { force: true })
+      .then(() => true)
+      .catch(() => false);
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 async function refreshLock(mapKey: string, token: string): Promise<void> {

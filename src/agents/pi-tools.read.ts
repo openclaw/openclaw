@@ -518,11 +518,22 @@ export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): An
       let ranMutation = false;
       try {
         await waitForQueuedMutation(previous, signal);
-        ranMutation = true;
-        const lockFn = await getWithWorkspaceLock();
+
+        // Also wait on any in-flight per-file write/edit queues for paths this
+        // patch touches so that apply_patch cannot bypass earlier-queued writes
+        // on the same files (fixes write-ordering race).
         const touchedPaths = await normalizeCanonicalLockKeys(
           extractApplyPatchTouchedPaths(resolvedRoot, params),
         );
+        for (const tp of touchedPaths) {
+          const perFilePrevious = workspaceMutationLocks.get(tp);
+          if (perFilePrevious) {
+            await waitForQueuedMutation(perFilePrevious, signal);
+          }
+        }
+
+        ranMutation = true;
+        const lockFn = await getWithWorkspaceLock();
         const runTool = async (): Promise<ReturnType<typeof tool.execute>> =>
           await tool.execute(toolCallId, params, signal, onUpdate);
 
@@ -851,24 +862,41 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      const existing = await readOptionalUtf8File({
-        absolutePath: allowedAbsolutePath,
-        relativePath: options.relativePath,
-        sandbox: options.sandbox,
-        signal,
-      });
-      const separator =
-        existing.length > 0 && !existing.endsWith("\n") && !content.startsWith("\n") ? "\n" : "";
-
-      return await tool.execute(
-        toolCallId,
+      // Wrap the read-then-write in a file-level workspace lock so concurrent
+      // memory flushes to the same file cannot read the same old content before
+      // the lock serialises the writes (fixes lost-update race).
+      const lockFn = await getWithWorkspaceLock();
+      return await lockFn(
+        allowedAbsolutePath,
         {
-          ...record,
-          path: options.relativePath,
-          content: `${existing}${separator}${content}`,
+          kind: "file",
+          timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
+          ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
+          signal,
         },
-        signal,
-        onUpdate,
+        async () => {
+          const existing = await readOptionalUtf8File({
+            absolutePath: allowedAbsolutePath,
+            relativePath: options.relativePath,
+            sandbox: options.sandbox,
+            signal,
+          });
+          const separator =
+            existing.length > 0 && !existing.endsWith("\n") && !content.startsWith("\n")
+              ? "\n"
+              : "";
+
+          return await tool.execute(
+            toolCallId,
+            {
+              ...record,
+              path: options.relativePath,
+              content: `${existing}${separator}${content}`,
+            },
+            signal,
+            onUpdate,
+          );
+        },
       );
     },
   };
