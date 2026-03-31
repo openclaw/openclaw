@@ -162,6 +162,26 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("treats shimmed Windows commands without a reported exit code as success even when child.killed is true", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+    });
+    child.killed = true;
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      expect(result.signal).toBeNull();
+      expect(result.termination).toBe("exit");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("uses cmd.exe wrapper with windowsVerbatimArguments in runExec for .cmd shims", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";

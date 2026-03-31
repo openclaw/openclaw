@@ -234,13 +234,11 @@ export async function runCommandWithTimeout(
     signal: NodeJS.Signals | null;
     timedOut: boolean;
     noOutputTimedOut: boolean;
-    killed: boolean;
   }): boolean =>
     usesWindowsExitCodeShim &&
     params.signal == null &&
     !params.timedOut &&
-    !params.noOutputTimedOut &&
-    !params.killed;
+    !params.noOutputTimedOut;
 
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
@@ -364,7 +362,6 @@ export async function runCommandWithTimeout(
           signal: resolvedSignal,
           timedOut,
           noOutputTimedOut,
-          killed: child.killed,
         })
       ) {
         resolvedCode = 0;
