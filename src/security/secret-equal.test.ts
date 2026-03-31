@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import crypto from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { safeEqualSecret } from "./secret-equal.js";
 
 describe("safeEqualSecret", () => {
@@ -103,35 +104,31 @@ describe("safeEqualSecret", () => {
   });
 
   describe("timing resistance", () => {
-    it("takes similar time for matching and non-matching strings of equal length", () => {
-      const a = "x".repeat(1000);
-      const b = "y".repeat(1000);
-      const iterations = 1000;
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
 
-      // Warm up to stabilize JIT
-      for (let i = 0; i < 100; i++) {
-        safeEqualSecret(a, a);
-        safeEqualSecret(a, b);
-      }
+    it("delegates to crypto.timingSafeEqual for the actual comparison", () => {
+      const spy = vi.spyOn(crypto, "timingSafeEqual");
 
-      const startMatch = performance.now();
-      for (let i = 0; i < iterations; i++) {
-        safeEqualSecret(a, a);
-      }
-      const matchTime = performance.now() - startMatch;
+      safeEqualSecret("secret-a", "secret-b");
 
-      const startDiffer = performance.now();
-      for (let i = 0; i < iterations; i++) {
-        safeEqualSecret(a, b);
-      }
-      const differTime = performance.now() - startDiffer;
+      expect(spy).toHaveBeenCalledOnce();
+      // Both arguments should be SHA-256 digests (32-byte Buffers).
+      const [buf1, buf2] = spy.mock.calls[0]!;
+      expect(Buffer.isBuffer(buf1)).toBe(true);
+      expect(Buffer.isBuffer(buf2)).toBe(true);
+      expect((buf1 as Buffer).length).toBe(32);
+      expect((buf2 as Buffer).length).toBe(32);
+    });
 
-      // The ratio of match time to differ time should be close to 1.
-      // Allow a generous 5x tolerance to avoid flaky tests while still
-      // catching naive early-return implementations.
-      const ratio = matchTime / differTime;
-      expect(ratio).toBeGreaterThan(0.2);
-      expect(ratio).toBeLessThan(5);
+    it("does not call timingSafeEqual for non-string inputs", () => {
+      const spy = vi.spyOn(crypto, "timingSafeEqual");
+
+      safeEqualSecret(null, "secret");
+      safeEqualSecret("secret", undefined);
+
+      expect(spy).not.toHaveBeenCalled();
     });
   });
 });
