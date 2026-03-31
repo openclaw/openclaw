@@ -281,8 +281,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
               const raw = storage.getItem(RELOAD_COUNT_KEY);
               if (raw) {
                 const parsed = JSON.parse(raw);
-                if (typeof parsed.count === "number") count = parsed.count;
-                if (typeof parsed.firstTime === "number") firstTime = parsed.firstTime;
+                if (typeof parsed.count === "number") {
+                  count = parsed.count;
+                }
+                if (typeof parsed.firstTime === "number") {
+                  firstTime = parsed.firstTime;
+                }
               }
             } catch {
             }
