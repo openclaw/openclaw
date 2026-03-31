@@ -64,7 +64,7 @@ export interface NostrBusOptions {
     reply: (text: string) => Promise<void>,
     meta: { eventId: string; createdAt: number },
   ) => Promise<void>;
-  /** Called before expensive crypto to allow sender policy checks (optional) */
+  /** Called after signature verification and before decrypt to allow sender policy checks (optional) */
   authorizeSender?: (params: {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
@@ -553,16 +553,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
-      if (authorizeSender) {
-        const decision = await authorizeSender({
-          senderPubkey: event.pubkey,
-          reply: replyTo,
-        });
-        if (decision !== "allow") {
-          return;
-        }
-      }
-
       updateRateLimiterSizeMetric();
       if (globalRateLimiter.isRateLimited("global")) {
         metrics.emit("rate_limit.global");
@@ -588,6 +578,16 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         metrics.emit("event.rejected.invalid_signature");
         onError?.(new Error("Invalid signature"), `event ${event.id}`);
         return;
+      }
+
+      if (authorizeSender) {
+        const decision = await authorizeSender({
+          senderPubkey: event.pubkey,
+          reply: replyTo,
+        });
+        if (decision !== "allow") {
+          return;
+        }
       }
 
       // Mark seen AFTER verify (don't cache invalid IDs)

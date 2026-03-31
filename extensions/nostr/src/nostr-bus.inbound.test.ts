@@ -101,7 +101,7 @@ describe("startNostrBus inbound guards", () => {
     mockState.handlers = null;
   });
 
-  it("checks sender authorization before verify/decrypt", async () => {
+  it("checks sender authorization after verify and before decrypt", async () => {
     const onMessage = vi.fn(async () => {});
     const authorizeSender = vi.fn(async () => "block" as const);
     const bus = await startNostrBus({
@@ -114,10 +114,32 @@ describe("startNostrBus inbound guards", () => {
     await emitEvent(createEvent());
 
     expect(authorizeSender).toHaveBeenCalledTimes(1);
-    expect(mockState.verifyEvent).not.toHaveBeenCalled();
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
     expect(mockState.decrypt).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
     expect(bus.getMetrics().eventsReceived).toBe(1);
+
+    bus.close();
+  });
+
+  it("rejects invalid signatures before sender authorization", async () => {
+    mockState.verifyEvent.mockReturnValueOnce(false);
+    const onMessage = vi.fn(async () => {});
+    const authorizeSender = vi.fn(async () => "allow" as const);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      authorizeSender,
+      onMetric: () => {},
+    });
+
+    await emitEvent(createEvent());
+
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(authorizeSender).not.toHaveBeenCalled();
+    expect(mockState.decrypt).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(bus.getMetrics().eventsRejected.invalidSignature).toBe(1);
 
     bus.close();
   });
