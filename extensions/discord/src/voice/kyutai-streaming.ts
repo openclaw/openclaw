@@ -7,13 +7,72 @@
 
 import { Readable } from "node:stream";
 
-const KYUTAI_STREAM_URL = "http://localhost:5123/v1/audio/speech/stream";
+const KYUTAI_BASE_URL = "http://localhost:5123";
+const KYUTAI_STREAM_URL = `${KYUTAI_BASE_URL}/v1/audio/speech/stream`;
 const PCMS_HEADER_SIZE = 8;
 
 export type KyutaiStreamResult = {
   readable: Readable;
   sampleRate: number;
 };
+
+// ---------------------------------------------------------------------------
+// Model lifecycle — pre-warm and release
+// ---------------------------------------------------------------------------
+
+/**
+ * Pre-warm the Kyutai TTS model (load into VRAM).
+ * Call on Discord VC join or when anticipating voice output.
+ * No-op if already loaded. Fire-and-forget safe.
+ */
+export async function kyutaiPrewarm(): Promise<boolean> {
+  try {
+    const res = await fetch(`${KYUTAI_BASE_URL}/load`, { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Release the Kyutai TTS model (free VRAM).
+ * Call on Discord VC leave. The idle timeout (300s) also handles this
+ * automatically, so this is optional but immediate.
+ */
+export async function kyutaiRelease(): Promise<boolean> {
+  try {
+    const res = await fetch(`${KYUTAI_BASE_URL}/unload`, { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if the Kyutai TTS sidecar is reachable and whether the model is loaded.
+ */
+export async function kyutaiStatus(): Promise<{
+  reachable: boolean;
+  loaded: boolean;
+  idleSeconds: number;
+}> {
+  try {
+    const res = await fetch(`${KYUTAI_BASE_URL}/status`);
+    if (!res.ok) return { reachable: true, loaded: false, idleSeconds: -1 };
+    const data = (await res.json()) as { loaded?: boolean; idle_seconds?: number };
+    return {
+      reachable: true,
+      loaded: data.loaded === true,
+      idleSeconds: data.idle_seconds ?? -1,
+    };
+  } catch {
+    return { reachable: false, loaded: false, idleSeconds: -1 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming TTS
+// ---------------------------------------------------------------------------
 
 /**
  * Stream TTS audio from the local Kyutai HTTP sidecar.

@@ -388,6 +388,12 @@ export class DiscordVoiceManager {
         PLAYBACK_READY_TIMEOUT_MS,
       );
       logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
+      // --- FORK: pre-warm Kyutai TTS model on VC join ---
+      import("./kyutai-streaming.js")
+        .then(({ kyutaiPrewarm }) => kyutaiPrewarm())
+        .then((ok) => ok && logVoiceVerbose(`join: kyutai TTS model pre-warmed`))
+        .catch(() => {}); // best-effort, non-blocking
+      // --- END FORK ---
     } catch (err) {
       connection.destroy();
       return { ok: false, message: `Failed to join voice channel: ${formatErrorMessage(err)}` };
@@ -505,6 +511,11 @@ export class DiscordVoiceManager {
     entry.stop();
     this.sessions.delete(guildId);
     logVoiceVerbose(`leave: disconnected from guild ${guildId} channel ${entry.channelId}`);
+    // --- FORK: release Kyutai TTS model on VC leave (idle timeout also handles this) ---
+    import("./kyutai-streaming.js")
+      .then(({ kyutaiRelease }) => kyutaiRelease())
+      .catch(() => {}); // best-effort
+    // --- END FORK ---
     return {
       ok: true,
       message: `Left ${formatMention({ channelId: entry.channelId })}.`,
