@@ -1,4 +1,3 @@
-import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   hasSensitiveUrlHintTag,
@@ -87,6 +86,12 @@ function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: s
  * round-trip through the Web UI does not corrupt credentials.
  */
 export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+
+function isSecretRefWithProvider(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { source: string; provider: string; id: string } {
+  return isSecretRefShape(value) && typeof value.provider === "string";
+}
 
 // ConfigUiHints' keys look like this:
 // - path.subpath.key (nested objects)
@@ -437,7 +442,7 @@ export function redactConfigSnapshot(
         ),
     })
   ) {
-    redactedRaw = JSON5.stringify(redactedParsed ?? redactedConfig, null, 2);
+    redactedRaw = null;
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
@@ -477,24 +482,24 @@ export function restoreRedactedValues(
     return { ok: false, error: "input not an object" };
   }
   try {
+    let restored: unknown;
     if (hints) {
       const lookup = buildRedactionLookup(hints);
       if (lookup.has("")) {
-        return {
-          ok: true,
-          result: restoreRedactedValuesWithLookup(incoming, original, lookup, "", hints),
-        };
+        restored = restoreRedactedValuesWithLookup(incoming, original, lookup, "", hints);
       } else {
-        return { ok: true, result: restoreRedactedValuesGuessing(incoming, original, "", hints) };
+        restored = restoreRedactedValuesGuessing(incoming, original, "", hints);
       }
     } else {
-      return { ok: true, result: restoreRedactedValuesGuessing(incoming, original, "") };
+      restored = restoreRedactedValuesGuessing(incoming, original, "");
     }
+    assertNoRedactedSentinel(restored, "");
+    return { ok: true, result: restored };
   } catch (err) {
     if (err instanceof RedactionError) {
       return {
         ok: false,
-        humanReadableMessage: `Sentinel value "${REDACTED_SENTINEL}" in key ${err.key} is not valid as real data`,
+        humanReadableMessage: err.humanReadableMessage,
       };
     }
     throw err; // some coding error, pass through
@@ -503,10 +508,14 @@ export function restoreRedactedValues(
 
 class RedactionError extends Error {
   public readonly key: string;
+  public readonly humanReadableMessage: string;
 
-  constructor(key: string) {
+  constructor(key: string, humanReadableMessage?: string) {
     super("internal error class---should never escape");
     this.key = key;
+    this.humanReadableMessage =
+      humanReadableMessage ??
+      `Sentinel value "${REDACTED_SENTINEL}" in key ${key} is not valid as real data`;
     this.name = "RedactionError";
   }
 }
@@ -523,6 +532,69 @@ function restoreOriginalValueOrThrow(params: {
     log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
   }
   throw new RedactionError(params.path);
+}
+
+function assertNoRedactedSentinel(value: unknown, path: string): void {
+  if (typeof value === "string" && value === REDACTED_SENTINEL) {
+    const pathLabel = path || "<root>";
+    throw new RedactionError(
+      pathLabel,
+      `Reserved redaction sentinel "${REDACTED_SENTINEL}" is not valid config data (${pathLabel}).`,
+    );
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const nextPath = path ? `${path}[${index}]` : `[${index}]`;
+      assertNoRedactedSentinel(value[index], nextPath);
+    }
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      assertNoRedactedSentinel(item, path ? `${path}.${key}` : key);
+    }
+  }
+}
+
+function maybeRestoreSecretRefId(params: {
+  incoming: unknown;
+  original: unknown;
+  path: string;
+}): { handled: false } | { handled: true; value: unknown } {
+  const incomingObj = toObjectRecord(params.incoming);
+  if (!isSecretRefShape(incomingObj) || incomingObj.id !== REDACTED_SENTINEL) {
+    return { handled: false };
+  }
+
+  const originalObj = toObjectRecord(params.original);
+  if (!isSecretRefWithProvider(originalObj)) {
+    if (isSecretRefShape(originalObj)) {
+      throw new RedactionError(
+        params.path,
+        `SecretRef at ${params.path} requires a provider field to restore the redacted id automatically (original ref lacks provider).`,
+      );
+    }
+    throw new RedactionError(
+      params.path,
+      `SecretRef at ${params.path} contains a redacted id placeholder with no matching original value.`,
+    );
+  }
+
+  if (!isSecretRefWithProvider(incomingObj)) {
+    throw new RedactionError(
+      params.path,
+      `SecretRef at ${params.path} must include source, provider, and id when redacted placeholders are present.`,
+    );
+  }
+
+  if (incomingObj.source !== originalObj.source || incomingObj.provider !== originalObj.provider) {
+    throw new RedactionError(
+      params.path,
+      `SecretRef at ${params.path} changed source/provider while id is redacted. Provide an explicit id when changing source/provider.`,
+    );
+  }
+
+  return { handled: true, value: { ...incomingObj, id: originalObj.id } };
 }
 
 function mapRedactedArray(params: {
@@ -682,7 +754,14 @@ function restoreRedactedValuesWithLookup(
         ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
-          result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
+          const restoredSecretRef = maybeRestoreSecretRefId({
+            incoming: value,
+            original: orig[key],
+            path,
+          });
+          result[key] = restoredSecretRef.handled
+            ? restoredSecretRef.value
+            : restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
         }
         break;
       }
@@ -698,7 +777,23 @@ function restoreRedactedValuesWithLookup(
       ) {
         result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
       } else if (typeof value === "object" && value !== null) {
-        result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+        const canRestoreSecretRef =
+          !markedNonSensitive &&
+          (isSensitivePath(path) ||
+            hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
+            isSensitiveUrlPath(path));
+        if (canRestoreSecretRef) {
+          const restoredSecretRef = maybeRestoreSecretRefId({
+            incoming: value,
+            original: orig[key],
+            path,
+          });
+          result[key] = restoredSecretRef.handled
+            ? restoredSecretRef.value
+            : restoreRedactedValuesGuessing(value, orig[key], path, hints);
+        } else {
+          result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+        }
       }
     }
   }
@@ -742,7 +837,23 @@ function restoreRedactedValuesGuessing(
     ) {
       result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {
-      result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+      const canRestoreSecretRef =
+        !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
+        (isSensitivePath(path) ||
+          hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
+          isSensitiveUrlPath(path));
+      if (canRestoreSecretRef) {
+        const restoredSecretRef = maybeRestoreSecretRefId({
+          incoming: value,
+          original: orig[key],
+          path,
+        });
+        result[key] = restoredSecretRef.handled
+          ? restoredSecretRef.value
+          : restoreRedactedValuesGuessing(value, orig[key], path, hints);
+      } else {
+        result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+      }
     } else {
       result[key] = value;
     }

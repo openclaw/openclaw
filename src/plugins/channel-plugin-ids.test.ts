@@ -138,19 +138,25 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["demo-bundled-sidecar"],
         modelId: "demo-cli/demo-model",
       }),
-      ["demo-channel", "demo-provider-plugin", "demo-bundled-sidecar", "demo-global-sidecar"],
+      [
+        "demo-channel",
+        "demo-default-on-sidecar",
+        "demo-provider-plugin",
+        "demo-bundled-sidecar",
+        "demo-global-sidecar",
+      ],
     ],
     [
-      "does not pull default-on bundled non-channel plugins into startup",
+      "includes bundled plugins with enabledByDefault: true",
       {} as OpenClawConfig,
-      ["demo-channel", "demo-global-sidecar"],
+      ["demo-channel", "demo-default-on-sidecar", "demo-global-sidecar"],
     ],
     [
       "auto-loads bundled plugins referenced by configured provider ids",
       createStartupConfig({
         providerIds: ["demo-provider"],
       }),
-      ["demo-channel", "demo-provider-plugin", "demo-global-sidecar"],
+      ["demo-channel", "demo-default-on-sidecar", "demo-provider-plugin", "demo-global-sidecar"],
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });

@@ -11,6 +11,7 @@ const SHARED_BROWSER_KEY = "__default__";
 const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
 const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
 const MAX_PDF_PAGES = 50;
+const LOCAL_VIEWER_BASE_HREF = "http://127.0.0.1/plugins/diffs/view/local/local";
 
 export type DiffScreenshotter = {
   screenshotHtml(params: {
@@ -274,7 +275,7 @@ function injectBaseHref(html: string): string {
   if (html.includes("<base ")) {
     return html;
   }
-  return html.replace("<head>", '<head><base href="http://127.0.0.1/" />');
+  return html.replace("<head>", `<head><base href="${LOCAL_VIEWER_BASE_HREF}" />`);
 }
 
 async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<string | undefined> {

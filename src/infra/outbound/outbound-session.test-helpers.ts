@@ -1,6 +1,5 @@
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   buildChannelOutboundSessionRoute,
   stripChannelTargetPrefix,
@@ -13,12 +12,18 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "../../plugin-sdk/routing.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 function createSessionRouteTestPlugin(params: {
   id: ChannelPlugin["id"];
   label: string;
-  resolveOutboundSessionRoute: (params: ChannelOutboundSessionRouteParams) => Awaited<
+  resolveOutboundSessionRoute: (
+    params: ChannelOutboundSessionRouteParams,
+  ) => Awaited<
     ReturnType<NonNullable<NonNullable<ChannelPlugin["messaging"]>["resolveOutboundSessionRoute"]>>
   >;
 }): ChannelPlugin {
@@ -95,9 +100,7 @@ function parseTelegramTargetForTest(raw: string): {
   };
 }
 
-function parseTelegramThreadIdForTest(
-  threadId?: string | number | null,
-): number | undefined {
+function parseTelegramThreadIdForTest(threadId?: string | number | null): number | undefined {
   const normalized = normalizeOutboundThreadId(threadId);
   if (!normalized) {
     return undefined;
@@ -119,15 +122,16 @@ function resolveTelegramOutboundSessionRouteForTest(params: ChannelOutboundSessi
   if (!chatId) {
     return null;
   }
-  const resolvedThreadId =
-    parsed.messageThreadId ?? parseTelegramThreadIdForTest(params.threadId);
+  const resolvedThreadId = parsed.messageThreadId ?? parseTelegramThreadIdForTest(params.threadId);
   const isGroup =
     parsed.chatType === "group" ||
     (parsed.chatType === "unknown" &&
       params.resolvedTarget?.kind !== undefined &&
       params.resolvedTarget.kind !== "user");
   const peerId =
-    isGroup && resolvedThreadId ? buildTelegramGroupPeerIdForTest(chatId, resolvedThreadId) : chatId;
+    isGroup && resolvedThreadId
+      ? buildTelegramGroupPeerIdForTest(chatId, resolvedThreadId)
+      : chatId;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "direct",
     id: peerId,
@@ -356,7 +360,9 @@ function resolveFeishuOutboundSessionRouteForTest(params: ChannelOutboundSession
   });
 }
 
-function resolveNextcloudTalkOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+function resolveNextcloudTalkOutboundSessionRouteForTest(
+  params: ChannelOutboundSessionRouteParams,
+) {
   const roomId = stripTargetKindPrefix(
     stripChannelTargetPrefix(params.target, "nextcloud-talk", "nc-talk", "nc"),
   );

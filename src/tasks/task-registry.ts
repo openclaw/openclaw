@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { getFlowById, syncFlowFromTask } from "./flow-registry.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -52,6 +53,12 @@ let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
   null;
+
+type TaskDeliveryOwner = {
+  sessionKey: string;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  flowId?: string;
+};
 
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return { ...record };
@@ -367,6 +374,7 @@ function mergeExistingTaskForCreate(
   params: {
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
+    parentFlowId?: string;
     parentTaskId?: string;
     agentId?: string;
     label?: string;
@@ -388,6 +396,9 @@ function mergeExistingTaskForCreate(
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
+  }
+  if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
+    patch.parentFlowId = params.parentFlowId.trim();
   }
   if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
     patch.parentTaskId = params.parentTaskId.trim();
@@ -427,6 +438,39 @@ function mergeExistingTaskForCreate(
 function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
   const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
   return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
+}
+
+function flowTerminalDeliveryIdempotencyKey(flowId: string, task: TaskRecord): string {
+  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
+  return `flow-terminal:${flowId}:${task.taskId}:${task.status}:${outcome}`;
+}
+
+function resolveTaskStateChangeIdempotencyKey(params: {
+  task: TaskRecord;
+  latestEvent: TaskEventRecord;
+  owner: TaskDeliveryOwner;
+}): string {
+  if (params.owner.flowId) {
+    return `flow-event:${params.owner.flowId}:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
+  }
+  return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
+}
+
+function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDeliveryOwner): string {
+  return owner.flowId
+    ? flowTerminalDeliveryIdempotencyKey(owner.flowId, task)
+    : taskTerminalDeliveryIdempotencyKey(task);
+}
+
+function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
+  const flow = task.parentFlowId?.trim() ? getFlowById(task.parentFlowId) : undefined;
+  return {
+    sessionKey: flow?.ownerSessionKey?.trim() || task.requesterSessionKey.trim(),
+    requesterOrigin: normalizeDeliveryContext(
+      flow?.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
+    ),
+    ...(flow ? { flowId: flow.flowId } : {}),
+  };
 }
 
 function restoreTaskRegistryOnce() {
@@ -485,6 +529,15 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     addSessionKeyIndex(taskId, next);
   }
   persistTaskUpsert(next);
+  try {
+    syncFlowFromTask(next);
+  } catch (error) {
+    log.warn("Failed to sync parent flow from task update", {
+      taskId,
+      flowId: next.parentFlowId,
+      error,
+    });
+  }
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
@@ -518,21 +571,22 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
 }
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
-  const origin = normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin);
+  const origin = resolveTaskDeliveryOwner(task).requesterOrigin;
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
 function queueTaskSystemEvent(task: TaskRecord, text: string) {
-  const requesterSessionKey = task.requesterSessionKey.trim();
+  const owner = resolveTaskDeliveryOwner(task);
+  const requesterSessionKey = owner.sessionKey.trim();
   if (!requesterSessionKey) {
     return false;
   }
   enqueueSystemEvent(text, {
     sessionKey: requesterSessionKey,
-    contextKey: `task:${task.taskId}`,
-    deliveryContext: taskDeliveryStates.get(task.taskId)?.requesterOrigin,
+    contextKey: owner.flowId ? `flow:${owner.flowId}` : `task:${task.taskId}`,
+    deliveryContext: owner.requesterOrigin,
   });
   requestHeartbeatNow({
     reason: "background-task",
@@ -546,14 +600,17 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
   if (!followupText) {
     return false;
   }
-  const requesterSessionKey = task.requesterSessionKey.trim();
+  const owner = resolveTaskDeliveryOwner(task);
+  const requesterSessionKey = owner.sessionKey.trim();
   if (!requesterSessionKey) {
     return false;
   }
   enqueueSystemEvent(followupText, {
     sessionKey: requesterSessionKey,
-    contextKey: `task:${task.taskId}:blocked-followup`,
-    deliveryContext: taskDeliveryStates.get(task.taskId)?.requesterOrigin,
+    contextKey: owner.flowId
+      ? `flow:${owner.flowId}:blocked-followup`
+      : `task:${task.taskId}:blocked-followup`,
+    deliveryContext: owner.requesterOrigin,
   });
   requestHeartbeatNow({
     reason: "background-task-blocked",
@@ -588,7 +645,8 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         lastEventAt: Date.now(),
       });
     }
-    if (!latest.requesterSessionKey.trim()) {
+    const owner = resolveTaskDeliveryOwner(latest);
+    if (!owner.sessionKey.trim()) {
       return updateTask(taskId, {
         deliveryStatus: "parent_missing",
         lastEventAt: Date.now(),
@@ -619,20 +677,20 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     }
     try {
       const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-      const origin = normalizeDeliveryContext(taskDeliveryStates.get(taskId)?.requesterOrigin);
-      const requesterAgentId = parseAgentSessionKey(latest.requesterSessionKey)?.agentId;
+      const requesterAgentId = parseAgentSessionKey(owner.sessionKey)?.agentId;
+      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest, owner);
       await sendMessage({
-        channel: origin?.channel,
-        to: origin?.to ?? "",
-        accountId: origin?.accountId,
-        threadId: origin?.threadId,
+        channel: owner.requesterOrigin?.channel,
+        to: owner.requesterOrigin?.to ?? "",
+        accountId: owner.requesterOrigin?.accountId,
+        threadId: owner.requesterOrigin?.threadId,
         content: eventText,
         agentId: requesterAgentId,
-        idempotencyKey: taskTerminalDeliveryIdempotencyKey(latest),
+        idempotencyKey,
         mirror: {
-          sessionKey: latest.requesterSessionKey,
+          sessionKey: owner.sessionKey,
           agentId: requesterAgentId,
-          idempotencyKey: taskTerminalDeliveryIdempotencyKey(latest),
+          idempotencyKey,
         },
       });
       if (latest.terminalOutcome === "blocked") {
@@ -645,8 +703,8 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     } catch (error) {
       log.warn("Failed to deliver background task update", {
         taskId,
-        requesterSessionKey: latest.requesterSessionKey,
-        requesterOrigin: taskDeliveryStates.get(taskId)?.requesterOrigin,
+        requesterSessionKey: owner.sessionKey,
+        requesterOrigin: owner.requesterOrigin,
         error,
       });
       try {
@@ -689,6 +747,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
     return cloneTaskRecord(current);
   }
   try {
+    const owner = resolveTaskDeliveryOwner(current);
     if (!canDeliverTaskToRequesterOrigin(current)) {
       queueTaskSystemEvent(current, eventText);
       upsertTaskDeliveryState({
@@ -701,20 +760,24 @@ export async function maybeDeliverTaskStateChangeUpdate(
       });
     }
     const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-    const origin = normalizeDeliveryContext(deliveryState?.requesterOrigin);
-    const requesterAgentId = parseAgentSessionKey(current.requesterSessionKey)?.agentId;
+    const requesterAgentId = parseAgentSessionKey(owner.sessionKey)?.agentId;
+    const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
+      task: current,
+      latestEvent,
+      owner,
+    });
     await sendMessage({
-      channel: origin?.channel,
-      to: origin?.to ?? "",
-      accountId: origin?.accountId,
-      threadId: origin?.threadId,
+      channel: owner.requesterOrigin?.channel,
+      to: owner.requesterOrigin?.to ?? "",
+      accountId: owner.requesterOrigin?.accountId,
+      threadId: owner.requesterOrigin?.threadId,
       content: eventText,
       agentId: requesterAgentId,
-      idempotencyKey: `task-event:${current.taskId}:${latestEvent.at}:${latestEvent.kind}`,
+      idempotencyKey,
       mirror: {
-        sessionKey: current.requesterSessionKey,
+        sessionKey: owner.sessionKey,
         agentId: requesterAgentId,
-        idempotencyKey: `task-event:${current.taskId}:${latestEvent.at}:${latestEvent.kind}`,
+        idempotencyKey,
       },
     });
     upsertTaskDeliveryState({
@@ -910,6 +973,7 @@ export function createTaskRecord(params: {
   sourceId?: string;
   requesterSessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  parentFlowId?: string;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
@@ -947,6 +1011,7 @@ export function createTaskRecord(params: {
     runtime: params.runtime,
     sourceId: params.sourceId?.trim() || undefined,
     requesterSessionKey: params.requesterSessionKey,
+    parentFlowId: params.parentFlowId?.trim() || undefined,
     childSessionKey: params.childSessionKey,
     parentTaskId: params.parentTaskId?.trim() || undefined,
     agentId: params.agentId?.trim() || undefined,
@@ -1149,6 +1214,24 @@ export function updateTaskNotifyPolicyById(params: {
   return updateTask(params.taskId, {
     notifyPolicy: params.notifyPolicy,
     lastEventAt: Date.now(),
+  });
+}
+
+export function linkTaskToFlowById(params: { taskId: string; flowId: string }): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const flowId = params.flowId.trim();
+  if (!flowId) {
+    return null;
+  }
+  const current = tasks.get(params.taskId);
+  if (!current) {
+    return null;
+  }
+  if (current.parentFlowId?.trim()) {
+    return cloneTaskRecord(current);
+  }
+  return updateTask(params.taskId, {
+    parentFlowId: flowId,
   });
 }
 
