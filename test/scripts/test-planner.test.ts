@@ -115,7 +115,40 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.runtimeProfileName).toBe("ci-linux");
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(sharedExtensionBatches.length).toBeGreaterThan(1);
-    expect(plan.topLevelParallelLimit).toBe(2);
+    expect(plan.topLevelParallelLimit).toBe(3);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates timed-heavy extension suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotUnit = plan.selectedUnits.find(
+      (unit) => unit.id === "extensions-plugin-entry.runtime-isolated",
+    );
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-timed-heavy");
     artifacts.cleanupTempArtifacts();
   });
 
@@ -383,6 +416,25 @@ describe("test planner", () => {
     expect(absoluteExplanation.pool).toBe(relativeExplanation.pool);
     expect(absoluteExplanation.isolate).toBe(relativeExplanation.isolate);
     expect(absoluteExplanation.reasons).toEqual(relativeExplanation.reasons);
+  });
+
+  it("explains timed-heavy extension suites as isolated", () => {
+    const explanation = explainExecutionTarget(
+      {
+        mode: "ci",
+        fileFilters: ["extensions/matrix/src/plugin-entry.runtime.test.ts"],
+      },
+      {
+        env: {
+          CI: "true",
+          GITHUB_ACTIONS: "true",
+        },
+      },
+    );
+
+    expect(explanation.surface).toBe("extensions");
+    expect(explanation.isolate).toBe(true);
+    expect(explanation.reasons).toContain("extensions-timed-heavy");
   });
 
   it("does not leak default-plan shard assignments into targeted units with the same id", () => {

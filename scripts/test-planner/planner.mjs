@@ -8,6 +8,7 @@ import {
   loadUnitTimingManifest,
   packFilesByDuration,
   packFilesByDurationWithBaseLoads,
+  selectTimedHeavyFiles,
   selectUnitHeavyFileGroups,
 } from "../test-runner-manifest.mjs";
 import { loadTestCatalog, normalizeRepoPath } from "./catalog.mjs";
@@ -430,6 +431,30 @@ const resolveUnitHeavyFileGroups = (context) => {
   };
 };
 
+const resolveExtensionTimedHeavyFiles = (context) => {
+  const { env, runtime, catalog, extensionTimingManifest } = context;
+  const timedHeavyExtensionFileLimit = parseEnvNumber(
+    env,
+    "OPENCLAW_TEST_HEAVY_EXTENSION_FILE_LIMIT",
+    runtime.isCI ? 16 : 8,
+  );
+  const timedHeavyExtensionMinDurationMs = parseEnvNumber(
+    env,
+    "OPENCLAW_TEST_HEAVY_EXTENSION_MIN_MS",
+    runtime.isCI ? 9_000 : 12_000,
+  );
+  return selectTimedHeavyFiles({
+    candidates: catalog.allKnownTestFiles.filter(
+      (file) =>
+        file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
+        !catalog.extensionForkIsolatedFileSet.has(file),
+    ),
+    limit: timedHeavyExtensionFileLimit,
+    minDurationMs: timedHeavyExtensionMinDurationMs,
+    timings: extensionTimingManifest,
+  });
+};
+
 const buildDefaultUnits = (context, request) => {
   const {
     env,
@@ -455,9 +480,14 @@ const buildDefaultUnits = (context, request) => {
   const unitMemoryIsolatedFiles = [...memoryHeavyUnitFiles].filter(
     (file) => !catalog.unitBehaviorOverrideSet.has(file),
   );
+  const extensionTimedHeavyFiles = resolveExtensionTimedHeavyFiles(context);
   const unitSchedulingOverrideSet = new Set([
     ...catalog.unitBehaviorOverrideSet,
     ...memoryHeavyUnitFiles,
+  ]);
+  const extensionSchedulingOverrideSet = new Set([
+    ...catalog.extensionForkIsolatedFiles,
+    ...extensionTimedHeavyFiles,
   ]);
   const unitFastExcludedFiles = [
     ...new Set([
@@ -483,8 +513,7 @@ const buildDefaultUnits = (context, request) => {
     catalog.unitThreadPinnedFiles.length > 0;
   const extensionSharedCandidateFiles = catalog.allKnownTestFiles.filter(
     (file) =>
-      file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
-      !catalog.extensionForkIsolatedFileSet.has(file),
+      file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) && !extensionSchedulingOverrideSet.has(file),
   );
   const channelSharedCandidateFiles = catalog.allKnownTestFiles.filter(
     (file) =>
@@ -708,6 +737,18 @@ const buildDefaultUnits = (context, request) => {
         }),
       );
     }
+    for (const file of extensionTimedHeavyFiles) {
+      units.push(
+        createExecutionUnit(context, {
+          id: `extensions-${path.basename(file, ".test.ts")}-isolated`,
+          surface: "extensions",
+          isolate: true,
+          estimatedDurationMs: estimateExtensionDurationMs(file),
+          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
+          reasons: ["extensions-timed-heavy"],
+        }),
+      );
+    }
     const extensionBatches = splitFilesByBalancedDurationBudget(
       extensionSharedCandidateFiles,
       extensionsBatchTargetMs,
@@ -919,6 +960,7 @@ const buildTargetedUnits = (context, request) => {
     return [];
   }
   const unitMemoryIsolatedFiles = request.unitMemoryIsolatedFiles ?? [];
+  const extensionTimedIsolatedFiles = request.extensionTimedIsolatedFiles ?? [];
   const estimateUnitDurationMs = (file) =>
     context.unitTimingManifest.files[file]?.durationMs ??
     context.unitTimingManifest.defaultDurationMs;
@@ -942,6 +984,7 @@ const buildTargetedUnits = (context, request) => {
     if (matchedFiles.length === 0) {
       const classification = context.catalog.classifyTestFile(normalizeRepoPath(fileFilter), {
         unitMemoryIsolatedFiles,
+        extensionTimedIsolatedFiles,
       });
       const key = `${classification.legacyBasePinned ? "base-pinned" : classification.surface}:${
         classification.isolated ? "isolated" : "default"
@@ -954,6 +997,7 @@ const buildTargetedUnits = (context, request) => {
     for (const matchedFile of matchedFiles) {
       const classification = context.catalog.classifyTestFile(matchedFile, {
         unitMemoryIsolatedFiles,
+        extensionTimedIsolatedFiles,
       });
       const key = `${classification.legacyBasePinned ? "base-pinned" : classification.surface}:${
         classification.isolated ? "isolated" : "default"
@@ -972,6 +1016,7 @@ const buildTargetedUnits = (context, request) => {
           context,
           context.catalog.classifyTestFile(file, {
             unitMemoryIsolatedFiles,
+            extensionTimedIsolatedFiles,
           }),
           [file],
         ),
@@ -1415,10 +1460,11 @@ function resolveSurfaceAwareTopLevelParallelLimit(context, units, defaultLimit) 
     return defaultLimit;
   }
 
-  // Shared extension batches can each retain multiple GiB in CI. Limit that
-  // phase to two concurrent lanes so provider-contract checks are not starved
-  // behind unrelated memory-heavy extension suites.
-  return Math.min(defaultLimit, 2);
+  // Shared extension batches can each retain multiple GiB in CI, but capping
+  // them at two lanes stretches the extensions phase into double-digit minutes.
+  // Keep one slot in reserve versus the base CI budget while still allowing
+  // enough overlap to amortize startup and import overhead.
+  return Math.min(defaultLimit, 3);
 }
 
 export function explainExecutionTarget(request, options = {}) {
@@ -1437,8 +1483,10 @@ export function explainExecutionTarget(request, options = {}) {
   const unitMemoryIsolatedFiles = [...memoryHeavyFiles].filter(
     (file) => !context.catalog.unitBehaviorOverrideSet.has(file),
   );
+  const extensionTimedIsolatedFiles = resolveExtensionTimedHeavyFiles(context);
   const classification = context.catalog.classifyTestFile(normalizedTarget, {
     unitMemoryIsolatedFiles,
+    extensionTimedIsolatedFiles,
   });
   const targetedUnit = createTargetedUnit(context, classification, [normalizedTarget]);
   return {
@@ -1522,11 +1570,13 @@ export function buildExecutionPlan(request, options = {}) {
   }
 
   const defaultPlanning = buildDefaultUnits(context, { ...request, fileFilters });
+  const extensionTimedIsolatedFiles = resolveExtensionTimedHeavyFiles(context);
   let units = defaultPlanning.units;
   const targetedUnits = buildTargetedUnits(context, {
     ...request,
     fileFilters,
     unitMemoryIsolatedFiles: defaultPlanning.unitMemoryIsolatedFiles,
+    extensionTimedIsolatedFiles,
   });
   if (context.configuredShardCount !== null && context.shardCount > 1) {
     units = expandUnitsAcrossTopLevelShards(context, units);
