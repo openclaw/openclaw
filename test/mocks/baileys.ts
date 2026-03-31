@@ -21,6 +21,7 @@ export type MockBaileysSocket = {
   sendPresenceUpdate: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   readMessages: ReturnType<typeof vi.fn>;
+  groupFetchAllParticipating: ReturnType<typeof vi.fn>;
   user?: { id?: string };
 };
 
@@ -138,6 +139,7 @@ export function createMockBaileys(): {
       sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockResolvedValue({ key: { id: "msg123" } }),
       readMessages: vi.fn().mockResolvedValue(undefined),
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
       user: { id: "123@s.whatsapp.net" },
     };
     setImmediate(() => ev.emit("connection.update", { connection: "open" }));

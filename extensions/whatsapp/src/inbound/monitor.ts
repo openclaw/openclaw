@@ -531,6 +531,20 @@ export async function monitorWebInbox(options: {
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
 
+  void (async () => {
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      if (shouldLogVerbose()) {
+        logVerbose(`Hydrated ${Object.keys(groups ?? {}).length} participating groups on connect`);
+      }
+    } catch (err) {
+      const error = String(err);
+      inboundLogger.warn({ error }, "failed hydrating participating groups on connect");
+      inboundConsoleLog.warn(`Failed hydrating participating groups on connect: ${error}`);
+      logVerbose(`Failed to hydrate participating groups on connect: ${error}`);
+    }
+  })();
+
   const sendApi = createWebSendApi({
     sock: {
       sendMessage: (jid: string, content: AnyMessageContent) => sendTrackedMessage(jid, content),
