@@ -30,6 +30,7 @@ import {
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
+import { createAgentScopedHostMediaReadFile } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -130,6 +131,7 @@ type ChannelHandlerParams = {
   forceDocument?: boolean;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gatewayClientScopes?: readonly string[];
 };
 
@@ -251,6 +253,7 @@ function createChannelOutboundContextBase(
     deps: params.deps,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
     gatewayClientScopes: params.gatewayClientScopes,
   };
 }
@@ -566,6 +569,10 @@ async function deliverOutboundPayloadsCore(
     agentId: params.session?.agentId ?? params.mirror?.agentId,
     mediaSources: collectPayloadMediaSources(payloads),
   });
+  const mediaReadFile = createAgentScopedHostMediaReadFile({
+    cfg,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+  });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -580,6 +587,7 @@ async function deliverOutboundPayloadsCore(
     forceDocument: params.forceDocument,
     silent: params.silent,
     mediaLocalRoots,
+    mediaReadFile,
     gatewayClientScopes: params.gatewayClientScopes,
   });
   const configuredTextLimit = handler.chunker

@@ -19,6 +19,7 @@ import {
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
 } from "../../media/local-roots.js";
+import { createAgentScopedHostMediaReadFile } from "../../media/read-capability.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
@@ -273,6 +274,7 @@ type ResolvedActionContext = {
   params: Record<string, unknown>;
   channel: ChannelId;
   mediaLocalRoots: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionRunnerGateway;
@@ -518,6 +520,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       channel,
       params,
       agentId,
+      mediaReadFile: ctx.mediaReadFile,
       accountId: accountId ?? undefined,
       gateway,
       toolContext: input.toolContext,
@@ -673,6 +676,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     cfg,
     params,
     mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
     accountId: accountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
     sessionKey: input.sessionKey,
@@ -749,9 +753,14 @@ export async function runMessageAction(
     agentId: resolvedAgentId,
     mediaSources: collectActionMediaSourceHints(params),
   });
+  const mediaReadFile = createAgentScopedHostMediaReadFile({
+    cfg,
+    agentId: resolvedAgentId,
+  });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots,
+    mediaReadFile,
   });
 
   await hydrateAttachmentParamsForAction({
@@ -792,6 +801,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       dryRun,
       gateway,
@@ -808,6 +818,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       dryRun,
       gateway,
@@ -821,6 +832,7 @@ export async function runMessageAction(
     params,
     channel,
     mediaLocalRoots,
+    mediaReadFile,
     accountId,
     dryRun,
     gateway,
