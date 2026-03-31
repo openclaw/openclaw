@@ -67,7 +67,8 @@ describe("CcRelayDispatcher", () => {
     expect(job.id).toBeTruthy();
     expect(job.taskName).toBe("test");
     expect(job.prompt).toBe("Hello world");
-    expect(job.status).toBe("queued");
+    // Status may be "queued" or "running" depending on microtask timing
+    expect(["queued", "running"]).toContain(job.status);
     expect(job.fresh).toBe(false);
   });
 
