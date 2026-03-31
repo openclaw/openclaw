@@ -153,9 +153,9 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
   return errors.map((error) => {
     const path = resolveAjvErrorPath(error);
     const additionalProperty = extractAdditionalProperty(error);
-    
+
     // Handle additionalProperties error with specific property name
-    if (error.keyword === "additionalProperties" && additionalProperty) {
+    if (additionalProperty) {
       const message = `unexpected property '${additionalProperty}'`;
       const safePath = sanitizeTerminalText(path);
       const safeMessage = sanitizeTerminalText(message);
@@ -165,7 +165,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
         text: `${safePath}: ${safeMessage}`,
       };
     }
-    
+
     const baseMessage = error.message ?? "invalid";
     const allowedValuesSummary = getAjvAllowedValuesSummary(error);
     const message = allowedValuesSummary
