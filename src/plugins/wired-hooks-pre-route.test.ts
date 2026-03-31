@@ -68,4 +68,26 @@ describe("pre_route hook runner", () => {
     );
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
+
+  it("passes AbortSignal to pre_route handlers", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "pre_route", handler }]);
+    const controller = new AbortController();
+
+    await runner.runPreRoute(preRouteEvent, preRouteCtx, controller.signal);
+
+    expect(handler).toHaveBeenCalledWith(preRouteEvent, preRouteCtx, controller.signal);
+  });
+
+  it("skips handlers when signal is already aborted", async () => {
+    const handler = vi.fn().mockResolvedValue({ handled: true });
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "pre_route", handler }]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runner.runPreRoute(preRouteEvent, preRouteCtx, controller.signal);
+
+    expect(result).toBeUndefined();
+    expect(handler).not.toHaveBeenCalled();
+  });
 });

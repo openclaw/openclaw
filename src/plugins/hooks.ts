@@ -625,8 +625,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           hook.handler as (
             event: unknown,
             ctx: unknown,
+            signal?: AbortSignal,
           ) => Promise<PluginHookPreRouteResult | void>
-        )(event, ctx);
+        )(event, ctx, signal);
         if (handlerResult?.handled) {
           return handlerResult;
         }

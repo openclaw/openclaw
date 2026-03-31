@@ -2542,6 +2542,7 @@ export type PluginHookHandlerMap = {
   pre_route: (
     event: PluginHookPreRouteEvent,
     ctx: PluginHookPreRouteContext,
+    signal?: AbortSignal,
   ) => Promise<PluginHookPreRouteResult | void> | PluginHookPreRouteResult | void;
   inbound_claim: (
     event: PluginHookInboundClaimEvent,

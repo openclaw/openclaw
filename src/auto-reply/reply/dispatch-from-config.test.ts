@@ -2429,6 +2429,42 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("threads pre_route agentId override into reply execution", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "pre_route") as (hookName?: string) => boolean,
+    );
+    hookMocks.runner.runPreRoute.mockResolvedValue({
+      handled: true,
+      routeOverride: {
+        sessionKey: "session:override:without-embedded-agent",
+        agentId: "codex",
+      },
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-pre-route-agent-id-forward-1",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "ok" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        agentIdOverride: "codex",
+      }),
+      undefined,
+    );
+  });
+
   it("uses native command target session in pre_route hook context", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
