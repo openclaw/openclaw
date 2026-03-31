@@ -5,12 +5,12 @@ import {
   promptSetupWizardAllowFrom,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { ircPlugin } from "./channel.js";
 import { setIrcRuntime } from "./runtime.js";
@@ -351,9 +351,6 @@ describe("irc setup", () => {
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
     vi.resetModules();
-    vi.doMock("../../../src/generated/bundled-channel-entries.generated.ts", () => ({
-      GENERATED_BUNDLED_CHANNEL_ENTRIES: [],
-    }));
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
     installIrcRuntime();
     const { ircPlugin: runtimeMockedPlugin } = await import("./channel.js");

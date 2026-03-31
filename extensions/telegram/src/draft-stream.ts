@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
+import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -145,11 +146,12 @@ export function createTelegramDraftStream(params: {
         ? false
         : params.thread?.scope === "dm";
   const threadParams = buildTelegramThreadParams(params.thread);
+  const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
-    params.replyToMessageId != null
+    replyToMessageId != null
       ? {
           ...threadParams,
-          reply_to_message_id: params.replyToMessageId,
+          reply_to_message_id: replyToMessageId,
           allow_sending_without_reply: true,
         }
       : threadParams;

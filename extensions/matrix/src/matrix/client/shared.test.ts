@@ -230,4 +230,33 @@ describe("resolveSharedMatrixClient", () => {
       }),
     ).rejects.toThrow("Matrix shared client account mismatch");
   });
+
+  it("recreates the shared client when dispatcherPolicy changes", async () => {
+    const firstAuth = {
+      ...authFor("main"),
+      dispatcherPolicy: {
+        mode: "explicit-proxy" as const,
+        proxyUrl: "http://127.0.0.1:7890",
+      },
+    };
+    const secondAuth = {
+      ...authFor("main"),
+      dispatcherPolicy: {
+        mode: "explicit-proxy" as const,
+        proxyUrl: "http://127.0.0.1:7891",
+      },
+    };
+    const firstClient = createMockClient("main-first");
+    const secondClient = createMockClient("main-second");
+
+    resolveMatrixAuthMock.mockResolvedValueOnce(firstAuth).mockResolvedValueOnce(secondAuth);
+    createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(secondClient);
+
+    const first = await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+    const second = await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+
+    expect(first).toBe(firstClient);
+    expect(second).toBe(secondClient);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
+  });
 });

@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  normalizeProviderModelIdWithPlugin: (params: unknown) =>
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: (params: unknown) =>
     normalizeProviderModelIdWithPluginMock(params),
 }));
 
@@ -16,25 +16,25 @@ describe("model-selection plugin runtime normalization", () => {
   it("delegates provider-owned model id normalization to plugin runtime hooks", async () => {
     normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
       if (
-        provider === "xai" &&
-        (context as { modelId?: string }).modelId === "grok-4.20-experimental-beta-0304-reasoning"
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
       ) {
-        return "grok-4.20-beta-latest-reasoning";
+        return "custom-modern-model";
       }
       return undefined;
     });
 
     const { parseModelRef } = await import("./model-selection.js");
 
-    expect(parseModelRef("grok-4.20-experimental-beta-0304-reasoning", "xai")).toEqual({
-      provider: "xai",
-      model: "grok-4.20-beta-latest-reasoning",
+    expect(parseModelRef("custom-legacy-model", "custom-provider")).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
     });
     expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledWith({
-      provider: "xai",
+      provider: "custom-provider",
       context: {
-        provider: "xai",
-        modelId: "grok-4.20-experimental-beta-0304-reasoning",
+        provider: "custom-provider",
+        modelId: "custom-legacy-model",
       },
     });
   });

@@ -2,7 +2,7 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -160,10 +160,22 @@ async function promptWebToolsConfig(
   runtime: RuntimeEnv,
   prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
+  type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
   const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } =
+    await import("../agents/codex-native-web-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
+
+  note(
+    [
+      "Web search lets your agent look things up online using the `web_search` tool.",
+      "Choose a managed provider now, and Codex-capable models can also use native Codex web search.",
+      "Docs: https://docs.openclaw.ai/tools/web",
+    ].join("\n"),
+    "Web search",
+  );
 
   const enableSearch = guardCancel(
     await confirm({
@@ -173,31 +185,109 @@ async function promptWebToolsConfig(
     runtime,
   );
 
-  let nextSearch: Record<string, unknown> = {
+  let nextSearch: WebSearchConfig = {
     ...existingSearch,
     enabled: enableSearch,
   };
   let workingConfig = nextConfig;
 
   if (enableSearch) {
-    if (searchProviderOptions.length === 0) {
+    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
+    let configureManagedProvider = true;
+
+    if (codexRelevant) {
       note(
         [
-          "No web search providers are currently available under this plugin policy.",
-          "Enable plugins or remove deny rules, then rerun configure.",
-          "Docs: https://docs.openclaw.ai/tools/web",
+          "Codex-capable models can optionally use native Codex web search.",
+          "Managed web_search still controls non-Codex models.",
+          "If no managed provider is configured, non-Codex models still rely on provider auto-detect and may have no search available.",
+          ...(describeCodexNativeWebSearch(nextConfig)
+            ? [describeCodexNativeWebSearch(nextConfig)!]
+            : ["Recommended mode: cached."]),
         ].join("\n"),
-        "Web search",
+        "Codex native search",
       );
-      nextSearch = {
-        ...existingSearch,
-        enabled: false,
-      };
-    } else {
+
+      const enableCodexNative = guardCancel(
+        await confirm({
+          message: "Enable native Codex web search for Codex-capable models?",
+          initialValue: existingSearch?.openaiCodex?.enabled === true,
+        }),
+        runtime,
+      );
+
+      if (enableCodexNative) {
+        const codexMode = guardCancel(
+          await select({
+            message: "Codex native web search mode",
+            options: [
+              {
+                value: "cached",
+                label: "cached (recommended)",
+                hint: "Uses cached web content",
+              },
+              {
+                value: "live",
+                label: "live",
+                hint: "Allows live external web access",
+              },
+            ],
+            initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
+          }),
+          runtime,
+        );
+        nextSearch = {
+          ...nextSearch,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            enabled: true,
+            mode: codexMode,
+          },
+        };
+        configureManagedProvider = guardCancel(
+          await confirm({
+            message: "Configure or change a managed web search provider now?",
+            initialValue: Boolean(existingSearch?.provider),
+          }),
+          runtime,
+        );
+      } else {
+        nextSearch = {
+          ...nextSearch,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            enabled: false,
+          },
+        };
+      }
+    }
+
+    if (searchProviderOptions.length === 0) {
+      if (configureManagedProvider) {
+        note(
+          [
+            "No web search providers are currently available under this plugin policy.",
+            "Enable plugins or remove deny rules, then rerun configure.",
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Web search",
+        );
+      }
+      if (nextSearch.openaiCodex?.enabled !== true) {
+        nextSearch = {
+          ...existingSearch,
+          enabled: false,
+        };
+      }
+    } else if (configureManagedProvider) {
       workingConfig = await setupSearch(workingConfig, runtime, prompter);
       nextSearch = {
         ...workingConfig.tools?.web?.search,
         enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+        openaiCodex: {
+          ...existingSearch?.openaiCodex,
+          ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
+        },
       };
     }
   }
@@ -237,7 +327,10 @@ export async function runConfigureWizard(
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    let currentBaseHash = snapshot.hash;
+    const baseConfig: OpenClawConfig = snapshot.valid
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -321,7 +414,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(remoteConfig);
+      await replaceConfigFile({
+        nextConfig: remoteConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
       return;
@@ -350,7 +447,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(nextConfig);
+      await replaceConfigFile({
+        nextConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
     };
 
@@ -559,7 +660,6 @@ export async function runConfigureWizard(
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
-    // Try both newly written and preexisting passwords while the gateway restarts.
     const newPassword =
       process.env.OPENCLAW_GATEWAY_PASSWORD ??
       (await resolveGatewaySecretInputForWizard({
@@ -587,7 +687,6 @@ export async function runConfigureWizard(
       token,
       password: newPassword,
     });
-    // If new password failed and it's different from old password, try old too.
     if (!gatewayProbe.ok && newPassword !== oldPassword && oldPassword) {
       gatewayProbe = await probeGatewayReachable({
         url: links.wsUrl,

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+} from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -12,6 +12,9 @@ const LIVE_MODEL_ID =
   process.env.OPENCLAW_LIVE_OPENROUTER_PLUGIN_MODEL?.trim() || "openai/gpt-5.4-nano";
 const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
+const ModelRegistryCtor = ModelRegistry as unknown as {
+  new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
+};
 
 const registerOpenRouterPlugin = () =>
   registerProviderPlugin({
@@ -41,7 +44,7 @@ describeLive("openrouter plugin live", () => {
     const resolved = provider.resolveDynamicModel?.({
       provider: "openrouter",
       modelId: LIVE_MODEL_ID,
-      modelRegistry: new ModelRegistry(AuthStorage.inMemory()),
+      modelRegistry: new ModelRegistryCtor(AuthStorage.inMemory()),
     });
     if (!resolved) {
       throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);

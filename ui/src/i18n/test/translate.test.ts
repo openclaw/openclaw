@@ -73,7 +73,7 @@ describe("i18n", () => {
     vi.resetModules();
     vi.unstubAllGlobals();
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    const warningSpy = vi.spyOn(process, "emitWarning");
+    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
 
     const fresh = await import("../lib/translate.ts");
 

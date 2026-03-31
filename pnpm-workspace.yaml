@@ -4,6 +4,11 @@ packages:
   - packages/*
   - extensions/*
 
+minimumReleaseAge: 2880
+
+# minimumReleaseAgeExclude:
+#   - "@mariozechner/*"
+
 onlyBuiltDependencies:
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"

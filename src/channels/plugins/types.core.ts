@@ -3,6 +3,7 @@ import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
@@ -83,6 +84,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   allowPrivateNetwork?: boolean;
+  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -127,17 +129,18 @@ export type ChannelMeta = {
   docsLabel?: string;
   blurb: string;
   order?: number;
-  aliases?: string[];
+  aliases?: readonly string[];
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
+  selectionExtras?: readonly string[];
   detailLabel?: string;
   systemImage?: string;
+  markdownCapable?: boolean;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
-  preferOver?: string[];
+  preferOver?: readonly string[];
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
@@ -333,7 +336,7 @@ export type ChannelThreadingAdapter = {
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
-   * Kept for compatibility with older extensions/docks.
+   * Kept for compatibility with older plugin surfaces.
    */
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {
@@ -462,6 +465,14 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
+  messageToolCapabilities?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[] | undefined;
+  reactionGuidance?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
@@ -484,7 +495,9 @@ export type ChannelMessageActionContext = {
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
   /**
    * Trusted sender id from inbound context. This is server-injected and must

@@ -7,6 +7,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
@@ -23,8 +24,9 @@ import {
 } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
+  isGatewayMessageChannel,
   isInternalMessageChannel,
+  normalizeMessageChannel,
 } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -37,13 +39,27 @@ import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-que
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 
-const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 
-const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
-  ? ([8, 16, 32] as const)
-  : ([5_000, 10_000, 20_000] as const);
+type SubagentAnnounceDeliveryDeps = {
+  callGateway: typeof callGateway;
+  loadConfig: typeof loadConfig;
+};
+
+const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
+  callGateway,
+  loadConfig,
+};
+
+let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
+  defaultSubagentAnnounceDeliveryDeps;
+
+function resolveDirectAnnounceTransientRetryDelaysMs() {
+  return process.env.OPENCLAW_TEST_FAST === "1"
+    ? ([8, 16, 32] as const)
+    : ([5_000, 10_000, 20_000] as const);
+}
 
 type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
 
@@ -140,6 +156,7 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   signal?: AbortSignal;
   run: () => Promise<T>;
 }): Promise<T> {
+  const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
   let retryIndex = 0;
   for (;;) {
     if (params.signal?.aborted) {
@@ -148,12 +165,12 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
-      const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
+      const delayMs = retryDelaysMs[retryIndex];
       if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
       }
       const nextAttempt = retryIndex + 2;
-      const maxAttempts = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS.length + 1;
+      const maxAttempts = retryDelaysMs.length + 1;
       defaultRuntime.log(
         `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
@@ -263,7 +280,10 @@ export async function resolveSubagentCompletionOrigin(params: {
       },
     );
     const hookOrigin = normalizeDeliveryContext(result?.origin);
-    if (!hookOrigin || (hookOrigin.channel && !isDeliverableMessageChannel(hookOrigin.channel))) {
+    if (!hookOrigin) {
+      return requesterOrigin;
+    }
+    if (hookOrigin.channel && isInternalMessageChannel(hookOrigin.channel)) {
       return requesterOrigin;
     }
     return mergeDeliveryContext(hookOrigin, requesterOrigin);
@@ -273,7 +293,7 @@ export async function resolveSubagentCompletionOrigin(params: {
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
@@ -286,7 +306,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       enqueuedAt: item.enqueuedAt,
     }),
   );
-  await callGateway({
+  await subagentAnnounceDeliveryDeps.callGateway({
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
@@ -332,7 +352,7 @@ export function resolveRequesterStoreKey(
 }
 
 export function loadRequesterSessionEntry(requesterSessionKey: string) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -342,7 +362,7 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
@@ -434,6 +454,7 @@ async function sendSubagentAnnounceDirectly(params: {
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
@@ -446,7 +467,7 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "none",
     };
   }
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
@@ -455,27 +476,29 @@ async function sendSubagentAnnounceDirectly(params: {
   try {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
+    const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
     const effectiveDirectOrigin =
       params.expectsCompletionMessage && completionDirectOrigin
         ? completionDirectOrigin
         : directOrigin;
-    const directChannelRaw =
-      typeof effectiveDirectOrigin?.channel === "string"
-        ? effectiveDirectOrigin.channel.trim()
-        : "";
-    const directChannel =
-      directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
-    const directTo =
-      typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
-    const hasDeliverableDirectTarget =
-      !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
-    const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
-
-    const threadId =
-      effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
-        ? String(effectiveDirectOrigin.threadId)
+    const sessionOnlyOrigin = effectiveDirectOrigin?.channel
+      ? effectiveDirectOrigin
+      : requesterSessionOrigin;
+    const deliveryTarget = !params.requesterIsSubagent
+      ? resolveExternalBestEffortDeliveryTarget({
+          channel: effectiveDirectOrigin?.channel,
+          to: effectiveDirectOrigin?.to,
+          accountId: effectiveDirectOrigin?.accountId,
+          threadId: effectiveDirectOrigin?.threadId,
+        })
+      : { deliver: false };
+    const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
+      ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
+      : undefined;
+    const sessionOnlyOriginChannel =
+      normalizedSessionOnlyOriginChannel &&
+      isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
+        ? normalizedSessionOnlyOriginChannel
         : undefined;
     if (params.signal?.aborted) {
       return {
@@ -489,18 +512,30 @@ async function sendSubagentAnnounceDirectly(params: {
         : "direct announce agent call",
       signal: params.signal,
       run: async () =>
-        await callGateway({
+        await subagentAnnounceDeliveryDeps.callGateway({
           method: "agent",
           params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
-            deliver: shouldDeliverExternally,
+            deliver: deliveryTarget.deliver,
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
-            channel: shouldDeliverExternally ? directChannel : undefined,
-            accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
-            to: shouldDeliverExternally ? directTo : undefined,
-            threadId: shouldDeliverExternally ? threadId : undefined,
+            channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+            accountId: deliveryTarget.deliver
+              ? deliveryTarget.accountId
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.accountId
+                : undefined,
+            to: deliveryTarget.deliver
+              ? deliveryTarget.to
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.to
+                : undefined,
+            threadId: deliveryTarget.deliver
+              ? deliveryTarget.threadId
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.threadId
+                : undefined,
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.sourceSessionKey,
@@ -534,6 +569,7 @@ export async function deliverSubagentAnnouncement(params: {
   steerMessage: string;
   internalEvents?: AgentInternalEvent[];
   summaryLine?: string;
+  requesterSessionOrigin?: DeliveryContext;
   requesterOrigin?: DeliveryContext;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
@@ -572,6 +608,7 @@ export async function deliverSubagentAnnouncement(params: {
         directIdempotencyKey: params.directIdempotencyKey,
         completionDirectOrigin: params.completionDirectOrigin,
         directOrigin: params.directOrigin,
+        requesterSessionOrigin: params.requesterSessionOrigin,
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
@@ -582,3 +619,14 @@ export async function deliverSubagentAnnouncement(params: {
       }),
   });
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
+    subagentAnnounceDeliveryDeps = overrides
+      ? {
+          ...defaultSubagentAnnounceDeliveryDeps,
+          ...overrides,
+        }
+      : defaultSubagentAnnounceDeliveryDeps;
+  },
+};

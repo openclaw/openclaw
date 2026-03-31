@@ -28,10 +28,10 @@ import {
   DEFAULT_ACCOUNT_ID,
   createAccountStatusSink,
   getChatChannelMeta,
+  loadOutboundMediaFromUrl,
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
   fetchRemoteMedia,
-  loadWebMedia,
   resolveChannelMediaMaxBytes,
   runPassiveAccountLifecycle,
   type ChannelMessageActionAdapter,
@@ -46,6 +46,7 @@ import {
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
 import { googlechatMessageActions } from "./actions.js";
+import { googleChatApprovalAuth } from "./approval-auth.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
@@ -163,6 +164,7 @@ export const googlechatPlugin = createChatChannelPlugin({
           },
         }),
     },
+    auth: googleChatApprovalAuth,
     groups: {
       resolveRequireMention: resolveGoogleChatGroupRequireMention,
     },
@@ -399,7 +401,9 @@ export const googlechatPlugin = createChatChannelPlugin({
         to,
         text,
         mediaUrl,
+        mediaAccess,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         replyToId,
         threadId,
@@ -430,9 +434,11 @@ export const googlechatPlugin = createChatChannelPlugin({
               url: mediaUrl,
               maxBytes: effectiveMaxBytes,
             })
-          : await loadWebMedia(mediaUrl, {
+          : await loadOutboundMediaFromUrl(mediaUrl, {
               maxBytes: effectiveMaxBytes,
-              localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+              mediaAccess,
+              mediaLocalRoots,
+              mediaReadFile,
             });
         const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
           await loadGoogleChatChannelRuntime();
