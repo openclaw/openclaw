@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#F5D76E"/>
+      <stop offset="60%" stop-color="#D4AF37"/>
+      <stop offset="100%" stop-color="#A68A2A"/>
+    </radialGradient>
+    <radialGradient id="inner-glow" cx="50%" cy="40%" r="45%">
+      <stop offset="0%" stop-color="#FFF8DC" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#D4AF37" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="12" flood-color="#A68A2A" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Gold circle -->
+  <circle cx="256" cy="256" r="220" fill="url(#glow)" filter="url(#soft-shadow)"/>
+  <circle cx="256" cy="256" r="220" fill="url(#inner-glow)"/>
+
+  <!-- Bodhi leaf / lotus mark — simplified geometric -->
+  <!-- Outer petals (4) -->
+  <g fill="none" stroke="#1b1b19" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
+    <!-- Top petal -->
+    <path d="M256 130 C230 170, 230 210, 256 230 C282 210, 282 170, 256 130Z" fill="#1b1b19" fill-opacity="0.12"/>
+    <!-- Bottom petal -->
+    <path d="M256 282 C230 302, 230 342, 256 382 C282 342, 282 302, 256 282Z" fill="#1b1b19" fill-opacity="0.12"/>
+    <!-- Left petal -->
+    <path d="M130 256 C170 230, 210 230, 230 256 C210 282, 170 282, 130 256Z" fill="#1b1b19" fill-opacity="0.12"/>
+    <!-- Right petal -->
+    <path d="M282 256 C302 230, 342 230, 382 256 C342 282, 302 282, 282 256Z" fill="#1b1b19" fill-opacity="0.12"/>
+  </g>
+
+  <!-- Inner circle — the seed / center of awareness -->
+  <circle cx="256" cy="256" r="32" fill="none" stroke="#1b1b19" stroke-width="4.5" opacity="0.8"/>
+  <circle cx="256" cy="256" r="12" fill="#1b1b19" opacity="0.7"/>
+
+  <!-- Connecting arcs — neural pathways -->
+  <g fill="none" stroke="#1b1b19" stroke-width="2.5" opacity="0.35">
+    <path d="M256 198 Q220 220, 198 256"/>
+    <path d="M198 256 Q220 292, 256 314"/>
+    <path d="M256 314 Q292 292, 314 256"/>
+    <path d="M314 256 Q292 220, 256 198"/>
+  </g>
+
+  <!-- Subtle orbit dots — representing nodes/thoughts -->
+  <circle cx="256" cy="148" r="6" fill="#1b1b19" opacity="0.5"/>
+  <circle cx="148" cy="256" r="6" fill="#1b1b19" opacity="0.5"/>
+  <circle cx="256" cy="364" r="6" fill="#1b1b19" opacity="0.5"/>
+  <circle cx="364" cy="256" r="6" fill="#1b1b19" opacity="0.5"/>
+
+  <!-- Diagonal orbit dots — secondary nodes -->
+  <circle cx="184" cy="184" r="4" fill="#1b1b19" opacity="0.3"/>
+  <circle cx="328" cy="184" r="4" fill="#1b1b19" opacity="0.3"/>
+  <circle cx="184" cy="328" r="4" fill="#1b1b19" opacity="0.3"/>
+  <circle cx="328" cy="328" r="4" fill="#1b1b19" opacity="0.3"/>
+</svg>

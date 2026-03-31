@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contemplative Emergence — OpenBodhi</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --anthropic-dark: #141413;
+            --anthropic-light: #faf9f5;
+            --anthropic-mid-gray: #b0aea5;
+            --anthropic-light-gray: #e8e6dc;
+            --anthropic-orange: #d97757;
+            --anthropic-blue: #6a9bcc;
+            --anthropic-green: #788c5d;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Poppins', sans-serif;
+            background: linear-gradient(135deg, var(--anthropic-light) 0%, #f5f3ee 100%);
+            min-height: 100vh;
+            color: var(--anthropic-dark);
+        }
+        .container { display: flex; min-height: 100vh; padding: 20px; gap: 20px; }
+        .sidebar {
+            width: 320px; flex-shrink: 0;
+            background: rgba(255,255,255,0.95); backdrop-filter: blur(10px);
+            padding: 24px; border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(20,20,19,0.1);
+            overflow-y: auto; overflow-x: hidden;
+        }
+        .sidebar h1 { font-family: 'Lora', serif; font-size: 24px; font-weight: 500; color: var(--anthropic-dark); margin-bottom: 8px; }
+        .sidebar .subtitle { color: var(--anthropic-mid-gray); font-size: 14px; margin-bottom: 32px; line-height: 1.4; }
+        .control-section { margin-bottom: 32px; }
+        .control-section h3 {
+            font-size: 16px; font-weight: 600; color: var(--anthropic-dark);
+            margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+        }
+        .control-section h3::before { content: '\2022'; color: var(--anthropic-orange); font-weight: bold; }
+        .seed-input {
+            width: 100%; background: var(--anthropic-light); padding: 12px; border-radius: 8px;
+            font-family: 'Courier New', monospace; font-size: 14px; margin-bottom: 12px;
+            border: 1px solid var(--anthropic-light-gray); text-align: center;
+        }
+        .seed-input:focus { outline: none; border-color: var(--anthropic-orange); box-shadow: 0 0 0 2px rgba(217,119,87,0.1); background: white; }
+        .seed-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+        .control-group { margin-bottom: 20px; }
+        .control-group label { display: block; font-size: 14px; font-weight: 500; color: var(--anthropic-dark); margin-bottom: 8px; }
+        .slider-container { display: flex; align-items: center; gap: 12px; }
+        .slider-container input[type="range"] { flex: 1; height: 4px; background: var(--anthropic-light-gray); border-radius: 2px; outline: none; -webkit-appearance: none; }
+        .slider-container input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--anthropic-orange); border-radius: 50%; cursor: pointer; transition: all 0.2s ease; }
+        .slider-container input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.1); background: #c86641; }
+        .slider-container input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; background: var(--anthropic-orange); border-radius: 50%; border: none; cursor: pointer; }
+        .value-display { font-family: 'Courier New', monospace; font-size: 12px; color: var(--anthropic-mid-gray); min-width: 60px; text-align: right; }
+        .color-group { margin-bottom: 16px; }
+        .color-group label { display: block; font-size: 12px; color: var(--anthropic-mid-gray); margin-bottom: 4px; }
+        .color-picker-container { display: flex; align-items: center; gap: 8px; }
+        .color-picker-container input[type="color"] { width: 32px; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: none; padding: 0; }
+        .color-value { font-family: 'Courier New', monospace; font-size: 12px; color: var(--anthropic-mid-gray); }
+        .button {
+            background: var(--anthropic-orange); color: white; border: none; padding: 10px 16px;
+            border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer;
+            transition: all 0.2s ease; width: 100%;
+        }
+        .button:hover { background: #c86641; transform: translateY(-1px); }
+        .button:active { transform: translateY(0); }
+        .button.secondary { background: var(--anthropic-blue); }
+        .button.secondary:hover { background: #5a8bb8; }
+        .button.tertiary { background: var(--anthropic-green); }
+        .button.tertiary:hover { background: #6b7b52; }
+        .button-row { display: flex; gap: 8px; }
+        .button-row .button { flex: 1; }
+        .canvas-area { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; }
+        #canvas-container { width: 100%; max-width: 1000px; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 40px rgba(20,20,19,0.1); background: #0e0e11; }
+        #canvas-container canvas { display: block; width: 100% !important; height: auto !important; }
+        .loading { display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--anthropic-mid-gray); padding: 200px 0; }
+        @media (max-width: 600px) {
+            .container { flex-direction: column; }
+            .sidebar { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <h1>Contemplative Emergence</h1>
+            <div class="subtitle">OpenBodhi knowledge graph. Ideas cluster, bridge, and breathe.</div>
+
+            <!-- Seed (FIXED) -->
+            <div class="control-section">
+                <h3>Seed</h3>
+                <input type="number" id="seed-input" class="seed-input" value="42" onchange="updateSeed()">
+                <div class="seed-controls">
+                    <button class="button secondary" onclick="previousSeed()">&larr; Prev</button>
+                    <button class="button secondary" onclick="nextSeed()">Next &rarr;</button>
+                </div>
+                <button class="button tertiary" onclick="randomSeedAndUpdate()">&orarr; Random</button>
+            </div>
+
+            <!-- Parameters (VARIABLE) -->
+            <div class="control-section">
+                <h3>Parameters</h3>
+
+                <div class="control-group">
+                    <label>Node Count</label>
+                    <div class="slider-container">
+                        <input type="range" id="nodeCount" min="60" max="600" step="10" value="320" oninput="updateParam('nodeCount', this.value)">
+                        <span class="value-display" id="nodeCount-value">320</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Connection Distance</label>
+                    <div class="slider-container">
+                        <input type="range" id="connectionDist" min="40" max="160" step="5" value="75" oninput="updateParam('connectionDist', this.value)">
+                        <span class="value-display" id="connectionDist-value">75</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Cluster Tightness</label>
+                    <div class="slider-container">
+                        <input type="range" id="clusterTightness" min="20" max="150" step="5" value="65" oninput="updateParam('clusterTightness', this.value)">
+                        <span class="value-display" id="clusterTightness-value">65</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Drift Speed</label>
+                    <div class="slider-container">
+                        <input type="range" id="driftSpeed" min="0.05" max="1.0" step="0.05" value="0.25" oninput="updateParam('driftSpeed', this.value)">
+                        <span class="value-display" id="driftSpeed-value">0.25</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Pulse Intensity</label>
+                    <div class="slider-container">
+                        <input type="range" id="pulseIntensity" min="0.0" max="1.0" step="0.05" value="0.6" oninput="updateParam('pulseIntensity', this.value)">
+                        <span class="value-display" id="pulseIntensity-value">0.6</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Bridge Glow</label>
+                    <div class="slider-container">
+                        <input type="range" id="bridgeGlow" min="0.0" max="1.0" step="0.05" value="0.7" oninput="updateParam('bridgeGlow', this.value)">
+                        <span class="value-display" id="bridgeGlow-value">0.7</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Grain Opacity</label>
+                    <div class="slider-container">
+                        <input type="range" id="grainOpacity" min="0" max="40" step="2" value="12" oninput="updateParam('grainOpacity', this.value)">
+                        <span class="value-display" id="grainOpacity-value">12</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Colors -->
+            <div class="control-section">
+                <h3>Colors</h3>
+                <div class="color-group">
+                    <label>Amber (Energy)</label>
+                    <div class="color-picker-container">
+                        <input type="color" id="colorAmber" value="#d4941a" onchange="updateColor('colorAmber', this.value)">
+                        <span class="color-value" id="colorAmber-value">#d4941a</span>
+                    </div>
+                </div>
+                <div class="color-group">
+                    <label>Sage (Practice)</label>
+                    <div class="color-picker-container">
+                        <input type="color" id="colorSage" value="#5a8a75" onchange="updateColor('colorSage', this.value)">
+                        <span class="color-value" id="colorSage-value">#5a8a75</span>
+                    </div>
+                </div>
+                <div class="color-group">
+                    <label>Warm White (Bridge)</label>
+                    <div class="color-picker-container">
+                        <input type="color" id="colorBridge" value="#ece5d8" onchange="updateColor('colorBridge', this.value)">
+                        <span class="color-value" id="colorBridge-value">#ece5d8</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions (FIXED) -->
+            <div class="control-section">
+                <h3>Actions</h3>
+                <div class="button-row" style="margin-bottom:8px">
+                    <button class="button" onclick="resetParameters()">Reset</button>
+                    <button class="button secondary" onclick="exportImage()">Download PNG</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="canvas-area">
+            <div id="canvas-container">
+                <div class="loading">Growing the knowledge graph...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ═══════════════════════════════════════════════════════════════════════
+    // CONTEMPLATIVE EMERGENCE — OpenBodhi Brand Graphic
+    // ═══════════════════════════════════════════════════════════════════════
+
+    let params = {
+        seed: 42,
+        nodeCount: 320,
+        connectionDist: 75,
+        clusterTightness: 65,
+        driftSpeed: 0.25,
+        pulseIntensity: 0.6,
+        bridgeGlow: 0.7,
+        grainOpacity: 12,
+        colorAmber: '#d4941a',
+        colorSage: '#5a8a75',
+        colorBridge: '#ece5d8',
+        colorMuted: '#7a7572',
+        colorBg: '#0e0e11'
+    };
+    let defaultParams = JSON.parse(JSON.stringify(params));
+
+    // Node types with relative frequencies and size ranges
+    const NODE_TYPES = [
+        { name: 'idea',        weight: 0.48, minR: 1.2, maxR: 2.8,  color: 'muted'  },
+        { name: 'pattern',     weight: 0.18, minR: 2.5, maxR: 4.2,  color: 'amber'  },
+        { name: 'practice',    weight: 0.14, minR: 2.2, maxR: 3.8,  color: 'sage'   },
+        { name: 'decision',    weight: 0.10, minR: 3.5, maxR: 5.5,  color: 'amber'  },
+        { name: 'synthesis',   weight: 0.07, minR: 4.5, maxR: 7.0,  color: 'bridge' },
+        { name: 'integration', weight: 0.03, minR: 6.0, maxR: 9.0,  color: 'bridge' }
+    ];
+
+    let nodes = [];
+    let clusters = [];
+    let grainBuffer;
+    let frameCount_ = 0;
+
+    function setup() {
+        let canvas = createCanvas(1200, 630);
+        canvas.parent('canvas-container');
+        pixelDensity(2);
+        document.querySelector('.loading').style.display = 'none';
+        initializeSystem();
+    }
+
+    function initializeSystem() {
+        randomSeed(params.seed);
+        noiseSeed(params.seed);
+        nodes = [];
+        clusters = [];
+        frameCount_ = 0;
+
+        // Generate cluster centers — elliptical gaussian matching canvas aspect ratio
+        let numClusters = floor(random(6, 11));
+        let cx = width / 2, cy = height / 2;
+
+        for (let i = 0; i < numClusters; i++) {
+            let angle = random(TWO_PI);
+            // Spread horizontally wider than vertically to match 1200x630
+            let dx = randomGaussian(0, width * 0.25);
+            let dy = randomGaussian(0, height * 0.28);
+            let x = constrain(cx + dx, 60, width - 60);
+            let y = constrain(cy + dy, 40, height - 40);
+            clusters.push({
+                x: x, y: y,
+                radius: random(params.clusterTightness * 0.7, params.clusterTightness * 1.5),
+                id: i
+            });
+        }
+
+        // Generate nodes assigned to clusters
+        for (let i = 0; i < params.nodeCount; i++) {
+            let type = pickNodeType();
+            let cluster = clusters[floor(random(numClusters))];
+
+            // Nodes within cluster radius, gaussian distributed
+            let angle = random(TWO_PI);
+            let dist = abs(randomGaussian(0, cluster.radius));
+            let x = cluster.x + cos(angle) * dist;
+            let y = cluster.y + sin(angle) * dist;
+
+            // Keep within bounds with padding
+            x = constrain(x, 30, width - 30);
+            y = constrain(y, 30, height - 30);
+
+            let r = random(type.minR, type.maxR);
+            let energy = random(0.2, 1.0);
+            // Larger node types tend to have higher energy
+            if (type.name === 'synthesis' || type.name === 'integration') energy = random(0.6, 1.0);
+            if (type.name === 'idea') energy = random(0.15, 0.7);
+
+            nodes.push({
+                x: x, y: y,
+                ox: x, oy: y, // original position for drift anchoring
+                r: r,
+                type: type,
+                clusterId: cluster.id,
+                energy: energy,
+                phase: random(TWO_PI),
+                driftPhase: random(TWO_PI),
+                pulseSpeed: random(0.008, 0.025)
+            });
+        }
+
+        // Generate grain texture
+        generateGrain();
+    }
+
+    function generateGrain() {
+        grainBuffer = createGraphics(width, height);
+        grainBuffer.loadPixels();
+        for (let i = 0; i < grainBuffer.pixels.length; i += 4) {
+            let v = random(0, 255);
+            grainBuffer.pixels[i] = v;
+            grainBuffer.pixels[i+1] = v;
+            grainBuffer.pixels[i+2] = v;
+            grainBuffer.pixels[i+3] = 255;
+        }
+        grainBuffer.updatePixels();
+    }
+
+    function hexToRgbArr(hex) {
+        let r = parseInt(hex.slice(1,3), 16);
+        let g = parseInt(hex.slice(3,5), 16);
+        let b = parseInt(hex.slice(5,7), 16);
+        return [r, g, b];
+    }
+
+    function getNodeColor(node) {
+        switch(node.type.color) {
+            case 'amber':  return hexToRgbArr(params.colorAmber);
+            case 'sage':   return hexToRgbArr(params.colorSage);
+            case 'bridge': return hexToRgbArr(params.colorBridge);
+            default:       return hexToRgbArr(params.colorMuted);
+        }
+    }
+
+    function draw() {
+        frameCount_++;
+
+        // Background
+        let bg = hexToRgbArr(params.colorBg);
+        background(bg[0], bg[1], bg[2]);
+
+        // Central seed glow — radial gradient
+        let amber = hexToRgbArr(params.colorAmber);
+        let cx = width / 2, cy = height / 2;
+        noStroke();
+        for (let r = 280; r > 0; r -= 4) {
+            let a = map(r, 0, 280, 18, 0);
+            fill(amber[0], amber[1], amber[2], a);
+            ellipse(cx, cy, r * 2, r * 2);
+        }
+
+        // Update node positions (drift)
+        let t = frameCount_ * 0.001 * params.driftSpeed;
+        for (let n of nodes) {
+            let nx = noise(n.driftPhase, t) - 0.5;
+            let ny = noise(n.driftPhase + 100, t) - 0.5;
+            n.x = n.ox + nx * 18;
+            n.y = n.oy + ny * 18;
+        }
+
+        // Draw edges
+        let connDist = params.connectionDist;
+        let connDistSq = connDist * connDist;
+        let bridgeDist = connDist * 1.8;
+        let bridgeDistSq = bridgeDist * bridgeDist;
+
+        for (let i = 0; i < nodes.length; i++) {
+            for (let j = i + 1; j < nodes.length; j++) {
+                let a = nodes[i], b = nodes[j];
+                let dx = a.x - b.x, dy = a.y - b.y;
+                let dSq = dx*dx + dy*dy;
+
+                let isBridge = a.clusterId !== b.clusterId;
+                let maxDistSq = isBridge ? bridgeDistSq : connDistSq;
+
+                if (dSq < maxDistSq) {
+                    let d = sqrt(dSq);
+                    let maxD = isBridge ? bridgeDist : connDist;
+                    let alpha = map(d, 0, maxD, isBridge ? 50 : 30, 0);
+
+                    if (isBridge) {
+                        // Bridge edges glow amber/warm white
+                        let bCol = hexToRgbArr(params.colorBridge);
+                        alpha *= params.bridgeGlow;
+                        // Subtle glow: draw twice with different widths
+                        stroke(bCol[0], bCol[1], bCol[2], alpha * 0.4);
+                        strokeWeight(2.5);
+                        line(a.x, a.y, b.x, b.y);
+                        stroke(bCol[0], bCol[1], bCol[2], alpha);
+                        strokeWeight(0.6);
+                        line(a.x, a.y, b.x, b.y);
+                    } else {
+                        // Intra-cluster edges: muted
+                        let mCol = hexToRgbArr(params.colorMuted);
+                        stroke(mCol[0], mCol[1], mCol[2], alpha * 0.6);
+                        strokeWeight(0.4);
+                        line(a.x, a.y, b.x, b.y);
+                    }
+                }
+            }
+        }
+
+        // Draw nodes
+        noStroke();
+        for (let n of nodes) {
+            let col = getNodeColor(n);
+            let pulse = sin(frameCount_ * n.pulseSpeed + n.phase);
+            let pulseMapped = map(pulse, -1, 1, 0.6, 1.0);
+            let energyAlpha = map(n.energy, 0, 1, 80, 255);
+            let currentAlpha = energyAlpha * pulseMapped;
+
+            // Glow for high-energy nodes
+            if (n.energy > 0.55 && params.pulseIntensity > 0) {
+                let glowR = n.r * map(n.energy, 0.55, 1, 2, 5);
+                let glowAlpha = map(pulse, -1, 1, 2, 12) * params.pulseIntensity * n.energy;
+                fill(col[0], col[1], col[2], glowAlpha);
+                ellipse(n.x, n.y, glowR * 2, glowR * 2);
+            }
+
+            // Core node
+            fill(col[0], col[1], col[2], currentAlpha);
+            ellipse(n.x, n.y, n.r * 2, n.r * 2);
+
+            // Bright center dot for synthesis/integration
+            if (n.type.name === 'synthesis' || n.type.name === 'integration') {
+                fill(col[0], col[1], col[2], currentAlpha * 1.2);
+                ellipse(n.x, n.y, n.r * 0.6, n.r * 0.6);
+            }
+        }
+
+        // Central bodhi seed circle
+        let seedPulse = sin(frameCount_ * 0.012) * 0.1 + 0.9;
+        noFill();
+        stroke(amber[0], amber[1], amber[2], 40 * seedPulse);
+        strokeWeight(1.5);
+        ellipse(cx, cy, 60, 60);
+        stroke(amber[0], amber[1], amber[2], 20 * seedPulse);
+        strokeWeight(0.8);
+        ellipse(cx, cy, 90, 90);
+
+        // Grain overlay
+        if (params.grainOpacity > 0) {
+            push();
+            blendMode(OVERLAY);
+            tint(255, params.grainOpacity);
+            image(grainBuffer, 0, 0);
+            pop();
+        }
+    }
+
+    function pickNodeType() {
+        let r = random();
+        let cumulative = 0;
+        for (let t of NODE_TYPES) {
+            cumulative += t.weight;
+            if (r <= cumulative) return t;
+        }
+        return NODE_TYPES[0];
+    }
+
+    function exportImage() {
+        saveCanvas('openbodhi-emergence-' + params.seed, 'png');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // UI CONTROL HANDLERS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function updateParam(name, value) {
+        params[name] = parseFloat(value);
+        document.getElementById(name + '-value').textContent = value;
+        // Structural changes need full reinit
+        if (name === 'nodeCount' || name === 'clusterTightness') {
+            initializeSystem();
+        }
+    }
+
+    function updateColor(id, value) {
+        let paramKey = id;
+        params[paramKey] = value;
+        document.getElementById(id + '-value').textContent = value;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SEED CONTROLS (FIXED)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function updateSeedDisplay() {
+        document.getElementById('seed-input').value = params.seed;
+    }
+    function updateSeed() {
+        let v = parseInt(document.getElementById('seed-input').value);
+        if (v && v > 0) { params.seed = v; initializeSystem(); }
+        else updateSeedDisplay();
+    }
+    function previousSeed() { params.seed = Math.max(1, params.seed - 1); updateSeedDisplay(); initializeSystem(); }
+    function nextSeed() { params.seed++; updateSeedDisplay(); initializeSystem(); }
+    function randomSeedAndUpdate() { params.seed = Math.floor(Math.random() * 999999) + 1; updateSeedDisplay(); initializeSystem(); }
+
+    function resetParameters() {
+        params = JSON.parse(JSON.stringify(defaultParams));
+        // Update all UI elements
+        document.getElementById('nodeCount').value = params.nodeCount;
+        document.getElementById('nodeCount-value').textContent = params.nodeCount;
+        document.getElementById('connectionDist').value = params.connectionDist;
+        document.getElementById('connectionDist-value').textContent = params.connectionDist;
+        document.getElementById('clusterTightness').value = params.clusterTightness;
+        document.getElementById('clusterTightness-value').textContent = params.clusterTightness;
+        document.getElementById('driftSpeed').value = params.driftSpeed;
+        document.getElementById('driftSpeed-value').textContent = params.driftSpeed;
+        document.getElementById('pulseIntensity').value = params.pulseIntensity;
+        document.getElementById('pulseIntensity-value').textContent = params.pulseIntensity;
+        document.getElementById('bridgeGlow').value = params.bridgeGlow;
+        document.getElementById('bridgeGlow-value').textContent = params.bridgeGlow;
+        document.getElementById('grainOpacity').value = params.grainOpacity;
+        document.getElementById('grainOpacity-value').textContent = params.grainOpacity;
+        document.getElementById('colorAmber').value = params.colorAmber;
+        document.getElementById('colorAmber-value').textContent = params.colorAmber;
+        document.getElementById('colorSage').value = params.colorSage;
+        document.getElementById('colorSage-value').textContent = params.colorSage;
+        document.getElementById('colorBridge').value = params.colorBridge;
+        document.getElementById('colorBridge-value').textContent = params.colorBridge;
+        updateSeedDisplay();
+        initializeSystem();
+    }
+
+    window.addEventListener('load', updateSeedDisplay);
+    </script>
+</body>
+</html>
