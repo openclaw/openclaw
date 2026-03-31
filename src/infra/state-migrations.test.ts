@@ -99,16 +99,14 @@ describe("state migrations", () => {
     expect(detected.whatsappAuth.hasLegacy).toBe(true);
     expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
     expect(detected.pairingAllowFrom.copyPlans.map((plan) => plan.targetPath)).toEqual([
-      resolveChannelAllowFromPath("telegram", env, "alpha"),
-      resolveChannelAllowFromPath("telegram", env, "beta"),
+      resolveChannelAllowFromPath("telegram", env, "default"),
     ]);
     expect(detected.preview).toEqual([
       `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
       `- Sessions: canonicalize legacy keys in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       `- Agent dir: ${path.join(stateDir, "agent")} → ${path.join(stateDir, "agents", "worker-1", "agent")}`,
       `- WhatsApp auth: ${path.join(stateDir, "credentials")} → ${path.join(stateDir, "credentials", "whatsapp", "default")} (keep oauth.json)`,
-      `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
+      `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "default")}`,
     ]);
   });
 
@@ -134,8 +132,7 @@ describe("state migrations", () => {
       "Moved agent file settings.json → agents/worker-1/agent",
       "Moved WhatsApp auth creds.json → whatsapp/default",
       "Moved WhatsApp auth pre-key-1.json → whatsapp/default",
-      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
+      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "default")}`,
     ]);
 
     const mergedStore = JSON.parse(
@@ -173,10 +170,13 @@ describe("state migrations", () => {
       fs.readFile(path.join(stateDir, "credentials", "oauth.json"), "utf8"),
     ).resolves.toContain('"oauth":true');
     await expect(
-      fs.readFile(resolveChannelAllowFromPath("telegram", env, "alpha"), "utf8"),
+      fs.readFile(resolveChannelAllowFromPath("telegram", env, "default"), "utf8"),
     ).resolves.toBe('["123","456"]\n');
     await expect(
-      fs.readFile(resolveChannelAllowFromPath("telegram", env, "beta"), "utf8"),
-    ).resolves.toBe('["123","456"]\n');
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "alpha")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "beta")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
