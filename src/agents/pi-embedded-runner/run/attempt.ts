@@ -245,6 +245,28 @@ export function resolveEmbeddedAgentStreamFn(params: {
   return currentStreamFn;
 }
 
+export function buildBeforeModelCallEvent(params: {
+  runId: string;
+  sessionId: string;
+  provider: string;
+  model: string;
+  api?: string;
+  callId: string;
+  systemPrompt?: string;
+  requestMessages: unknown[];
+}) {
+  return {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.model,
+    api: params.api,
+    callId: params.callId,
+    systemPrompt: params.systemPrompt,
+    requestMessages: params.requestMessages,
+  };
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -1075,6 +1097,125 @@ export async function runEmbeddedAttempt(
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
         );
+      }
+
+      // Wrap streamFn to fire before_model_call / after_model_call hooks around
+      // every real provider invocation so plugins can observe the exact messages
+      // sent to the model and the outcome of each call.
+      if (hookRunner?.hasHooks("before_model_call") || hookRunner?.hasHooks("after_model_call")) {
+        const innerForHooks = activeSession.agent.streamFn;
+        let modelCallCounter = 0;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const callId = `${params.runId}-${++modelCallCounter}`;
+          const hookCtxForCall = {
+            runId: params.runId,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: params.workspaceDir,
+            messageProvider: params.messageProvider ?? undefined,
+            trigger: params.trigger,
+            channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          };
+          const requestMessages = (context as unknown as { messages?: unknown[] }).messages ?? [];
+          if (hookRunner?.hasHooks("before_model_call")) {
+            hookRunner
+              .runBeforeModelCall(
+                buildBeforeModelCallEvent({
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                  provider: params.provider,
+                  model: params.modelId,
+                  api: params.model.api,
+                  callId,
+                  systemPrompt: systemPromptText,
+                  requestMessages,
+                }),
+                hookCtxForCall,
+              )
+              .catch((err) => {
+                log.warn(`before_model_call hook failed: ${String(err)}`);
+              });
+          }
+          const startMs = Date.now();
+          const result = innerForHooks(model, context, options);
+          // Wrap the stream to intercept .result() and capture the response
+          // message for the after_model_call hook. The stream is an async
+          // iterable with a .result() method that resolves to the full
+          // AssistantMessage once the stream is consumed.
+          if (hookRunner?.hasHooks("after_model_call")) {
+            const fireAfterModelCall = (responseMessage?: unknown, error?: string) => {
+              hookRunner
+                .runAfterModelCall(
+                  {
+                    runId: params.runId,
+                    sessionId: params.sessionId,
+                    provider: params.provider,
+                    model: params.modelId,
+                    api: params.model.api,
+                    callId,
+                    durationMs: Date.now() - startMs,
+                    ...(error != null ? { error } : {}),
+                    ...(responseMessage != null ? { responseMessage } : {}),
+                  },
+                  hookCtxForCall,
+                )
+                .catch((hookErr) => {
+                  log.warn(`after_model_call hook failed: ${String(hookErr)}`);
+                });
+            };
+
+            // Wrap the resolved stream to intercept .result() and capture
+            // the full assistant message for the after_model_call hook.
+            const wrapStreamForAfterHook = (stream: unknown) => {
+              if (
+                stream &&
+                typeof stream === "object" &&
+                "result" in stream &&
+                typeof (stream as { result: unknown }).result === "function"
+              ) {
+                const originalResult = (stream as { result: () => Promise<unknown> }).result.bind(
+                  stream,
+                );
+                (stream as { result: () => Promise<unknown> }).result = async () => {
+                  try {
+                    const message = await originalResult();
+                    fireAfterModelCall(message);
+                    return message;
+                  } catch (err) {
+                    fireAfterModelCall(undefined, String(err));
+                    throw err;
+                  }
+                };
+              } else {
+                // Fallback: no .result() method; fire without response
+                Promise.resolve(stream).then(
+                  () => fireAfterModelCall(),
+                  (err) => fireAfterModelCall(undefined, String(err)),
+                );
+              }
+              return stream;
+            };
+
+            // Handle both sync and async (Promise-wrapped) stream returns
+            if (
+              result &&
+              typeof result === "object" &&
+              "then" in result &&
+              typeof (result as { then: unknown }).then === "function"
+            ) {
+              return (result as Promise<unknown>).then(
+                (resolved) => wrapStreamForAfterHook(resolved),
+                (err) => {
+                  fireAfterModelCall(undefined, String(err));
+                  throw err;
+                },
+              ) as typeof result;
+            }
+            wrapStreamForAfterHook(result);
+          }
+          return result;
+        };
       }
 
       try {
