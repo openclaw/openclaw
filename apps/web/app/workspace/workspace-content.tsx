@@ -1158,6 +1158,12 @@ function WorkspacePageInner() {
     [],
   );
 
+  const handleOpenSettings = useCallback((initialTab?: string) => {
+    openTabForNode({ path: "~settings", name: "Settings", type: "folder" });
+    setActivePath("~settings");
+    setContent({ kind: "settings", initialTab });
+  }, [openTabForNode]);
+
   const handleNodeSelect = useCallback(
     (node: TreeNode) => {
       // --- Browse-mode: detect special OpenClaw directories ---
@@ -2087,12 +2093,6 @@ function WorkspacePageInner() {
     const tab = openBlankChatTab();
     sendMessageInChatTab(tab.id, message);
   }, [openBlankChatTab, sendMessageInChatTab]);
-
-  const handleOpenSettings = useCallback((initialTab?: string) => {
-    openTabForNode({ path: "~settings", name: "Settings", type: "folder" });
-    setActivePath("~settings");
-    setContent({ kind: "settings", initialTab });
-  }, [openTabForNode]);
 
   // Derive the active session's title for the header / right sidebar
   const activeSessionTitle = useMemo(() => {
