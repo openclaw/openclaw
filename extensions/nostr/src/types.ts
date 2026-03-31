@@ -7,11 +7,7 @@ import {
   listCombinedAccountIds,
   resolveListedDefaultAccountId,
 } from "openclaw/plugin-sdk/account-resolution";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-  type SecretInput,
-} from "openclaw/plugin-sdk/secret-input";
+import { normalizeSecretInputString, type SecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { OpenClawConfig } from "../api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
@@ -54,9 +50,10 @@ export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
   const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
     | NostrAccountConfig
     | undefined;
+  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey);
   return listCombinedAccountIds({
     configuredAccountIds: [],
-    implicitAccountId: hasConfiguredSecretInput(nostrCfg?.privateKey)
+    implicitAccountId: privateKey
       ? (resolveConfiguredDefaultNostrAccountId(cfg) ?? DEFAULT_ACCOUNT_ID)
       : undefined,
   });
@@ -86,7 +83,7 @@ export function resolveNostrAccount(opts: {
 
   const baseEnabled = nostrCfg?.enabled !== false;
   const privateKey = normalizeSecretInputString(nostrCfg?.privateKey) ?? "";
-  const configured = hasConfiguredSecretInput(nostrCfg?.privateKey);
+  const configured = Boolean(privateKey);
 
   let publicKey = "";
   if (privateKey) {

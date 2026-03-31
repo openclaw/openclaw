@@ -227,7 +227,7 @@ describe("nostr account helpers", () => {
       expect(listNostrAccountIds(cfg)).toEqual(["work"]);
     });
 
-    it("treats SecretRef privateKey as configured", () => {
+    it("does not treat unresolved SecretRef privateKey as configured", () => {
       const cfg = {
         channels: {
           nostr: {
@@ -239,7 +239,7 @@ describe("nostr account helpers", () => {
           },
         },
       };
-      expect(listNostrAccountIds(cfg)).toEqual(["default"]);
+      expect(listNostrAccountIds(cfg)).toEqual([]);
     });
   });
 
@@ -329,7 +329,7 @@ describe("nostr account helpers", () => {
       expect(account.publicKey).toBe("");
     });
 
-    it("treats SecretRef privateKey as configured without trimming objects", () => {
+    it("does not treat unresolved SecretRef privateKey as configured", () => {
       const secretRef = {
         source: "env" as const,
         provider: "default",
@@ -344,7 +344,7 @@ describe("nostr account helpers", () => {
       };
       const account = resolveNostrAccount({ cfg });
 
-      expect(account.configured).toBe(true);
+      expect(account.configured).toBe(false);
       expect(account.privateKey).toBe("");
       expect(account.publicKey).toBe("");
       expect(account.config.privateKey).toEqual(secretRef);
@@ -372,7 +372,7 @@ describe("nostr account helpers", () => {
   });
 
   describe("setup wizard", () => {
-    it("treats SecretRef privateKey as already configured", () => {
+    it("keeps unresolved SecretRef privateKey visible without marking the account configured", () => {
       const secretRef = {
         source: "env" as const,
         provider: "default",
@@ -391,7 +391,7 @@ describe("nostr account helpers", () => {
       }
 
       expect(credential.inspect({ cfg, accountId: "default" })).toEqual({
-        accountConfigured: true,
+        accountConfigured: false,
         hasConfiguredValue: true,
         resolvedValue: undefined,
         envValue: undefined,
