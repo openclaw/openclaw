@@ -11,6 +11,9 @@ title: "GLM Models"
 GLM is a **model family** (not a company) available through the Z.AI platform. In OpenClaw, GLM
 models are accessed via the `zai` provider and model IDs like `zai/glm-5`.
 
+GLM models are also available via the [`dinference`](/docs/providers/dinference) provider, which offers
+open-source model access with different pricing and availability.
+
 ## CLI setup
 
 ```bash
