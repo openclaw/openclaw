@@ -208,6 +208,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/outbound: restore runtime send/action routing and outbound compatibility after the recent channel seam refactor so outbound sends, reactions, and related media actions keep reaching the active session.
 - xAI/Responses: normalize image-bearing tool results for xAI responses payloads, including OpenResponses-style `input_image.source` parts, so image tool replays no longer 422 on the follow-up turn. (#58017) Thanks @neeravmakwana.
 - Zalo/webhooks: scope replay dedupe to the authenticated target so one configured account can no longer cause same-id inbound events for another target to be dropped. Thanks @smaeljaish771 and @vincentkoc.
+- Agents/live sessions: make persisted `/model` overrides win over stale runtime model fields and keep provider/model resolution on the same tier, so interactive sessions and cron runs stop selecting the wrong live model. (#58461) Thanks @prue-starfield.
 
 ## 2026.3.28
 
