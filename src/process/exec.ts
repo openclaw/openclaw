@@ -229,6 +229,19 @@ export async function runCommandWithTimeout(
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
   const usesWindowsExitCodeShim =
     process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
+
+  const shouldAssumeWindowsShimSuccess = (params: {
+    signal: NodeJS.Signals | null;
+    timedOut: boolean;
+    noOutputTimedOut: boolean;
+    killed: boolean;
+  }): boolean =>
+    usesWindowsExitCodeShim &&
+    params.signal == null &&
+    !params.timedOut &&
+    !params.noOutputTimedOut &&
+    !params.killed;
+
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
     useCmdWrapper
@@ -344,17 +357,18 @@ export async function runCommandWithTimeout(
       clearNoOutputTimer();
       clearCloseFallbackTimer();
       const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
-      const resolvedCode =
-        childExitState?.code ??
-        code ??
-        child.exitCode ??
-        (usesWindowsExitCodeShim &&
-        resolvedSignal == null &&
-        !timedOut &&
-        !noOutputTimedOut &&
-        !child.killed
-          ? 0
-          : null);
+      let resolvedCode = childExitState?.code ?? code ?? child.exitCode ?? null;
+      if (
+        resolvedCode == null &&
+        shouldAssumeWindowsShimSuccess({
+          signal: resolvedSignal,
+          timedOut,
+          noOutputTimedOut,
+          killed: child.killed,
+        })
+      ) {
+        resolvedCode = 0;
+      }
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut

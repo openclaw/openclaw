@@ -7,12 +7,12 @@ import {
   getAgentScopedMediaLocalRoots,
   logInboundDrop,
   logTypingFailure,
+  ensureConfiguredAcpBindingReady,
   type PluginRuntime,
   type ReplyPayload,
   type RuntimeEnv,
   type RuntimeLogger,
-} from "openclaw/plugin-sdk/matrix";
-import { ensureConfiguredAcpBindingReady } from "openclaw/plugin-sdk/matrix-runtime-heavy";
+} from "../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
 import {
