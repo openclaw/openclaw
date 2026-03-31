@@ -659,6 +659,23 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([]);
   });
 
+  it("drops telegram <br>-only payload after sanitization converts it to \\n", async () => {
+    // Regression: sanitizeForPlainText converts <br> → "\n" before delivery.
+    // normalizeEmptyPayloadForDelivery must run on the sanitized payload so that
+    // the resulting whitespace-only text is caught and the payload dropped rather
+    // than forwarded to Telegram as a blank message (which causes a 400 error).
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    await withEnvAsync({ TELEGRAM_BOT_TOKEN: "" }, async () => {
+      const results = await deliverTelegramPayload({
+        sendTelegram,
+        payload: { text: "<br>" },
+      });
+
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(results).toEqual([]);
+    });
+  });
+
   it("preserves fenced blocks for markdown chunkers in newline mode", async () => {
     const chunker = vi.fn((text: string) => (text ? [text] : []));
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
