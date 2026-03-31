@@ -329,6 +329,7 @@ function describeMSTeamsMessageTool({
           "react",
           "reactions",
           "search",
+          "member-info",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -840,6 +841,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 return jsonMSTeamsOkActionResult("search", result);
               },
             });
+          }
+
+          if (ctx.action === "member-info") {
+            const userId = typeof ctx.params.userId === "string" ? ctx.params.userId.trim() : "";
+            if (!userId) {
+              return actionError("member-info requires a userId.");
+            }
+            const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getMemberInfoMSTeams({ cfg: ctx.cfg, userId });
+            return jsonMSTeamsOkActionResult("member-info", result);
           }
 
           // Return null to fall through to default handler
