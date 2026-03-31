@@ -202,13 +202,20 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
+  private readonly handler: DiscordMessageHandler;
+  private readonly logger?: Logger;
+  private readonly onEvent?: () => void;
+
   constructor(
-    private handler: DiscordMessageHandler,
-    private logger?: Logger,
-    private onEvent?: () => void,
+    handler: DiscordMessageHandler,
+    logger?: Logger,
+    onEvent?: () => void,
     _options?: { timeoutMs?: number },
   ) {
     super();
+    this.handler = handler;
+    this.logger = logger;
+    this.onEvent = onEvent;
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
@@ -227,8 +234,11 @@ export class DiscordMessageListener extends MessageCreateListener {
 }
 
 export class DiscordReactionListener extends MessageReactionAddListener {
-  constructor(private params: DiscordReactionListenerParams) {
+  private readonly params: DiscordReactionListenerParams;
+
+  constructor(params: DiscordReactionListenerParams) {
     super();
+    this.params = params;
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
@@ -245,8 +255,11 @@ export class DiscordReactionListener extends MessageReactionAddListener {
 }
 
 export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
-  constructor(private params: DiscordReactionListenerParams) {
+  private readonly params: DiscordReactionListenerParams;
+
+  constructor(params: DiscordReactionListenerParams) {
     super();
+    this.params = params;
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
@@ -731,12 +744,15 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
 type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 
 export class DiscordThreadUpdateListener extends ThreadUpdateListener {
-  constructor(
-    private cfg: OpenClawConfig,
-    private accountId: string,
-    private logger?: Logger,
-  ) {
+  private readonly cfg: OpenClawConfig;
+  private readonly accountId: string;
+  private readonly logger?: Logger;
+
+  constructor(cfg: OpenClawConfig, accountId: string, logger?: Logger) {
     super();
+    this.cfg = cfg;
+    this.accountId = accountId;
+    this.logger = logger;
   }
 
   async handle(data: ThreadUpdateEvent) {
