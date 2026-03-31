@@ -202,6 +202,8 @@ export const CreateResponseBodySchema = z
       })
       .optional(),
     truncation: z.enum(["auto", "disabled"]).optional(),
+    /** OpenClaw extension: per-request skill allowlist override. */
+    skills: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
