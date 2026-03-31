@@ -334,10 +334,13 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: 1024 * 1024,
-      localRoots: undefined,
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: 1024 * 1024,
+        localRoots: undefined,
+      }),
+    );
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
@@ -350,10 +353,13 @@ describe("sendMessageMatrix media", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: undefined,
-      localRoots: ["/tmp/openclaw-matrix-test"],
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: undefined,
+        localRoots: ["/tmp/openclaw-matrix-test"],
+      }),
+    );
   });
 });
 

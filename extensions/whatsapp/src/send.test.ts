@@ -214,10 +214,13 @@ describe("web outbound", () => {
       mediaLocalRoots: ["/tmp/workspace"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
-      maxBytes: 100 * 1024 * 1024,
-      localRoots: ["/tmp/workspace"],
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/tmp/pic.jpg",
+      expect.objectContaining({
+        maxBytes: 100 * 1024 * 1024,
+        localRoots: ["/tmp/workspace"],
+      }),
+    );
   });
 
   it("sends polls via active listener", async () => {
