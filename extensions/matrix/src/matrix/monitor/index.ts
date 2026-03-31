@@ -26,6 +26,7 @@ import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 
@@ -213,12 +214,20 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // Cold starts should ignore old room history, but once we have a persisted
   // /sync cursor we want restart backlogs to replay just like other channels.
   const dropPreStartupMessages = !client.hasPersistedSyncState();
-  const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
+  const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+  const directTracker = createDirectRoomTracker(client, {
+    log: logVerboseMessage,
+    canPromoteRecentInvite: async (roomId) =>
+      shouldPromoteRecentInviteRoom({
+        roomId,
+        roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+        rooms: roomsConfig,
+      }),
+  });
   registerMatrixAutoJoin({ client, accountConfig, runtime });
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
 
-  const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
   const handleRoomMessage = createMatrixRoomMessageHandler({
     client,
     core,
