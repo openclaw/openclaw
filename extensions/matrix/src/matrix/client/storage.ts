@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../account-selection.js";
-import { maybeCreateMatrixMigrationSnapshot, normalizeAccountId } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   resolveMatrixAccountStorageRoot,
@@ -337,6 +337,9 @@ export async function maybeMigrateLegacyStorage(params: {
   });
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
+  const { maybeCreateMatrixMigrationSnapshot } = await import(
+    "./migration-snapshot.runtime.js"
+  );
   await maybeCreateMatrixMigrationSnapshot({
     trigger: "matrix-client-fallback",
     env: params.env,
