@@ -17,7 +17,7 @@ const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 const COPILOT_REASONING_UNSUPPORTED_MODEL_IDS = ["gpt-5-mini"] as const;
 
-function isCopilotReasoningUnsupportedModel(modelId: unknown): boolean {
+export function isCopilotReasoningUnsupportedModel(modelId: unknown): boolean {
   if (typeof modelId !== "string") {
     return false;
   }
@@ -29,7 +29,7 @@ function isCopilotReasoningUnsupportedModel(modelId: unknown): boolean {
 
 type CopilotStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
 
-function createCopilotPayloadCompatibilityWrapper(
+export function createCopilotPayloadCompatibilityWrapper(
   streamFn: ProviderWrapStreamFnContext["streamFn"],
 ): ProviderWrapStreamFnContext["streamFn"] {
   if (!streamFn) {
