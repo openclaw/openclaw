@@ -684,6 +684,9 @@ export async function runWithModelFallback<T>(params: {
           // appears later in the fallback chain (e.g. same provider, different
           // model), that fallback candidate deserves its own probe attempt.
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
+          // Primary probes must not consume a shared-provider slot — the
+          // primary is always probed near cooldown expiry as a recovery
+          // mechanism, and blocking same-provider fallbacks would stall the chain.
           if (
             isTransientCooldownReason &&
             !isPrimary &&
@@ -716,6 +719,7 @@ export async function runWithModelFallback<T>(params: {
           }
           runOptions = { allowTransientCooldownProbe: true };
           if (isTransientCooldownReason && !isPrimary) {
+            // Only non-primary probes mark the provider slot as consumed.
             transientProbeProviderForAttempt = candidate.provider;
           }
         }

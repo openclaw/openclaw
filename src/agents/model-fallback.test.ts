@@ -1538,6 +1538,65 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(4, "openrouter", "openrouter/claude-opus-4.6");
     });
 
+    it("non-primary fallbacks still deduplicate among themselves on the same provider", async () => {
+      // After primary probe, two same-provider non-primary fallbacks:
+      // the first should probe, the second should be skipped.
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const now = Date.now();
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "sub2api:default": { type: "api_key", provider: "sub2api", key: "test-key" },
+          "groq:default": { type: "api_key", provider: "groq", key: "test-key" },
+        },
+        usageStats: {
+          "sub2api:default": {
+            cooldownUntil: now + 60000,
+            failureCounts: { rate_limit: 1 },
+          },
+        },
+      };
+      saveAuthProfileStore(store, tmpDir);
+
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "sub2api/claude-opus-4-6",
+              fallbacks: [
+                "sub2api/claude-sonnet-4-6",
+                "sub2api/claude-haiku-3-5",
+                "groq/llama-3.3-70b-versatile",
+              ],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("sub2api opus timeout")) // primary probe
+        .mockRejectedValueOnce(new Error("sub2api sonnet also down")) // first non-primary probe
+        // sub2api/haiku skipped (non-primary slot already consumed for sub2api)
+        .mockResolvedValueOnce("groq success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "sub2api",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: tmpDir,
+      });
+
+      expect(result.result).toBe("groq success");
+      // primary + sonnet (first non-primary probe) + groq; haiku skipped
+      expect(run).toHaveBeenCalledTimes(3);
+      expect(run).toHaveBeenNthCalledWith(2, "sub2api", "claude-sonnet-4-6", {
+        allowTransientCooldownProbe: true,
+      });
+      expect(run).toHaveBeenNthCalledWith(3, "groq", "llama-3.3-70b-versatile");
+    });
+
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
       const cfg = makeCfg({
