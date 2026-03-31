@@ -116,6 +116,9 @@ Docs: https://docs.openclaw.ai
 - MS Teams: replace the deprecated Teams SDK HttpPlugin stub with `httpServerAdapter` so recurring gateway deprecation warnings stop firing and the Express 5 compatibility workaround stays on the supported SDK path. (#60939) Thanks @coolramukaka-sys.
 - CLI/Commander: preserve Commander-computed exit codes for argument and help-error paths, and cover the user-argv parse mode in the regression tests so invalid CLI invocations no longer report success when exits are intercepted. (#60923) Thanks @Linux2010.
 
+
+- Gateway: honor \gents.defaults.mediaMaxMb\ for inbound attachment size validation across all gateway RPC entry points (\chat.send\, \gent.send\, share); previously this config key was ignored and the limit was always 5 MB. Values above the WS transport budget (~18.74 MiB) are clamped automatically. (#50215)
+
 ## 2026.4.2
 
 ### Breaking

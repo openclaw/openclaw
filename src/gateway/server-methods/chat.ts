@@ -41,6 +41,7 @@ import {
   MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
+  resolveInboundMediaMaxBytes,
 } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
@@ -1530,7 +1531,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
+          maxBytes: resolveInboundMediaMaxBytes(cfg),
           log: context.logGateway,
           supportsImages,
         });

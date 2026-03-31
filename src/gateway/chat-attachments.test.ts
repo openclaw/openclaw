@@ -3,7 +3,12 @@ import {
   buildMessageWithAttachments,
   type ChatAttachment,
   parseMessageWithAttachments,
+  resolveInboundMediaMaxBytes,
 } from "./chat-attachments.js";
+import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+
+const WS_JSON_OVERHEAD = 4 * 1024;
+const WS_INBOUND_MAX_BYTES = Math.floor(((MAX_PAYLOAD_BYTES - WS_JSON_OVERHEAD) * 3) / 4);
 
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -176,5 +181,50 @@ describe("shared attachment validation", () => {
     } finally {
       fromSpy.mockRestore();
     }
+  });
+});
+
+describe("resolveInboundMediaMaxBytes", () => {
+  it("returns 5_000_000 when config is undefined", () => {
+    expect(resolveInboundMediaMaxBytes(undefined)).toBe(5_000_000);
+  });
+
+  it("returns 5_000_000 when agents.defaults.mediaMaxMb is not set", () => {
+    expect(resolveInboundMediaMaxBytes({})).toBe(5_000_000);
+    expect(resolveInboundMediaMaxBytes({ agents: {} })).toBe(5_000_000);
+    expect(resolveInboundMediaMaxBytes({ agents: { defaults: {} } })).toBe(5_000_000);
+  });
+
+  it("converts mediaMaxMb to bytes (binary MiB)", () => {
+    expect(resolveInboundMediaMaxBytes({ agents: { defaults: { mediaMaxMb: 10 } } })).toBe(
+      10 * 1024 * 1024,
+    );
+  });
+
+  it("clamps to WS budget when configured value exceeds it", () => {
+    const huge = { agents: { defaults: { mediaMaxMb: 9999 } } };
+    expect(resolveInboundMediaMaxBytes(huge)).toBe(WS_INBOUND_MAX_BYTES);
+  });
+
+  it("accepts a value equal to the WS budget", () => {
+    const exactMb = WS_INBOUND_MAX_BYTES / (1024 * 1024);
+    const result = resolveInboundMediaMaxBytes({
+      agents: { defaults: { mediaMaxMb: exactMb } },
+    });
+    expect(result).toBe(WS_INBOUND_MAX_BYTES);
+  });
+
+  it("rejects values above the WS budget via clamping", () => {
+    const overMb = (WS_INBOUND_MAX_BYTES + 1024 * 1024) / (1024 * 1024);
+    const result = resolveInboundMediaMaxBytes({
+      agents: { defaults: { mediaMaxMb: overMb } },
+    });
+    expect(result).toBeLessThanOrEqual(WS_INBOUND_MAX_BYTES);
+  });
+
+  it("small configured value is returned as-is", () => {
+    expect(resolveInboundMediaMaxBytes({ agents: { defaults: { mediaMaxMb: 1 } } })).toBe(
+      1 * 1024 * 1024,
+    );
   });
 });

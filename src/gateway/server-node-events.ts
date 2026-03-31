@@ -21,6 +21,7 @@ import {
   registerApnsRegistration,
   requestHeartbeatNow,
   resolveGatewayModelSupportsImages,
+  resolveInboundMediaMaxBytes,
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
@@ -391,7 +392,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         });
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-            maxBytes: 5_000_000,
+            maxBytes: resolveInboundMediaMaxBytes(cfg),
             log: ctx.logGateway,
             supportsImages,
           });
