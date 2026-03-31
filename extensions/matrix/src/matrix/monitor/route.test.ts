@@ -25,6 +25,7 @@ function resolveDmRoute(cfg: OpenClawConfig) {
     senderId: "@alice:example.org",
     isDirectMessage: true,
     messageId: "$msg1",
+    effectiveThreadReplies: "inbound",
     resolveAgentRoute,
   });
 }
@@ -205,6 +206,7 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
       isDirectMessage: false,
       messageId: "$reply1",
       threadRootId: "$thread-root",
+      effectiveThreadReplies: "inbound",
       resolveAgentRoute,
     });
 
@@ -221,6 +223,7 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
       isDirectMessage: false,
       messageId: "$thread-root",
       threadRootId: "$thread-root",
+      effectiveThreadReplies: "inbound",
       resolveAgentRoute,
     });
 
@@ -235,9 +238,44 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
       senderId: "@alice:example.org",
       isDirectMessage: false,
       messageId: "$msg1",
+      effectiveThreadReplies: "inbound",
       resolveAgentRoute,
     });
 
     expect(route.sessionKey).not.toContain(":thread:");
+  });
+
+  it("keeps room sessions flat when threadReplies is off", () => {
+    const { route } = resolveMatrixInboundRoute({
+      cfg: baseCfg as never,
+      accountId: "ops",
+      roomId: "!room:example.org",
+      senderId: "@alice:example.org",
+      isDirectMessage: false,
+      messageId: "$reply1",
+      threadRootId: "$thread-root",
+      effectiveThreadReplies: "off",
+      resolveAgentRoute,
+    });
+
+    expect(route.sessionKey).not.toContain(":thread:");
+    expect(route.mainSessionKey).not.toContain(":thread:");
+  });
+
+  it("keeps DM sessions flat when dm.threadReplies overrides threading off", () => {
+    const { route } = resolveMatrixInboundRoute({
+      cfg: baseCfg as never,
+      accountId: "ops",
+      roomId: "!dm:example.org",
+      senderId: "@alice:example.org",
+      isDirectMessage: true,
+      messageId: "$reply1",
+      threadRootId: "$thread-root",
+      effectiveThreadReplies: "off",
+      resolveAgentRoute,
+    });
+
+    expect(route.sessionKey).not.toContain(":thread:");
+    expect(route.mainSessionKey).not.toContain(":thread:");
   });
 });

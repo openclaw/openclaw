@@ -1,6 +1,8 @@
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { RelationType } from "./types.js";
 
+type MatrixThreadReplies = "off" | "inbound" | "always";
+
 function resolveMatrixRelatedReplyToEventId(relates: unknown): string | undefined {
   if (!relates || typeof relates !== "object") {
     return undefined;
@@ -17,8 +19,33 @@ function resolveMatrixRelatedReplyToEventId(relates: unknown): string | undefine
   return undefined;
 }
 
+export function resolveMatrixEffectiveThreadReplies(params: {
+  isDirectMessage: boolean;
+  threadReplies: MatrixThreadReplies;
+  dmThreadReplies?: MatrixThreadReplies;
+}): MatrixThreadReplies {
+  return params.isDirectMessage && params.dmThreadReplies !== undefined
+    ? params.dmThreadReplies
+    : params.threadReplies;
+}
+
+export function resolveMatrixThreadSessionId(params: {
+  effectiveThreadReplies: MatrixThreadReplies;
+  messageId: string;
+  threadRootId?: string;
+  isThreadRoot?: boolean;
+}): string | undefined {
+  if (params.effectiveThreadReplies === "off") {
+    return undefined;
+  }
+  const isThreadRoot = params.isThreadRoot === true;
+  return params.threadRootId && params.threadRootId !== params.messageId && !isThreadRoot
+    ? params.threadRootId
+    : undefined;
+}
+
 export function resolveMatrixThreadTarget(params: {
-  threadReplies: "off" | "inbound" | "always";
+  threadReplies: MatrixThreadReplies;
   messageId: string;
   threadRootId?: string;
   isThreadRoot?: boolean;
