@@ -62,10 +62,81 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointAllowsLocalhostCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://localhost:18789")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "localhost",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://localhost:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsIpv6LoopbackCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[::1]")
+
+    assertEquals("::1", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsIpv4MappedIpv6LoopbackCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[::ffff:127.0.0.1]")
+
+    assertEquals("::ffff:127.0.0.1", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+  }
+
+  @Test
   fun parseGatewayEndpointRejectsCleartextLoopbackPrefixBypassHost() {
     val parsed = parseGatewayEndpoint("http://127.attacker.example:80")
 
     assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsNonLoopbackIpv6CleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[2001:db8::1]")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsLinkLocalIpv6ZoneCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[fe80::1%25eth0]")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsUnspecifiedIpv4CleartextHttpUrls() {
+    val parsed = parseGatewayEndpoint("http://0.0.0.0:80")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "0.0.0.0",
+        port = 80,
+        tls = false,
+        displayUrl = "http://0.0.0.0:80",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsUnspecifiedIpv6CleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://[::]")
+
+    assertEquals("::", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
   }
 
   @Test

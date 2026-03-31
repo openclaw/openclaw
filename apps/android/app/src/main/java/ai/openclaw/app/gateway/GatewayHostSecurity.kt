@@ -18,6 +18,9 @@ internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
     host = host.substring(0, zoneIndex)
   }
   if (host.isEmpty()) return false
+  // `0.0.0.0` / `::` are unspecified addresses, but Android client connections to them
+  // still resolve only to the local device. Treat them as loopback so local gateways can
+  // continue using cleartext development flows.
   if (host == "localhost" || host == "0.0.0.0" || host == "::") return true
 
   parseIpv4Address(host)?.let { ipv4 ->
@@ -27,6 +30,7 @@ internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
 
   val address = runCatching { InetAddress.getByName(host) }.getOrNull()?.address ?: return false
   if (address.size != 16) return false
+  // `::1` is 15 zero bytes followed by `0x01`.
   val isIpv6Loopback = address.copyOfRange(0, 15).all { it == 0.toByte() } && address[15] == 1.toByte()
   if (isIpv6Loopback) return true
 
