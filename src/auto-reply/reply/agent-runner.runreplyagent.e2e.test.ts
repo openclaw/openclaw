@@ -1809,6 +1809,94 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("does not reset session on embedded context overflow during heartbeat run", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-heartbeat-embedded-overflow";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+      };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "important-conversation-data", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "context overflow", isError: true }],
+        meta: {
+          error: {
+            kind: "context_overflow",
+            message: 'Summarization failed: 400 {"message":"prompt is too long"}',
+          },
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      // Session must NOT have been reset
+      expect(sessionStore.main.sessionId).toBe(sessionId);
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionId);
+    });
+  });
+
+  it("does not reset session on embedded role ordering error during heartbeat run", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-heartbeat-embedded-role";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+      };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "important-conversation-data", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "role conflict", isError: true }],
+        meta: {
+          error: {
+            kind: "role_ordering",
+            message: 'roles must alternate between "user" and "assistant"',
+          },
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      // Session must NOT have been reset
+      expect(sessionStore.main.sessionId).toBe(sessionId);
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionId);
+    });
+  });
+
   it("rewrites Bun socket errors into friendly text", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [

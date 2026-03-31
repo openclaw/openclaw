@@ -603,7 +603,7 @@ export async function runAgentTurnWithFallback(params: {
       ) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit context overflow — skipping session reset to preserve conversation history (${embeddedError.message})`,
+            `Heartbeat run hit context overflow — skipping session reset to preserve conversation history (${sanitizeForLog(embeddedError.message)})`,
           );
           return {
             kind: "final",
@@ -623,7 +623,7 @@ export async function runAgentTurnWithFallback(params: {
       if (embeddedError?.kind === "role_ordering") {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit role ordering conflict — skipping session reset to preserve conversation history (${embeddedError.message})`,
+            `Heartbeat run hit role ordering conflict — skipping session reset to preserve conversation history (${sanitizeForLog(embeddedError.message)})`,
           );
           return {
             kind: "final",
@@ -692,7 +692,7 @@ export async function runAgentTurnWithFallback(params: {
       if (isCompactionFailure && !didResetAfterCompactionFailure) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit compaction failure — skipping session reset to preserve conversation history (${message})`,
+            `Heartbeat run hit compaction failure — skipping session reset to preserve conversation history (${sanitizeForLog(message)})`,
           );
           return {
             kind: "final",
@@ -712,7 +712,7 @@ export async function runAgentTurnWithFallback(params: {
       if (isRoleOrderingError) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit role ordering error — skipping session reset to preserve conversation history (${message})`,
+            `Heartbeat run hit role ordering error — skipping session reset to preserve conversation history (${sanitizeForLog(message)})`,
           );
           return {
             kind: "final",
@@ -740,7 +740,7 @@ export async function runAgentTurnWithFallback(params: {
       ) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit Gemini session corruption — skipping session reset to preserve conversation history (${params.sessionKey})`,
+            `Heartbeat run hit Gemini session corruption — skipping session reset to preserve conversation history (${sanitizeForLog(params.sessionKey)})`,
           );
           return {
             kind: "final",
