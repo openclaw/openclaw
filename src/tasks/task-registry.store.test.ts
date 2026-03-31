@@ -7,6 +7,7 @@ import {
   createTaskRecord,
   deleteTaskRecordById,
   findTaskByRunId,
+  maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
@@ -119,6 +120,55 @@ describe("task-registry store runtime", () => {
       kind: "deleted",
       taskId: created.taskId,
     });
+  });
+
+  it("uses atomic task-plus-delivery store methods when available", async () => {
+    const upsertTaskWithDeliveryState = vi.fn();
+    const deleteTaskWithDeliveryState = vi.fn();
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot: vi.fn(),
+        upsertTaskWithDeliveryState,
+        deleteTaskWithDeliveryState,
+      },
+    });
+
+    const created = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:new",
+      runId: "run-atomic",
+      task: "Atomic task",
+      status: "running",
+      notifyPolicy: "state_changes",
+      deliveryStatus: "pending",
+    });
+
+    await maybeDeliverTaskStateChangeUpdate(created.taskId, {
+      at: 200,
+      kind: "progress",
+      summary: "working",
+    });
+    expect(deleteTaskRecordById(created.taskId)).toBe(true);
+
+    expect(upsertTaskWithDeliveryState).toHaveBeenCalled();
+    expect(upsertTaskWithDeliveryState.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.objectContaining({
+        taskId: created.taskId,
+      }),
+    });
+    expect(
+      upsertTaskWithDeliveryState.mock.calls.some((call) => {
+        const params = call[0] as { deliveryState?: { lastNotifiedEventAt?: number } };
+        return params.deliveryState?.lastNotifiedEventAt === 200;
+      }),
+    ).toBe(true);
+    expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
   });
 
   it("restores persisted tasks from the default sqlite store", () => {
