@@ -72,6 +72,8 @@ private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoo
         screen.navigate(to: trusted, trustA2UIActions: true)
 
         #expect(screen.isTrustedCanvasUIURL(URL(string: trusted)!) == true)
+        // Fragment differences must not affect trust (SPA hash routing).
+        #expect(screen.isTrustedCanvasUIURL(URL(string: "https://node.ts.net:18789/__openclaw__/a2ui/?platform=ios#step2")!) == true)
         #expect(screen.isTrustedCanvasUIURL(URL(string: "https://node.ts.net:18789/__openclaw__/a2ui/?platform=android")!) == false)
         #expect(screen.isTrustedCanvasUIURL(URL(string: "https://node.ts.net:18789/__openclaw__/canvas/")!) == false)
         #expect(screen.isTrustedCanvasUIURL(URL(string: "https://evil.ts.net:18789/__openclaw__/a2ui/?platform=ios")!) == false)
