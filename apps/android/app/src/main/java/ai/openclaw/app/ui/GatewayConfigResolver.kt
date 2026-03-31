@@ -40,6 +40,7 @@ internal fun resolveGatewayConnectConfig(
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
+  fallbackBootstrapToken: String,
   fallbackToken: String,
   fallbackPassword: String,
 ): GatewayConnectConfig? {
@@ -75,7 +76,12 @@ internal fun resolveGatewayConnectConfig(
     host = parsed.host,
     port = parsed.port,
     tls = parsed.tls,
-    bootstrapToken = "",
+    bootstrapToken =
+      if (fallbackToken.isBlank() && fallbackPassword.isBlank()) {
+        fallbackBootstrapToken.trim()
+      } else {
+        ""
+      },
     token = fallbackToken.trim(),
     password = fallbackPassword.trim(),
   )
