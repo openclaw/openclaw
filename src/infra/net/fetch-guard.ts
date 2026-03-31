@@ -100,17 +100,7 @@ function isRedirectStatus(status: number): boolean {
 export function retainSafeHeadersForCrossOriginRedirectHeaders(
   headers?: HeadersInit,
 ): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const incoming = new Headers(headers);
-  const safeHeaders = new Headers();
-  for (const [key, value] of incoming.entries()) {
-    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key.toLowerCase())) {
-      safeHeaders.set(key, value);
-    }
-  }
-  return Object.fromEntries(safeHeaders.entries());
+  return retainSafeRedirectHeaders(headers);
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
