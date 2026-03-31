@@ -362,7 +362,39 @@ function resolveConversationIdForThreadBinding(params: {
   channel?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): string | undefined {
+  const channel = params.channel?.trim().toLowerCase();
+  const normalizedThreadId =
+    params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
+  if (channel === "telegram") {
+    const rawChatId = (params.groupId ?? params.to ?? "").trim();
+    let chatId = rawChatId;
+    while (true) {
+      const next = (() => {
+        if (/^(telegram|tg):/i.test(chatId)) {
+          return chatId.replace(/^(telegram|tg):/i, "").trim();
+        }
+        if (/^(group|channel):/i.test(chatId)) {
+          return chatId.replace(/^(group|channel):/i, "").trim();
+        }
+        return chatId;
+      })();
+      if (next === chatId) {
+        break;
+      }
+      chatId = next;
+    }
+    chatId = chatId
+      .replace(/:topic:\d+$/i, "")
+      .replace(/:\d+$/i, "")
+      .trim();
+    if (/^-?\d+$/.test(chatId)) {
+      return normalizedThreadId ? `${chatId}:topic:${normalizedThreadId}` : chatId;
+    }
+    return undefined;
+  }
+
   const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
@@ -370,8 +402,6 @@ function resolveConversationIdForThreadBinding(params: {
   if (genericConversationId) {
     return genericConversationId;
   }
-
-  const channel = params.channel?.trim().toLowerCase();
   const target = params.to?.trim() || "";
   if (channel === "line") {
     const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
@@ -451,15 +481,9 @@ function prepareAcpThreadBinding(params: {
     channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
+    groupId: params.groupId,
   });
-  // For Telegram, bare topic numbers (no leading "-") need substituting with
-  // the group chat ID. Other channels use their own ID formats so skip this.
-  const groupId = params.groupId?.trim();
-  const conversationId =
-    channel === "telegram" && conversationIdRaw && !conversationIdRaw.startsWith("-") && groupId
-      ? groupId
-      : conversationIdRaw;
-  if (!conversationId) {
+  if (!conversationIdRaw) {
     return {
       ok: false,
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
@@ -472,7 +496,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       placement,
-      conversationId,
+      conversationId: conversationIdRaw,
     },
   };
 }
@@ -820,14 +844,6 @@ export async function spawnAcpDirect(
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
-
-  const isTelegramForumTopic =
-    ctx.agentChannel?.toLowerCase() === "telegram" &&
-    ctx.agentGroupId?.trim() &&
-    ctx.agentThreadId != null;
-  if (isTelegramForumTopic) {
-    requestThreadBinding = false;
-  }
 
   let preparedBinding: PreparedAcpThreadBinding | null = null;
   if (requestThreadBinding) {
