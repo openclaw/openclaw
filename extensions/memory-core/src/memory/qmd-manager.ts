@@ -126,15 +126,6 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
   };
 }
 
-function resolveStableJitterMs(params: { seed: string; windowMs: number }): number {
-  if (params.windowMs <= 0) {
-    return 0;
-  }
-  const hash = crypto.createHash("sha256").update(params.seed).digest();
-  const bucket = hash.readUInt32BE(0);
-  return bucket % (Math.floor(params.windowMs) + 1);
-}
-
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
@@ -1392,7 +1383,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     await previous.catch(() => undefined);
     try {
-      return await withFileLock(lockPath, QMD_EMBED_LOCK_OPTIONS, task);
+      return await withFileLock(
+        lockPath,
+        resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
+        task,
+      );
     } finally {
       releaseCurrent();
     }
