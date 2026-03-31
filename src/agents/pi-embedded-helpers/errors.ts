@@ -1017,6 +1017,16 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (leadingStatus?.code === 410) {
     return classifyFailoverReasonFromHttpStatus(leadingStatus.code, leadingStatus.rest);
   }
+
+  // Handle Kimi-style JSON error payloads like:
+  // {"type":"error","error":{"type":"quota_exceeded","message":"..."}}
+  // These need explicit handling because the error type is in the JSON body,
+  // not just in the message text.
+  const quotaExceededMatch = trimmed.match(/"type"\s*:\s*"quota_exceeded"/i);
+  if (quotaExceededMatch) {
+    return "rate_limit";
+  }
+
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return reasonFrom402Text;
