@@ -153,7 +153,7 @@ function parsePinnedIdentity(stdout: string): FileIdentityStat {
 }
 
 function resolvePython3InstallHint(stderr: string): string {
-  if (stderr && /xcrun|command.?line.?tools|xcode/i.test(stderr)) {
+  if (process.platform === "darwin" && stderr && /xcrun|command.?line.?tools|xcode/i.test(stderr)) {
     return " (install Xcode Command Line Tools: xcode-select --install)";
   }
   if (process.platform === "linux" && /no such file|not found|ENOENT/i.test(stderr)) {
