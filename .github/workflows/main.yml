@@ -2,7 +2,7 @@ name: 每30分钟自动同步上游 OpenClaw (main分支)
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # 每30分钟一次
+    - cron: "*/60 * * * *"  # 每60分钟一次
   workflow_dispatch:        # 允许手动触发
 
 jobs:
