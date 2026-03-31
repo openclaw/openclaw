@@ -77,6 +77,7 @@ plist_path="$3"
 ${waitForCallerPid}
 if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
   launchctl enable "$service_target" >/dev/null 2>&1
+  launchctl bootout "$domain" "$plist_path" >/dev/null 2>&1 || true
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
     launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
   fi
@@ -90,9 +91,8 @@ plist_path="$3"
 ${waitForCallerPid}
 if ! launchctl start "$service_target" >/dev/null 2>&1; then
   launchctl enable "$service_target" >/dev/null 2>&1
+  launchctl bootout "$domain" "$plist_path" >/dev/null 2>&1 || true
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
-    launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
-  else
     launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
   fi
 fi
