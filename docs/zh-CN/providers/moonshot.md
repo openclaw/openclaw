@@ -143,7 +143,7 @@ openclaw onboard --auth-choice kimi-code-api-key
 
 ## 说明
 
-- Moonshot 模型引用使用 `moonshot/<modelId>`。Kimi Coding 模型引用使用 `kimi/<modelId>`（提供商 ID 是 `kimi`，而非 `kimi-coding`）。
+- Moonshot 模型引用使用 `moonshot/<modelId>`。Kimi Coding 模型引用使用 `kimi/<modelId>`。
 - 如有需要，可在 `models.providers` 中覆盖定价和上下文元数据。
 - 如果 Moonshot 为某个模型发布了不同的上下文限制，请相应调整
   `contextWindow`。
