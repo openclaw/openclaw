@@ -12,6 +12,7 @@ import {
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
+import { handleFeishuCommentEvent } from "./comment-handler.js";
 import {
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
@@ -21,6 +22,7 @@ import {
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
+import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -597,6 +599,38 @@ function registerEventHandlers(
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
+    },
+    "drive.notice.comment_add_v1": async (data: unknown) => {
+      await runFeishuHandler({
+        errorMessage: `feishu[${accountId}]: error handling drive comment notice`,
+        task: async () => {
+          log(
+            `feishu[${accountId}]: received drive comment raw payload ` + `${JSON.stringify(data)}`,
+          );
+          const event = parseFeishuDriveCommentNoticeEventPayload(data);
+          if (!event) {
+            error(`feishu[${accountId}]: ignoring malformed drive comment notice payload`);
+            return;
+          }
+          log(
+            `feishu[${accountId}]: received drive comment notice ` +
+              `event=${event.event_id ?? "unknown"} ` +
+              `type=${event.notice_meta?.notice_type ?? "unknown"} ` +
+              `file=${event.notice_meta?.file_type ?? "unknown"}:${event.notice_meta?.file_token ?? "unknown"} ` +
+              `comment=${event.comment_id ?? "unknown"} ` +
+              `reply=${event.reply_id ?? "none"} ` +
+              `from=${event.notice_meta?.from_user_id?.open_id ?? "unknown"} ` +
+              `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
+          );
+          await handleFeishuCommentEvent({
+            cfg,
+            accountId,
+            event,
+            botOpenId: botOpenIds.get(accountId),
+            runtime,
+          });
+        },
+      });
     },
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
