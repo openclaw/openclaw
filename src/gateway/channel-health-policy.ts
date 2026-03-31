@@ -125,6 +125,12 @@ export function evaluateChannelHealth(
     }
     const eventAge = policy.now - snapshot.lastEventAt;
     if (eventAge > policy.staleEventThresholdMs) {
+      // Same guard: if the transport still considers itself connected, the
+      // lack of dispatch events does not mean the socket is dead — it may
+      // simply be an idle channel with no user activity.
+      if (snapshot.connected) {
+        return { healthy: true, reason: "healthy" };
+      }
       return { healthy: false, reason: "stale-socket" };
     }
   }
