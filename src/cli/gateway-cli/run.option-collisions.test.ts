@@ -146,7 +146,7 @@ describe("gateway run option collisions", () => {
   beforeEach(() => {
     resetRuntimeCapture();
     configState.cfg = {};
-    configState.snapshot = { exists: false };
+    configState.snapshot = { valid: true, exists: false, issues: [] };
     controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
     startGatewayServer.mockClear();
