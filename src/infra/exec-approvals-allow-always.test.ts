@@ -120,6 +120,30 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   }
 
+  function expectShellScriptFallbackRejected(command: string) {
+    const { dir, scriptsDir, script, env, safeBins } = createShellScriptFixture();
+    const rcFile = path.join(scriptsDir, "evilrc");
+    fs.writeFileSync(rcFile, "echo blocked\n");
+
+    const { persisted } = resolvePersistedPatterns({
+      command,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command,
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  }
+
   function expectPositionalArgvCarrierRejected(command: string) {
     const dir = makeTempDir();
     const touch = makeExecutable(dir, "touch");
@@ -281,6 +305,32 @@ describe("resolveAllowAlwaysPatterns", () => {
       env,
       safeBins,
     });
+  });
+
+  it("rejects shell rc and init-file options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
+  });
+
+  it("rejects shell rc and init-file equals options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile=scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file=scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file=scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
   });
 
   it("rejects shell-wrapper positional argv carriers", () => {
@@ -568,6 +618,23 @@ $0 \\"$1\\"" touch {marker}`);
     });
   });
 
+  it("prevents allow-always bypass for caffeinate wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", () => {
     if (process.platform === "win32") {
       return;
@@ -585,6 +652,24 @@ $0 \\"$1\\"" touch {marker}`);
     });
   });
 
+  it("prevents allow-always bypass for sandbox-exec wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand:
+        "/usr/bin/sandbox-exec -p '(deny default) (allow process*)' /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/sandbox-exec -p '(allow default)' /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for time wrapper chains", () => {
     if (process.platform === "win32") {
       return;
@@ -597,6 +682,30 @@ $0 \\"$1\\"" touch {marker}`);
       dir,
       firstCommand: "/usr/bin/time -p /bin/zsh -lc 'echo warmup-ok'",
       secondCommand: "/usr/bin/time -p /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
+  it("prevents allow-always bypass for macOS dispatch-wrapper chains", () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/arch -arm64 /bin/zsh -lc 'id > marker-arch'",
+      env,
+      persistedPattern: echo,
+    });
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/xcrun /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/xcrun /bin/zsh -lc 'id > marker-xcrun'",
       env,
       persistedPattern: echo,
     });
