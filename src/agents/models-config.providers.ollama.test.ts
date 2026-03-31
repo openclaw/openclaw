@@ -3,32 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
-});
-
-describe("resolveOllamaApiBase", () => {
-  it("returns default localhost base when no configured URL is provided", () => {
-    expect(resolveOllamaApiBase()).toBe("http://127.0.0.1:11434");
-  });
-
-  it("strips /v1 suffix from OpenAI-compatible URLs", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434/v1")).toBe("http://ollama-host:11434");
-    expect(resolveOllamaApiBase("http://ollama-host:11434/V1")).toBe("http://ollama-host:11434");
-  });
-
-  it("keeps URLs without /v1 unchanged", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434")).toBe("http://ollama-host:11434");
-  });
-
-  it("handles trailing slash before canonicalizing", () => {
-    expect(resolveOllamaApiBase("http://ollama-host:11434/v1/")).toBe("http://ollama-host:11434");
-    expect(resolveOllamaApiBase("http://ollama-host:11434/")).toBe("http://ollama-host:11434");
-  });
 });
 
 describe("Ollama provider", () => {

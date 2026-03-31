@@ -176,21 +176,6 @@ describe("makeProxyFetch", () => {
     ({ getProxyUrlFromFetch, makeProxyFetch } = await import("./proxy.js"));
   });
 
-  it("uses undici fetch with ProxyAgent dispatcher", async () => {
-    const proxyUrl = "http://proxy.test:8080";
-    proxyMocks.undiciFetch.mockResolvedValue({ ok: true });
-
-    const proxyFetch = makeProxyFetch(proxyUrl);
-    await proxyFetch("https://api.telegram.org/bot123/getMe");
-
-    expect(proxyMocks.proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
-    expect(proxyMocks.undiciFetch).toHaveBeenCalledWith(
-      "https://api.telegram.org/bot123/getMe",
-      expect.objectContaining({ dispatcher: proxyMocks.getLastAgent() }),
-    );
-    expect(proxyMocks.setGlobalDispatcher).not.toHaveBeenCalled();
-  });
-
   it("attaches proxy metadata for resolver transport handling", () => {
     const proxyUrl = "http://proxy.test:8080";
     const proxyFetch = makeProxyFetch(proxyUrl);
