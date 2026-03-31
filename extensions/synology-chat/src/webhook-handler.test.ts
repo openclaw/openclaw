@@ -428,7 +428,7 @@ describe("createWebhookHandler", () => {
     (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
     const invalidRes = makeRes();
     await handler(invalidReq, invalidRes);
-    expect(invalidRes.status).toBe(401);
+    expect(invalidRes.status).toBe(429);
 
     const validReq = makeReq("POST", validBody);
     (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.11";
