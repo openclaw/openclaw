@@ -8,11 +8,15 @@ let prevGatewayToken: string | undefined;
 let prevGatewayPassword: string | undefined;
 
 const pwMocks = vi.hoisted(() => ({
+  closePageViaPlaywright: vi.fn(async () => {}),
   cookiesGetViaPlaywright: vi.fn(async () => ({
     cookies: [{ name: "session", value: "abc123" }],
   })),
-  storageGetViaPlaywright: vi.fn(async () => ({ values: { token: "value" } })),
   evaluateViaPlaywright: vi.fn(async () => "ok"),
+  getPageForTargetId: vi.fn(async () => ({
+    url: () => "https://example.com",
+  })),
+  storageGetViaPlaywright: vi.fn(async () => ({ values: { token: "value" } })),
 }));
 
 const routeCtxMocks = vi.hoisted(() => {
@@ -87,6 +91,8 @@ describe("browser control evaluate gating", () => {
     pwMocks.cookiesGetViaPlaywright.mockClear();
     pwMocks.storageGetViaPlaywright.mockClear();
     pwMocks.evaluateViaPlaywright.mockClear();
+    pwMocks.getPageForTargetId.mockClear();
+    pwMocks.closePageViaPlaywright.mockClear();
     routeCtxMocks.profileCtx.ensureTabAvailable.mockClear();
     routeCtxMocks.profileCtx.stopRunningBrowser.mockClear();
   });
@@ -137,6 +143,11 @@ describe("browser control evaluate gating", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
     });
+    expect(pwMocks.getPageForTargetId).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+    });
+    expect(pwMocks.closePageViaPlaywright).not.toHaveBeenCalled();
 
     const storageRes = (await realFetch(`${base}/storage/local?key=token`).then((r) =>
       r.json(),
@@ -152,5 +163,7 @@ describe("browser control evaluate gating", () => {
       kind: "local",
       key: "token",
     });
+    expect(pwMocks.getPageForTargetId).toHaveBeenCalledTimes(2);
+    expect(pwMocks.closePageViaPlaywright).not.toHaveBeenCalled();
   });
 });
