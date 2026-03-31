@@ -233,6 +233,11 @@ describe("sanitizeHostExecEnv", () => {
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
         AWS_CONFIG_FILE: "/tmp/override-aws-config",
+        PIP_INDEX_URL: "https://example.invalid/simple",
+        PIP_PYPI_URL: "https://example.invalid/simple",
+        PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        UV_INDEX_URL: "https://example.invalid/simple",
+        UV_DEFAULT_INDEX: "https://example.invalid/simple",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
         CLASSPATH: "/tmp/evil-classpath",
@@ -267,6 +272,11 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOFLAGS).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(env.PIP_INDEX_URL).toBeUndefined();
+    expect(env.PIP_PYPI_URL).toBeUndefined();
+    expect(env.PIP_EXTRA_INDEX_URL).toBeUndefined();
+    expect(env.UV_INDEX_URL).toBeUndefined();
+    expect(env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/trusted-home");
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
@@ -354,6 +364,11 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PIP_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("pip_pypi_url")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("PIP_EXTRA_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("UV_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("uv_default_index")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CLASSPATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("classpath")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GOFLAGS")).toBe(true);
@@ -380,6 +395,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         CXX: "/tmp/evil-cxx",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CLASSPATH: "/tmp/evil-classpath",
+        PIP_INDEX_URL: "https://example.invalid/simple",
+        PIP_PYPI_URL: "https://example.invalid/simple",
+        PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+        UV_INDEX_URL: "https://example.invalid/simple",
+        UV_DEFAULT_INDEX: "https://example.invalid/simple",
         SAFE_KEY: "ok",
         "BAD-KEY": "bad",
       },
@@ -390,6 +410,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "CMAKE_C_COMPILER",
       "CXX",
       "PATH",
+      "PIP_EXTRA_INDEX_URL",
+      "PIP_INDEX_URL",
+      "PIP_PYPI_URL",
+      "UV_DEFAULT_INDEX",
+      "UV_INDEX_URL",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env.SAFE_KEY).toBe("ok");
@@ -397,6 +422,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CLASSPATH).toBeUndefined();
     expect(result.env.CXX).toBeUndefined();
     expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
+    expect(result.env.PIP_INDEX_URL).toBeUndefined();
+    expect(result.env.PIP_PYPI_URL).toBeUndefined();
+    expect(result.env.PIP_EXTRA_INDEX_URL).toBeUndefined();
+    expect(result.env.UV_INDEX_URL).toBeUndefined();
+    expect(result.env.UV_DEFAULT_INDEX).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
