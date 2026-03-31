@@ -203,6 +203,16 @@ export async function saveApiKey(apiKey: string): Promise<CloudSettingsUpdateRes
     defaults.models = { ...existingModels, ...(asRecord(patchAgentModels.models) ?? {}) };
   }
 
+  const patchMcp = asRecord((patch as UnknownRecord).mcp);
+  if (patchMcp) {
+    const mcp = ensureRecord(config, "mcp");
+    const servers = ensureRecord(mcp, "servers");
+    const patchServers = asRecord(patchMcp.servers);
+    if (patchServers) {
+      Object.assign(servers, patchServers);
+    }
+  }
+
   writeConfig(config);
 
   const refresh = await refreshIntegrationsRuntime();
@@ -260,6 +270,16 @@ export async function selectModel(stableId: string): Promise<CloudSettingsUpdate
     baseUrl: gatewayUrl,
     apiKey,
   };
+
+  const patchMcp = asRecord((patch as UnknownRecord).mcp);
+  if (patchMcp) {
+    const mcp = ensureRecord(config, "mcp");
+    const servers = ensureRecord(mcp, "servers");
+    const patchServers = asRecord(patchMcp.servers);
+    if (patchServers) {
+      Object.assign(servers, patchServers);
+    }
+  }
 
   writeConfig(config);
 

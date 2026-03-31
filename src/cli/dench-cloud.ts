@@ -401,6 +401,16 @@ export function buildDenchCloudConfigPatch(params: {
         },
       },
     },
+    mcp: {
+      servers: {
+        composio: {
+          url: `${params.gatewayUrl}/v1/composio/mcp`,
+          headers: {
+            Authorization: `Bearer ${params.apiKey}`,
+          },
+        },
+      },
+    },
   };
 }
 
