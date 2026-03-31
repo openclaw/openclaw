@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Flows/tasks: route one-task ACP and subagent updates through a parent flow owner context, so detached work can emerge back through the intended parent thread/session instead of speaking only as a raw child task.
 - Matrix/history: add optional room history context for Matrix group triggers via `channels.matrix.historyLimit`, with per-agent watermarks and retry-safe snapshots so failed trigger retries do not drift into newer room messages. (#57022) thanks @chain710.
 - Diffs: skip unused viewer-versus-file SSR preload work so `diffs` view-only and file-only runs do less render work while keeping mode outputs aligned. (#57909) thanks @gumadeiras.
+- Matrix/threads: add per-DM `threadReplies` overrides and keep thread session isolation aligned with the effective room or DM thread policy from the triggering message onward. (#57995) thanks @teconomix.
 
 ### Fixes
 
@@ -117,8 +118,10 @@ Docs: https://docs.openclaw.ai
 - Matrix/CLI send: start one-off Matrix send clients before outbound delivery so `openclaw message send --channel matrix` restores E2EE in encrypted rooms instead of sending plain events. (#57936) Thanks @gumadeiras.
 - Matrix/direct rooms: stop trusting remote `is_direct`, honor explicit local `is_direct: false` for discovered DM candidates, and avoid extra member-state lookups for shared rooms so DM routing and repair stay aligned. (#57124) Thanks @w-sss.
 - Agents/sandbox: make remote FS bridge reads pin the parent path and open the file atomically in the helper so read access cannot race path resolution. Thanks @AntAISecurityLab and @vincentkoc.
+- Tools/web_fetch: route strict SSRF-guarded requests through configured HTTP(S) proxy env vars while keeping hostname-scoped local allowlists on the direct pinned path, so proxy-only installs work without breaking trusted local integrations. (#50650) Thanks @kkav004.
 - Exec/env: block Python package index override variables from request-scoped host exec environment sanitization so package fetches cannot be redirected through a caller-supplied index. Thanks @nexrin and @vincentkoc.
 - Telegram/audio: transcode Telegram voice-note `.ogg` attachments before the local `whisper-cli` auto fallback runs, and keep mention-preflight transcription enabled in auto mode when `tools.media.audio` is unset.
+- Matrix/direct rooms: recover fresh auto-joined 1:1 DMs without eagerly persisting invite-only `m.direct` mappings, while keeping named, aliased, and explicitly configured rooms on the room path. (#58024) Thanks @gumadeiras.
 
 ## 2026.3.28
 
