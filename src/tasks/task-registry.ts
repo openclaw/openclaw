@@ -296,6 +296,54 @@ function getTasksByRunId(runId: string): TaskRecord[] {
     .filter((task): task is TaskRecord => Boolean(task));
 }
 
+function taskRunOwnerKey(
+  task: Pick<TaskRecord, "runtime" | "requesterSessionKey" | "childSessionKey">,
+): string {
+  return [
+    task.runtime,
+    normalizeComparableText(task.requesterSessionKey),
+    normalizeComparableText(task.childSessionKey),
+  ].join("\u0000");
+}
+
+function getTasksByRunScope(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  const matches = getTasksByRunId(params.runId).filter(
+    (task) => !params.runtime || task.runtime === params.runtime,
+  );
+  const sessionKey = normalizeSessionIndexKey(params.sessionKey);
+  if (sessionKey) {
+    const childMatches = matches.filter(
+      (task) => normalizeSessionIndexKey(task.childSessionKey) === sessionKey,
+    );
+    if (childMatches.length > 0) {
+      return childMatches;
+    }
+    return matches.filter(
+      (task) => normalizeSessionIndexKey(task.requesterSessionKey) === sessionKey,
+    );
+  }
+  const ownerKeys = new Set(matches.map((task) => taskRunOwnerKey(task)));
+  return ownerKeys.size <= 1 ? matches : [];
+}
+
+function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
+  if (!task.runId?.trim()) {
+    return [];
+  }
+  return getTasksByRunId(task.runId).filter(
+    (candidate) =>
+      candidate.runtime === task.runtime &&
+      normalizeComparableText(candidate.requesterSessionKey) ===
+        normalizeComparableText(task.requesterSessionKey) &&
+      normalizeComparableText(candidate.childSessionKey) ===
+        normalizeComparableText(task.childSessionKey),
+  );
+}
+
 function taskLookupPriority(task: TaskRecord): number {
   const runtimePriority = task.runtime === "cli" ? 1 : 0;
   return runtimePriority;
@@ -335,14 +383,19 @@ function findExistingTaskForCreate(params: {
   task: string;
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
-  const exact = runId
-    ? getTasksByRunId(runId).find(
+  const runScopeMatches = runId
+    ? getTasksByRunId(runId).filter(
         (task) =>
           task.runtime === params.runtime &&
           normalizeComparableText(task.requesterSessionKey) ===
             normalizeComparableText(params.requesterSessionKey) &&
           normalizeComparableText(task.childSessionKey) ===
-            normalizeComparableText(params.childSessionKey) &&
+            normalizeComparableText(params.childSessionKey),
+      )
+    : [];
+  const exact = runId
+    ? runScopeMatches.find(
+        (task) =>
           normalizeComparableText(task.label) === normalizeComparableText(params.label) &&
           normalizeComparableText(task.task) === normalizeComparableText(params.task),
       )
@@ -353,18 +406,10 @@ function findExistingTaskForCreate(params: {
   if (!runId || params.runtime !== "acp") {
     return undefined;
   }
-  const siblingMatches = getTasksByRunId(runId).filter(
-    (task) =>
-      task.runtime === params.runtime &&
-      normalizeComparableText(task.requesterSessionKey) ===
-        normalizeComparableText(params.requesterSessionKey) &&
-      normalizeComparableText(task.childSessionKey) ===
-        normalizeComparableText(params.childSessionKey),
-  );
-  if (siblingMatches.length === 0) {
+  if (runScopeMatches.length === 0) {
     return undefined;
   }
-  return pickPreferredRunIdTask(siblingMatches);
+  return pickPreferredRunIdTask(runScopeMatches);
 }
 
 function mergeExistingTaskForCreate(
@@ -604,7 +649,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       return latest ? cloneTaskRecord(latest) : null;
     }
     const preferred = latest.runId
-      ? pickPreferredRunIdTask(getTasksByRunId(latest.runId))
+      ? pickPreferredRunIdTask(getPeerTasksForDelivery(latest))
       : undefined;
     if (
       shouldSuppressDuplicateTerminalDelivery({ task: latest, preferredTaskId: preferred?.taskId })
@@ -859,14 +904,19 @@ export function markTaskLostById(params: {
   });
 }
 
-function updateTasksByRunId(runId: string, patch: Partial<TaskRecord>): TaskRecord[] {
-  const ids = taskIdsByRunId.get(runId.trim());
-  if (!ids || ids.size === 0) {
+function updateTasksByRunId(params: {
+  runId: string;
+  patch: Partial<TaskRecord>;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  const matches = getTasksByRunScope(params);
+  if (matches.length === 0) {
     return [];
   }
   const updated: TaskRecord[] = [];
-  for (const taskId of ids) {
-    const task = updateTask(taskId, patch);
+  for (const match of matches) {
+    const task = updateTask(match.taskId, params.patch);
     if (task) {
       updated.push(task);
     }
@@ -881,16 +931,15 @@ function ensureListener() {
   listenerStarted = true;
   listenerStop = onAgentEvent((evt) => {
     restoreTaskRegistryOnce();
-    const ids = taskIdsByRunId.get(evt.runId);
-    if (!ids || ids.size === 0) {
+    const scopedTasks = getTasksByRunScope({
+      runId: evt.runId,
+      sessionKey: evt.sessionKey,
+    });
+    if (scopedTasks.length === 0) {
       return;
     }
     const now = evt.ts || Date.now();
-    for (const taskId of ids) {
-      const current = tasks.get(taskId);
-      if (!current) {
-        continue;
-      }
+    for (const current of scopedTasks) {
       const patch: Partial<TaskRecord> = {
         lastEventAt: now,
       };
@@ -928,10 +977,10 @@ function ensureListener() {
                     : undefined,
             })
           : undefined;
-      const updated = updateTask(taskId, patch);
+      const updated = updateTask(current.taskId, patch);
       if (updated) {
-        void maybeDeliverTaskStateChangeUpdate(taskId, stateChangeEvent);
-        void maybeDeliverTaskTerminalUpdate(taskId);
+        void maybeDeliverTaskStateChangeUpdate(current.taskId, stateChangeEvent);
+        void maybeDeliverTaskTerminalUpdate(current.taskId);
       }
     }
   });
@@ -1023,6 +1072,8 @@ export function createTaskRecord(params: {
 
 function updateTaskStateByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   status?: TaskStatus;
   startedAt?: number;
   endedAt?: number;
@@ -1034,16 +1085,12 @@ function updateTaskStateByRunId(params: {
   eventSummary?: string | null;
 }) {
   ensureTaskRegistryReady();
-  const ids = taskIdsByRunId.get(params.runId.trim());
-  if (!ids || ids.size === 0) {
+  const matches = getTasksByRunScope(params);
+  if (matches.length === 0) {
     return [];
   }
   const updated: TaskRecord[] = [];
-  for (const taskId of ids) {
-    const current = tasks.get(taskId);
-    if (!current) {
-      continue;
-    }
+  for (const current of matches) {
     const patch: Partial<TaskRecord> = {};
     const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
     const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
@@ -1094,7 +1141,7 @@ function updateTaskStateByRunId(params: {
           summary: eventSummary,
         })
       : undefined;
-    const task = updateTask(taskId, patch);
+    const task = updateTask(current.taskId, patch);
     if (task) {
       updated.push(task);
       void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
@@ -1104,15 +1151,27 @@ function updateTaskStateByRunId(params: {
   return updated;
 }
 
-function updateTaskDeliveryByRunId(params: { runId: string; deliveryStatus: TaskDeliveryStatus }) {
+function updateTaskDeliveryByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  deliveryStatus: TaskDeliveryStatus;
+}) {
   ensureTaskRegistryReady();
-  return updateTasksByRunId(params.runId, {
-    deliveryStatus: params.deliveryStatus,
+  return updateTasksByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    patch: {
+      deliveryStatus: params.deliveryStatus,
+    },
   });
 }
 
 export function markTaskRunningByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;
@@ -1120,6 +1179,8 @@ export function markTaskRunningByRunId(params: {
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     status: "running",
     startedAt: params.startedAt,
     lastEventAt: params.lastEventAt,
@@ -1130,12 +1191,16 @@ export function markTaskRunningByRunId(params: {
 
 export function recordTaskProgressByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,
@@ -1144,6 +1209,8 @@ export function recordTaskProgressByRunId(params: {
 
 export function markTaskTerminalByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
   startedAt?: number;
   endedAt: number;
@@ -1155,6 +1222,8 @@ export function markTaskTerminalByRunId(params: {
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     status: params.status,
     startedAt: params.startedAt,
     endedAt: params.endedAt,
@@ -1168,6 +1237,8 @@ export function markTaskTerminalByRunId(params: {
 
 export function setTaskRunDeliveryStatusByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
 }) {
   return updateTaskDeliveryByRunId(params);

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+  resetAgentRunContextForTest,
+} from "../infra/agent-events.js";
 import {
   hasPendingHeartbeatWake,
   resetHeartbeatWakeStateForTests,
@@ -18,6 +22,7 @@ import {
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
   markTaskRunningByRunId,
+  markTaskTerminalById,
   recordTaskProgressByRunId,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
@@ -120,6 +125,7 @@ describe("task-registry", () => {
     }
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
+    resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
@@ -595,6 +601,55 @@ describe("task-registry", () => {
     });
   });
 
+  it("scopes shared-run lifecycle events to the matching session", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const victimTask = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:victim:main",
+        childSessionKey: "agent:victim:acp:child",
+        runId: "run-shared-scope",
+        task: "Victim ACP task",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const attackerTask = createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:attacker:main",
+        childSessionKey: "agent:attacker:main",
+        runId: "run-shared-scope",
+        task: "Attacker CLI task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+      });
+
+      registerAgentRunContext("run-shared-scope", {
+        sessionKey: "agent:attacker:main",
+      });
+      emitAgentEvent({
+        runId: "run-shared-scope",
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          endedAt: 250,
+          error: "attacker controlled error",
+        },
+      });
+
+      expect(getTaskById(attackerTask.taskId)).toMatchObject({
+        status: "failed",
+        error: "attacker controlled error",
+      });
+      expect(getTaskById(victimTask.taskId)).toMatchObject({
+        status: "running",
+      });
+      expect(getTaskById(victimTask.taskId)).not.toHaveProperty("error");
+    });
+  });
+
   it("suppresses duplicate ACP delivery when a preferred spawned task shares the runId", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -645,6 +700,56 @@ describe("task-registry", () => {
         task: "Spawn ACP child",
         deliveryStatus: "delivered",
       });
+    });
+  });
+
+  it("does not suppress ACP delivery across different requester scopes when runIds collide", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const victimTask = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:victim:main",
+        childSessionKey: "agent:victim:acp:child",
+        runId: "run-cross-requester-delivery",
+        task: "Victim ACP task",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      const attackerTask = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:attacker:main",
+        childSessionKey: "agent:attacker:acp:child",
+        runId: "run-cross-requester-delivery",
+        task: "Attacker ACP task",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      markTaskTerminalById({
+        taskId: victimTask.taskId,
+        status: "succeeded",
+        endedAt: 250,
+      });
+      markTaskTerminalById({
+        taskId: attackerTask.taskId,
+        status: "succeeded",
+        endedAt: 260,
+      });
+      await maybeDeliverTaskTerminalUpdate(victimTask.taskId);
+      await maybeDeliverTaskTerminalUpdate(attackerTask.taskId);
+
+      await waitForAssertion(() =>
+        expect(getTaskById(victimTask.taskId)).toMatchObject({
+          deliveryStatus: "session_queued",
+        }),
+      );
+      await waitForAssertion(() =>
+        expect(getTaskById(attackerTask.taskId)).toMatchObject({
+          deliveryStatus: "session_queued",
+        }),
+      );
     });
   });
 

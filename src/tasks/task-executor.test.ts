@@ -10,7 +10,7 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./task-executor.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "./task-registry.js";
+import { getTaskById, resetTaskRegistryForTests } from "./task-registry.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -89,7 +89,7 @@ describe("task-executor", () => {
         terminalSummary: "Done.",
       });
 
-      expect(findTaskByRunId("run-executor-queued")).toMatchObject({
+      expect(getTaskById(created.taskId)).toMatchObject({
         taskId: created.taskId,
         status: "succeeded",
         startedAt: 100,
@@ -129,7 +129,7 @@ describe("task-executor", () => {
         deliveryStatus: "failed",
       });
 
-      expect(findTaskByRunId("run-executor-fail")).toMatchObject({
+      expect(getTaskById(created.taskId)).toMatchObject({
         taskId: created.taskId,
         status: "failed",
         progressSummary: "Collecting results",
@@ -164,7 +164,7 @@ describe("task-executor", () => {
         terminalSummary: "Writable session required.",
       });
 
-      expect(findTaskByRunId("run-executor-blocked")).toMatchObject({
+      expect(getTaskById(created.taskId)).toMatchObject({
         taskId: created.taskId,
         status: "succeeded",
         terminalOutcome: "blocked",
@@ -196,7 +196,7 @@ describe("task-executor", () => {
         found: true,
         cancelled: true,
       });
-      expect(findTaskByRunId("run-linear-cancel")).toMatchObject({
+      expect(getTaskById(child.taskId)).toMatchObject({
         taskId: child.taskId,
         status: "cancelled",
       });
@@ -234,13 +234,51 @@ describe("task-executor", () => {
         found: true,
         cancelled: true,
       });
-      expect(findTaskByRunId("run-subagent-cancel")).toMatchObject({
+      expect(getTaskById(child.taskId)).toMatchObject({
         taskId: child.taskId,
         status: "cancelled",
       });
       expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
+      });
+    });
+  });
+
+  it("scopes run-id updates to the matching runtime and session", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const victim = createRunningTaskRun({
+        runtime: "acp",
+        requesterSessionKey: "agent:victim:main",
+        childSessionKey: "agent:victim:acp:child",
+        runId: "run-shared-executor-scope",
+        task: "Victim ACP task",
+        deliveryStatus: "pending",
+      });
+      const attacker = createRunningTaskRun({
+        runtime: "cli",
+        requesterSessionKey: "agent:attacker:main",
+        childSessionKey: "agent:attacker:main",
+        runId: "run-shared-executor-scope",
+        task: "Attacker CLI task",
+        deliveryStatus: "not_applicable",
+      });
+
+      failTaskRunByRunId({
+        runId: "run-shared-executor-scope",
+        runtime: "cli",
+        sessionKey: "agent:attacker:main",
+        endedAt: 40,
+        lastEventAt: 40,
+        error: "attacker controlled error",
+      });
+
+      expect(getTaskById(attacker.taskId)).toMatchObject({
+        status: "failed",
+        error: "attacker controlled error",
+      });
+      expect(getTaskById(victim.taskId)).toMatchObject({
+        status: "running",
       });
     });
   });

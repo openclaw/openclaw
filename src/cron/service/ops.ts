@@ -436,6 +436,7 @@ function tryFinishManualTaskRun(
     if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
       completeTaskRunByRunId({
         runId: params.taskRunId,
+        runtime: "cron",
         endedAt: params.endedAt,
         lastEventAt: params.endedAt,
         terminalSummary: params.coreResult.summary ?? undefined,
@@ -444,6 +445,7 @@ function tryFinishManualTaskRun(
     }
     failTaskRunByRunId({
       runId: params.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
           ? "timed_out"

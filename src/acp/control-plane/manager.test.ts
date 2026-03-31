@@ -327,7 +327,8 @@ describe("AcpSessionManager", () => {
 
       expect(findTaskByRunId("direct-parented-run")).toMatchObject({
         runtime: "acp",
-        requesterSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
         childSessionKey: "agent:codex:acp:child-1",
         label: "Quant patch",
         task: "Implement the feature and report back",

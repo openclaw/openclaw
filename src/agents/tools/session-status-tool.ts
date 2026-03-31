@@ -23,7 +23,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { listTasksForSessionKey } from "../../tasks/task-registry.js";
+import { listTasksForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { resolveAgentConfig, resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
@@ -119,8 +119,14 @@ function resolveStoreScopedRequesterKey(params: {
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
-function formatSessionTaskLine(sessionKey: string): string | undefined {
-  const tasks = listTasksForSessionKey(sessionKey);
+function formatSessionTaskLine(params: {
+  relatedSessionKey: string;
+  callerOwnerKey: string;
+}): string | undefined {
+  const tasks = listTasksForRelatedSessionKeyForOwner({
+    relatedSessionKey: params.relatedSessionKey,
+    callerOwnerKey: params.callerOwnerKey,
+  });
   if (tasks.length === 0) {
     return undefined;
   }
@@ -568,7 +574,10 @@ export function createSessionStatusTool(opts?: {
         },
         includeTranscriptUsage: true,
       });
-      const taskLine = formatSessionTaskLine(resolved.key);
+      const taskLine = formatSessionTaskLine({
+        relatedSessionKey: resolved.key,
+        callerOwnerKey: visibilityRequesterKey,
+      });
       const fullStatusText = taskLine ? `${statusText}\n${taskLine}` : statusText;
 
       return {

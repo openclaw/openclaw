@@ -170,6 +170,7 @@ function tryFinishCronTaskRun(
     if (result.status === "ok" || result.status === "skipped") {
       completeTaskRunByRunId({
         runId: result.taskRunId,
+        runtime: "cron",
         endedAt: result.endedAt,
         lastEventAt: result.endedAt,
         terminalSummary: result.summary ?? undefined,
@@ -178,6 +179,7 @@ function tryFinishCronTaskRun(
     }
     failTaskRunByRunId({
       runId: result.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(result.error) === timeoutErrorMessage() ? "timed_out" : "failed",
       endedAt: result.endedAt,

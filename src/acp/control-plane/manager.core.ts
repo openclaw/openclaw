@@ -790,6 +790,7 @@ export class AcpSessionManager {
                   }
                   if (taskContext) {
                     this.markBackgroundTaskRunning(taskContext.runId, {
+                      sessionKey,
                       lastEventAt: Date.now(),
                       progressSummary: taskProgressSummary || null,
                     });
@@ -835,6 +836,7 @@ export class AcpSessionManager {
             if (taskContext) {
               const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
               this.markBackgroundTaskTerminal(taskContext.runId, {
+                sessionKey,
                 status: "succeeded",
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
@@ -874,6 +876,7 @@ export class AcpSessionManager {
             });
             if (taskContext) {
               this.markBackgroundTaskTerminal(taskContext.runId, {
+                sessionKey,
                 status: resolveBackgroundTaskFailureStatus(acpError),
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
@@ -1902,6 +1905,7 @@ export class AcpSessionManager {
   private markBackgroundTaskRunning(
     runId: string,
     params: {
+      sessionKey?: string;
       lastEventAt?: number;
       progressSummary?: string | null;
     },
@@ -1909,6 +1913,8 @@ export class AcpSessionManager {
     try {
       startTaskRunByRunId({
         runId,
+        runtime: "acp",
+        sessionKey: params.sessionKey,
         lastEventAt: params.lastEventAt,
         progressSummary: params.progressSummary,
       });
@@ -1920,6 +1926,7 @@ export class AcpSessionManager {
   private markBackgroundTaskTerminal(
     runId: string,
     params: {
+      sessionKey?: string;
       status: "succeeded" | "failed" | "timed_out";
       endedAt: number;
       lastEventAt?: number;
@@ -1933,6 +1940,8 @@ export class AcpSessionManager {
       if (params.status === "succeeded") {
         completeTaskRunByRunId({
           runId,
+          runtime: "acp",
+          sessionKey: params.sessionKey,
           endedAt: params.endedAt,
           lastEventAt: params.lastEventAt,
           progressSummary: params.progressSummary,
@@ -1943,6 +1952,8 @@ export class AcpSessionManager {
       }
       failTaskRunByRunId({
         runId,
+        runtime: "acp",
+        sessionKey: params.sessionKey,
         status: params.status,
         endedAt: params.endedAt,
         lastEventAt: params.lastEventAt,
