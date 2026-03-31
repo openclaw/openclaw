@@ -30,11 +30,9 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-sonnet-4-6",
+        "primary": "openrouter/step/step-3.5-flash:free",
         "fallbacks": [
-          "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-          "openrouter/google/gemma-3-12b-it:free",
-          "ollama/gemma3:12b"
+          "openrouter/kimi/kimi-2.5:free"
         ]
       },
       "thinkingDefault": "low",
