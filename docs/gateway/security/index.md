@@ -285,6 +285,7 @@ aggregates:
 - `hooks.gmail.allowUnsafeExternalContent=true`
 - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
 - `tools.exec.applyPatch.workspaceOnly=false`
+- `plugins.entries.acpx.config.permissionMode=approve-all`
 
 Complete `dangerous*` / `dangerously*` config keys defined in OpenClaw config
 schema:
