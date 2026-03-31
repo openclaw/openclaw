@@ -23,11 +23,16 @@ function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function readStore(filePath: string): DeviceAuthStore | null {
+  let raw: string;
   try {
-    if (!fs.existsSync(filePath)) {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
     }
-    const raw = fs.readFileSync(filePath, "utf8");
+    throw err;
+  }
+  try {
     return safeParseJsonWithSchema(DeviceAuthStoreSchema, raw);
   } catch {
     return null;
