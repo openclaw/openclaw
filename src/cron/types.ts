@@ -93,6 +93,8 @@ type CronAgentTurnPayloadFields = {
   allowUnsafeExternalContent?: boolean;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
   deliver?: boolean;
   channel?: CronMessageChannel;
   to?: string;
