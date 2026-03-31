@@ -212,6 +212,8 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { model: trimToUndefined(params.modelId) }),
       ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
+      ...(asNumber(params.vol) == null ? {} : { vol: asNumber(params.vol) }),
+      ...(asNumber(params.pitch) == null ? {} : { pitch: asNumber(params.pitch) }),
     }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>

@@ -157,7 +157,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
       providers: {
         minimax: {
           apiKey: "minimax_api_key",
-          baseUrl: "https://api.minimaxi.com",
+          baseUrl: "https://api.minimax.io",
           model: "speech-2.8-hd",
           voiceId: "English_expressive_narrator",
           speed: 1.0,
@@ -262,7 +262,7 @@ Then run:
 - `providers.elevenlabs.applyTextNormalization`: `auto|on|off`
 - `providers.elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
 - `providers.elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
-- `providers.minimax.baseUrl`: override MiniMax API base URL (default `https://api.minimaxi.com`, env: `MINIMAX_API_HOST`).
+- `providers.minimax.baseUrl`: override MiniMax API base URL (default `https://api.minimax.io`, env: `MINIMAX_API_HOST`).
 - `providers.minimax.model`: TTS model (default `speech-2.8-hd`, env: `MINIMAX_TTS_MODEL`).
 - `providers.minimax.voiceId`: voice identifier (default `English_expressive_narrator`, env: `MINIMAX_TTS_VOICE_ID`).
 - `providers.minimax.speed`: playback speed `0.5..2.0` (default 1.0).
