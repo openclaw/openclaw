@@ -71,7 +71,6 @@ const QNAIGC_MODELS = [
     contextWindow: 256000,
     maxTokens: 32000,
   },
-  },
   {
     id: "z-ai/glm-5",
     name: "Z-AI GLM-5 (QNAIGC)",
