@@ -1,0 +1,26 @@
+name: 每30分钟自动同步上游 OpenClaw (main分支)
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"  # 每30分钟一次
+  workflow_dispatch:        # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 同步 Fork 与原仓库 main 分支
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          upstream_sync_repo: openclaw/openclaw
+          upstream_sync_branch: main
+          target_sync_branch: main
+          test_mode: false
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
