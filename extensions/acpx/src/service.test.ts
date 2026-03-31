@@ -23,6 +23,11 @@ vi.mock("./ensure.js", () => ({
 type RuntimeStub = AcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
+  doctor?(): Promise<{
+    ok: boolean;
+    message: string;
+    details?: string[];
+  }>;
 };
 
 function createRuntimeStub(healthy: boolean): {
@@ -53,6 +58,53 @@ function createRuntimeStub(healthy: boolean): {
     },
     probeAvailabilitySpy,
     isHealthySpy,
+  };
+}
+
+function createRetryingRuntimeStub(healthSequence: boolean[]): {
+  runtime: RuntimeStub;
+  probeAvailabilitySpy: ReturnType<typeof vi.fn>;
+  isHealthySpy: ReturnType<typeof vi.fn>;
+  doctorSpy: ReturnType<typeof vi.fn>;
+} {
+  let probeCount = 0;
+  const probeAvailabilitySpy = vi.fn(async () => {
+    probeCount += 1;
+  });
+  const isHealthySpy = vi.fn(() => {
+    const index = Math.max(0, probeCount - 1);
+    return healthSequence[Math.min(index, healthSequence.length - 1)] ?? false;
+  });
+  const doctorSpy = vi.fn(async () => ({
+    ok: false,
+    message: "acpx help check failed",
+    details: ["stderr=temporary startup race"],
+  }));
+  return {
+    runtime: {
+      ensureSession: vi.fn(async (input) => ({
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      })),
+      runTurn: vi.fn(async function* () {
+        yield { type: "done" as const };
+      }),
+      cancel: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      async probeAvailability() {
+        await probeAvailabilitySpy();
+      },
+      isHealthy() {
+        return isHealthySpy();
+      },
+      async doctor() {
+        return await doctorSpy();
+      },
+    },
+    probeAvailabilitySpy,
+    isHealthySpy,
+    doctorSpy,
   };
 }
 
@@ -204,5 +256,31 @@ describe("createAcpxRuntimeService", () => {
       await service.stop?.(context);
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("retries health probes until the runtime becomes healthy", async () => {
+    const { runtime, probeAvailabilitySpy, doctorSpy } = createRetryingRuntimeStub([
+      false,
+      false,
+      true,
+    ]);
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime,
+      healthProbeRetryDelaysMs: [0, 0],
+    });
+    const context = createServiceContext();
+
+    await service.start(context);
+
+    await vi.waitFor(() => {
+      expect(probeAvailabilitySpy).toHaveBeenCalledTimes(3);
+    });
+    expect(doctorSpy).toHaveBeenCalledTimes(2);
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("probe attempt 1 failed"),
+    );
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "acpx runtime backend ready after 3 probe attempts",
+    );
   });
 });

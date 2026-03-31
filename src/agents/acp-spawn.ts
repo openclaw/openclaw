@@ -58,6 +58,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -850,6 +851,12 @@ export async function spawnAcpDirect(
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
+  const resolvedCwd = resolveSpawnedWorkspaceInheritance({
+    config: cfg,
+    targetAgentId,
+    requesterSessionKey: ctx.agentSessionKey,
+    explicitWorkspaceDir: params.cwd,
+  });
 
   let preparedBinding: PreparedAcpThreadBinding | null = null;
   if (requestThreadBinding) {
@@ -890,7 +897,7 @@ export async function spawnAcpDirect(
       targetAgentId,
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
-      cwd: params.cwd,
+      cwd: resolvedCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
 

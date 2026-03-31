@@ -538,6 +538,49 @@ describe("spawnAcpDirect", () => {
     });
   });
 
+  it("uses the target agent workspace for cross-agent ACP spawns when cwd is omitted", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "claude-code"],
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            workspace: "/tmp/workspace-main",
+          },
+          {
+            id: "claude-code",
+            workspace: "/tmp/workspace-claude-code",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Inspect the queue owner state",
+        agentId: "claude-code",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:claude-code:acp:/),
+        agent: "claude-code",
+        cwd: "/tmp/workspace-claude-code",
+      }),
+    );
+  });
+
   it("binds LINE ACP sessions to the current conversation when the channel has no native threads", async () => {
     enableLineCurrentConversationBindings();
     hoisted.sessionBindingBindMock.mockImplementationOnce(
