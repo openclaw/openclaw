@@ -848,7 +848,7 @@ describe("redactConfigSnapshot", () => {
     const snapshot = makeSnapshot({
       channels: {
         nostr: {
-          privateKey: "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+          privateKey: "nostr-private-key-placeholder",
           relays: ["wss://relay.example.com"],
         },
       },
@@ -861,7 +861,7 @@ describe("redactConfigSnapshot", () => {
 
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.channels.nostr.privateKey).toBe(
-      "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+      "nostr-private-key-placeholder",
     );
   });
 

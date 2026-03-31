@@ -36,7 +36,14 @@ type ExecFileUtf8Like = (
   command: string,
   args: string[],
   options?: Omit<ExecFileOptionsWithStringEncoding, "encoding">,
-) => Promise<{ stdout: string; stderr: string; code: number }>;
+) => Promise<{ stdout: string; stderr: string; code: number; timedOut?: boolean }>;
+
+type WslProbeResult = {
+  stdout: string;
+  stderr: string;
+  code: number;
+  timedOut?: boolean;
+};
 
 const WSL_PROBE_TIMEOUT_MS = 5_000;
 
@@ -69,22 +76,30 @@ function parseDefaultDistroName(output: string): string | undefined {
   return undefined;
 }
 
-function probeTimedOut(result: { stdout: string; stderr: string; code: number }): boolean {
-  return /timed out|etimedout/i.test(`${result.stderr}\n${result.stdout}`);
+function probeTimedOut(result: WslProbeResult): boolean {
+  return (
+    result.timedOut === true || /timed out|etimedout/i.test(`${result.stderr}\n${result.stdout}`)
+  );
 }
 
 async function runWslProbe(
   execFileImpl: ExecFileUtf8Like,
   args: string[],
-): Promise<{ stdout: string; stderr: string; code: number }> {
+): Promise<WslProbeResult> {
   return await execFileImpl("wsl.exe", args, {
     windowsHide: true,
     timeout: WSL_PROBE_TIMEOUT_MS,
-  }).catch((error: unknown) => ({
-    stdout: "",
-    stderr: String(error),
-    code: 1,
-  }));
+  }).catch((error: unknown) => {
+    const maybeError = error as { killed?: unknown; message?: unknown } | null;
+    const message = typeof maybeError?.message === "string" ? maybeError.message : String(error);
+    const timedOut = maybeError?.killed === true || /timed out|etimedout/i.test(message);
+    return {
+      stdout: "",
+      stderr: message,
+      code: 1,
+      ...(timedOut ? { timedOut: true } : {}),
+    };
+  });
 }
 
 async function readWindowsWslStatus(

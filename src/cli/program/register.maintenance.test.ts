@@ -107,6 +107,10 @@ describe("registerMaintenanceCommands doctor action", () => {
       stderr: EventEmitter;
     };
     child.kill = vi.fn();
+    child.kill.mockImplementation(() => {
+      setTimeout(() => child.emit("exit", null, "SIGTERM"), 0);
+      return true;
+    });
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
     spawn.mockReturnValue(child);

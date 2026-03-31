@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import type { Command } from "commander";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { doctorCommand } from "../../commands/doctor.js";
@@ -133,6 +134,19 @@ async function runDoctorWithTimeout(
       process.stderr.write(stderrPassthroughBuffer);
       stderrPassthroughBuffer = "";
     };
+    const waitForChildExit = async () => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return;
+      }
+      const timeout = new Promise<void>((resolveTimeout) => {
+        const waitTimer = setTimeout(resolveTimeout, 2_000);
+        waitTimer.unref?.();
+      });
+      await Promise.race([
+        once(child, "exit").then(() => undefined).catch(() => undefined),
+        timeout,
+      ]);
+    };
     const child = spawn(process.execPath, [entryArg, ...process.argv.slice(2)], {
       cwd: process.cwd(),
       env: { ...process.env, OPENCLAW_DOCTOR_CHILD: "1", OPENCLAW_DEBUG_DOCTOR: "1" },
@@ -155,14 +169,26 @@ async function runDoctorWithTimeout(
       if (settled) {
         return;
       }
-      settled = true;
-      child.kill();
-      const lastDebugLine = extractLastDoctorDebugLine(`${stdoutTail}\n${stderrTail}`);
-      reject(
-        new Error(
-          formatDoctorTimeoutMessage({ timeoutMs, lastDebugLine }),
-        ),
-      );
+      void (async () => {
+        try {
+          child.kill();
+        } catch {
+          // Best effort only; we still wait briefly so the timed-out child can exit.
+        }
+        await waitForChildExit();
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        flushChildStderr(true);
+        const lastDebugLine = extractLastDoctorDebugLine(`${stdoutTail}\n${stderrTail}`);
+        reject(
+          new Error(
+            formatDoctorTimeoutMessage({ timeoutMs, lastDebugLine }),
+          ),
+        );
+      })();
     }, timeoutMs);
 
     child.once("error", (error) => {

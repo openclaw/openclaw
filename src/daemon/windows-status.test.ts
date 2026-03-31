@@ -109,4 +109,23 @@ describe("collectWindowsGatewayStatus", () => {
       expect(summary.wsl.recommendedAction).toContain("wsl --shutdown");
     });
   });
+
+  it("treats generic exec timeout failures as degraded when probe metadata marks them as timed out", async () => {
+    await withTempHome(async (env) => {
+      const summary = await collectWindowsGatewayStatus(env, {
+        taskRegistered: false,
+        runtimeStatus: "stopped",
+        execFileImpl: async () => ({
+          code: 1,
+          stdout: "",
+          stderr: "Command failed: wsl.exe --status",
+          timedOut: true,
+        }),
+      });
+
+      expect(summary.wsl.wslExeAvailable).toBe(true);
+      expect(summary.wsl.defaultDistroReachable).toBe(false);
+      expect(summary.wsl.recommendedAction).toContain("wsl --shutdown");
+    });
+  });
 });
