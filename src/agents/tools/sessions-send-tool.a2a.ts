@@ -45,6 +45,9 @@ export async function runSessionsSendA2AFlow(params: {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
+      // Keep the delayed-delivery path bounded: after the original wait times out,
+      // we do at most one follow-up wait here. If that also times out or produces
+      // no reply, the announce flow exits without retrying again.
       const wait = await waitForAgentRun({
         runId: params.waitRunId,
         timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
