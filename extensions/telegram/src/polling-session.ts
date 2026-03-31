@@ -184,7 +184,10 @@ export class TelegramPollingSession {
           const onRecovery = () => abortController.abort();
           this.opts.abortSignal?.addEventListener("abort", onSessionAbort, { once: true });
           heartbeatRecoveryWake.signal.addEventListener("abort", onRecovery, { once: true });
-          if (heartbeatSuspended) {
+          // Re-check after wiring listeners: if recovery already fired between
+          // the outer while-check and the addEventListener, the signal is already
+          // aborted and we should not sleep for a full interval.
+          if (heartbeatSuspended && !heartbeatRecoveryWake.signal.aborted) {
             await sleepWithAbort(HEARTBEAT_INTERVAL_MS, abortController.signal).catch(() => {});
           }
           this.opts.abortSignal?.removeEventListener("abort", onSessionAbort);
@@ -547,6 +550,12 @@ export class TelegramPollingSession {
       this.opts.log(
         `[telegram][diag] polling cycle finished reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}`,
       );
+      // When the heartbeat supervisor aborted this cycle, skip the restart
+      // delay — the main loop will re-enter the suspension wait immediately
+      // and the backoff just delays recovery.
+      if (heartbeatAbortedCycle) {
+        return "continue";
+      }
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
       );
