@@ -65,6 +65,16 @@ function isArchSelectorToken(token: string): boolean {
   return /^-[A-Za-z0-9_]+$/.test(token);
 }
 
+function isKnownArchSelectorToken(token: string): boolean {
+  return (
+    token === "-arm64" ||
+    token === "-arm64e" ||
+    token === "-i386" ||
+    token === "-x86_64" ||
+    token === "-x86_64h"
+  );
+}
+
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
 
 function withWindowsExeAliases(names: readonly string[]): string[] {
@@ -379,7 +389,7 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
       if (lower === "-c" || lower === "-d" || lower === "-e" || lower === "-h") {
         return "invalid";
       }
-      return isArchSelectorToken(token) ? "continue" : "invalid";
+      return isArchSelectorToken(token) && isKnownArchSelectorToken(lower) ? "continue" : "invalid";
     },
   });
 }
