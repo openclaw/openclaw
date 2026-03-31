@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { printCronList } from "./shared.js";
+import { getCronChannelOptions, printCronList } from "./shared.js";
 
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
@@ -165,5 +165,11 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+  });
+});
+
+describe("getCronChannelOptions", () => {
+  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+    expect(getCronChannelOptions()).toBe("last|<channel-id>");
   });
 });

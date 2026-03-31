@@ -1,3 +1,4 @@
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { inspectMatrixDirectRoomEvidence } from "./direct-room.js";
 import type { MatrixClient } from "./sdk.js";
 import { EventType, type MatrixDirectAccountData } from "./send/types.js";
@@ -26,6 +27,28 @@ export type MatrixDirectRoomRepairResult = MatrixDirectRoomInspection & {
   directContentBefore: MatrixDirectAccountData;
   directContentAfter: MatrixDirectAccountData;
 };
+
+export type MatrixDirectRoomPromotionResult =
+  | {
+      classifyAsDirect: true;
+      repaired: boolean;
+      roomId: string;
+      reason: "promoted" | "already-mapped" | "repair-failed";
+    }
+  | {
+      classifyAsDirect: false;
+      repaired: false;
+      reason: "not-strict" | "local-explicit-false";
+    };
+
+type MatrixDirectRoomMappingWriteResult = {
+  changed: boolean;
+  directContentBefore: MatrixDirectAccountData;
+  directContentAfter: MatrixDirectAccountData;
+};
+
+const DIRECT_ACCOUNT_DATA_QUEUE_KEY = EventType.Direct;
+const directAccountDataWriteQueues = new WeakMap<MatrixClient, KeyedAsyncQueue>();
 
 async function readMatrixDirectAccountData(client: MatrixClient): Promise<MatrixDirectAccountData> {
   try {
@@ -76,6 +99,55 @@ function normalizeRoomIdList(values: readonly string[]): string[] {
   return normalized;
 }
 
+function hasPrimaryMatrixDirectRoomMapping(params: {
+  directContent: MatrixDirectAccountData;
+  remoteUserId: string;
+  roomId: string;
+}): boolean {
+  return normalizeMappedRoomIds(params.directContent, params.remoteUserId)[0] === params.roomId;
+}
+
+function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQueue {
+  const existing = directAccountDataWriteQueues.get(client);
+  if (existing) {
+    return existing;
+  }
+  const created = new KeyedAsyncQueue();
+  directAccountDataWriteQueues.set(client, created);
+  return created;
+}
+
+async function writeMatrixDirectRoomMapping(params: {
+  client: MatrixClient;
+  remoteUserId: string;
+  roomId: string;
+}): Promise<MatrixDirectRoomMappingWriteResult> {
+  return await resolveDirectAccountDataWriteQueue(params.client).enqueue(
+    DIRECT_ACCOUNT_DATA_QUEUE_KEY,
+    async () => {
+      const directContentBefore = await readMatrixDirectAccountData(params.client);
+      const directContentAfter = buildNextDirectContent({
+        directContent: directContentBefore,
+        remoteUserId: params.remoteUserId,
+        roomId: params.roomId,
+      });
+      const changed = !hasPrimaryMatrixDirectRoomMapping({
+        directContent: directContentBefore,
+        remoteUserId: params.remoteUserId,
+        roomId: params.roomId,
+      });
+      if (changed) {
+        await params.client.setAccountData(EventType.Direct, directContentAfter);
+      }
+      return {
+        changed,
+        directContentBefore,
+        directContentAfter,
+      };
+    },
+  );
+}
+
 async function classifyDirectRoomCandidate(params: {
   client: MatrixClient;
   roomId: string;
@@ -121,20 +193,63 @@ export async function persistMatrixDirectRoomMapping(params: {
   roomId: string;
 }): Promise<boolean> {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
-  const directContent = await readMatrixDirectAccountData(params.client);
-  const current = normalizeMappedRoomIds(directContent, remoteUserId);
-  if (current[0] === params.roomId) {
-    return false;
-  }
-  await params.client.setAccountData(
-    EventType.Direct,
-    buildNextDirectContent({
-      directContent,
+  return (
+    await writeMatrixDirectRoomMapping({
+      client: params.client,
       remoteUserId,
       roomId: params.roomId,
-    }),
-  );
-  return true;
+    })
+  ).changed;
+}
+
+export async function promoteMatrixDirectRoomCandidate(params: {
+  client: MatrixClient;
+  remoteUserId: string;
+  roomId: string;
+  selfUserId?: string | null;
+}): Promise<MatrixDirectRoomPromotionResult> {
+  const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
+  const evidence = await inspectMatrixDirectRoomEvidence({
+    client: params.client,
+    roomId: params.roomId,
+    remoteUserId,
+    selfUserId: params.selfUserId,
+  });
+  if (!evidence.strict) {
+    return {
+      classifyAsDirect: false,
+      repaired: false,
+      reason: "not-strict",
+    };
+  }
+  if (evidence.memberStateFlag === false) {
+    return {
+      classifyAsDirect: false,
+      repaired: false,
+      reason: "local-explicit-false",
+    };
+  }
+
+  try {
+    const repaired = await persistMatrixDirectRoomMapping({
+      client: params.client,
+      remoteUserId,
+      roomId: params.roomId,
+    });
+    return {
+      classifyAsDirect: true,
+      repaired,
+      roomId: params.roomId,
+      reason: repaired ? "promoted" : "already-mapped",
+    };
+  } catch {
+    return {
+      classifyAsDirect: true,
+      repaired: false,
+      roomId: params.roomId,
+      reason: "repair-failed",
+    };
+  }
 }
 
 export async function inspectMatrixDirectRooms(params: {
@@ -204,7 +319,6 @@ export async function repairMatrixDirectRooms(params: {
   encrypted?: boolean;
 }): Promise<MatrixDirectRoomRepairResult> {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
-  const directContentBefore = await readMatrixDirectAccountData(params.client);
   const inspected = await inspectMatrixDirectRooms({
     client: params.client,
     remoteUserId,
@@ -215,27 +329,17 @@ export async function repairMatrixDirectRooms(params: {
       encrypted: params.encrypted === true,
     }));
   const createdRoomId = inspected.activeRoomId ? null : activeRoomId;
-  const directContentAfter = buildNextDirectContent({
-    directContent: directContentBefore,
+  const mappingWrite = await writeMatrixDirectRoomMapping({
+    client: params.client,
     remoteUserId,
     roomId: activeRoomId,
   });
-  const changed =
-    JSON.stringify(directContentAfter[remoteUserId] ?? []) !==
-    JSON.stringify(directContentBefore[remoteUserId] ?? []);
-  if (changed) {
-    await persistMatrixDirectRoomMapping({
-      client: params.client,
-      remoteUserId,
-      roomId: activeRoomId,
-    });
-  }
   return {
     ...inspected,
     activeRoomId,
     createdRoomId,
-    changed,
-    directContentBefore,
-    directContentAfter,
+    changed: mappingWrite.changed,
+    directContentBefore: mappingWrite.directContentBefore,
+    directContentAfter: mappingWrite.directContentAfter,
   };
 }

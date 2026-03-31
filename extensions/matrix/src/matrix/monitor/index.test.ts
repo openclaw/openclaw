@@ -2,11 +2,19 @@ import path from "node:path";
 import { z } from "openclaw/plugin-sdk/zod";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
+import type { MatrixRoomInfo } from "./room-info.js";
+
+type DirectRoomTrackerOptions = {
+  canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
+};
 
 const hoisted = vi.hoisted(() => {
   const callOrder: string[] = [];
   const state = {
     startClientError: null as Error | null,
+  };
+  const accountConfig = {
+    dm: {},
   };
   const inboundDeduper = {
     claimEvent: vi.fn(() => true),
@@ -22,6 +30,17 @@ const hoisted = vi.hoisted(() => {
     drainPendingDecryptions: vi.fn(async () => undefined),
   };
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
+  const createDirectRoomTracker = vi.fn((_client: unknown, _opts?: DirectRoomTrackerOptions) => ({
+    isDirectMessage: vi.fn(async () => false),
+  }));
+  const getRoomInfo = vi.fn<
+    (roomId: string, opts?: { includeAliases?: boolean }) => Promise<MatrixRoomInfo>
+  >(async () => ({
+    altAliases: [],
+    nameResolved: true,
+    aliasesResolved: true,
+  }));
+  const getMemberDisplayName = vi.fn(async () => "Bot");
   const resolveTextChunkLimit = vi.fn<
     (cfg: unknown, channel: unknown, accountId?: unknown) => number
   >(() => 4000);
@@ -37,8 +56,12 @@ const hoisted = vi.hoisted(() => {
   const setMatrixRuntime = vi.fn();
   return {
     callOrder,
+    accountConfig,
     client,
+    createDirectRoomTracker,
     createMatrixRoomMessageHandler,
+    getMemberDisplayName,
+    getRoomInfo,
     inboundDeduper,
     logger,
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
@@ -61,6 +84,7 @@ vi.mock("../../runtime-api.js", () => {
     MarkdownConfigSchema: z.any().optional(),
     PAIRING_APPROVED_MESSAGE: "paired",
     ToolPolicySchema: z.any().optional(),
+    addAllowlistUserEntriesFromConfigEntry: vi.fn(),
     buildChannelConfigSchema: (schema: unknown) => schema,
     buildChannelKeyCandidates: () => [],
     buildProbeChannelStatusSummary: (
@@ -93,7 +117,40 @@ vi.mock("../../runtime-api.js", () => {
       groupPolicy: "allowlist",
       providerMissingFallbackApplied: false,
     }),
-    resolveChannelEntryMatch: () => null,
+    resolveChannelEntryMatch: ({
+      entries,
+      keys,
+      wildcardKey,
+    }: {
+      entries: Record<string, unknown>;
+      keys: string[];
+      wildcardKey: string;
+    }) => {
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(entries, key)) {
+          return {
+            entry: entries[key],
+            key,
+            wildcardEntry: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
+              ? entries[wildcardKey]
+              : undefined,
+            wildcardKey: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
+              ? wildcardKey
+              : undefined,
+          };
+        }
+      }
+      return {
+        entry: undefined,
+        key: undefined,
+        wildcardEntry: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
+          ? entries[wildcardKey]
+          : undefined,
+        wildcardKey: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
+          ? wildcardKey
+          : undefined,
+      };
+    },
     resolveDefaultGroupPolicy: () => "allowlist",
     resolveOutboundSendDep: () => null,
     resolveThreadBindingFarewellText: () => null,
@@ -152,9 +209,7 @@ vi.mock("../accounts.js", async (importOriginal) => {
     resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
     resolveMatrixAccount: () => ({
       accountId: "default",
-      config: {
-        dm: {},
-      },
+      config: hoisted.accountConfig,
     }),
   };
 });
@@ -234,9 +289,7 @@ vi.mock("./auto-join.js", () => ({
 }));
 
 vi.mock("./direct.js", () => ({
-  createDirectRoomTracker: vi.fn(() => ({
-    isDirectMessage: vi.fn(async () => false),
-  })),
+  createDirectRoomTracker: hoisted.createDirectRoomTracker,
 }));
 
 vi.mock("./events.js", () => ({
@@ -262,10 +315,8 @@ vi.mock("./legacy-crypto-restore.js", () => ({
 
 vi.mock("./room-info.js", () => ({
   createMatrixRoomInfoResolver: vi.fn(() => ({
-    getRoomInfo: vi.fn(async () => ({
-      altAliases: [],
-    })),
-    getMemberDisplayName: vi.fn(async () => "Bot"),
+    getRoomInfo: hoisted.getRoomInfo,
+    getMemberDisplayName: hoisted.getMemberDisplayName,
   })),
 }));
 
@@ -292,8 +343,19 @@ describe("monitorMatrixProvider", () => {
   beforeEach(() => {
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
+    hoisted.accountConfig.dm = {};
+    delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
+    hoisted.createDirectRoomTracker.mockReset().mockReturnValue({
+      isDirectMessage: vi.fn(async () => false),
+    });
+    hoisted.getRoomInfo.mockReset().mockResolvedValue({
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
+    hoisted.getMemberDisplayName.mockReset().mockResolvedValue("Bot");
     hoisted.registeredOnRoomMessage = null;
     hoisted.setActiveMatrixClient.mockReset();
     hoisted.stopThreadBindingManager.mockReset();
@@ -436,6 +498,62 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder.indexOf("stop-deduper")).toBeLessThan(
       hoisted.callOrder.indexOf("release-client"),
     );
+  });
+
+  it("wires recent-invite promotion to fail closed when room metadata is unresolved", async () => {
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
+    if (!trackerOpts?.canPromoteRecentInvite) {
+      throw new Error("recent invite promotion callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      altAliases: [],
+      nameResolved: false,
+      aliasesResolved: false,
+    });
+
+    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
+  });
+
+  it("wires recent-invite promotion to reject named rooms", async () => {
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
+    if (!trackerOpts?.canPromoteRecentInvite) {
+      throw new Error("recent invite promotion callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      name: "Ops Room",
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
+
+    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
+  });
+
+  it("wires recent-invite promotion to reject wildcard-configured rooms", async () => {
+    (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms = {
+      "*": { enabled: false },
+    };
+
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
+    if (!trackerOpts?.canPromoteRecentInvite) {
+      throw new Error("recent invite promotion callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
+
+    await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
   });
 });
 
