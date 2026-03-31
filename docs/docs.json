@@ -984,6 +984,7 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/qqbot",
                   "channels/signal",
                   "channels/slack",
                   "channels/synology-chat",
