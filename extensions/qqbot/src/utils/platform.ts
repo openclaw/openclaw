@@ -165,9 +165,11 @@ export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
   }
 
   const resolvedCandidate = path.resolve(candidate);
-  const canonicalCandidate = fs.existsSync(resolvedCandidate)
-    ? fs.realpathSync(resolvedCandidate)
-    : resolvedCandidate;
+  if (!fs.existsSync(resolvedCandidate)) {
+    return null;
+  }
+
+  const canonicalCandidate = fs.realpathSync(resolvedCandidate);
   const allowedRoots = [getQQBotMediaDir()];
 
   for (const root of allowedRoots) {

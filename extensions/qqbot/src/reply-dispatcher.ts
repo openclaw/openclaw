@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -201,7 +202,7 @@ function validateStructuredPayloadLocalPath(
   }
 
   ctx.log?.error(
-    `[qqbot:${ctx.account.accountId}] Blocked ${mediaType} payload local path outside QQ Bot media storage: ${sanitizeForLog(payloadPath)}`,
+    `[qqbot:${ctx.account.accountId}] Blocked ${mediaType} payload local path outside QQ Bot media storage`,
   );
   return null;
 }
@@ -216,17 +217,15 @@ function sanitizeForLog(value: string, maxLen = 200): string {
 
 function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): string {
   if (!isHttpUrl) {
-    const name = path.basename(pathValue);
-    return name ? sanitizeForLog(name) : "<local-file>";
+    return "<local-file>";
   }
 
   try {
     const url = new URL(pathValue);
     url.username = "";
     url.password = "";
-    url.search = "";
-    url.hash = "";
-    return sanitizeForLog(`${url.protocol}//${url.host}${url.pathname}`);
+    const urlId = crypto.createHash("sha256").update(url.toString()).digest("hex").slice(0, 12);
+    return sanitizeForLog(`${url.protocol}//${url.host}#${urlId}`);
   } catch {
     return "<invalid-url>";
   }
