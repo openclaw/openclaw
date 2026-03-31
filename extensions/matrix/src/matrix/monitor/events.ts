@@ -131,7 +131,7 @@ export function registerMatrixMonitorEvents(params: {
     const senderIsInvitee =
       typeof event?.sender === "string" && invitee && event.sender.trim() === invitee;
     const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
-    if (isDirect && typeof event?.sender === "string" && event.sender.trim() && !senderIsInvitee) {
+    if (typeof event?.sender === "string" && event.sender.trim() && !senderIsInvitee) {
       directTracker?.rememberInvite?.(roomId, event.sender);
     }
     logVerboseMessage(

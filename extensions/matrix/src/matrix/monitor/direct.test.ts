@@ -341,6 +341,8 @@ describe("createDirectRoomTracker", () => {
       }),
     ).resolves.toBe(true);
 
+    tracker.invalidateRoom("!room:example.org");
+
     vi.setSystemTime(new Date("2026-03-30T23:01:00Z"));
 
     await expect(

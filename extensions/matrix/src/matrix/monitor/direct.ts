@@ -154,7 +154,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           directMemberFlagCache.delete(key);
         }
       }
-      locallyPromotedDirectRooms.delete(roomId);
       lastDmUpdateMs = 0;
       log(`matrix: invalidated dm cache room=${roomId}`);
     },
