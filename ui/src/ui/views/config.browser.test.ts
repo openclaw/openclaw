@@ -490,4 +490,48 @@ describe("config view", () => {
     expect(input).not.toBeNull();
     expect(input?.placeholder).toBe("Structured value (SecretRef) - edit the config file directly");
   });
+
+  it("keeps malformed non-SecretRef object values editable when raw mode is unavailable", () => {
+    const onFormPatch = vi.fn();
+    const { container } = renderConfigView({
+      rawAvailable: false,
+      formMode: "raw",
+      schema: {
+        type: "object",
+        properties: {
+          gateway: {
+            type: "object",
+            properties: {
+              mode: { type: "string" },
+            },
+          },
+        },
+      },
+      formValue: {
+        gateway: {
+          mode: { malformed: true },
+        },
+      },
+      originalValue: {
+        gateway: {
+          mode: { malformed: true },
+        },
+      },
+      onFormPatch,
+    });
+
+    const input = container.querySelector<HTMLInputElement>(".cfg-input");
+    expect(input).not.toBeNull();
+    expect(input?.readOnly).toBe(false);
+    expect(input?.value).toContain("malformed");
+    expect(input?.value).not.toBe("[object Object]");
+    expect(input?.placeholder).not.toContain("Structured value (SecretRef)");
+
+    if (!input) {
+      return;
+    }
+    input.value = "local";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
+  });
 });

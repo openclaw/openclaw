@@ -103,6 +103,21 @@ type FieldMeta = {
   tags: string[];
 };
 
+function isSecretRefObject(value: unknown): value is {
+  source: string;
+  id: string;
+  provider?: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.source !== "string" || typeof candidate.id !== "string") {
+    return false;
+  }
+  return candidate.provider === undefined || typeof candidate.provider === "string";
+}
+
 type SensitiveRenderParams = {
   path: Array<string | number>;
   value: unknown;
@@ -642,10 +657,11 @@ function renderTextInput(params: {
   });
   const isStructuredValue =
     value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
+  const isStructuredSecretRef = isSecretRefObject(value);
   const rawAvailable = params.rawAvailable ?? true;
-  const effectiveRedacted = sensitiveState.isRedacted || isStructuredValue;
+  const effectiveRedacted = sensitiveState.isRedacted || isStructuredSecretRef;
   const placeholder = effectiveRedacted
-    ? isStructuredValue
+    ? isStructuredSecretRef
       ? rawAvailable
         ? "Structured value (SecretRef) - use Raw mode to edit"
         : "Structured value (SecretRef) - edit the config file directly"
@@ -653,7 +669,11 @@ function renderTextInput(params: {
     : (hint?.placeholder ??
       // oxlint-disable typescript/no-base-to-string
       (schema.default !== undefined ? `Default: ${String(schema.default)}` : ""));
-  const displayValue = effectiveRedacted ? "" : (value ?? "");
+  const displayValue = effectiveRedacted
+    ? ""
+    : isStructuredValue
+      ? jsonValue(value)
+      : (value ?? "");
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
 
   return html`
@@ -669,7 +689,11 @@ function renderTextInput(params: {
           ?disabled=${disabled}
           ?readonly=${effectiveRedacted}
           @click=${() => {
-            if (sensitiveState.isRedacted && !isStructuredValue && params.onToggleSensitivePath) {
+            if (
+              sensitiveState.isRedacted &&
+              !isStructuredSecretRef &&
+              params.onToggleSensitivePath
+            ) {
               params.onToggleSensitivePath(path);
             }
           }}
@@ -698,7 +722,7 @@ function renderTextInput(params: {
           }}
         />
         ${
-          isStructuredValue
+          isStructuredSecretRef
             ? nothing
             : renderSensitiveToggleButton({
                 path,
