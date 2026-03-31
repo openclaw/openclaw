@@ -242,7 +242,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_discoveryUnspecifiedIpv4WithoutHintsCanStayCleartext() {
+  fun resolveTlsParamsForEndpoint_discoveryUnspecifiedIpv4WithoutHintsRequiresTls() {
     val endpoint =
       GatewayEndpoint(
         stableId = "_openclaw-gw._tcp.|local.|Test",
@@ -260,7 +260,33 @@ class ConnectionManagerTest {
         manualTlsEnabled = false,
       )
 
-    assertNull(params)
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryUnspecifiedIpv6WithoutHintsRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "::",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
   }
 
   @Test

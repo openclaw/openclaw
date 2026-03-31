@@ -18,10 +18,7 @@ internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
     host = host.substring(0, zoneIndex)
   }
   if (host.isEmpty()) return false
-  // `0.0.0.0` / `::` are unspecified addresses, but Android client connections to them
-  // still resolve only to the local device. Treat them as loopback so local gateways can
-  // continue using cleartext development flows.
-  if (host == "localhost" || host == "0.0.0.0" || host == "::") return true
+  if (host == "localhost") return true
 
   parseIpv4Address(host)?.let { ipv4 ->
     return ipv4.first() == 127.toByte()

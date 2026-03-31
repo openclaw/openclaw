@@ -116,27 +116,17 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointAllowsUnspecifiedIpv4CleartextHttpUrls() {
+  fun parseGatewayEndpointRejectsUnspecifiedIpv4CleartextHttpUrls() {
     val parsed = parseGatewayEndpoint("http://0.0.0.0:80")
 
-    assertEquals(
-      GatewayEndpointConfig(
-        host = "0.0.0.0",
-        port = 80,
-        tls = false,
-        displayUrl = "http://0.0.0.0:80",
-      ),
-      parsed,
-    )
+    assertNull(parsed)
   }
 
   @Test
-  fun parseGatewayEndpointAllowsUnspecifiedIpv6CleartextWsUrls() {
+  fun parseGatewayEndpointRejectsUnspecifiedIpv6CleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://[::]")
 
-    assertEquals("::", parsed?.host)
-    assertEquals(18789, parsed?.port)
-    assertEquals(false, parsed?.tls)
+    assertNull(parsed)
   }
 
   @Test

@@ -165,7 +165,8 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
 
 internal fun resolveScannedSetupCode(rawInput: String): String? {
   val setupCode = resolveSetupCodeCandidate(rawInput) ?: return null
-  return setupCode.takeIf { decodeGatewaySetupCode(it) != null }
+  val decoded = decodeGatewaySetupCode(setupCode) ?: return null
+  return setupCode.takeIf { parseGatewayEndpoint(decoded.url) != null }
 }
 
 internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: Boolean): String? {
