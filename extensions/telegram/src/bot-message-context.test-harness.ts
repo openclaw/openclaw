@@ -99,13 +99,5 @@ async function installMessageContextTestMocks() {
       resolveStorePath: (storePath?: string) => storePath ?? "/tmp/sessions.json",
     };
   });
-  vi.doMock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-    const actual =
-      await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-    return {
-      ...actual,
-      recordInboundSession: async () => undefined,
-    };
-  });
   messageContextMocksInstalled = true;
 }
