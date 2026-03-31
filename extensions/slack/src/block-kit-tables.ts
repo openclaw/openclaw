@@ -1,7 +1,9 @@
 import type { MarkdownTableData } from "openclaw/plugin-sdk/text-runtime";
 
 const SLACK_MAX_TABLE_COLUMNS = 20;
-const SLACK_MAX_TABLE_ROWS = 100;
+// Slack silently drops rows beyond 100 (including header row).
+// Use 99 to guarantee the truncation indicator row is always visible.
+const SLACK_MAX_TABLE_ROWS = 99;
 const SLACK_MAX_FALLBACK_CELL_WIDTH = 80;
 const SLACK_MAX_FALLBACK_TEXT_LENGTH = 4000;
 
