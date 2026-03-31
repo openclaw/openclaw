@@ -521,6 +521,31 @@ describe("Agent-specific tool filtering", () => {
     expect(names).not.toContain("exec");
   });
 
+  it("should resolve feishu group tool policy for sender-scoped session keys", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            oc_group_chat: {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-scoped-group",
+      agentDir: "/tmp/agent-feishu",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+  });
+
   it("should inherit group tool policy for subagents from spawnedBy session keys", () => {
     const cfg: OpenClawConfig = {
       channels: {

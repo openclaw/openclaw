@@ -1,5 +1,8 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
+import {
+  resolveSessionConversationRef,
+  resolveSessionParentSessionKey,
+} from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
@@ -135,6 +138,18 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return {};
+  }
+  const resolvedConversation = resolveSessionConversationRef(raw);
+  if (resolvedConversation) {
+    const groupId =
+      resolvedConversation.parentConversationCandidates.at(-1) ?? resolvedConversation.id;
+    if (!groupId) {
+      return {};
+    }
+    return {
+      channel: resolvedConversation.channel,
+      groupId,
+    };
   }
   const base = resolveSessionParentSessionKey(raw) ?? raw;
   const parts = base.split(":").filter(Boolean);
