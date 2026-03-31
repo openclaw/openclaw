@@ -92,6 +92,79 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
+function stripTelegramAnnouncePrefix(to: string): string {
+  let trimmed = to.trim();
+  let strippedTelegramPrefix = false;
+  while (true) {
+    const next = (() => {
+      if (/^(telegram|tg):/i.test(trimmed)) {
+        strippedTelegramPrefix = true;
+        return trimmed.replace(/^(telegram|tg):/i, "").trim();
+      }
+      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
+        return trimmed.replace(/^group:/i, "").trim();
+      }
+      return trimmed;
+    })();
+    if (next === trimmed) {
+      return trimmed;
+    }
+    trimmed = next;
+  }
+}
+
+function parseTelegramAnnounceTarget(to: string): {
+  chatId: string;
+  chatType: "direct" | "group" | "unknown";
+} {
+  const normalized = stripTelegramAnnouncePrefix(to);
+  const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
+  const colonMatch = /^(.+):(\d+)$/.exec(normalized);
+  const chatId = topicMatch?.[1] ?? colonMatch?.[1] ?? normalized;
+  const trimmedChatId = chatId.trim();
+  const chatType = /^-?\d+$/.test(trimmedChatId)
+    ? trimmedChatId.startsWith("-")
+      ? "group"
+      : "direct"
+    : "unknown";
+  return { chatId: trimmedChatId, chatType };
+}
+
+function shouldStripThreadFromAnnounceEntry(
+  normalizedRequester?: DeliveryContext,
+  normalizedEntry?: DeliveryContext,
+): boolean {
+  if (
+    !normalizedRequester?.to ||
+    normalizedRequester.threadId != null ||
+    normalizedEntry?.threadId == null
+  ) {
+    return false;
+  }
+  const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  if (requesterChannel && requesterChannel !== "telegram") {
+    return true;
+  }
+  if (!requesterChannel && !normalizedRequester.to.startsWith("telegram:")) {
+    return true;
+  }
+  try {
+    const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
+    if (requesterTarget.chatType !== "group") {
+      return true;
+    }
+    const entryTarget = normalizedEntry.to
+      ? parseTelegramAnnounceTarget(normalizedEntry.to)
+      : undefined;
+    if (entryTarget && entryTarget.chatId !== requesterTarget.chatId) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\berrorcode=unavailable\b/i,
   /\bstatus\s*[:=]\s*"?unavailable\b/i,
@@ -196,9 +269,7 @@ export function resolveAnnounceOrigin(
     );
   }
   const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
+    normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
       ? (() => {
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;
