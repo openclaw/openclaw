@@ -27,9 +27,11 @@ describe("test planner executor", () => {
       kill: vi.fn(),
     });
     const spawnMock = vi.fn(() => {
-      setTimeout(() => {
+      queueMicrotask(() => {
+        stdout.end();
+        stderr.end();
         fakeChild.emit("exit", 0, null);
-      }, 0);
+      });
       return fakeChild;
     });
     const artifacts = createExecutionArtifacts({ OPENCLAW_TEST_CLOSE_GRACE_MS: "10" });
@@ -75,15 +77,17 @@ describe("test planner executor", () => {
     const spawnMock = vi.fn(() => {
       const child = children[childIndex];
       childIndex += 1;
-      setTimeout(() => {
+      queueMicrotask(() => {
         child.stdout.write(
           child.index === 0
             ? " ❯ src/alpha.test.ts (1 test | 1 failed)\n"
             : " ❯ src/beta.test.ts (1 test | 1 failed)\n",
         );
+        child.stdout.end();
+        child.stderr.end();
         child.emit("exit", 1, null);
         child.emit("close", 1, null);
-      }, 0);
+      });
       return child;
     });
     const artifacts = createExecutionArtifacts({});
@@ -140,10 +144,12 @@ describe("test planner executor", () => {
     let capturedEnv;
     const spawnMock = vi.fn((_command, _args, options) => {
       capturedEnv = options?.env;
-      setTimeout(() => {
+      queueMicrotask(() => {
+        stdout.end();
+        stderr.end();
         fakeChild.emit("exit", 0, null);
         fakeChild.emit("close", 0, null);
-      }, 0);
+      });
       return fakeChild;
     });
     const artifacts = createExecutionArtifacts({
@@ -190,3 +196,5 @@ describe("test planner executor", () => {
     artifacts.cleanupTempArtifacts();
   });
 });
+
+
