@@ -828,7 +828,10 @@ class NodeRuntime(
     }
   }
 
-  fun connect(endpoint: GatewayEndpoint) {
+  private fun beginConnect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
       // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
@@ -847,18 +850,18 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth())
+    connectWithAuth(endpoint = endpoint, auth = auth)
+  }
+
+  fun connect(endpoint: GatewayEndpoint) {
+    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth())
   }
 
   fun connect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
-    connectedEndpoint = endpoint
-    operatorStatusText = "Connecting…"
-    nodeStatusText = "Connecting…"
-    updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
+    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
   }
 
   internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth {
