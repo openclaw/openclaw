@@ -26,7 +26,6 @@ let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwar
 let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     __resetDiscordChannelInfoCacheForTest,
     resolveDiscordChannelInfo,

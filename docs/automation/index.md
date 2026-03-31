@@ -25,22 +25,22 @@ flowchart TD
 
 ## Mechanisms at a glance
 
-| Mechanism | What it does | Runs in | Creates task record |
-|---|---|---|---|
-| [Heartbeat](/gateway/heartbeat) | Periodic main-session turn — batches multiple checks | Main session | No |
-| [Cron](/automation/cron-jobs) | Scheduled jobs with precise timing | Main or isolated session | Yes (all types) |
-| [Background Tasks](/automation/tasks) | Tracks detached work (cron, ACP, subagents, CLI) | N/A (ledger) | N/A |
-| [Hooks](/automation/hooks) | Event-driven scripts triggered by agent lifecycle events | Hook runner | No |
-| [Standing Orders](/automation/standing-orders) | Persistent instructions injected into the system prompt | Main session | No |
-| [Webhooks](/automation/webhook) | Receive inbound HTTP events and route to the agent | Gateway HTTP | No |
+| Mechanism                                      | What it does                                             | Runs in                  | Creates task record |
+| ---------------------------------------------- | -------------------------------------------------------- | ------------------------ | ------------------- |
+| [Heartbeat](/gateway/heartbeat)                | Periodic main-session turn — batches multiple checks     | Main session             | No                  |
+| [Cron](/automation/cron-jobs)                  | Scheduled jobs with precise timing                       | Main or isolated session | Yes (all types)     |
+| [Background Tasks](/automation/tasks)          | Tracks detached work (cron, ACP, subagents, CLI)         | N/A (ledger)             | N/A                 |
+| [Hooks](/automation/hooks)                     | Event-driven scripts triggered by agent lifecycle events | Hook runner              | No                  |
+| [Standing Orders](/automation/standing-orders) | Persistent instructions injected into the system prompt  | Main session             | No                  |
+| [Webhooks](/automation/webhook)                | Receive inbound HTTP events and route to the agent       | Gateway HTTP             | No                  |
 
 ### Specialized automation
 
-| Mechanism | What it does |
-|---|---|
-| [Gmail PubSub](/automation/gmail-pubsub) | Real-time Gmail notifications via Google PubSub |
-| [Polling](/automation/poll) | Periodic data source checks (RSS, APIs, etc.) |
-| [Auth Monitoring](/automation/auth-monitoring) | Credential health and expiry alerts |
+| Mechanism                                      | What it does                                    |
+| ---------------------------------------------- | ----------------------------------------------- |
+| [Gmail PubSub](/automation/gmail-pubsub)       | Real-time Gmail notifications via Google PubSub |
+| [Polling](/automation/poll)                    | Periodic data source checks (RSS, APIs, etc.)   |
+| [Auth Monitoring](/automation/auth-monitoring) | Credential health and expiry alerts             |
 
 ## How they work together
 

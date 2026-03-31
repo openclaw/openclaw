@@ -233,13 +233,16 @@ function sanitizeLiveConfig(raw: string): string {
         list?: Array<Record<string, unknown>>;
       };
     } = JSON5.parse(raw);
+
     if (!parsed || typeof parsed !== "object") {
       return raw;
     }
+
     if (parsed.agents?.defaults && typeof parsed.agents.defaults === "object") {
       delete parsed.agents.defaults.workspace;
       delete parsed.agents.defaults.agentDir;
     }
+
     if (Array.isArray(parsed.agents?.list)) {
       parsed.agents.list = parsed.agents.list.map((entry) => {
         if (!entry || typeof entry !== "object") {
@@ -251,6 +254,7 @@ function sanitizeLiveConfig(raw: string): string {
         return nextEntry;
       });
     }
+
     return `${JSON.stringify(parsed, null, 2)}\n`;
   } catch {
     return raw;

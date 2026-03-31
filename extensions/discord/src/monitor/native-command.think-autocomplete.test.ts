@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
@@ -55,9 +55,11 @@ const SESSION_KEY = "agent:main:main";
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
 
 describe("discord native /think autocomplete", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ resolveDiscordNativeChoiceContext } = await import("./native-command-ui.js"));
+  });
+
+  beforeEach(() => {
     clearSessionStoreCacheForTest();
     ensureConfiguredBindingRouteReadyMock.mockReset();
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });

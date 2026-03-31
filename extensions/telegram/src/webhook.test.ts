@@ -915,7 +915,7 @@ describe("startTelegramWebhook", () => {
     });
 
     abort.abort();
-    await vi.waitFor(() => expect(deleteWebhookSpy).toHaveBeenCalledTimes(1));
+    expect(deleteWebhookSpy).toHaveBeenCalledTimes(1);
     expect(deleteWebhookSpy).toHaveBeenCalledWith({ drop_pending_updates: false });
   });
 });

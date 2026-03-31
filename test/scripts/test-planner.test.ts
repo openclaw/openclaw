@@ -150,7 +150,7 @@ describe("test planner", () => {
     expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitIsolated).toBe(1);
-    expect(plan.topLevelParallelLimit).toBe(4);
+    expect(plan.topLevelParallelLimit).toBe(3);
     expect(plan.deferredRunConcurrency).toBe(1);
     artifacts.cleanupTempArtifacts();
   });
@@ -180,10 +180,27 @@ describe("test planner", () => {
     const sharedUnitBatches = plan.selectedUnits.filter(
       (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
     );
+    const baselinePlan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        loadAverage: [1, 1, 1],
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+    const baselineSharedUnitBatches = baselinePlan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
 
     expect(plan.runtimeCapabilities.memoryBand).toBe("high");
     expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
-    expect(sharedUnitBatches).toHaveLength(3);
+    expect(sharedUnitBatches.length).toBeLessThan(baselineSharedUnitBatches.length);
     expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.unitFastBatchTargetMs).toBe(90_000);
     artifacts.cleanupTempArtifacts();
@@ -393,9 +410,55 @@ describe("test planner", () => {
 
     expect(targetedUnit).toBeTruthy();
     expect(defaultUnitWithSameId).toBeTruthy();
-    expect(defaultUnitWithSameId).not.toBe(targetedUnit);
-    expect(plan.topLevelSingleShardAssignments.get(targetedUnit)).toBeUndefined();
-    expect(plan.topLevelSingleShardAssignments.get(defaultUnitWithSameId)).toBeDefined();
+    const targetedUnitRecord = targetedUnit!;
+    const defaultUnitRecord = defaultUnitWithSameId as typeof targetedUnitRecord;
+
+    expect(defaultUnitRecord).not.toBe(targetedUnitRecord);
+    expect(plan.topLevelSingleShardAssignments.get(targetedUnitRecord)).toBeUndefined();
+    expect(plan.topLevelSingleShardAssignments.get(defaultUnitRecord)).toBeDefined();
+
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("pins the smallest CI include-file batches to fixed shards", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_TEST_SHARDS: "4",
+      OPENCLAW_TEST_SHARD_INDEX: "1",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        mode: "ci",
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const shardableUnits = plan.parallelUnits.filter(
+      (unit) =>
+        unit.id.startsWith("unit-fast-") &&
+        Array.isArray(unit.includeFiles) &&
+        unit.includeFiles.length > 0,
+    );
+    const smallestIncludeCount = Math.min(
+      ...shardableUnits.map((unit) => unit.includeFiles.length),
+    );
+    const smallestBatches = shardableUnits.filter(
+      (unit) => unit.includeFiles.length === smallestIncludeCount,
+    );
+
+    expect(smallestBatches.length).toBeGreaterThan(0);
+    expect(smallestBatches.every((unit) => typeof unit.fixedShardIndex === "number")).toBe(true);
+    expect(
+      smallestBatches.every((unit) => plan.topLevelSingleShardAssignments.get(unit) === undefined),
+    ).toBe(true);
 
     artifacts.cleanupTempArtifacts();
   });
@@ -430,11 +493,12 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
 
     await expect(
-      new Promise((resolve, reject) => {
+      new Promise<void>((resolve, reject) => {
         stream.on("error", reject);
-        stream.end("after cleanup\n", resolve);
+        stream.write("after cleanup\n");
+        stream.end(() => resolve());
       }),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 

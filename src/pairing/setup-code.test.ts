@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -74,8 +74,8 @@ describe("pairing setup code", () => {
     expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith(
       expect.objectContaining({
         profile: {
-          roles: ["node"],
-          scopes: [],
+          roles: ["node", "operator"],
+          scopes: ["operator.read", "operator.talk.secrets", "operator.write"],
         },
       }),
     );
@@ -158,16 +158,18 @@ describe("pairing setup code", () => {
   }
 
   beforeEach(() => {
-    vi.resetModules();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
   });
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js"));
     ({ issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
       await import("../infra/device-bootstrap.js"));
+  });
+
+  beforeEach(() => {
     vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
   });
 

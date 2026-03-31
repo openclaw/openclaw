@@ -337,7 +337,8 @@ export function resolveGatewayStartupPluginIds(params: {
       return (
         pluginsConfig.allow.includes(plugin.id) ||
         pluginsConfig.entries[plugin.id]?.enabled === true ||
-        pluginsConfig.slots.memory === plugin.id
+        pluginsConfig.slots.memory === plugin.id ||
+        plugin.enabledByDefault === true
       );
     })
     .map((plugin) => plugin.id);

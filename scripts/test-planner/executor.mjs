@@ -15,6 +15,17 @@ import {
 } from "../test-parallel-utils.mjs";
 import { countExplicitEntryFilters, getExplicitEntryFilters } from "./vitest-args.mjs";
 
+const countUnitEntryFilters = (unit) => {
+  const explicitFilterCount = countExplicitEntryFilters(unit.args);
+  if (explicitFilterCount !== null) {
+    return explicitFilterCount;
+  }
+  if (Array.isArray(unit.includeFiles) && unit.includeFiles.length > 0) {
+    return unit.includeFiles.length;
+  }
+  return null;
+};
+
 export function resolvePnpmCommandInvocation(options = {}) {
   const npmExecPath = typeof options.npmExecPath === "string" ? options.npmExecPath.trim() : "";
   if (npmExecPath && path.isAbsolute(npmExecPath)) {
@@ -253,7 +264,7 @@ export function formatPlanOutput(plan) {
     `runtime=${plan.runtimeCapabilities.runtimeProfileName} mode=${plan.runtimeCapabilities.mode} intent=${plan.runtimeCapabilities.intentProfile} memoryBand=${plan.runtimeCapabilities.memoryBand} loadBand=${plan.runtimeCapabilities.loadBand} failurePolicy=${plan.failurePolicy} vitestMaxWorkers=${String(plan.executionBudget.vitestMaxWorkers ?? "default")} topLevelParallel=${plan.topLevelParallelEnabled ? String(plan.topLevelParallelLimit) : "off"}`,
     ...plan.selectedUnits.map(
       (unit) =>
-        `${unit.id} filters=${String(countExplicitEntryFilters(unit.args) ?? "all")} maxWorkers=${String(
+        `${unit.id} filters=${String(countUnitEntryFilters(unit) ?? "all")} maxWorkers=${String(
           unit.maxWorkers ?? "default",
         )} surface=${unit.surface} isolate=${unit.isolate ? "yes" : "no"} pool=${unit.pool}`,
     ),
@@ -810,7 +821,7 @@ export async function executePlan(plan, options = {}) {
       results.push(await runOnce(unit, extraArgs));
       return results;
     }
-    const explicitFilterCount = countExplicitEntryFilters(unit.args);
+    const explicitFilterCount = countUnitEntryFilters(unit);
     const topLevelAssignedShard = plan.topLevelSingleShardAssignments.get(unit);
     if (topLevelAssignedShard !== undefined) {
       if (plan.shardIndexOverride !== null && plan.shardIndexOverride !== topLevelAssignedShard) {
