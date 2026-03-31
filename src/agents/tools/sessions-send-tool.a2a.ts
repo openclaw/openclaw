@@ -35,7 +35,6 @@ export async function runSessionsSendA2AFlow(params: {
   requesterChannel?: GatewayMessageChannel;
   roundOneReply?: string;
   waitRunId?: string;
-  metadata?: Record<string, unknown>;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
