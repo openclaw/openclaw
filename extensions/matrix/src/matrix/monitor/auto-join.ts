@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "../../runtime-api.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";

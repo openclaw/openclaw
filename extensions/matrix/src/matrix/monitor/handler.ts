@@ -1,18 +1,18 @@
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
-  ensureConfiguredAcpBindingReady,
   formatAllowlistMatchMeta,
   getAgentScopedMediaLocalRoots,
-  getSessionBindingService,
   logInboundDrop,
   logTypingFailure,
-  resolveControlCommandGate,
   type PluginRuntime,
   type ReplyPayload,
   type RuntimeEnv,
   type RuntimeLogger,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/matrix";
+import { ensureConfiguredAcpBindingReady } from "openclaw/plugin-sdk/matrix-runtime-heavy";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
 import {

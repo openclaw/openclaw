@@ -1,4 +1,4 @@
-import { resolveAckReaction, type OpenClawConfig } from "../../runtime-api.js";
+import { resolveAckReaction, type OpenClawConfig } from "openclaw/plugin-sdk/matrix";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../accounts.js";
 
