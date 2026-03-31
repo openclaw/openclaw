@@ -208,7 +208,7 @@ async function runFallbackCandidate<T>(params: {
     // quickly to other providers without repeated backoff delays.
     const result = shouldRetryCandidate
       ? await retryAsync(runFn, {
-          attempts: 1 + Math.max(rateLimitRetryBudget, overloadedRetryBudget, authRetryBudget),
+          attempts: 1 + rateLimitRetryBudget + overloadedRetryBudget + authRetryBudget,
           minDelayMs: 2000,
           maxDelayMs: 30000,
           jitter: 0.1,
@@ -489,6 +489,11 @@ function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
 function pruneProbeState(now: number): void {
   // Lazy pruning: only prune if more than 1 second has passed since last prune
   const TTL_PRUNE_MS = 1_000;
+  // Guard against wall-clock jumps backwards (NTP/manual adjustment).
+  // Treat backward jumps as "stale" so prune is not blocked until clock catch-up.
+  if (now < lastProbeStatePruneAt) {
+    lastProbeStatePruneAt = now - TTL_PRUNE_MS;
+  }
   if (now - lastProbeStatePruneAt < TTL_PRUNE_MS) {
     return;
   }

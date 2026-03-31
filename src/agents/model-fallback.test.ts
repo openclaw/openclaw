@@ -9,7 +9,11 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
-import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import {
+  _probeThrottleInternals,
+  runWithImageModelFallback,
+  runWithModelFallback,
+} from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -244,7 +248,7 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(3);
   });
 
-  it("tracks retry budgets independently per failover reason", async () => {
+  it("allows mixed failover reasons to consume their own retry budgets", async () => {
     const run = vi
       .fn()
       .mockRejectedValueOnce({
@@ -280,7 +284,17 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow();
 
-    expect(run).toHaveBeenCalledTimes(3);
+    expect(run).toHaveBeenCalledTimes(4);
+  });
+
+  it("prunes stale probe state even after a backward clock jump", () => {
+    _probeThrottleInternals.lastProbeAttempt.clear();
+    _probeThrottleInternals.pruneProbeState(200_000_000);
+    _probeThrottleInternals.lastProbeAttempt.set("scope::provider", 1);
+
+    _probeThrottleInternals.pruneProbeState(199_999_500);
+
+    expect(_probeThrottleInternals.lastProbeAttempt.has("scope::provider")).toBe(false);
   });
 
   it("retries recoverable auth failures using auth_failure retry budget", async () => {
