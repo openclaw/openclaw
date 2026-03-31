@@ -18,9 +18,10 @@ final class TalkModeController {
             TalkOverlayController.shared.dismiss()
         }
         await TalkModeRuntime.shared.setEnabled(enabled)
-        // Resume voice wake listener *after* TalkMode audio is fully torn down
-        // (mirrors the push-to-talk teardown that calls refresh only after the engine is released).
-        if !enabled, AppStateStore.shared.voiceWakeTriggersTalkMode {
+        // Resume voice wake listener *after* TalkMode audio is fully torn down.
+        // Check swabbleEnabled (not voiceWakeTriggersTalkMode) so the paused wake listener
+        // resumes even if the user toggled "Trigger Talk Mode" off during the session.
+        if !enabled, AppStateStore.shared.swabbleEnabled {
             Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }
         }
     }
