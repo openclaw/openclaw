@@ -117,7 +117,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         accountId,
         name,
       }),
-    validateInput: ({ input }) => validateQQBotSetupInput(input),
+    validateInput: ({ accountId, input }) => validateQQBotSetupInput({ accountId, input }),
     applyAccountConfig: ({ cfg, accountId, input }) =>
       applyQQBotSetupAccountConfig({ cfg, accountId, input }),
   },

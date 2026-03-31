@@ -33,9 +33,18 @@ function parseQQBotInlineToken(token: string): { appId: string; clientSecret: st
   return { appId, clientSecret };
 }
 
-export function validateQQBotSetupInput(input: ChannelSetupInput): string | null {
+export function validateQQBotSetupInput(params: {
+  accountId: string;
+  input: ChannelSetupInput;
+}): string | null {
+  const { accountId, input } = params;
+
   if (!input.token && !input.tokenFile && !input.useEnv) {
     return "QQBot requires --token (format: appId:clientSecret) or --use-env";
+  }
+
+  if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+    return "QQBot --use-env only supports the default account";
   }
 
   if (input.token && !parseQQBotInlineToken(input.token)) {
@@ -50,6 +59,10 @@ export function applyQQBotSetupAccountConfig(params: {
   accountId: string;
   input: ChannelSetupInput;
 }): OpenClawConfig {
+  if (params.input.useEnv && params.accountId !== DEFAULT_ACCOUNT_ID) {
+    return params.cfg;
+  }
+
   let appId = "";
   let clientSecret = "";
 
@@ -151,7 +164,7 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         accountId,
         name,
       }),
-    validateInput: ({ input }) => validateQQBotSetupInput(input),
+    validateInput: ({ accountId, input }) => validateQQBotSetupInput({ accountId, input }),
     applyAccountConfig: ({ cfg, accountId, input }) =>
       applyQQBotSetupAccountConfig({ cfg, accountId, input }),
   },

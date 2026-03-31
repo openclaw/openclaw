@@ -277,4 +277,42 @@ describe("qqbot config", () => {
       },
     });
   });
+
+  it("rejects --use-env for named accounts across setup paths", () => {
+    const runtimeSetup = qqbotPlugin.setup;
+    const lightweightSetup = qqbotSetupPlugin.setup;
+    expect(runtimeSetup).toBeDefined();
+    expect(lightweightSetup).toBeDefined();
+
+    const input = { useEnv: true, name: "Env Bot" };
+
+    expect(
+      runtimeSetup!.validateInput?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toBe("QQBot --use-env only supports the default account");
+    expect(
+      lightweightSetup!.validateInput?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toBe("QQBot --use-env only supports the default account");
+    expect(
+      runtimeSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toEqual({});
+    expect(
+      lightweightSetup!.applyAccountConfig?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "bot2",
+        input,
+      }),
+    ).toEqual({});
+  });
 });
