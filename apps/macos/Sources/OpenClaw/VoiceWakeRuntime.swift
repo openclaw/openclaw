@@ -538,7 +538,6 @@ actor VoiceWakeRuntime {
         if config.triggersTalkMode {
             self.logger.info("voicewake trigger -> activating Talk Mode (skipping capture)")
             DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "triggerTalkMode")
-            self.haltRecognitionPipeline()
             self.pauseForPushToTalk()
             await AppStateStore.shared.setTalkEnabled(true)
             return
