@@ -32,6 +32,20 @@ import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
+
+/** Hash-prefix a session key so logs are correlatable but not directly identifying. */
+function safeSessionId(id: string): string {
+  return crypto.createHash("sha256").update(id).digest("hex").slice(0, 12);
+}
+
+/** Truncate + sanitize a provider error message for safe logging. */
+function safeErrorSummary(msg: string, maxLen = 200): string {
+  const truncated = msg.length > maxLen ? msg.slice(0, maxLen) + "…" : msg;
+  return sanitizeForLog(truncated).replace(
+    /(api[_\-]?key|token|secret|authorization|bearer)\s*[=:]\s*\S+/gi,
+    "$1=<redacted>",
+  );
+}
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -603,11 +617,11 @@ export async function runAgentTurnWithFallback(params: {
       ) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit context overflow — skipping session reset to preserve conversation history (${sanitizeForLog(embeddedError.message)})`,
+            `Heartbeat run hit context overflow — skipping session reset to preserve conversation history (${safeErrorSummary(embeddedError.message)})`,
           );
           return {
             kind: "final",
-            payload: { text: "" },
+            payload: { text: "", isError: true },
           };
         }
         if (await params.resetSessionAfterCompactionFailure(embeddedError.message)) {
@@ -623,11 +637,11 @@ export async function runAgentTurnWithFallback(params: {
       if (embeddedError?.kind === "role_ordering") {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit role ordering conflict — skipping session reset to preserve conversation history (${sanitizeForLog(embeddedError.message)})`,
+            `Heartbeat run hit role ordering conflict — skipping session reset to preserve conversation history (${safeErrorSummary(embeddedError.message)})`,
           );
           return {
             kind: "final",
-            payload: { text: "" },
+            payload: { text: "", isError: true },
           };
         }
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
@@ -692,11 +706,11 @@ export async function runAgentTurnWithFallback(params: {
       if (isCompactionFailure && !didResetAfterCompactionFailure) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit compaction failure — skipping session reset to preserve conversation history (${sanitizeForLog(message)})`,
+            `Heartbeat run hit compaction failure — skipping session reset to preserve conversation history (${safeErrorSummary(message)})`,
           );
           return {
             kind: "final",
-            payload: { text: "" },
+            payload: { text: "", isError: true },
           };
         }
         if (await params.resetSessionAfterCompactionFailure(message)) {
@@ -712,11 +726,11 @@ export async function runAgentTurnWithFallback(params: {
       if (isRoleOrderingError) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit role ordering error — skipping session reset to preserve conversation history (${sanitizeForLog(message)})`,
+            `Heartbeat run hit role ordering error — skipping session reset to preserve conversation history (${safeErrorSummary(message)})`,
           );
           return {
             kind: "final",
-            payload: { text: "" },
+            payload: { text: "", isError: true },
           };
         }
         const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
@@ -740,11 +754,11 @@ export async function runAgentTurnWithFallback(params: {
       ) {
         if (params.isHeartbeat) {
           defaultRuntime.error(
-            `Heartbeat run hit Gemini session corruption — skipping session reset to preserve conversation history (${sanitizeForLog(params.sessionKey)})`,
+            `Heartbeat run hit Gemini session corruption — skipping session reset to preserve conversation history (session=${safeSessionId(params.sessionKey)})`,
           );
           return {
             kind: "final",
-            payload: { text: "" },
+            payload: { text: "", isError: true },
           };
         }
         const sessionKey = params.sessionKey;
