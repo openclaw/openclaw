@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
-import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   isOllamaCompatProvider,
+  resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./attempt.js";
+} from "../../../plugin-sdk/ollama.js";
+import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
+import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
