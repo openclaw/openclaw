@@ -8,6 +8,7 @@ import {
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
@@ -75,6 +76,7 @@ import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
+  MAX_OVERLOAD_PROFILE_ROTATIONS,
   OVERLOAD_FAILOVER_BACKOFF_POLICY,
   resolveActiveErrorContext,
   resolveMaxRunRetryIterations,
@@ -316,6 +318,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let overloadProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
@@ -1192,6 +1195,33 @@ export async function runEmbeddedPiAgent(
               if (cloudCodeAssistFormatError) {
                 log.warn(
                   `Profile ${lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
+                );
+              }
+            }
+
+            // For overloaded errors, check the rotation cap *before* calling
+            // advanceAuthProfile() to avoid a wasted auth-profile setup cycle.
+            // advanceAuthProfile() runs applyApiKeyInfo() which initialises the
+            // next profile — costly work that is pointless when we already know
+            // we will escalate to cross-provider fallback.
+            // See: https://github.com/openclaw/openclaw/issues/58348
+            if (assistantFailoverReason === "overloaded") {
+              overloadProfileRotations += 1;
+              if (overloadProfileRotations > MAX_OVERLOAD_PROFILE_ROTATIONS && fallbackConfigured) {
+                const status = resolveFailoverStatus("overloaded");
+                log.warn(
+                  `overload profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
+                );
+                logAssistantFailoverDecision("fallback_model", { status });
+                throw new FailoverError(
+                  "The AI service is temporarily overloaded. Please try again in a moment.",
+                  {
+                    reason: "overloaded",
+                    provider: activeErrorContext.provider,
+                    model: activeErrorContext.model,
+                    profileId: lastProfileId,
+                    status,
+                  },
                 );
               }
             }

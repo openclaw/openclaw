@@ -1,18 +1,5 @@
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  formatAllowlistMatchMeta,
-  getAgentScopedMediaLocalRoots,
-  logInboundDrop,
-  logTypingFailure,
-  type PluginRuntime,
-  type ReplyPayload,
-  type RuntimeEnv,
-  type RuntimeLogger,
-} from "openclaw/plugin-sdk/matrix";
-import { ensureConfiguredAcpBindingReady } from "openclaw/plugin-sdk/matrix-runtime-heavy";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
 import {
@@ -49,6 +36,19 @@ import { createRoomHistoryTracker } from "./room-history.js";
 import type { HistoryEntry } from "./room-history.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixInboundRoute } from "./route.js";
+import {
+  createReplyPrefixOptions,
+  createTypingCallbacks,
+  ensureConfiguredAcpBindingReady,
+  formatAllowlistMatchMeta,
+  getAgentScopedMediaLocalRoots,
+  logInboundDrop,
+  logTypingFailure,
+  type PluginRuntime,
+  type ReplyPayload,
+  type RuntimeEnv,
+  type RuntimeLogger,
+} from "./runtime-api.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
 import {
   resolveMatrixReplyToEventId,

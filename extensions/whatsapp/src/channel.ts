@@ -69,10 +69,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     outbound: {
       ...createWhatsAppOutboundBase({
         chunker: chunkText,
-        sendMessageWhatsApp: async (...args) =>
-          await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
-        sendPollWhatsApp: async (...args) =>
-          await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
+        sendMessageWhatsApp: (...args) =>
+          getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
+        sendPollWhatsApp: (...args) =>
+          getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
         shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
         resolveTarget: ({ to, allowFrom, mode }) =>
           resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
@@ -92,7 +92,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
         isConfigured: async (account) =>
-          await getWhatsAppRuntime().channel.whatsapp.webAuthExists(account.authDir),
+          await (await loadWhatsAppChannelRuntime()).webAuthExists(account.authDir),
       }),
       agentTools: () => [createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({

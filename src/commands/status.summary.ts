@@ -17,7 +17,7 @@ let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 let taskRegistryMaintenanceModulePromise:
-  | Promise<typeof import("../tasks/task-registry.maintenance.js")>
+  | Promise<typeof import("openclaw/plugin-sdk/tasks-summary")>
   | undefined;
 
 function loadChannelSummaryModule() {
@@ -41,7 +41,7 @@ function loadConfigIoModule() {
 }
 
 function loadTaskRegistryMaintenanceModule() {
-  taskRegistryMaintenanceModulePromise ??= import("../tasks/task-registry.maintenance.js");
+  taskRegistryMaintenanceModulePromise ??= import("openclaw/plugin-sdk/tasks-summary");
   return taskRegistryMaintenanceModulePromise;
 }
 
