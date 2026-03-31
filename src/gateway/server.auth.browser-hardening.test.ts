@@ -294,6 +294,8 @@ describe("gateway auth browser hardening", () => {
             authMode?: unknown;
           };
         };
+        // connectReq scopes are evaluated after auth and unbound-scope clearing, so this assertion
+        // verifies the effective low-privilege session view rather than self-declared client scopes.
         const snapshot = payload.snapshot as
           | { configPath?: unknown; stateDir?: unknown; authMode?: unknown }
           | undefined;
