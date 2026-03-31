@@ -257,6 +257,21 @@ describe("loadGatewayPlugins", () => {
     );
   });
 
+  test("reuses the provided startup plugin scope without recomputing it", async () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPluginsForTest({
+      pluginIds: ["browser"],
+    });
+
+    expect(resolveGatewayStartupPluginIds).not.toHaveBeenCalled();
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["browser"],
+      }),
+    );
+  });
+
   test("loads gateway plugins from the auto-enabled config snapshot", async () => {
     const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
     applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
@@ -632,6 +647,28 @@ describe("loadGatewayPlugins", () => {
 
     expect(log.error).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+  });
+
+  test("reuses the initial startup plugin scope during deferred reloads", async () => {
+    const { reloadDeferredGatewayPlugins } = serverPluginBootstrapModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    reloadDeferredGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      pluginIds: ["discord"],
+      logDiagnostics: false,
+    });
+
+    expect(resolveGatewayStartupPluginIds).not.toHaveBeenCalled();
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["discord"],
+      }),
+    );
   });
 
   test("runs registry hook before priming configured bindings", async () => {

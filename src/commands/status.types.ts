@@ -1,5 +1,5 @@
-import type { TaskAuditSummary } from "openclaw/plugin-sdk/tasks";
-import type { TaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
+import type { TaskAuditSummary } from "openclaw/plugin-sdk/tasks-summary";
+import type { TaskRegistrySummary } from "openclaw/plugin-sdk/tasks-summary";
 import type { ChannelId } from "../channels/plugins/types.js";
 
 export type SessionStatus = {
