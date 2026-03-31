@@ -623,6 +623,9 @@ export class DiscordExecApprovalHandler {
       adapter: nativeApprovalAdapter.native,
     });
     const pendingEntries: PendingApproval[] = [];
+    // "target=both" can collapse onto one Discord DM surface when the origin route
+    // and approver DM resolve to the same concrete channel id.
+    const deliveredChannelIds = new Set<string>();
     const originTarget = deliveryPlan.originTarget;
     if (deliveryPlan.notifyOriginWhenDmOnly && originTarget) {
       try {
@@ -640,6 +643,12 @@ export class DiscordExecApprovalHandler {
 
     for (const deliveryTarget of deliveryPlan.targets) {
       if (deliveryTarget.surface === "origin") {
+        if (deliveredChannelIds.has(deliveryTarget.target.to)) {
+          logDebug(
+            `discord exec approvals: skipping duplicate approval ${request.id} for channel ${deliveryTarget.target.to}`,
+          );
+          continue;
+        }
         try {
           const message = (await discordRequest(
             () =>
@@ -654,6 +663,7 @@ export class DiscordExecApprovalHandler {
               discordMessageId: message.id,
               discordChannelId: deliveryTarget.target.to,
             });
+            deliveredChannelIds.add(deliveryTarget.target.to);
 
             logDebug(
               `discord exec approvals: sent approval ${request.id} to channel ${deliveryTarget.target.to}`,
@@ -679,6 +689,12 @@ export class DiscordExecApprovalHandler {
           logError(`discord exec approvals: failed to create DM for user ${userId}`);
           continue;
         }
+        if (deliveredChannelIds.has(dmChannel.id)) {
+          logDebug(
+            `discord exec approvals: skipping duplicate approval ${request.id} for DM channel ${dmChannel.id}`,
+          );
+          continue;
+        }
 
         const message = (await discordRequest(
           () =>
@@ -697,6 +713,7 @@ export class DiscordExecApprovalHandler {
           discordMessageId: message.id,
           discordChannelId: dmChannel.id,
         });
+        deliveredChannelIds.add(dmChannel.id);
 
         logDebug(`discord exec approvals: sent approval ${request.id} to user ${userId}`);
       } catch (err) {
