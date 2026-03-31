@@ -257,6 +257,86 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
+  it("counts oversized ciphertext toward the global inbound rate limit", async () => {
+    const onMessage = vi.fn(async () => {});
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      onMetric: () => {},
+      guardPolicy: {
+        maxCiphertextBytes: 4,
+        rateLimit: {
+          windowMs: 60_000,
+          maxGlobalPerWindow: 1,
+          maxPerSenderPerWindow: 10,
+          maxTrackedSenderKeys: 32,
+        },
+      },
+    });
+
+    await emitEvent(
+      createEvent({
+        id: "oversized-global-1",
+        pubkey: `sender1${"a".repeat(57)}`,
+        content: "ciphertext-too-large",
+      }),
+    );
+    await emitEvent(
+      createEvent({
+        id: "oversized-global-2",
+        pubkey: `sender2${"b".repeat(57)}`,
+        content: "ciphertext-too-large",
+      }),
+    );
+
+    expect(bus.getMetrics().eventsRejected.oversizedCiphertext).toBe(1);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(1);
+    expect(mockState.verifyEvent).not.toHaveBeenCalled();
+    expect(mockState.decrypt).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
+  it("counts oversized ciphertext toward the per-sender inbound rate limit", async () => {
+    const onMessage = vi.fn(async () => {});
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      onMetric: () => {},
+      guardPolicy: {
+        maxCiphertextBytes: 4,
+        rateLimit: {
+          windowMs: 60_000,
+          maxGlobalPerWindow: 10,
+          maxPerSenderPerWindow: 1,
+          maxTrackedSenderKeys: 32,
+        },
+      },
+    });
+
+    await emitEvent(
+      createEvent({
+        id: "oversized-sender-1",
+        content: "ciphertext-too-large",
+      }),
+    );
+    await emitEvent(
+      createEvent({
+        id: "oversized-sender-2",
+        content: "ciphertext-too-large",
+      }),
+    );
+
+    expect(bus.getMetrics().eventsRejected.oversizedCiphertext).toBe(1);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(1);
+    expect(mockState.verifyEvent).not.toHaveBeenCalled();
+    expect(mockState.decrypt).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
   it("rejects far-future events before crypto", async () => {
     const onMessage = vi.fn(async () => {});
     const bus = await startNostrBus({
