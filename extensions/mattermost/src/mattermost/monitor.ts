@@ -1220,11 +1220,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    // Don't thread if channel lookup failed and the websocket event didn't include
-    // channel_type — we might be in a DM masquerading as "channel" via the
-    // mapMattermostChannelTypeToChatType fallback.
-    const channelTypeKnown = channelInfo != null || payload.data?.channel_type != null;
-    const threadRootId = channelTypeKnown ? (post.root_id?.trim() || undefined) : undefined;
+    const threadRootId = post.root_id?.trim() || undefined;
     const replyToMode = resolveMattermostReplyToMode(account, kind);
     const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
