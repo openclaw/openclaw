@@ -39,6 +39,7 @@ type SubagentOutputSnapshot = {
   latestSilentText?: string;
   latestRawText?: string;
   assistantFragments: string[];
+  toolResultFragments: string[];
   toolCallCount: number;
 };
 
@@ -84,6 +85,15 @@ function extractToolResultText(content: unknown): string {
     }
     if (typeof obj.summary === "string") {
       return sanitizeTextContent(obj.summary);
+    }
+    // Handle nested content arrays (e.g. AgentToolResult wrapping)
+    if (Array.isArray(obj.content)) {
+      const nested = extractTextFromChatContent(obj.content, {
+        sanitizeText: sanitizeTextContent,
+        normalizeText: (text) => text,
+        joinWith: "\n",
+      });
+      return nested?.trim() ?? "";
     }
   }
   if (!Array.isArray(content)) {
@@ -169,6 +179,7 @@ function countAssistantToolCalls(content: unknown): number {
 function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
   const snapshot: SubagentOutputSnapshot = {
     assistantFragments: [],
+    toolResultFragments: [],
     toolCallCount: 0,
   };
   for (const message of messages) {
@@ -177,7 +188,13 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     }
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
-      snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
+      const toolCalls = countAssistantToolCalls((message as { content?: unknown }).content);
+      snapshot.toolCallCount += toolCalls;
+      // Reset tool result fragments when a new tool-call round starts,
+      // so only the final round's results are included in the output.
+      if (toolCalls > 0) {
+        snapshot.toolResultFragments = [];
+      }
       const text = extractSubagentOutputText(message).trim();
       if (!text) {
         continue;
@@ -186,6 +203,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         snapshot.latestSilentText = text;
         snapshot.latestAssistantText = undefined;
         snapshot.assistantFragments = [];
+        snapshot.toolResultFragments = [];
         continue;
       }
       snapshot.latestSilentText = undefined;
@@ -196,6 +214,9 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     const text = extractSubagentOutputText(message).trim();
     if (text) {
       snapshot.latestRawText = text;
+      if (role === "toolResult" || role === "tool") {
+        snapshot.toolResultFragments.push(text);
+      }
     }
   }
   return snapshot;
@@ -230,6 +251,17 @@ function selectSubagentOutputText(
 ): string | undefined {
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
+  }
+  // When tool calls were executed and we have tool result output, include it
+  // alongside the assistant text. The assistant text may be a summary that
+  // omits the actual exec stdout/stderr the parent needs.
+  if (
+    snapshot.latestAssistantText &&
+    snapshot.toolCallCount > 0 &&
+    snapshot.toolResultFragments.length > 0
+  ) {
+    const toolOutput = snapshot.toolResultFragments.join("\n\n");
+    return `${toolOutput}\n\n${snapshot.latestAssistantText}`;
   }
   if (snapshot.latestAssistantText) {
     return snapshot.latestAssistantText;
