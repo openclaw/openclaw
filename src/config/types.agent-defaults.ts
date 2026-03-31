@@ -193,6 +193,12 @@ export type AgentDefaultsConfig = {
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
+  /**
+   * When true, instructs the model to wrap user-visible output in `<final>` tags
+   * and reasoning in `<think>` tags. Only text inside `<final>` is delivered.
+   * Prevents intermediate reasoning between tool calls from leaking to users.
+   */
+  enforceFinalTag?: boolean;
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
   /**

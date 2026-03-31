@@ -47,6 +47,7 @@ import {
   isExternalHookSession,
   resolveHookExternalContentSource,
 } from "../../security/external-content.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
@@ -542,6 +543,9 @@ export async function runCronIsolatedAgentTurn(params: {
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            ...(isReasoningTagProvider(providerOverride) || agentCfg?.enforceFinalTag === true
+              ? { enforceFinalTag: true }
+              : {}),
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

@@ -928,6 +928,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
+      enforceFinalTag: false,
       timeoutSeconds: 600,
       mediaMaxMb: 5,
       contextTokens: 200000,
@@ -1147,6 +1148,24 @@ See [Session Pruning](/concepts/session-pruning) for behavior details.
 - `humanDelay`: randomized pause between block replies. `natural` = 800–2500ms. Per-agent override: `agents.list[].humanDelay`.
 
 See [Streaming](/concepts/streaming) for behavior + chunking details.
+
+### Final-tag enforcement
+
+```json5
+{
+  agents: {
+    defaults: {
+      enforceFinalTag: false, // true | false
+    },
+  },
+}
+```
+
+- When `true`, instructs the model to wrap all user-visible output in `<final>` tags and all reasoning in `<think>` tags.
+- Only text inside `<final>` is delivered to the user; intermediate reasoning between tool calls is discarded.
+- Prevents reasoning leakage in messaging channels where multi-turn streaming is not desired.
+- Automatically enabled for reasoning-tag providers (DeepSeek, Gemini CLI).
+- Use this setting to enable the same behavior for any provider (e.g., Anthropic, OpenAI).
 
 ### Typing indicators
 
