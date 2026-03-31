@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/qqbot",
-  "version": "2026.3.22",
+  "version": "2026.3.31",
   "private": false,
   "description": "OpenClaw QQ Bot channel plugin",
   "type": "module",
@@ -10,8 +10,7 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.18.1",
-    "openclaw": "workspace:*"
+    "@types/ws": "^8.18.1"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"
