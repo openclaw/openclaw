@@ -46,7 +46,7 @@ extension NodeAppModel {
         guard let initialUrl = await self.resolveA2UIHostURLWithCapabilityRefresh() else {
             return .hostNotConfigured
         }
-        self.screen.navigate(to: initialUrl)
+        self.screen.navigate(to: initialUrl, trustA2UIActions: true)
         if await self.screen.waitForA2UIReady(timeoutMs: timeoutMs) {
             return .ready(initialUrl)
         }
@@ -54,7 +54,7 @@ extension NodeAppModel {
         // First render can fail when scoped capability rotates between reconnects.
         guard await self.gatewaySession.refreshNodeCanvasCapability() else { return .hostUnavailable }
         guard let refreshedUrl = await self.resolveA2UIHostURL() else { return .hostUnavailable }
-        self.screen.navigate(to: refreshedUrl)
+        self.screen.navigate(to: refreshedUrl, trustA2UIActions: true)
         if await self.screen.waitForA2UIReady(timeoutMs: timeoutMs) {
             return .ready(refreshedUrl)
         }
