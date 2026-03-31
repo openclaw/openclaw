@@ -1,0 +1,32 @@
+{
+  "id": "yep",
+  "providerAuthEnvVars": {
+    "yep": ["YEP_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Yep API Key",
+      "help": "Yep API key (fallback: YEP_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "yep_..."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["yep"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}
