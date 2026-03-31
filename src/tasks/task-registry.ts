@@ -35,6 +35,7 @@ import type {
   TaskRegistrySummary,
   TaskRegistrySnapshot,
   TaskRuntime,
+  TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
@@ -97,6 +98,14 @@ function persistTaskRegistry() {
 
 function persistTaskUpsert(task: TaskRecord) {
   const store = getTaskRegistryStore();
+  const deliveryState = taskDeliveryStates.get(task.taskId);
+  if (store.upsertTaskWithDeliveryState) {
+    store.upsertTaskWithDeliveryState({
+      task,
+      ...(deliveryState ? { deliveryState } : {}),
+    });
+    return;
+  }
   if (store.upsertTask) {
     store.upsertTask(task);
     return;
@@ -109,6 +118,10 @@ function persistTaskUpsert(task: TaskRecord) {
 
 function persistTaskDelete(taskId: string) {
   const store = getTaskRegistryStore();
+  if (store.deleteTaskWithDeliveryState) {
+    store.deleteTaskWithDeliveryState(taskId);
+    return;
+  }
   if (store.deleteTask) {
     store.deleteTask(taskId);
     return;
@@ -157,6 +170,35 @@ function ensureNotifyPolicy(params: {
   }
   const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(params.requesterSessionKey);
   return deliveryStatus === "not_applicable" ? "silent" : "done_only";
+}
+
+function resolveTaskScopeKind(params: {
+  scopeKind?: TaskScopeKind;
+  requesterSessionKey: string;
+}): TaskScopeKind {
+  if (params.scopeKind) {
+    return params.scopeKind;
+  }
+  return params.requesterSessionKey.trim() ? "session" : "system";
+}
+
+function resolveTaskRequesterSessionKey(params: {
+  requesterSessionKey?: string;
+  ownerKey?: string;
+  scopeKind?: TaskScopeKind;
+}): string {
+  const requesterSessionKey = params.requesterSessionKey?.trim();
+  if (requesterSessionKey) {
+    return requesterSessionKey;
+  }
+  if (params.scopeKind === "system") {
+    return "";
+  }
+  return params.ownerKey?.trim() ?? "";
+}
+
+function resolveTaskOwnerKey(params: { requesterSessionKey: string; ownerKey?: string }): string {
+  return params.ownerKey?.trim() || params.requesterSessionKey.trim();
 }
 
 function normalizeTaskSummary(value: string | null | undefined): string | undefined {
@@ -989,7 +1031,9 @@ function ensureListener() {
 export function createTaskRecord(params: {
   runtime: TaskRuntime;
   sourceId?: string;
-  requesterSessionKey: string;
+  requesterSessionKey?: string;
+  ownerKey?: string;
+  scopeKind?: TaskScopeKind;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   childSessionKey?: string;
   parentTaskId?: string;
@@ -1009,25 +1053,39 @@ export function createTaskRecord(params: {
   terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord {
   ensureTaskRegistryReady();
-  const existing = findExistingTaskForCreate(params);
+  const requesterSessionKey = resolveTaskRequesterSessionKey(params);
+  const scopeKind = resolveTaskScopeKind({
+    scopeKind: params.scopeKind,
+    requesterSessionKey,
+  });
+  const ownerKey = resolveTaskOwnerKey({
+    requesterSessionKey,
+    ownerKey: params.ownerKey,
+  });
+  const existing = findExistingTaskForCreate({
+    ...params,
+    requesterSessionKey,
+  });
   if (existing) {
     return mergeExistingTaskForCreate(existing, params);
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();
   const status = normalizeTaskStatus(params.status);
-  const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(params.requesterSessionKey);
+  const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(requesterSessionKey);
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus,
-    requesterSessionKey: params.requesterSessionKey,
+    requesterSessionKey,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
   const record: TaskRecord = {
     taskId,
     runtime: params.runtime,
     sourceId: params.sourceId?.trim() || undefined,
-    requesterSessionKey: params.requesterSessionKey,
+    requesterSessionKey,
+    ownerKey,
+    scopeKind,
     childSessionKey: params.childSessionKey,
     parentTaskId: params.parentTaskId?.trim() || undefined,
     agentId: params.agentId?.trim() || undefined,
@@ -1376,6 +1434,14 @@ export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | un
   return task ? cloneTaskRecord(task) : undefined;
 }
 
+export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
+  return findLatestTaskForSessionKey(ownerKey);
+}
+
+export function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
+  return findLatestTaskForSessionKey(sessionKey);
+}
+
 export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = normalizeSessionIndexKey(sessionKey);
@@ -1400,6 +1466,14 @@ export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
     )
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _, ...task }) => task);
+}
+
+export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  return listTasksForSessionKey(ownerKey);
+}
+
+export function listTasksForRelatedSessionKey(sessionKey: string): TaskRecord[] {
+  return listTasksForSessionKey(sessionKey);
 }
 
 export function resolveTaskForLookupToken(token: string): TaskRecord | undefined {
