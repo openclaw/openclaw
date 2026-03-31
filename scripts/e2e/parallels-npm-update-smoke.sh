@@ -24,6 +24,8 @@ LATEST_VERSION=""
 CURRENT_HEAD=""
 CURRENT_HEAD_SHORT=""
 API_KEY_VALUE=""
+PROGRESS_INTERVAL_S=15
+PROGRESS_STALE_S=60
 
 MACOS_FRESH_STATUS="skip"
 WINDOWS_FRESH_STATUS="skip"
@@ -331,11 +333,97 @@ start_server() {
 wait_job() {
   local label="$1"
   local pid="$2"
+  local log_path="${3:-}"
   if wait "$pid"; then
     return 0
   fi
   warn "$label failed"
+  if [[ -n "$log_path" ]]; then
+    dump_log_tail "$label" "$log_path"
+  fi
   return 1
+}
+
+extract_log_progress() {
+  local log_path="$1"
+  python3 - "$log_path" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+text = path.read_text(encoding="utf-8", errors="replace")
+lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+for line in reversed(lines):
+    if line.startswith("==> "):
+        print(line[4:].strip())
+        raise SystemExit(0)
+
+for line in reversed(lines):
+    if line.startswith("warn:") or line.startswith("error:"):
+        print(line)
+        raise SystemExit(0)
+
+if lines:
+    print(lines[-1][:240])
+else:
+    print("")
+PY
+}
+
+dump_log_tail() {
+  local label="$1"
+  local log_path="$2"
+  [[ -f "$log_path" ]] || return 0
+  warn "$label log tail ($log_path)"
+  tail -n 40 "$log_path" >&2 || true
+}
+
+monitor_jobs_progress() {
+  local group="$1"
+  shift
+
+  local labels=()
+  local pids=()
+  local logs=()
+  local last_progress=()
+  local last_print=()
+  local i summary now running
+
+  while [[ $# -gt 0 ]]; do
+    labels+=("$1")
+    pids+=("$2")
+    logs+=("$3")
+    last_progress+=("")
+    last_print+=(0)
+    shift 3
+  done
+
+  say "$group progress; run dir: $RUN_DIR"
+
+  while :; do
+    running=0
+    now=$SECONDS
+    for ((i = 0; i < ${#pids[@]}; i++)); do
+      if ! kill -0 "${pids[$i]}" >/dev/null 2>&1; then
+        continue
+      fi
+      running=1
+      summary="$(extract_log_progress "${logs[$i]}")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      if [[ "${last_progress[$i]}" != "$summary" ]] || (( now - last_print[$i] >= PROGRESS_STALE_S )); then
+        say "$group ${labels[$i]}: $summary"
+        last_progress[$i]="$summary"
+        last_print[$i]=$now
+      fi
+    done
+    (( running )) || break
+    sleep "$PROGRESS_INTERVAL_S"
+  done
 }
 
 extract_last_version() {
@@ -626,6 +714,7 @@ if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
 fi
 
 say "Run fresh npm baseline: $PACKAGE_SPEC"
+say "Run dir: $RUN_DIR"
 bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
   --mode fresh \
   --provider "$PROVIDER" \
@@ -650,9 +739,14 @@ bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
   --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
 linux_fresh_pid=$!
 
-wait_job "macOS fresh" "$macos_fresh_pid" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
-wait_job "Windows fresh" "$windows_fresh_pid" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
-wait_job "Linux fresh" "$linux_fresh_pid" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
+monitor_jobs_progress "fresh" \
+  "macOS" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" \
+  "Windows" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" \
+  "Linux" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log"
+
+wait_job "macOS fresh" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
+wait_job "Windows fresh" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
+wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
 
 [[ "$MACOS_FRESH_STATUS" == "pass" ]] || die "macOS fresh baseline failed"
 [[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
@@ -673,9 +767,14 @@ windows_update_pid=$!
 run_linux_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!
 
-wait_job "macOS update" "$macos_update_pid" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
-wait_job "Windows update" "$windows_update_pid" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
-wait_job "Linux update" "$linux_update_pid" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
+monitor_jobs_progress "update" \
+  "macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log" \
+  "Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log" \
+  "Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log"
+
+wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
+wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
+wait_job "Linux update" "$linux_update_pid" "$RUN_DIR/linux-update.log" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
 
 [[ "$MACOS_UPDATE_STATUS" == "pass" ]] || die "macOS update failed"
 [[ "$WINDOWS_UPDATE_STATUS" == "pass" ]] || die "Windows update failed"
