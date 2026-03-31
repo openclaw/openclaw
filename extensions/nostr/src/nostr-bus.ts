@@ -553,21 +553,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
-      updateRateLimiterSizeMetric();
-      if (globalRateLimiter.isRateLimited("global")) {
-        metrics.emit("rate_limit.global");
-        metrics.emit("event.rejected.rate_limited");
-        updateRateLimiterSizeMetric();
-        return;
-      }
-      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
-        metrics.emit("rate_limit.per_sender");
-        metrics.emit("event.rejected.rate_limited");
-        updateRateLimiterSizeMetric();
-        return;
-      }
-      updateRateLimiterSizeMetric();
-
       if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
         metrics.emit("event.rejected.oversized_ciphertext");
         return;
@@ -589,6 +574,21 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           return;
         }
       }
+
+      updateRateLimiterSizeMetric();
+      if (globalRateLimiter.isRateLimited("global")) {
+        metrics.emit("rate_limit.global");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
+        metrics.emit("rate_limit.per_sender");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      updateRateLimiterSizeMetric();
 
       // Mark seen AFTER verify (don't cache invalid IDs)
       seen.add(event.id);

@@ -168,6 +168,47 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
+  it("does not spend rate-limit buckets on blocked senders before authorization", async () => {
+    const onMessage = vi.fn(async () => {});
+    const authorizeSender = vi.fn(async ({ senderPubkey }: { senderPubkey: string }) =>
+      senderPubkey.startsWith("blocked") ? ("block" as const) : ("allow" as const),
+    );
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      authorizeSender,
+      onMetric: () => {},
+      guardPolicy: {
+        rateLimit: {
+          windowMs: 60_000,
+          maxGlobalPerWindow: 1,
+          maxPerSenderPerWindow: 1,
+          maxTrackedSenderKeys: 32,
+        },
+      },
+    });
+
+    await emitEvent(
+      createEvent({
+        id: "blocked-event",
+        pubkey: `blocked${"a".repeat(57)}`,
+      }),
+    );
+    await emitEvent(
+      createEvent({
+        id: "allowed-event",
+        pubkey: `allowed${"b".repeat(57)}`,
+      }),
+    );
+
+    expect(authorizeSender).toHaveBeenCalledTimes(2);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(0);
+
+    bus.close();
+  });
+
   it("rejects far-future events before crypto", async () => {
     const onMessage = vi.fn(async () => {});
     const bus = await startNostrBus({
