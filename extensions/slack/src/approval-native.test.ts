@@ -200,4 +200,48 @@ describe("slack native approval adapter", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps plugin approval auth independent from exec approvers", () => {
+    const cfg = buildConfig({
+      allowFrom: ["U123OWNER"],
+      execApprovals: {
+        enabled: true,
+        approvers: ["U999EXEC"],
+        target: "both",
+      },
+    });
+
+    expect(
+      slackNativeApprovalAdapter.auth.authorizeActorAction({
+        cfg,
+        accountId: "default",
+        senderId: "U123OWNER",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+
+    expect(
+      slackNativeApprovalAdapter.auth.authorizeActorAction({
+        cfg,
+        accountId: "default",
+        senderId: "U999EXEC",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({
+      authorized: false,
+      reason: "❌ You are not authorized to approve plugin requests on Slack.",
+    });
+
+    expect(
+      slackNativeApprovalAdapter.auth.authorizeActorAction({
+        cfg,
+        accountId: "default",
+        senderId: "U999EXEC",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({ authorized: true });
+  });
 });
