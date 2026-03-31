@@ -106,14 +106,54 @@ export async function buildStatusReply(params: {
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
 }): Promise<ReplyPayload | undefined> {
+  const { command } = params;
+  if (!command.isAuthorizedSender) {
+    logVerbose(`Ignoring /status from unauthorized sender: ${command.senderId || "<unknown>"}`);
+    return undefined;
+  }
+
+  return {
+    text: await buildStatusText({
+      ...params,
+      statusChannel: command.channel,
+    }),
+  };
+}
+
+export async function buildStatusText(params: {
+  cfg: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  parentSessionKey?: string;
+  sessionScope?: SessionScope;
+  storePath?: string;
+  statusChannel: string;
+  provider: string;
+  model: string;
+  contextTokens?: number;
+  resolvedThinkLevel?: ThinkLevel;
+  resolvedFastMode?: boolean;
+  resolvedVerboseLevel: VerboseLevel;
+  resolvedReasoningLevel: ReasoningLevel;
+  resolvedElevatedLevel?: ElevatedLevel;
+  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  isGroup: boolean;
+  defaultGroupActivation: () => "always" | "mention";
+  mediaDecisions?: MediaUnderstandingDecision[];
+  taskLineOverride?: string;
+  skipDefaultTaskLookup?: boolean;
+  primaryModelLabelOverride?: string;
+  modelAuthOverride?: string;
+  activeModelAuthOverride?: string;
+}): Promise<string> {
   const {
     cfg,
-    command,
     sessionEntry,
     sessionKey,
     parentSessionKey,
     sessionScope,
     storePath,
+    statusChannel,
     provider,
     model,
     contextTokens,
@@ -126,10 +166,6 @@ export async function buildStatusReply(params: {
     isGroup,
     defaultGroupActivation,
   } = params;
-  if (!command.isAuthorizedSender) {
-    logVerbose(`Ignoring /status from unauthorized sender: ${command.senderId || "<unknown>"}`);
-    return undefined;
-  }
   const statusAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
@@ -139,20 +175,24 @@ export async function buildStatusReply(params: {
     selectedModel: model,
     sessionEntry,
   });
-  const selectedModelAuth = resolveModelAuthLabel({
-    provider,
-    cfg,
-    sessionEntry,
-    agentDir: statusAgentDir,
-  });
-  const activeModelAuth = modelRefs.activeDiffers
-    ? resolveModelAuthLabel({
-        provider: modelRefs.active.provider,
+  const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
+    ? params.modelAuthOverride
+    : resolveModelAuthLabel({
+        provider,
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
-      })
-    : selectedModelAuth;
+      });
+  const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
+    ? params.activeModelAuthOverride
+    : modelRefs.activeDiffers
+      ? resolveModelAuthLabel({
+          provider: modelRefs.active.provider,
+          cfg,
+          sessionEntry,
+          agentDir: statusAgentDir,
+        })
+      : selectedModelAuth;
   const currentUsageProvider = (() => {
     try {
       return resolveUsageProviderId(provider);
@@ -205,7 +245,7 @@ export async function buildStatusReply(params: {
   }
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: command.channel,
+    channel: statusChannel,
     sessionEntry,
   });
   const queueKey = sessionKey ?? sessionEntry?.sessionId;
@@ -219,8 +259,10 @@ export async function buildStatusReply(params: {
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    taskLine = formatSessionTaskLine(requesterKey);
-    if (!taskLine) {
+    taskLine = params.skipDefaultTaskLookup
+      ? params.taskLineOverride
+      : (params.taskLineOverride ?? formatSessionTaskLine(requesterKey));
+    if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
     const runs = listControlledSubagentRuns(requesterKey);
@@ -262,9 +304,9 @@ export async function buildStatusReply(params: {
       ...agentDefaults,
       model: {
         ...toAgentModelListLike(agentDefaults.model),
-        primary: `${provider}/${model}`,
+        primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
       },
-      contextTokens,
+      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
       thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
@@ -302,5 +344,5 @@ export async function buildStatusReply(params: {
     includeTranscriptUsage: false,
   });
 
-  return { text: statusText };
+  return statusText;
 }
