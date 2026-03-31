@@ -126,6 +126,15 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
   };
 }
 
+function resolveStableJitterMs(params: { seed: string; windowMs: number }): number {
+  if (params.windowMs <= 0) {
+    return 0;
+  }
+  const hash = crypto.createHash("sha256").update(params.seed).digest();
+  const bucket = hash.readUInt32BE(0);
+  return bucket % (Math.floor(params.windowMs) + 1);
+}
+
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
@@ -1132,7 +1141,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.updateTimer = null;
     }
     if (this.embedTimer) {
-      clearInterval(this.embedTimer);
+      clearTimeout(this.embedTimer);
       this.embedTimer = null;
     }
     if (this.watchTimer) {
@@ -1371,7 +1380,22 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async withQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
     const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
-    return await withFileLock(lockPath, QMD_EMBED_LOCK_OPTIONS, task);
+    const queue = getQmdEmbedQueueState();
+    const previous = queue.tail;
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    queue.tail = previous.then(
+      () => current,
+      () => current,
+    );
+    await previous.catch(() => undefined);
+    try {
+      return await withFileLock(lockPath, QMD_EMBED_LOCK_OPTIONS, task);
+    } finally {
+      releaseCurrent();
+    }
   }
 
   private noteEmbedFailure(reason: string, err: unknown): void {

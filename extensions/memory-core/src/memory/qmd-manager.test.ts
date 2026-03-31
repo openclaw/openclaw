@@ -26,6 +26,7 @@ const { withFileLockMock } = vi.hoisted(() => ({
   ),
 }));
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
+const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 
 type MockChild = EventEmitter & {
   stdout: EventEmitter;
@@ -255,6 +256,7 @@ describe("QmdMemoryManager", () => {
       (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
     }
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -3183,45 +3185,9 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("serializes qmd embeds through a shared file lock", async () => {
+  it("serializes qmd embeds within a process before taking the shared file lock", async () => {
     vi.useFakeTimers();
     const embedChildren: MockChild[] = [];
-    let lockHeld = false;
-    let releaseWaiter: (() => void) | null = null;
-    withFileLockMock.mockImplementationOnce(
-      async (_filePath: string, _options: unknown, fn: () => Promise<unknown>) => {
-        if (lockHeld) {
-          await new Promise<void>((resolve) => {
-            releaseWaiter = resolve;
-          });
-        }
-        lockHeld = true;
-        try {
-          return await fn();
-        } finally {
-          lockHeld = false;
-          releaseWaiter?.();
-          releaseWaiter = null;
-        }
-      },
-    );
-    withFileLockMock.mockImplementationOnce(
-      async (_filePath: string, _options: unknown, fn: () => Promise<unknown>) => {
-        if (lockHeld) {
-          await new Promise<void>((resolve) => {
-            releaseWaiter = resolve;
-          });
-        }
-        lockHeld = true;
-        try {
-          return await fn();
-        } finally {
-          lockHeld = false;
-          releaseWaiter?.();
-          releaseWaiter = null;
-        }
-      },
-    );
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "embed") {
         const child = createMockChild({ autoClose: false });
