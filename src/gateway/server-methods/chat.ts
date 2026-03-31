@@ -1664,9 +1664,77 @@ export const chatHandlers: GatewayRequestHandlers = {
       // This handles fallback-only configs like imageModel: { fallbacks: ["openai/gpt-4o"] }
       const hasImageModelConfig = imageModelPrimary || imageModelConfigFallbacks.length > 0;
 
-      // If imageModel is configured, preserve images for the switch logic.
+      // Check if the image model is actually usable (in allowlist).
+      // If not, we should not force supportsImages=true, since the downstream
+      // model-selection path will reject the modelOverride and fall back to
+      // the default text model, which would then receive images it cannot handle.
+      let imageModelIsUsable = false;
+      if (hasImageModelConfig) {
+        // Resolve agent's allowlist to check if any image model is allowed
+        const agentDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+        const { allowAny, allowedKeys } = buildAllowedModelSet({
+          cfg,
+          catalog: [],
+          defaultProvider: agentDefault.provider,
+          defaultModel: agentDefault.model,
+          agentId: sessionAgentId,
+        });
+        if (allowAny) {
+          imageModelIsUsable = true;
+        } else {
+          // Check if primary is in allowlist
+          if (imageModelPrimary) {
+            const aliasIndex = buildModelAliasIndex({
+              cfg,
+              defaultProvider: agentDefault.provider,
+            });
+            const resolved = resolveModelRefFromString({
+              raw: imageModelPrimary.trim(),
+              defaultProvider: agentDefault.provider,
+              aliasIndex,
+            });
+            if (resolved) {
+              const key = modelKey(resolved.ref.provider, resolved.ref.model);
+              if (allowedKeys.has(key) || allowedKeys.has(imageModelPrimary.trim())) {
+                imageModelIsUsable = true;
+              }
+            } else if (allowedKeys.has(imageModelPrimary.trim())) {
+              imageModelIsUsable = true;
+            }
+          }
+          // Check fallbacks if primary is not in allowlist
+          if (!imageModelIsUsable && imageModelConfigFallbacks.length > 0) {
+            const aliasIndex = buildModelAliasIndex({
+              cfg,
+              defaultProvider: agentDefault.provider,
+            });
+            for (const fb of imageModelConfigFallbacks) {
+              if (!fb?.trim()) {
+                continue;
+              }
+              const resolved = resolveModelRefFromString({
+                raw: fb.trim(),
+                defaultProvider: agentDefault.provider,
+                aliasIndex,
+              });
+              if (resolved) {
+                const key = modelKey(resolved.ref.provider, resolved.ref.model);
+                if (allowedKeys.has(key) || allowedKeys.has(fb.trim())) {
+                  imageModelIsUsable = true;
+                  break;
+                }
+              } else if (allowedKeys.has(fb.trim())) {
+                imageModelIsUsable = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // If imageModel is configured AND usable (in allowlist), preserve images.
       // Otherwise, check if the current model supports images.
-      const supportsImages = hasImageModelConfig
+      const supportsImages = imageModelIsUsable
         ? true
         : await resolveGatewayModelSupportsImages({
             loadGatewayModelCatalog: context.loadGatewayModelCatalog,
@@ -1710,7 +1778,9 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // When images are detected, switch to the configured image model.
     // This ensures non-vision models don't fail when users send images via Dashboard.
-    if (parsedImages.length > 0) {
+    // Check both inline images and offloaded attachments (large images >2MB are offloaded).
+    const hasAnyImages = parsedImages.length > 0 || parsedOffloadedRefs.length > 0;
+    if (hasAnyImages) {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       let imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       const imageModelConfigFallbacks = resolveAgentModelFallbackValues(imageModelConfig);
