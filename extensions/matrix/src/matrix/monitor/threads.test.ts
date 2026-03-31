@@ -11,7 +11,6 @@ describe("resolveMatrixThreadRouting", () => {
         threadRootId: "$root",
       }),
     ).toEqual({
-      effectiveThreadReplies: "off",
       threadId: undefined,
     });
   });
@@ -25,7 +24,6 @@ describe("resolveMatrixThreadRouting", () => {
         threadRootId: "$root",
       }),
     ).toEqual({
-      effectiveThreadReplies: "inbound",
       threadId: "$root",
     });
   });
@@ -38,7 +36,6 @@ describe("resolveMatrixThreadRouting", () => {
         messageId: "$root",
       }),
     ).toEqual({
-      effectiveThreadReplies: "inbound",
       threadId: undefined,
     });
   });
@@ -51,7 +48,6 @@ describe("resolveMatrixThreadRouting", () => {
         messageId: "$root",
       }),
     ).toEqual({
-      effectiveThreadReplies: "always",
       threadId: "$root",
     });
   });
@@ -66,7 +62,6 @@ describe("resolveMatrixThreadRouting", () => {
         threadRootId: "$root",
       }),
     ).toEqual({
-      effectiveThreadReplies: "off",
       threadId: undefined,
     });
   });

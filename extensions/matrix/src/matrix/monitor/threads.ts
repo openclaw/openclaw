@@ -4,7 +4,6 @@ import { RelationType } from "./types.js";
 export type MatrixThreadReplies = "off" | "inbound" | "always";
 
 export type MatrixThreadRouting = {
-  effectiveThreadReplies: MatrixThreadReplies;
   threadId?: string;
 };
 
@@ -49,7 +48,6 @@ export function resolveMatrixThreadRouting(params: {
         : (inboundThreadId ?? (messageId || undefined));
 
   return {
-    effectiveThreadReplies,
     threadId,
   };
 }
