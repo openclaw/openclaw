@@ -40,9 +40,11 @@ import {
   extractHookToken,
   getHookAgentPolicyError,
   getHookChannelError,
+  getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
   isHookAgentAllowed,
+  isSessionKeyAllowedByPrefix,
   normalizeAgentPayload,
   normalizeHookHeaders,
   resolveHookIdempotencyKey,
@@ -615,6 +617,14 @@ export function createHooksRequestHandler(
         sessionKey: sessionKey.value,
         targetAgentId,
       });
+      const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+      if (
+        allowedPrefixes &&
+        !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
+      ) {
+        sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+        return true;
+      }
       const runId = dispatchAgentHook({
         ...normalized.value,
         idempotencyKey,
@@ -676,6 +686,14 @@ export function createHooksRequestHandler(
             sessionKey: sessionKey.value,
             targetAgentId,
           });
+          const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+          if (
+            allowedPrefixes &&
+            !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
+          ) {
+            sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+            return true;
+          }
           const replayKey = buildHookReplayCacheKey({
             pathKey: subPath || "mapping",
             token,
