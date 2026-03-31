@@ -158,6 +158,7 @@ class GatewayConfigResolverTest {
         manualHost = "",
         manualPort = "",
         manualTls = true,
+        fallbackBootstrapToken = "",
         fallbackToken = "shared-token",
         fallbackPassword = "shared-password",
       )
@@ -182,6 +183,7 @@ class GatewayConfigResolverTest {
         manualHost = "",
         manualPort = "",
         manualTls = true,
+        fallbackBootstrapToken = "",
         fallbackToken = "shared-token",
         fallbackPassword = "shared-password",
       )
@@ -192,6 +194,47 @@ class GatewayConfigResolverTest {
     assertEquals("bootstrap-1", resolved?.bootstrapToken)
     assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
     assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualPreservesBootstrapTokenWhenNoReplacementAuthExists() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        manualHost = "192.168.31.100",
+        manualPort = "18789",
+        manualTls = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("192.168.31.100", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualDropsBootstrapTokenWhenReplacementPasswordExists() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        manualHost = "192.168.31.100",
+        manualPort = "18789",
+        manualTls = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "password-1",
+      )
+
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("password-1", resolved?.password)
   }
 
   private fun encodeSetupCode(payloadJson: String): String {
