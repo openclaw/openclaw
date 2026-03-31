@@ -203,6 +203,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
       apiBase: resolveTelegramApiBase(account.config.apiRoot?.trim() || undefined),
+      proxyUrl: account.config.proxy?.trim() || undefined,
     });
     await pollingSession.runUntilAbort();
   } finally {

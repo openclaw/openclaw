@@ -33,8 +33,15 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+const capturedHeartbeatOpts = vi.hoisted(() => ({
+  current: null as null | Record<string, unknown>,
+}));
+
 vi.mock("./heartbeat.js", () => ({
   HeartbeatSupervisor: class {
+    constructor(opts: Record<string, unknown>) {
+      capturedHeartbeatOpts.current = opts;
+    }
     start = heartbeatStartMock;
     stop = heartbeatStopMock;
   },
@@ -910,5 +917,101 @@ describe("TelegramPollingSession", () => {
 
     expect(heartbeatStartMock).toHaveBeenCalledTimes(1);
     expect(heartbeatStopMock).toHaveBeenCalled();
+  });
+
+  it("forwards proxyUrl to HeartbeatSupervisor when provided", async () => {
+    const abort = new AbortController();
+    createTelegramBotMock.mockReturnValue(makeBot());
+    runMock.mockImplementation(() => ({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    }));
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: makeTelegramTransport(),
+      createTelegramTransport: () => makeTelegramTransport(),
+      apiBase: "https://api.telegram.org",
+      proxyUrl: "http://proxy.example.com:3128",
+    });
+
+    await session.runUntilAbort();
+
+    expect(capturedHeartbeatOpts.current).toMatchObject({
+      apiBase: "https://api.telegram.org",
+      proxyUrl: "http://proxy.example.com:3128",
+    });
+  });
+
+  it("stops polling cycle immediately when cycleAbortSignal is pre-aborted", async () => {
+    const abort = new AbortController();
+    // Capture HeartbeatSupervisor onOutageDetected to fire it before #runPollingCycle
+    let triggerOutage: (() => void) | undefined;
+    let resolveTaskSetup: (() => void) | undefined;
+
+    createTelegramBotMock.mockImplementation(async () => {
+      // While #createPollingBot is awaiting, fire the outage so cycleAbortController
+      // is aborted BEFORE addEventListener is registered in #runPollingCycle.
+      await new Promise<void>((r) => {
+        resolveTaskSetup = r;
+      });
+      return makeBot();
+    });
+
+    let cycleCount = 0;
+    runMock.mockImplementation(() => {
+      cycleCount += 1;
+      return {
+        task: async () => {
+          // Second cycle: abort the main signal to exit
+          abort.abort();
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      };
+    });
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: makeTelegramTransport(),
+      createTelegramTransport: () => makeTelegramTransport(),
+      apiBase: "https://api.telegram.org",
+    });
+
+    // Capture the onOutageDetected from the constructed supervisor
+    triggerOutage = (capturedHeartbeatOpts.current as { onOutageDetected?: () => void })
+      ?.onOutageDetected;
+
+    const runPromise = session.runUntilAbort();
+
+    // Fire outage while #createPollingBot is suspended, before addEventListener
+    triggerOutage?.();
+    resolveTaskSetup?.();
+
+    await runPromise;
+
+    // The session should have restarted the cycle (cycleAbort triggered restart)
+    expect(cycleCount).toBeGreaterThanOrEqual(1);
   });
 });

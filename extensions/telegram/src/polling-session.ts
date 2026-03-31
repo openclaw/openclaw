@@ -59,6 +59,8 @@ type TelegramPollingSessionOpts = {
   createTelegramTransport?: () => TelegramTransport;
   /** Pre-resolved Telegram API base URL. Enables the heartbeat supervisor when set. */
   apiBase?: string;
+  /** Optional proxy URL forwarded to heartbeat probes. */
+  proxyUrl?: string;
 };
 
 export class TelegramPollingSession {
@@ -99,6 +101,7 @@ export class TelegramPollingSession {
       ? new HeartbeatSupervisor({
           apiBase: this.opts.apiBase,
           token: this.opts.token,
+          proxyUrl: this.opts.proxyUrl,
           abortSignal: this.opts.abortSignal,
           log: this.opts.log,
           onOutageDetected: () => {
@@ -411,6 +414,9 @@ export class TelegramPollingSession {
 
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     cycleAbortSignal?.addEventListener("abort", stopOnCycleAbort, { once: true });
+    if (cycleAbortSignal?.aborted) {
+      stopOnCycleAbort();
+    }
     try {
       await Promise.race([runner.task(), forceCyclePromise]);
       if (this.opts.abortSignal?.aborted) {

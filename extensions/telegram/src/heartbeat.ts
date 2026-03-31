@@ -4,6 +4,8 @@ export type HeartbeatSupervisorOpts = {
   /** Pre-resolved Telegram API base URL (e.g. "https://api.telegram.org"). */
   apiBase: string;
   token: string;
+  /** Optional proxy URL forwarded to each probe (e.g. "http://proxy:3128"). */
+  proxyUrl?: string;
   /** Shared abort signal; heartbeat stops when aborted. */
   abortSignal?: AbortSignal;
   /** How often to run a probe (ms). @default 30_000 */
@@ -78,6 +80,7 @@ export class HeartbeatSupervisor {
     try {
       const result = await probeTelegram(this.opts.token, this.#probeTimeoutMs, {
         apiRoot: this.opts.apiBase,
+        proxyUrl: this.opts.proxyUrl,
       });
 
       if (this.#stopped || this.opts.abortSignal?.aborted) {

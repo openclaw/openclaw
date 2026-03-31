@@ -332,6 +332,7 @@ describe("HeartbeatSupervisor (threshold)", () => {
       expect(logLine).not.toContain("secret-api.example.com");
       expect(probeTelegramMock).toHaveBeenCalledWith("SECRET_TOKEN_VALUE", 10_000, {
         apiRoot: "https://secret-api.example.com",
+        proxyUrl: undefined,
       });
     } finally {
       setIntervalSpy.mockRestore();
@@ -389,6 +390,26 @@ describe("HeartbeatSupervisor (threshold)", () => {
       probeTelegramMock.mockResolvedValue({ ok: true, elapsedMs: 10, error: null });
       await tick();
       expect(opts.onRecovered).toHaveBeenCalledTimes(2);
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  it("forwards proxyUrl to probeTelegram when provided", async () => {
+    probeTelegramMock.mockResolvedValue({ ok: true, elapsedMs: 10, error: null });
+    const { setIntervalSpy, tick } = captureInterval();
+
+    try {
+      const opts = makeOpts({ proxyUrl: "http://proxy.example.com:3128" });
+      const supervisor = new HeartbeatSupervisor(opts);
+      supervisor.start();
+
+      await tick();
+
+      expect(probeTelegramMock).toHaveBeenCalledWith("test-token", 10_000, {
+        apiRoot: "https://api.telegram.org",
+        proxyUrl: "http://proxy.example.com:3128",
+      });
     } finally {
       setIntervalSpy.mockRestore();
     }
