@@ -34,6 +34,41 @@ describe("gateway control ui HTTP host hardening", () => {
     });
   });
 
+  test("does not apply the control ui host gate to non-ui read endpoints", async () => {
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          trustedProxies: [],
+          controlUi: {
+            allowedOrigins: ["https://control.example.com"],
+          },
+        },
+      },
+      prefix: "openclaw-control-ui-http-host-non-ui-bypass-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_NONE,
+          overrides: {
+            controlUiEnabled: true,
+            controlUiBasePath: "",
+            controlUiRoot: { kind: "missing" },
+            openAiChatCompletionsEnabled: true,
+          },
+        });
+
+        const response = await sendRequest(server, {
+          path: "/v1/models",
+          host: "evil.example",
+          headers: {
+            "x-openclaw-scopes": "operator.read",
+          },
+        });
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toContain('"object":"list"');
+      },
+    });
+  });
+
   test("allows root-mounted control ui requests when Host matches allowedOrigins", async () => {
     await withTempConfig({
       cfg: {

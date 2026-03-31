@@ -149,13 +149,21 @@ export async function sendRequest(
   params: {
     path: string;
     authorization?: string;
+    headers?: Record<string, string>;
     method?: string;
     remoteAddress?: string;
     host?: string;
   },
 ): Promise<ReturnType<typeof createResponse>> {
   const response = createResponse();
-  await dispatchRequest(server, createRequest(params), response.res);
+  await dispatchRequest(
+    server,
+    createRequest({
+      ...params,
+      headers: params.headers,
+    }),
+    response.res,
+  );
   return response;
 }
 

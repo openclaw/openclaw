@@ -7,6 +7,23 @@ export type ControlUiRequestClassification =
   | { kind: "serve" };
 
 const ROOT_MOUNTED_GATEWAY_PROBE_PATHS = new Set(["/health", "/healthz", "/ready", "/readyz"]);
+const ROOT_MOUNTED_NON_UI_PREFIXES = new Set(["/api", "/plugins"]);
+
+function isRootMountedGatewayReadPath(pathname: string): boolean {
+  if (
+    pathname === "/v1/models" ||
+    pathname.startsWith("/v1/models/") ||
+    /^\/sessions\/[^/]+\/history$/.test(pathname)
+  ) {
+    return true;
+  }
+  for (const prefix of ROOT_MOUNTED_NON_UI_PREFIXES) {
+    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function classifyControlUiRequest(params: {
   basePath: string;
@@ -24,12 +41,9 @@ export function classifyControlUiRequest(params: {
     if (ROOT_MOUNTED_GATEWAY_PROBE_PATHS.has(pathname)) {
       return { kind: "not-control-ui" };
     }
-    // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA
-    // fallback so untrusted plugins cannot claim arbitrary UI paths.
-    if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
-      return { kind: "not-control-ui" };
-    }
-    if (pathname === "/api" || pathname.startsWith("/api/")) {
+    // Keep gateway-owned read routes outside the root-mounted Control UI SPA
+    // fallback so the host gate does not block non-UI HTTP surfaces.
+    if (isRootMountedGatewayReadPath(pathname)) {
       return { kind: "not-control-ui" };
     }
     if (!isReadHttpMethod(method)) {

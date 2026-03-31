@@ -96,7 +96,7 @@ describe("checkBrowserOrigin", () => {
 describe("checkBrowserRequestHost", () => {
   it.each([
     {
-      name: "accepts explicit allowlist host matches",
+      name: "accepts allowlist host matches when the browser omits the default https port",
       input: {
         requestHost: "control.example.com",
         allowedOrigins: ["https://control.example.com"],
@@ -115,6 +115,14 @@ describe("checkBrowserRequestHost", () => {
       name: "accepts loopback hosts without an allowlist",
       input: {
         requestHost: "127.0.0.1:18789",
+      },
+      expected: { ok: true as const, matchedBy: "local-loopback" as const },
+    },
+    {
+      name: "accepts loopback hosts even when an allowlist is configured",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        allowedOrigins: ["https://control.example.com"],
       },
       expected: { ok: true as const, matchedBy: "local-loopback" as const },
     },
