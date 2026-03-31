@@ -55,6 +55,10 @@ import {
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
 import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
@@ -130,7 +134,14 @@ export async function processDiscordMessage(
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
-  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
+  const mediaList = await resolveMediaList(
+    message,
+    mediaMaxBytes,
+    discordRestFetch,
+    ssrfPolicy,
+    DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+  );
   if (isProcessAborted(abortSignal)) {
     return;
   }
@@ -139,6 +150,8 @@ export async function processDiscordMessage(
     mediaMaxBytes,
     discordRestFetch,
     ssrfPolicy,
+    DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
   );
   if (isProcessAborted(abortSignal)) {
     return;

@@ -298,6 +298,75 @@ describe("resolveForwardedMediaList", () => {
     expect(result).toEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
+
+  it("passes readIdleTimeoutMs to forwarded attachment downloads", async () => {
+    const attachment = {
+      id: "att-fwd-timeout",
+      url: "https://cdn.discordapp.com/attachments/1/fwd-timeout.png",
+      filename: "fwd-timeout.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/fwd-timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { attachments: [attachment] } }],
+        },
+      }),
+      512,
+      undefined,
+      undefined,
+      60000,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readIdleTimeoutMs: 60000,
+      }),
+    );
+  });
+
+  it("passes readIdleTimeoutMs to forwarded sticker downloads", async () => {
+    const sticker = {
+      id: "sticker-fwd-timeout",
+      name: "fwd-timeout-sticker",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/fwd-sticker-timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { sticker_items: [sticker] } }],
+        },
+      }),
+      512,
+      undefined,
+      undefined,
+      60000,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readIdleTimeoutMs: 60000,
+      }),
+    );
+  });
 });
 
 describe("resolveMediaList", () => {
@@ -485,6 +554,95 @@ describe("resolveMediaList", () => {
         placeholder: "<media:sticker>",
       },
     ]);
+  });
+
+  it("passes readIdleTimeoutMs to fetchRemoteMedia for attachments", async () => {
+    const attachment = {
+      id: "att-timeout",
+      url: "https://cdn.discordapp.com/attachments/1/timeout.png",
+      filename: "timeout.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+      undefined,
+      undefined,
+      60000,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readIdleTimeoutMs: 60000,
+      }),
+    );
+  });
+
+  it("passes readIdleTimeoutMs to fetchRemoteMedia for stickers", async () => {
+    const sticker = {
+      id: "sticker-timeout",
+      name: "timeout-sticker",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/sticker-timeout.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        stickers: [sticker],
+      }),
+      512,
+      undefined,
+      undefined,
+      60000,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readIdleTimeoutMs: 60000,
+      }),
+    );
+  });
+
+  it("keeps attachment metadata when download times out", async () => {
+    const attachment = {
+      id: "att-timeout-fallback",
+      url: "https://cdn.discordapp.com/attachments/1/timeout-fallback.png",
+      filename: "timeout-fallback.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(
+      new Error("Media download stalled: no data received for 60000ms"),
+    );
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+      undefined,
+      undefined,
+      60000,
+    );
+
+    expectAttachmentImageFallback({ result, attachment });
   });
 });
 
@@ -698,5 +856,148 @@ describe("resolveDiscordChannelInfo", () => {
     expect(first).toBeNull();
     expect(second).toBeNull();
     expect(fetchChannel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveMediaList with timeout", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("times out slow attachment downloads and returns fallback", async () => {
+    const attachment = {
+      id: "att-1",
+      filename: "large-video.mp4",
+      url: "https://cdn.discordapp.com/attachments/123/456/large-video.mp4",
+      content_type: "video/mp4",
+    };
+
+    fetchRemoteMedia.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve({
+              buffer: Buffer.from("fake-video-data"),
+              contentType: "video/mp4",
+              fileName: "large-video.mp4",
+            });
+          }, 200);
+        }),
+    );
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      10_000_000,
+      undefined,
+      undefined,
+      60_000,
+      100,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "video/mp4",
+        placeholder: "<media:video>",
+      },
+    ]);
+  });
+
+  it("completes fast attachment downloads within timeout", async () => {
+    const attachment = {
+      id: "att-2",
+      filename: "small-image.png",
+      url: "https://cdn.discordapp.com/attachments/123/456/small-image.png",
+      content_type: "image/png",
+    };
+
+    fetchRemoteMedia.mockResolvedValue({
+      buffer: Buffer.from("fake-image-data"),
+      contentType: "image/png",
+      fileName: "small-image.png",
+    });
+
+    saveMediaBuffer.mockResolvedValue({
+      path: "/tmp/discord-media/small-image.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      10_000_000,
+      undefined,
+      undefined,
+      60_000,
+      5000,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      {
+        path: "/tmp/discord-media/small-image.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("times out forwarded media downloads and returns fallback", async () => {
+    fetchRemoteMedia.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve({
+              buffer: Buffer.from("fake-data"),
+              contentType: "image/png",
+            });
+          }, 200);
+        }),
+    );
+
+    const result = await resolveForwardedMediaList(
+      asMessage({
+        content: "",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "Forwarded message",
+                attachments: [
+                  {
+                    id: "fwd-att-1",
+                    filename: "forwarded.png",
+                    url: "https://cdn.discordapp.com/attachments/111/222/forwarded.png",
+                    content_type: "image/png",
+                  },
+                ],
+                author: { id: "u1", username: "Alice" },
+              },
+            },
+          ],
+        },
+      }),
+      10_000_000,
+      undefined,
+      undefined,
+      60_000,
+      100,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        path: "https://cdn.discordapp.com/attachments/111/222/forwarded.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
   });
 });

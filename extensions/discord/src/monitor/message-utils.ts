@@ -211,6 +211,8 @@ export async function resolveMediaList(
   maxBytes: number,
   fetchImpl?: FetchLike,
   ssrfPolicy?: SsrFPolicy,
+  readIdleTimeoutMs?: number,
+  totalTimeoutMs?: number,
 ): Promise<DiscordMediaInfo[]> {
   const out: DiscordMediaInfo[] = [];
   const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(ssrfPolicy);
@@ -221,6 +223,8 @@ export async function resolveMediaList(
     errorPrefix: "discord: failed to download attachment",
     fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs,
+    totalTimeoutMs,
   });
   await appendResolvedMediaFromStickers({
     stickers: resolveDiscordMessageStickers(message),
@@ -229,6 +233,8 @@ export async function resolveMediaList(
     errorPrefix: "discord: failed to download sticker",
     fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs,
+    totalTimeoutMs,
   });
   return out;
 }
@@ -238,6 +244,8 @@ export async function resolveForwardedMediaList(
   maxBytes: number,
   fetchImpl?: FetchLike,
   ssrfPolicy?: SsrFPolicy,
+  readIdleTimeoutMs?: number,
+  totalTimeoutMs?: number,
 ): Promise<DiscordMediaInfo[]> {
   const snapshots = resolveDiscordMessageSnapshots(message);
   if (snapshots.length === 0) {
@@ -253,6 +261,8 @@ export async function resolveForwardedMediaList(
       errorPrefix: "discord: failed to download forwarded attachment",
       fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      readIdleTimeoutMs,
+      totalTimeoutMs,
     });
     await appendResolvedMediaFromStickers({
       stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
@@ -261,6 +271,8 @@ export async function resolveForwardedMediaList(
       errorPrefix: "discord: failed to download forwarded sticker",
       fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      readIdleTimeoutMs,
+      totalTimeoutMs,
     });
   }
   return out;
@@ -273,6 +285,8 @@ async function appendResolvedMediaFromAttachments(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
 }) {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
@@ -280,13 +294,32 @@ async function appendResolvedMediaFromAttachments(params: {
   }
   for (const attachment of attachments) {
     try {
-      const fetched = await fetchRemoteMedia({
+      const fetchPromise = fetchRemoteMedia({
         url: attachment.url,
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
         ssrfPolicy: params.ssrfPolicy,
+        readIdleTimeoutMs: params.readIdleTimeoutMs,
       });
+
+      let fetched: Awaited<typeof fetchPromise>;
+      if (params.totalTimeoutMs) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error(`Media fetch timed out after ${params.totalTimeoutMs}ms`));
+            }, params.totalTimeoutMs);
+          });
+          fetched = await Promise.race([fetchPromise, timeoutPromise]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      } else {
+        fetched = await fetchPromise;
+      }
+
       const saved = await saveMediaBuffer(
         fetched.buffer,
         fetched.contentType ?? attachment.content_type,
@@ -383,6 +416,8 @@ async function appendResolvedMediaFromStickers(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
 }) {
   const stickers = params.stickers;
   if (!stickers || stickers.length === 0) {
@@ -393,13 +428,32 @@ async function appendResolvedMediaFromStickers(params: {
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        const fetched = await fetchRemoteMedia({
+        const fetchPromise = fetchRemoteMedia({
           url: candidate.url,
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
           ssrfPolicy: params.ssrfPolicy,
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
         });
+
+        let fetched: Awaited<typeof fetchPromise>;
+        if (params.totalTimeoutMs) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                reject(new Error(`Media fetch timed out after ${params.totalTimeoutMs}ms`));
+              }, params.totalTimeoutMs);
+            });
+            fetched = await Promise.race([fetchPromise, timeoutPromise]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        } else {
+          fetched = await fetchPromise;
+        }
+
         const saved = await saveMediaBuffer(
           fetched.buffer,
           fetched.contentType,
