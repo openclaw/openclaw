@@ -5,6 +5,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -732,6 +733,66 @@ function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unk
   return changed ? next : messages;
 }
 
+/**
+ * Extract visible text from a user message for heartbeat prompt detection.
+ * Returns `undefined` for non-user messages or messages with no extractable text.
+ */
+function extractUserTextForHeartbeatCheck(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "user") {
+    return undefined;
+  }
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return undefined;
+  }
+  const texts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type === "text" && typeof typed.text === "string") {
+      texts.push(typed.text);
+    }
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
+}
+
+/**
+ * Filter heartbeat-injected user messages from chat history so the Control UI
+ * does not display the raw heartbeat prompt alongside real user messages.
+ * Matches the resolved heartbeat prompt (custom or default) by prefix comparison.
+ */
+function filterHeartbeatUserMessages(
+  messages: unknown[],
+  heartbeatPrompt: string,
+): unknown[] {
+  if (messages.length === 0 || !heartbeatPrompt) {
+    return messages;
+  }
+  const promptPrefix = heartbeatPrompt.slice(0, 80).trim();
+  let changed = false;
+  const next: unknown[] = [];
+  for (const message of messages) {
+    const userText = extractUserTextForHeartbeatCheck(message);
+    if (userText !== undefined && userText.trim().startsWith(promptPrefix)) {
+      changed = true;
+      continue;
+    }
+    next.push(message);
+  }
+  return changed ? next : messages;
+}
+
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
@@ -1248,10 +1309,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized, effectiveMaxChars);
+    // Filter heartbeat-injected user prompts so the Control UI does not
+    // display the raw heartbeat check text as if the user typed it.
+    const heartbeatPrompt = resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt);
+    const heartbeatFiltered = filterHeartbeatUserMessages(normalized, heartbeatPrompt);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
-      messages: normalized,
+      messages: heartbeatFiltered,
       maxSingleMessageBytes: perMessageHardCap,
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
