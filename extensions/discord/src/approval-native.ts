@@ -1,11 +1,10 @@
-import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
+import { createApproverRestrictedNativeApprovalAdapter, resolveExecApprovalSessionTarget } from "openclaw/plugin-sdk/approval-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   ExecApprovalRequest,
   ExecApprovalSessionTarget,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveExecApprovalSessionTarget } from "openclaw/plugin-sdk/approval-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
@@ -137,11 +136,16 @@ function resolveDiscordOriginTarget(params: {
   if (turnSourceTarget) {
     return { to: turnSourceTarget.to };
   }
+  if (sessionKind === "dm") {
+    return null;
+  }
   if (sessionTarget?.channel === "discord") {
     const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
     return targetTo ? { to: targetTo } : null;
   }
-  const legacyChannelId = extractDiscordChannelId(params.request.request.sessionKey?.trim() || null);
+  const legacyChannelId = extractDiscordChannelId(
+    params.request.request.sessionKey?.trim() || null,
+  );
   if (legacyChannelId) {
     return { to: legacyChannelId };
   }

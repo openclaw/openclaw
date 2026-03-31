@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
@@ -10,7 +10,26 @@ import {
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.snapshot.js");
 
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
+
 describe("pw-tools-core.snapshot navigate guard", () => {
+  beforeEach(() => {
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, "");
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("blocks unsupported non-network URLs before page lookup", async () => {
     const goto = vi.fn(async () => {});
     setPwToolsCoreCurrentPage({
