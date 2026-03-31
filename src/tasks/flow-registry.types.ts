@@ -19,6 +19,8 @@ export type FlowRecord = {
   notifyPolicy: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;
+  blockedTaskId?: string;
+  blockedSummary?: string;
   createdAt: number;
   updatedAt: number;
   endedAt?: number;

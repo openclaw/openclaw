@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createFlowForTask, deleteFlowRecordById } from "./flow-registry.js";
+import { createFlowForTask, deleteFlowRecordById, getFlowById } from "./flow-registry.js";
 import {
   cancelTaskById,
   createTaskRecord,
+  findLatestTaskForFlowId,
   linkTaskToFlowById,
   markTaskLostById,
   markTaskRunningByRunId,
@@ -91,6 +92,141 @@ export function createQueuedTaskRun(params: {
   return ensureSingleTaskFlow({
     task,
     requesterOrigin: params.requesterOrigin,
+  });
+}
+
+type RetryBlockedFlowResult = {
+  found: boolean;
+  retried: boolean;
+  reason?: string;
+  previousTask?: TaskRecord;
+  task?: TaskRecord;
+};
+
+type RetryBlockedFlowParams = {
+  flowId: string;
+  sourceId?: string;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  childSessionKey?: string;
+  agentId?: string;
+  runId?: string;
+  label?: string;
+  task?: string;
+  preferMetadata?: boolean;
+  notifyPolicy?: TaskNotifyPolicy;
+  deliveryStatus?: TaskDeliveryStatus;
+  status: "queued" | "running";
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+};
+
+function resolveRetryableBlockedFlowTask(flowId: string): {
+  flowFound: boolean;
+  retryable: boolean;
+  latestTask?: TaskRecord;
+  reason?: string;
+} {
+  const flow = getFlowById(flowId);
+  if (!flow) {
+    return {
+      flowFound: false,
+      retryable: false,
+      reason: "Flow not found.",
+    };
+  }
+  const latestTask = findLatestTaskForFlowId(flowId);
+  if (!latestTask) {
+    return {
+      flowFound: true,
+      retryable: false,
+      reason: "Flow has no retryable task.",
+    };
+  }
+  if (flow.status !== "blocked") {
+    return {
+      flowFound: true,
+      retryable: false,
+      latestTask,
+      reason: "Flow is not blocked.",
+    };
+  }
+  if (latestTask.status !== "succeeded" || latestTask.terminalOutcome !== "blocked") {
+    return {
+      flowFound: true,
+      retryable: false,
+      latestTask,
+      reason: "Latest flow task is not blocked.",
+    };
+  }
+  return {
+    flowFound: true,
+    retryable: true,
+    latestTask,
+  };
+}
+
+function retryBlockedFlowTask(params: RetryBlockedFlowParams): RetryBlockedFlowResult {
+  const resolved = resolveRetryableBlockedFlowTask(params.flowId);
+  if (!resolved.retryable || !resolved.latestTask) {
+    return {
+      found: resolved.flowFound,
+      retried: false,
+      reason: resolved.reason,
+    };
+  }
+  const flow = getFlowById(params.flowId);
+  if (!flow) {
+    return {
+      found: false,
+      retried: false,
+      reason: "Flow not found.",
+      previousTask: resolved.latestTask,
+    };
+  }
+  const task = createTaskRecord({
+    runtime: resolved.latestTask.runtime,
+    sourceId: params.sourceId ?? resolved.latestTask.sourceId,
+    requesterSessionKey: flow.ownerSessionKey,
+    requesterOrigin: params.requesterOrigin ?? flow.requesterOrigin,
+    parentFlowId: flow.flowId,
+    childSessionKey: params.childSessionKey,
+    parentTaskId: resolved.latestTask.taskId,
+    agentId: params.agentId ?? resolved.latestTask.agentId,
+    runId: params.runId,
+    label: params.label ?? resolved.latestTask.label,
+    task: params.task ?? resolved.latestTask.task,
+    preferMetadata: params.preferMetadata,
+    notifyPolicy: params.notifyPolicy ?? resolved.latestTask.notifyPolicy,
+    deliveryStatus: params.deliveryStatus ?? "pending",
+    status: params.status,
+    startedAt: params.startedAt,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+  });
+  return {
+    found: true,
+    retried: true,
+    previousTask: resolved.latestTask,
+    task,
+  };
+}
+
+export function retryBlockedFlowAsQueuedTaskRun(
+  params: Omit<RetryBlockedFlowParams, "status" | "startedAt" | "lastEventAt" | "progressSummary">,
+): RetryBlockedFlowResult {
+  return retryBlockedFlowTask({
+    ...params,
+    status: "queued",
+  });
+}
+
+export function retryBlockedFlowAsRunningTaskRun(
+  params: Omit<RetryBlockedFlowParams, "status">,
+): RetryBlockedFlowResult {
+  return retryBlockedFlowTask({
+    ...params,
+    status: "running",
   });
 }
 
