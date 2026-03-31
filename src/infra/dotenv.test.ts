@@ -236,6 +236,31 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks bundled trust-root vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
+            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
+            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+      });
+    });
+  });
+
   it("still allows trusted global .env to set non-workspace runtime vars", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
@@ -344,6 +369,32 @@ describe("loadCliDotEnv", () => {
         loadCliDotEnv({ quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks bundled trust-root vars from workspace .env during CLI startup", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
+            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
+            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
       });
     });
   });
