@@ -983,7 +983,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
-      const lines = this.extractSnippetLines(snippet);
+      const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
@@ -1681,7 +1681,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       const scoreRaw = item.score;
       const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
       const snippet = typeof item.snippet === "string" ? item.snippet : "";
-      out.push({ docid, score: Number.isFinite(score) ? score : 0, snippet });
+      out.push({
+        docid,
+        score: Number.isFinite(score) ? score : 0,
+        snippet,
+        collection: typeof item.collection === "string" ? item.collection : undefined,
+        file: typeof item.file === "string" ? item.file : undefined,
+        body: typeof item.body === "string" ? item.body : undefined,
+        startLine: this.normalizeSnippetLine(item.start_line ?? item.startLine),
+        endLine: this.normalizeSnippetLine(item.end_line ?? item.endLine),
+      });
     }
     return out;
   }
@@ -2109,6 +2118,26 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const lines = snippet.split("\n").length;
     return { startLine: 1, endLine: lines };
+  }
+
+  private resolveSnippetLines(
+    entry: QmdQueryResult,
+    snippet: string,
+  ): { startLine: number; endLine: number } {
+    const explicitStart = this.normalizeSnippetLine(entry.startLine);
+    const explicitEnd = this.normalizeSnippetLine(entry.endLine);
+    if (explicitStart !== undefined || explicitEnd !== undefined) {
+      const startLine = explicitStart ?? explicitEnd ?? 1;
+      const endLine = explicitEnd ?? explicitStart ?? startLine;
+      return startLine <= endLine
+        ? { startLine, endLine }
+        : { startLine: endLine, endLine: startLine };
+    }
+    return this.extractSnippetLines(snippet);
+  }
+
+  private normalizeSnippetLine(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
   }
 
   private readCounts(): {
