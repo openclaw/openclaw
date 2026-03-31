@@ -1820,7 +1820,20 @@ export class QmdMemoryManager implements MemorySearchManager {
     preferredCollection?: string;
     preferredFile?: string;
   }): { rel: string; abs: string; source: MemorySource } | null {
+    log.debug(
+      `qmd resolveDocLocationFromHints input: ${JSON.stringify({
+        uri: hints.preferredFile,
+        pathHints: hints,
+        collection: hints.preferredCollection,
+      })}`,
+    );
     if (!hints.preferredCollection || !hints.preferredFile) {
+      log.debug(
+        `qmd resolveDocLocationFromHints output: ${JSON.stringify({
+          resolvedDocs: [],
+          reason: "missing-hints",
+        })}`,
+      );
       return null;
     }
     const indexedLocation = this.resolveIndexedDocLocationFromHint(
@@ -1828,6 +1841,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       hints.preferredFile,
     );
     if (indexedLocation) {
+      log.debug(
+        `qmd resolveDocLocationFromHints output: ${JSON.stringify({
+          resolvedDocs: [indexedLocation.rel],
+          strategy: "indexed",
+        })}`,
+      );
       return indexedLocation;
     }
     const collectionRelativePath = this.toCollectionRelativePath(
@@ -1835,9 +1854,24 @@ export class QmdMemoryManager implements MemorySearchManager {
       hints.preferredFile,
     );
     if (!collectionRelativePath) {
+      log.debug(
+        `qmd resolveDocLocationFromHints output: ${JSON.stringify({
+          resolvedDocs: [],
+          strategy: "slugified-fallback",
+          reason: "no-collection-relative-path",
+        })}`,
+      );
       return null;
     }
-    return this.toDocLocation(hints.preferredCollection, collectionRelativePath);
+    const location = this.toDocLocation(hints.preferredCollection, collectionRelativePath);
+    log.debug(
+      `qmd resolveDocLocationFromHints output: ${JSON.stringify({
+        resolvedDocs: location ? [location.rel] : [],
+        strategy: "slugified-fallback",
+        collectionRelativePath,
+      })}`,
+    );
+    return location;
   }
 
   private resolveIndexedDocLocationFromHint(
@@ -1846,7 +1880,25 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): { rel: string; abs: string; source: MemorySource } | null {
     const trimmedCollection = collection.trim();
     const trimmedFile = preferredFile.trim();
+    log.debug(
+      `qmd resolveIndexedDocLocationFromHint input: ${JSON.stringify({
+        uri: preferredFile,
+        pathHints: {
+          preferredCollection: collection,
+          preferredFile,
+        },
+        collection,
+        trimmedCollection,
+        trimmedFile,
+      })}`,
+    );
     if (!trimmedCollection || !trimmedFile) {
+      log.debug(
+        `qmd resolveIndexedDocLocationFromHint output: ${JSON.stringify({
+          resolvedDocs: [],
+          reason: "missing-trimmed-hints",
+        })}`,
+      );
       return null;
     }
     const exactPath = path.normalize(trimmedFile).replace(/\\/g, "/");
@@ -1857,7 +1909,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         .prepare("SELECT path FROM documents WHERE collection = ? AND path = ? AND active = 1")
         .all(trimmedCollection, exactPath) as Array<{ path: string }>;
       if (exactRows.length > 0) {
-        return this.toDocLocation(trimmedCollection, exactRows[0].path);
+        const location = this.toDocLocation(trimmedCollection, exactRows[0].path);
+        log.debug(
+          `qmd resolveIndexedDocLocationFromHint output: ${JSON.stringify({
+            resolvedDocs: exactRows.map((row) => row.path),
+            strategy: "exact-index-match",
+            exactPath,
+            returnedDoc: location?.rel ?? null,
+          })}`,
+        );
+        return location;
       }
       rows = db
         .prepare("SELECT path FROM documents WHERE collection = ? AND active = 1")
@@ -1873,6 +1934,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       return null;
     }
     const matches = rows.filter((row) => this.matchesPreferredFileHint(row.path, trimmedFile));
+    log.debug(
+      `qmd resolveIndexedDocLocationFromHint output: ${JSON.stringify({
+        resolvedDocs: matches.map((row) => row.path),
+        candidateDocs: rows.map((row) => row.path),
+        exactPath,
+        matchCount: matches.length,
+      })}`,
+    );
     if (matches.length !== 1) {
       return null;
     }
