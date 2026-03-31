@@ -104,6 +104,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 8,
     unitFastBatchTargetMs: 10_000,
     channelsBatchTargetMs: 0,
+    extensionsBatchTargetMs: 60_000,
   },
   moderate: {
     vitestCap: 3,
@@ -121,6 +122,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 12,
     unitFastBatchTargetMs: 15_000,
     channelsBatchTargetMs: 0,
+    extensionsBatchTargetMs: 120_000,
   },
   mid: {
     vitestCap: 4,
@@ -138,6 +140,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 16,
     unitFastBatchTargetMs: 0,
     channelsBatchTargetMs: 0,
+    extensionsBatchTargetMs: 180_000,
   },
   high: {
     vitestCap: 6,
@@ -155,6 +158,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 16,
     unitFastBatchTargetMs: 45_000,
     channelsBatchTargetMs: 30_000,
+    extensionsBatchTargetMs: 300_000,
   },
 };
 
@@ -313,7 +317,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     unitFastLaneCount: 1,
     unitFastBatchTargetMs: bandBudget.unitFastBatchTargetMs,
     channelsBatchTargetMs: bandBudget.channelsBatchTargetMs ?? 0,
-    extensionsBatchTargetMs: 300_000,
+    extensionsBatchTargetMs: bandBudget.extensionsBatchTargetMs ?? 300_000,
   };
 
   const loadAdjustedBudget = {
@@ -321,6 +325,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     vitestMaxWorkers: scaleForLoad(baseBudget.vitestMaxWorkers, runtime.loadBand),
     unitSharedWorkers: scaleForLoad(baseBudget.unitSharedWorkers, runtime.loadBand),
     channelSharedWorkers: scaleForLoad(baseBudget.channelSharedWorkers, runtime.loadBand),
+    unitIsolatedWorkers: scaleForLoad(baseBudget.unitIsolatedWorkers, runtime.loadBand),
     unitHeavyWorkers: scaleForLoad(baseBudget.unitHeavyWorkers, runtime.loadBand),
     extensionWorkers: scaleForLoad(baseBudget.extensionWorkers, runtime.loadBand),
     gatewayWorkers: scaleForLoad(baseBudget.gatewayWorkers, runtime.loadBand),
@@ -336,6 +341,12 @@ export function resolveExecutionBudget(runtimeCapabilities) {
       baseBudget.topLevelParallelLimitIsolated,
       runtime.loadBand,
     ),
+    unitFastBatchTargetMs:
+      runtime.loadBand === "busy"
+        ? Math.max(baseBudget.unitFastBatchTargetMs, 60_000)
+        : runtime.loadBand === "saturated"
+          ? Math.max(baseBudget.unitFastBatchTargetMs, 90_000)
+          : baseBudget.unitFastBatchTargetMs,
     deferredRunConcurrency:
       runtime.loadBand === "busy"
         ? Math.max(1, (baseBudget.deferredRunConcurrency ?? 1) - 1)

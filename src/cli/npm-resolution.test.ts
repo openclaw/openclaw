@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import {
   buildNpmInstallRecordFields,
   logPinnedNpmSpecMessages,
@@ -7,6 +8,9 @@ import {
   resolvePinnedNpmInstallRecordForCli,
   resolvePinnedNpmSpec,
 } from "./npm-resolution.js";
+
+const CLI_STATE_ROOT = "/tmp/openclaw";
+const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 
 describe("npm-resolution helpers", () => {
   it("keeps original spec when pin is disabled", () => {
@@ -67,7 +71,7 @@ describe("npm-resolution helpers", () => {
     expect(
       buildNpmInstallRecordFields({
         spec: "@openclaw/plugin-alpha@1.2.3",
-        installPath: "/tmp/openclaw/extensions/alpha",
+        installPath: ALPHA_INSTALL_PATH,
         version: "1.2.3",
         resolution: {
           name: "@openclaw/plugin-alpha",
@@ -79,7 +83,7 @@ describe("npm-resolution helpers", () => {
     ).toEqual({
       source: "npm",
       spec: "@openclaw/plugin-alpha@1.2.3",
-      installPath: "/tmp/openclaw/extensions/alpha",
+      installPath: ALPHA_INSTALL_PATH,
       version: "1.2.3",
       resolvedName: "@openclaw/plugin-alpha",
       resolvedVersion: "1.2.3",
@@ -112,7 +116,7 @@ describe("npm-resolution helpers", () => {
     const record = resolvePinnedNpmInstallRecord({
       rawSpec: "@openclaw/plugin-alpha@latest",
       pin: true,
-      installPath: "/tmp/openclaw/extensions/alpha",
+      installPath: ALPHA_INSTALL_PATH,
       version: "1.2.3",
       resolution: {
         name: "@openclaw/plugin-alpha",
@@ -126,7 +130,7 @@ describe("npm-resolution helpers", () => {
     expect(record).toEqual({
       source: "npm",
       spec: "@openclaw/plugin-alpha@1.2.3",
-      installPath: "/tmp/openclaw/extensions/alpha",
+      installPath: ALPHA_INSTALL_PATH,
       version: "1.2.3",
       resolvedName: "@openclaw/plugin-alpha",
       resolvedVersion: "1.2.3",
@@ -144,7 +148,7 @@ describe("npm-resolution helpers", () => {
     const record = resolvePinnedNpmInstallRecordForCli(
       "@openclaw/plugin-alpha@latest",
       true,
-      "/tmp/openclaw/extensions/alpha",
+      ALPHA_INSTALL_PATH,
       "1.2.3",
       undefined,
       (message) => logs.push(message),
@@ -154,7 +158,7 @@ describe("npm-resolution helpers", () => {
     expect(record).toEqual({
       source: "npm",
       spec: "@openclaw/plugin-alpha@latest",
-      installPath: "/tmp/openclaw/extensions/alpha",
+      installPath: ALPHA_INSTALL_PATH,
       version: "1.2.3",
       resolvedName: undefined,
       resolvedVersion: undefined,

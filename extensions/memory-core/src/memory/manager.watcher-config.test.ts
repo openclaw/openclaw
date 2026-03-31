@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type {
+  MemorySearchConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../engine-host-api.js";
-import type { MemorySearchConfig } from "../engine-host-api.js";
 import type { MemoryIndexManager } from "./index.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 const { watchMock } = vi.hoisted(() => ({
   watchMock: vi.fn(() => ({
@@ -35,9 +38,13 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 type MemoryIndexModule = typeof import("./index.js");
+type MemoryEmbeddingProvidersModule =
+  typeof import("../../../../src/plugins/memory-embedding-providers.js");
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
+let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
@@ -47,7 +54,13 @@ describe("memory watcher config", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    ({
+      clearMemoryEmbeddingProviders: clearRegistry,
+      registerMemoryEmbeddingProvider: registerAdapter,
+    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
     vi.clearAllMocks();
+    clearRegistry();
+    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
   });
 
   afterEach(async () => {
@@ -57,6 +70,7 @@ describe("memory watcher config", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    clearRegistry();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";

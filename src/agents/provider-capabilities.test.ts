@@ -1,8 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
   switch (params.provider) {
     case "anthropic":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "anthropic-vertex":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "amazon-bedrock":
       return {
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
@@ -55,24 +65,22 @@ let shouldSanitizeGeminiThoughtSignaturesForModel: typeof import("./provider-cap
 let supportsOpenAiCompatTurnValidation: typeof import("./provider-capabilities.js").supportsOpenAiCompatTurnValidation;
 let usesMoonshotThinkingPayloadCompat: typeof import("./provider-capabilities.js").usesMoonshotThinkingPayloadCompat;
 
-async function loadFreshProviderCapabilitiesModuleForTest() {
-  vi.resetModules();
-  ({
-    isAnthropicProviderFamily,
-    isOpenAiProviderFamily,
-    requiresOpenAiCompatibleAnthropicToolPayload,
-    resolveProviderCapabilities,
-    resolveTranscriptToolCallIdMode,
-    shouldDropThinkingBlocksForModel,
-    shouldSanitizeGeminiThoughtSignaturesForModel,
-    supportsOpenAiCompatTurnValidation,
-    usesMoonshotThinkingPayloadCompat,
-  } = await import("./provider-capabilities.js"));
-}
-
 describe("resolveProviderCapabilities", () => {
-  beforeEach(async () => {
-    await loadFreshProviderCapabilitiesModuleForTest();
+  beforeAll(async () => {
+    ({
+      isAnthropicProviderFamily,
+      isOpenAiProviderFamily,
+      requiresOpenAiCompatibleAnthropicToolPayload,
+      resolveProviderCapabilities,
+      resolveTranscriptToolCallIdMode,
+      shouldDropThinkingBlocksForModel,
+      shouldSanitizeGeminiThoughtSignaturesForModel,
+      supportsOpenAiCompatTurnValidation,
+      usesMoonshotThinkingPayloadCompat,
+    } = await import("./provider-capabilities.js"));
+  });
+
+  beforeEach(() => {
     resolveProviderCapabilitiesWithPluginMock.mockClear();
   });
 
@@ -104,6 +112,26 @@ describe("resolveProviderCapabilities", () => {
       dropThinkingBlockModelHints: ["claude"],
     });
     expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
+  });
+
+  it("preserves built-in fallback capability hints when plugin overrides are partial", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => ({
+      providerFamily: "anthropic",
+    }));
+
+    expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
       openAiPayloadNormalizationMode: "default",

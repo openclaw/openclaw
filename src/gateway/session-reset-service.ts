@@ -313,7 +313,7 @@ export async function performGatewaySessionReset(params: {
     const nextSessionId = randomUUID();
     const sessionFile = resolveSessionFilePath(
       nextSessionId,
-      undefined,
+      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
       resolveSessionFilePathOptions({
         storePath,
         agentId: sessionAgentId,
@@ -368,6 +368,9 @@ export async function performGatewaySessionReset(params: {
       space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
+      cliSessionBindings: currentEntry?.cliSessionBindings,
+      cliSessionIds: currentEntry?.cliSessionIds,
+      claudeCliSessionId: currentEntry?.claudeCliSessionId,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,

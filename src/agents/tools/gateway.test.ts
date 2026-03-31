@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
 const configState = vi.hoisted(() => ({
@@ -15,28 +15,19 @@ vi.mock("../../gateway/call.js", () => ({
 let callGatewayTool: typeof import("./gateway.js").callGatewayTool;
 let resolveGatewayOptions: typeof import("./gateway.js").resolveGatewayOptions;
 
-async function loadFreshGatewayToolModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../../config/config.js", () => ({
-    loadConfig: () => configState.value,
-    resolveGatewayPort: () => 18789,
-  }));
-  vi.doMock("../../gateway/call.js", () => ({
-    callGateway: (...args: unknown[]) => callGatewayMock(...args),
-  }));
-  ({ callGatewayTool, resolveGatewayOptions } = await import("./gateway.js"));
-}
-
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
   };
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ callGatewayTool, resolveGatewayOptions } = await import("./gateway.js"));
+  });
+
+  beforeEach(() => {
     callGatewayMock.mockClear();
     configState.value = {};
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    await loadFreshGatewayToolModuleForTest();
   });
 
   afterAll(() => {
@@ -169,6 +160,22 @@ describe("gateway tool defaults", () => {
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "cron.add",
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("allows explicit scope overrides for dynamic callers", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool(
+      "node.pair.approve",
+      {},
+      { requestId: "req-1" },
+      { scopes: ["operator.admin"] },
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.pair.approve",
         scopes: ["operator.admin"],
       }),
     );

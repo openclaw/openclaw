@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -8,6 +7,8 @@ import {
   parseNonInteractiveCustomApiFlags,
   promptCustomApiConfig,
 } from "./onboard-custom.js";
+
+const OLLAMA_DEFAULT_BASE_URL_FOR_TEST = "http://127.0.0.1:11434";
 
 // Mock dependencies
 vi.mock("./model-picker.js", () => ({
@@ -162,7 +163,7 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "API Base URL",
-        initialValue: OLLAMA_DEFAULT_BASE_URL,
+        initialValue: OLLAMA_DEFAULT_BASE_URL_FOR_TEST,
       }),
     );
   });
@@ -481,7 +482,7 @@ describe("applyCustomApiConfig", () => {
     const provider = result.config.models?.providers?.[providerId];
 
     expect(provider?.baseUrl).toBe("https://user123-resource.openai.azure.com/openai/v1");
-    expect(provider?.api).toBe("openai-responses");
+    expect(provider?.api).toBe("azure-openai-responses");
     expect(provider?.authHeader).toBe(false);
     expect(provider?.headers).toEqual({ "api-key": "abcd1234" });
 
@@ -567,7 +568,7 @@ describe("applyCustomApiConfig", () => {
     expect(result.providerIdRenamedFrom).toBeUndefined();
     const provider = result.config.models?.providers?.[oldProviderId];
     expect(provider?.baseUrl).toBe("https://my-resource.openai.azure.com/openai/v1");
-    expect(provider?.api).toBe("openai-responses");
+    expect(provider?.api).toBe("azure-openai-responses");
     expect(provider?.authHeader).toBe(false);
     expect(provider?.headers).toEqual({ "api-key": "key789" });
   });

@@ -177,7 +177,6 @@ function installModelsListCommandForwardCompatMocks() {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   installModelsListCommandForwardCompatMocks();
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
@@ -390,6 +389,54 @@ describe("modelsListCommand forward-compat", () => {
       expect(lastPrintedRows<{ key: string }>()).toEqual([
         expect.objectContaining({
           key: "openai-codex/gpt-5.4",
+        }),
+      ]);
+    });
+  });
+
+  describe("provider filter canonicalization", () => {
+    it("matches alias-valued discovered providers against canonical provider filters", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [
+          {
+            provider: "z.ai",
+            id: "glm-4.5",
+            name: "GLM-4.5",
+            api: "openai-responses",
+            baseUrl: "https://api.z.ai/v1",
+            input: ["text"],
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+        availableKeys: new Set(["z.ai/glm-4.5"]),
+        registry: {
+          getAll: () => [
+            {
+              provider: "z.ai",
+              id: "glm-4.5",
+              name: "GLM-4.5",
+              api: "openai-responses",
+              baseUrl: "https://api.z.ai/v1",
+              input: ["text"],
+              contextWindow: 128_000,
+              maxTokens: 16_384,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      });
+
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "z-ai", json: true }, runtime as never);
+
+      expect(mocks.printModelTable).toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({
+          key: "z.ai/glm-4.5",
         }),
       ]);
     });

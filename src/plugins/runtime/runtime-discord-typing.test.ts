@@ -1,40 +1,39 @@
-import { afterEach, describe, it, vi } from "vitest";
-import { createDiscordTypingLease } from "./runtime-discord-typing.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  expectBackgroundTypingPulseFailuresAreSwallowed,
-  expectIndependentTypingLeases,
-} from "./typing-lease.test-support.js";
+  createDiscordTypingLease,
+  type CreateDiscordTypingLeaseParams,
+} from "./runtime-discord-typing.js";
 
 describe("createDiscordTypingLease", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("pulses immediately and keeps leases independent", async () => {
-    await expectIndependentTypingLeases({
-      createLease: createDiscordTypingLease,
-      buildParams: (pulse) => ({
-        channelId: "123",
-        intervalMs: 2_000,
-        pulse,
-      }),
-    });
-  });
+  it("uses the Discord default interval and forwards pulse params", async () => {
+    vi.useFakeTimers();
+    const pulse: CreateDiscordTypingLeaseParams["pulse"] = vi.fn(async () => undefined);
+    const cfg = { channels: { discord: { token: "x" } } };
 
-  it("swallows background pulse failures", async () => {
-    const pulse = vi
-      .fn<(params: { channelId: string; accountId?: string; cfg?: unknown }) => Promise<void>>()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("boom"));
-
-    await expectBackgroundTypingPulseFailuresAreSwallowed({
-      createLease: createDiscordTypingLease,
+    const lease = await createDiscordTypingLease({
+      channelId: "123",
+      accountId: "work",
+      cfg,
+      intervalMs: Number.NaN,
       pulse,
-      buildParams: (pulse) => ({
-        channelId: "123",
-        intervalMs: 2_000,
-        pulse,
-      }),
     });
+
+    expect(pulse).toHaveBeenCalledTimes(1);
+    expect(pulse).toHaveBeenCalledWith({
+      channelId: "123",
+      accountId: "work",
+      cfg,
+    });
+
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(pulse).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pulse).toHaveBeenCalledTimes(2);
+
+    lease.stop();
   });
 });

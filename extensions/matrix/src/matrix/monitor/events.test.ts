@@ -28,7 +28,10 @@ function createHarness(params?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   storeAllowFrom?: string[];
+  accountDataByType?: Record<string, unknown>;
   joinedMembersByRoom?: Record<string, string[]>;
+  getJoinedRoomsError?: Error;
+  memberStateByRoomUser?: Record<string, Record<string, { is_direct?: boolean }>>;
   verifications?: Array<{
     id: string;
     transactionId?: string;
@@ -68,6 +71,7 @@ function createHarness(params?: {
   );
   const sendMessage = vi.fn(async (_roomId: string, _payload: { body?: string }) => "$notice");
   const invalidateRoom = vi.fn();
+  const rememberInvite = vi.fn();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const formatNativeDependencyHint = vi.fn(() => "install hint");
   const logVerboseMessage = vi.fn();
@@ -88,7 +92,22 @@ function createHarness(params?: {
       async (roomId: string) =>
         params?.joinedMembersByRoom?.[roomId] ?? ["@bot:example.org", "@alice:example.org"],
     ),
-    getJoinedRooms: vi.fn(async () => Object.keys(params?.joinedMembersByRoom ?? {})),
+    getJoinedRooms: vi.fn(async () =>
+      params?.getJoinedRoomsError
+        ? await Promise.reject(params.getJoinedRoomsError)
+        : Object.keys(params?.joinedMembersByRoom ?? {}).length > 0
+          ? Object.keys(params?.joinedMembersByRoom ?? {})
+          : ["!room:example.org"],
+    ),
+    getAccountData: vi.fn(
+      async (eventType: string) =>
+        (params?.accountDataByType?.[eventType] as Record<string, unknown> | undefined) ??
+        undefined,
+    ),
+    getRoomStateEvent: vi.fn(
+      async (roomId: string, _eventType: string, stateKey: string) =>
+        params?.memberStateByRoomUser?.[roomId]?.[stateKey] ?? {},
+    ),
     ...(params?.cryptoAvailable === false
       ? {}
       : {
@@ -112,6 +131,7 @@ function createHarness(params?: {
     readStoreAllowFrom,
     directTracker: {
       invalidateRoom,
+      rememberInvite,
     },
     logVerboseMessage,
     warnedEncryptedRooms: new Set<string>(),
@@ -130,6 +150,7 @@ function createHarness(params?: {
     onRoomMessage,
     sendMessage,
     invalidateRoom,
+    rememberInvite,
     roomEventListener,
     listVerifications,
     readStoreAllowFrom,
@@ -143,6 +164,8 @@ function createHarness(params?: {
     verificationSummaryListener: listeners.get("verification.summary") as
       | VerificationSummaryListener
       | undefined,
+    roomInviteListener: listeners.get("room.invite") as RoomEventListener | undefined,
+    roomJoinListener: listeners.get("room.join") as RoomEventListener | undefined,
   };
 }
 
@@ -238,6 +261,70 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("remembers invite provenance on room invites", async () => {
+    const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
+    if (!roomInviteListener) {
+      throw new Error("room.invite listener was not registered");
+    }
+
+    roomInviteListener("!room:example.org", {
+      event_id: "$invite1",
+      sender: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: {
+        membership: "invite",
+        is_direct: true,
+      },
+      state_key: "@bot:example.org",
+    });
+
+    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
+  });
+
+  it("ignores lifecycle-only invite events emitted with self sender ids", async () => {
+    const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
+    if (!roomInviteListener) {
+      throw new Error("room.invite listener was not registered");
+    }
+
+    roomInviteListener("!room:example.org", {
+      event_id: "$invite-self",
+      sender: "@bot:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: {
+        membership: "invite",
+      },
+      state_key: "@bot:example.org",
+    });
+
+    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(rememberInvite).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize invite provenance from room joins", async () => {
+    const { invalidateRoom, rememberInvite, roomJoinListener } = createHarness();
+    if (!roomJoinListener) {
+      throw new Error("room.join listener was not registered");
+    }
+
+    roomJoinListener("!room:example.org", {
+      event_id: "$join1",
+      sender: "@bot:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: {
+        membership: "join",
+      },
+      state_key: "@bot:example.org",
+    });
+
+    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(rememberInvite).not.toHaveBeenCalled();
   });
 
   it("posts verification request notices directly into the room", async () => {
@@ -683,7 +770,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(body).toContain("SAS decimal: 4321 8765 2109");
   });
 
-  it("prefers the most recent verification DM over the canonical active DM for unmapped SAS summaries", async () => {
+  it("prefers the canonical active DM over the most recent verification room for unmapped SAS summaries", async () => {
     const { sendMessage, roomEventListener, verificationSummaryListener } = createHarness({
       joinedMembersByRoom: {
         "!dm-active:example.org": ["@alice:example.org", "@bot:example.org"],
@@ -748,7 +835,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         "SAS decimal: 2468 1357 9753",
       ),
     );
-    expect((sasCall?.[0] ?? "") as string).toBe("!dm-current:example.org");
+    expect((sasCall?.[0] ?? "") as string).toBe("!dm-active:example.org");
   });
 
   it("retries SAS notice lookup when start arrives before SAS payload is available", async () => {
@@ -849,6 +936,115 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     await vi.waitFor(() => {
       expect(sendMessage).toHaveBeenCalledTimes(0);
     });
+  });
+
+  it("routes unmapped verification summaries to the room marked direct in member state", async () => {
+    const { sendMessage, verificationSummaryListener } = createHarness({
+      joinedMembersByRoom: {
+        "!fallback:example.org": ["@alice:example.org", "@bot:example.org"],
+        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
+      },
+      memberStateByRoomUser: {
+        "!dm:example.org": {
+          "@bot:example.org": { is_direct: true },
+        },
+      },
+    });
+    if (!verificationSummaryListener) {
+      throw new Error("verification.summary listener was not registered");
+    }
+
+    verificationSummaryListener({
+      id: "verification-explicit-room",
+      otherUserId: "@alice:example.org",
+      isSelfVerification: false,
+      initiatedByMe: false,
+      phase: 3,
+      phaseName: "started",
+      pending: true,
+      methods: ["m.sas.v1"],
+      canAccept: false,
+      hasSas: true,
+      sas: {
+        decimal: [6158, 1986, 3513],
+        emoji: [
+          ["🎁", "Gift"],
+          ["🌍", "Globe"],
+          ["🐴", "Horse"],
+        ],
+      },
+      hasReciprocateQr: false,
+      completed: false,
+      createdAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
+      updatedAt: new Date("2026-02-25T21:42:55.000Z").toISOString(),
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect((sendMessage.mock.calls as unknown[][])[0]?.[0]).toBe("!dm:example.org");
+  });
+
+  it("prefers the active direct room over a stale remembered strict room for unmapped summaries", async () => {
+    const { sendMessage, roomEventListener, verificationSummaryListener } = createHarness({
+      joinedMembersByRoom: {
+        "!fallback:example.org": ["@alice:example.org", "@bot:example.org"],
+        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
+      },
+      memberStateByRoomUser: {
+        "!dm:example.org": {
+          "@bot:example.org": { is_direct: true },
+        },
+      },
+    });
+    if (!verificationSummaryListener) {
+      throw new Error("verification.summary listener was not registered");
+    }
+
+    roomEventListener("!fallback:example.org", {
+      event_id: "$start-fallback",
+      sender: "@alice:example.org",
+      type: "m.key.verification.start",
+      origin_server_ts: Date.now(),
+      content: {
+        "m.relates_to": { event_id: "$req-fallback" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    sendMessage.mockClear();
+
+    verificationSummaryListener({
+      id: "verification-stale-room",
+      otherUserId: "@alice:example.org",
+      isSelfVerification: false,
+      initiatedByMe: false,
+      phase: 3,
+      phaseName: "started",
+      pending: true,
+      methods: ["m.sas.v1"],
+      canAccept: false,
+      hasSas: true,
+      sas: {
+        decimal: [6158, 1986, 3513],
+        emoji: [
+          ["🎁", "Gift"],
+          ["🌍", "Globe"],
+          ["🐴", "Horse"],
+        ],
+      },
+      hasReciprocateQr: false,
+      completed: false,
+      createdAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
+      updatedAt: new Date("2026-02-25T21:42:55.000Z").toISOString(),
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect((sendMessage.mock.calls as unknown[][])[0]?.[0]).toBe("!dm:example.org");
   });
 
   it("does not emit duplicate SAS notices for the same verification payload", async () => {
@@ -965,6 +1161,51 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       String((call[1] as { body?: string } | undefined)?.body ?? ""),
     );
     expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
+  });
+
+  it("preserves strict-room SAS fallback when active DM inspection cannot resolve a room", async () => {
+    const { sendMessage, roomEventListener } = createHarness({
+      joinedMembersByRoom: {
+        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
+      },
+      getJoinedRoomsError: new Error("temporary joined-room lookup failure"),
+      verifications: [
+        {
+          id: "verification-active",
+          transactionId: "$different-flow-id",
+          otherUserId: "@alice:example.org",
+          updatedAt: new Date("2026-02-25T21:43:54.000Z").toISOString(),
+          phaseName: "started",
+          phase: 3,
+          pending: true,
+          sas: {
+            decimal: [6158, 1986, 3513],
+            emoji: [
+              ["🎁", "Gift"],
+              ["🌍", "Globe"],
+              ["🐴", "Horse"],
+            ],
+          },
+        },
+      ],
+    });
+
+    roomEventListener("!dm:example.org", {
+      event_id: "$start-active",
+      sender: "@alice:example.org",
+      type: "m.key.verification.start",
+      origin_server_ts: Date.now(),
+      content: {
+        "m.relates_to": { event_id: "$req-active" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      const bodies = (sendMessage.mock.calls as unknown[][]).map((call) =>
+        String((call[1] as { body?: string } | undefined)?.body ?? ""),
+      );
+      expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
+    });
   });
 
   it("prefers the active verification for the current DM when multiple active summaries exist", async () => {

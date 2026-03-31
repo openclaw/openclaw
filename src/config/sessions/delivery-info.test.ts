@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
@@ -26,10 +26,12 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
   deliveryContext,
 });
 
-beforeEach(async () => {
-  vi.resetModules();
-  storeState.store = {};
+beforeAll(async () => {
   ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
+});
+
+beforeEach(() => {
+  storeState.store = {};
 });
 
 describe("extractDeliveryInfo", () => {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
 
 export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
@@ -11,8 +11,8 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-export const ACPX_PINNED_VERSION = "0.3.1";
 export const ACPX_VERSION_ANY = "any";
+export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 
 function isAcpxPluginRoot(dir: string): boolean {
@@ -58,6 +58,14 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
 }
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
+const pluginPkg = JSON.parse(fs.readFileSync(path.join(ACPX_PLUGIN_ROOT, "package.json"), "utf8"));
+const acpxVersion: unknown = pluginPkg?.dependencies?.acpx;
+if (typeof acpxVersion !== "string" || acpxVersion.trim() === "") {
+  throw new Error(
+    `Could not read acpx version from ${path.join(ACPX_PLUGIN_ROOT, "package.json")} — expected a non-empty string at dependencies.acpx`,
+  );
+}
+export const ACPX_PINNED_VERSION: string = acpxVersion.replace(/^[^0-9]*/, "");
 export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
   return `npm install --omit=dev --no-save --package-lock=false acpx@${version}`;
@@ -83,6 +91,7 @@ export type AcpxPluginConfig = {
   cwd?: string;
   permissionMode?: AcpxPermissionMode;
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
+  pluginToolsMcpBridge?: boolean;
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
@@ -98,6 +107,7 @@ export type ResolvedAcpxPluginConfig = {
   cwd: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
+  pluginToolsMcpBridge: boolean;
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
@@ -148,6 +158,7 @@ const AcpxPluginConfigSchema = z.strictObject({
       error: `nonInteractivePermissions must be one of: ${ACPX_NON_INTERACTIVE_POLICIES.join(", ")}`,
     })
     .optional(),
+  pluginToolsMcpBridge: z.boolean({ error: "pluginToolsMcpBridge must be a boolean" }).optional(),
   strictWindowsCmdWrapper: z
     .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
     .optional(),
@@ -201,6 +212,57 @@ function resolveConfiguredCommand(params: { configured?: string; workspaceDir?: 
   return configured;
 }
 
+function resolveOpenClawRoot(currentRoot: string): string {
+  if (
+    path.basename(currentRoot) === "acpx" &&
+    path.basename(path.dirname(currentRoot)) === "extensions"
+  ) {
+    const parent = path.dirname(path.dirname(currentRoot));
+    if (path.basename(parent) === "dist") {
+      return path.dirname(parent);
+    }
+    return parent;
+  }
+  return path.resolve(currentRoot, "..");
+}
+
+export function resolvePluginToolsMcpServerConfig(
+  moduleUrl: string = import.meta.url,
+): McpServerConfig {
+  const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
+  const openClawRoot = resolveOpenClawRoot(pluginRoot);
+  const distEntry = path.join(openClawRoot, "dist", "mcp", "plugin-tools-serve.js");
+  if (fs.existsSync(distEntry)) {
+    return {
+      command: process.execPath,
+      args: [distEntry],
+    };
+  }
+  const sourceEntry = path.join(openClawRoot, "src", "mcp", "plugin-tools-serve.ts");
+  return {
+    command: process.execPath,
+    args: ["--import", "tsx", sourceEntry],
+  };
+}
+
+function resolveConfiguredMcpServers(params: {
+  mcpServers?: Record<string, McpServerConfig>;
+  pluginToolsMcpBridge: boolean;
+  moduleUrl?: string;
+}): Record<string, McpServerConfig> {
+  const resolved = { ...(params.mcpServers ?? {}) };
+  if (!params.pluginToolsMcpBridge) {
+    return resolved;
+  }
+  if (resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME]) {
+    throw new Error(
+      `mcpServers.${ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME} is reserved when pluginToolsMcpBridge=true`,
+    );
+  }
+  resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME] = resolvePluginToolsMcpServerConfig(params.moduleUrl);
+  return resolved;
+}
+
 export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
   return buildPluginConfigSchema(AcpxPluginConfigSchema);
 }
@@ -220,6 +282,7 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;
   workspaceDir?: string;
+  moduleUrl?: string;
 }): ResolvedAcpxPluginConfig {
   const parsed = parseAcpxPluginConfig(params.rawConfig);
   if (!parsed.ok) {
@@ -240,6 +303,12 @@ export function resolveAcpxPluginConfig(params: {
       ? undefined
       : (configuredExpectedVersion ?? (allowPluginLocalInstall ? ACPX_PINNED_VERSION : undefined));
   const installCommand = buildAcpxLocalInstallCommand(expectedVersion ?? ACPX_PINNED_VERSION);
+  const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
+  const mcpServers = resolveConfiguredMcpServers({
+    mcpServers: normalized.mcpServers,
+    pluginToolsMcpBridge,
+    moduleUrl: params.moduleUrl,
+  });
 
   return {
     command,
@@ -251,10 +320,11 @@ export function resolveAcpxPluginConfig(params: {
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
+    pluginToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
-    mcpServers: normalized.mcpServers ?? {},
+    mcpServers,
   };
 }

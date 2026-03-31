@@ -10,7 +10,7 @@
         "reason": "Measured ~35% faster under threads than forks on base config after removing process.chdir() from the test."
       },
       {
-        "file": "src/agents/pi-extensions/compaction-safeguard.test.ts",
+        "file": "src/agents/pi-hooks/compaction-safeguard.test.ts",
         "reason": "Measured ~27% faster under threads than forks on base config after removing process.chdir() from the test."
       },
       {
@@ -139,12 +139,24 @@
         "reason": "Matrix sdk.test.ts hoists a matrix-js-sdk module mock; keep the sync-store persistence regression in its own forked lane so non-isolated extension workers stay deterministic."
       },
       {
+        "file": "extensions/matrix/src/matrix/client.test.ts",
+        "reason": "This Matrix client suite measured about 736.9 MiB RSS growth in the shared extensions lane during heapsnapshot tracing; keep it isolated so the shared Matrix extension worker can recycle instead of retaining Matrix runtime state."
+      },
+      {
+        "file": "extensions/matrix/src/matrix/monitor/startup.test.ts",
+        "reason": "This Matrix startup suite was missing from the extension timing snapshot and repeated heapsnapshots in the shared extensions lane retained large Vite SSR transform strings plus system / Context growth; keep it isolated so the shared Matrix extension worker can recycle immediately after startup coverage."
+      },
+      {
         "file": "extensions/nextcloud-talk/src/monitor.replay.test.ts",
         "reason": "The replay-handling regression is green alone but can inherit disturbed global stream/Response state from the shared extensions lane, so keep it in its own forked lane for deterministic CI."
       },
       {
         "file": "extensions/duckduckgo/src/ddg-search-provider.test.ts",
         "reason": "This provider test hoists a client mock and imports the provider lazily; keep it in its own forked lane so shared extension workers do not reuse a previously cached module under test."
+      },
+      {
+        "file": "extensions/browser/src/browser/chrome.test.ts",
+        "reason": "This Chrome CDP helper suite opens mock WebSocket servers and stubs global fetch state; keep it isolated so shared extension workers do not inherit stale browser probe state from neighboring files."
       },
       {
         "file": "extensions/firecrawl/src/firecrawl-scrape-tool.test.ts",
@@ -157,6 +169,26 @@
       {
         "file": "extensions/firecrawl/src/firecrawl-search-tool.test.ts",
         "reason": "This tool suite hoists the Firecrawl client mock and imports lazily; keep it isolated so shared extension workers cannot leak cached implementations across files."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.acp-init-failure.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so ACP init-failure teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.bot-menu.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so bot-menu lifecycle teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.broadcast.reply-once.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so broadcast reply-once teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.card-action.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite shares the same reconnect helpers and module state; keep it isolated with the other Feishu lifecycle files so card-action runs do not inherit cross-file websocket state."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.reply-once.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so reply-once teardown stays deterministic."
       },
       {
         "file": "extensions/line/src/download.test.ts",
@@ -185,6 +217,14 @@
       {
         "file": "extensions/tavily/src/tavily-search-tool.test.ts",
         "reason": "This search-tool suite hoists the Tavily client mock and imports lazily; keep it isolated so shared extension workers do not bypass the mocked client via cached modules."
+      },
+      {
+        "file": "extensions/xai/provider.contract.test.ts",
+        "reason": "This xAI provider contract suite validates the bundled provider registration produced by defineSingleProviderPluginEntry; keep it in its own forked extension lane so shared workers cannot poison that registry with hoisted plugin-sdk mocks from unrelated extension files."
+      },
+      {
+        "file": "extensions/xai/web-search-provider.contract.test.ts",
+        "reason": "This xAI web-search contract suite validates the bundled Grok web-search registration from the same xAI plugin entry; keep it isolated so shared extension workers do not reuse hoisted plugin-sdk web-search mocks from unrelated extension files."
       }
     ]
   },
@@ -193,6 +233,42 @@
       {
         "file": "src/cli/qr-dashboard.integration.test.ts",
         "reason": "This CLI integration suite hoists runtime/config mocks and resets module state between qr and dashboard command imports; keep it in its own forked lane so shared unit-fast workers stay deterministic."
+      },
+      {
+        "file": "src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts",
+        "reason": "This config validation hotspot passes when rerun directly but can time out inside the shared unit-fast swarm under local and CI load; keep it in its own forked lane so schema validation stays deterministic."
+      },
+      {
+        "file": "src/config/plugin-auto-enable.test.ts",
+        "reason": "This plugin auto-enable suite validates config schema and plugin metadata across many cases; keep it isolated so the shared unit-fast batches do not starve its longer validation loop."
+      },
+      {
+        "file": "src/infra/matrix-legacy-crypto.test.ts",
+        "reason": "This Matrix legacy crypto migration suite touches temp-home filesystem fixtures and can time out when it shares the busy unit-fast lane; keep it isolated for deterministic migration timing."
+      },
+      {
+        "file": "src/infra/state-migrations.test.ts",
+        "reason": "This legacy state migration suite builds multi-surface fixture trees and passes when rerun directly; keep it isolated so shared unit-fast pressure does not push it past the timeout budget."
+      },
+      {
+        "file": "src/plugins/commands.test.ts",
+        "reason": "This plugin command suite contains a broad parameterized binding matrix and can time out only under the congested unit-fast lane; keep it isolated so command binding coverage remains deterministic."
+      },
+      {
+        "file": "src/plugin-sdk/package-contract-guardrails.test.ts",
+        "reason": "This packed-artifact contract suite shells out through npm pack/install and passes alone but can overrun the shared unit-fast lane when it competes with other package-heavy unit batches."
+      },
+      {
+        "file": "src/secrets/runtime.coverage.test.ts",
+        "reason": "This secrets runtime coverage sweep exercises every active registry target and passes in direct reruns; keep it isolated so the shared unit-fast lane does not starve its filesystem and config setup."
+      },
+      {
+        "file": "src/secrets/runtime.test.ts",
+        "reason": "This secrets runtime snapshot suite can time out only inside the shared unit-fast swarm; keep it isolated so secret-resolution setup remains deterministic."
+      },
+      {
+        "file": "src/security/audit.test.ts",
+        "reason": "This security audit suite runs a wide config matrix and direct reruns stay green; keep it isolated so shared unit-fast congestion does not push its longest cases past the timeout budget."
       }
     ],
     "threadPinned": []

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
-import { clearConfigCache } from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { modelsListCommand } from "./models/list.list-command.js";
 
@@ -44,11 +44,13 @@ async function withAuthSyncFixture(run: (fixture: AuthSyncFixture) => Promise<vo
         OPENROUTER_API_KEY: undefined,
       },
       async () => {
+        clearRuntimeConfigSnapshot();
         clearConfigCache();
         await run({ root, stateDir, agentDir, configPath, authPath });
       },
     );
   } finally {
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     await fs.rm(root, { recursive: true, force: true });
   }

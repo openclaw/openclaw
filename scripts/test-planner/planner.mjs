@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "../lib/bundled-plugin-paths.mjs";
 import {
   loadChannelTimingManifest,
   loadExtensionTimingManifest,
@@ -17,6 +18,17 @@ import {
   parsePassthroughArgs,
   SINGLE_RUN_ONLY_FLAGS,
 } from "./vitest-args.mjs";
+
+const countUnitEntryFilters = (unit) => {
+  const explicitFilterCount = countExplicitEntryFilters(unit.args);
+  if (explicitFilterCount !== null) {
+    return explicitFilterCount;
+  }
+  if (Array.isArray(unit.includeFiles) && unit.includeFiles.length > 0) {
+    return unit.includeFiles.length;
+  }
+  return null;
+};
 
 const parseEnvNumber = (env, name, fallback) => {
   const parsed = Number.parseInt(env[name] ?? "", 10);
@@ -97,13 +109,14 @@ const normalizeSurfaces = (values = []) => [
   ),
 ];
 
-const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "gateway"]);
+const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "contracts", "gateway"]);
+const FAILURE_POLICIES = new Set(["fail-fast", "collect-all"]);
 
 const validateExplicitSurfaces = (surfaces) => {
   const invalidSurfaces = surfaces.filter((surface) => !EXPLICIT_PLAN_SURFACES.has(surface));
   if (invalidSurfaces.length > 0) {
     throw new Error(
-      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, extensions, channels, gateway.`,
+      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, extensions, channels, contracts, gateway.`,
     );
   }
 };
@@ -125,10 +138,55 @@ const buildRequestedSurfaces = (request, env) => {
   if (env.OPENCLAW_TEST_INCLUDE_CHANNELS === "1") {
     surfaces.push("channels");
   }
+  if (env.OPENCLAW_TEST_INCLUDE_CONTRACTS === "1") {
+    surfaces.push("contracts");
+  }
   if (env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1") {
     surfaces.push("gateway");
   }
   return surfaces;
+};
+
+const normalizeFailurePolicy = (requestFailurePolicy, optionArgs) => {
+  if (requestFailurePolicy !== null && requestFailurePolicy !== undefined) {
+    if (!FAILURE_POLICIES.has(requestFailurePolicy)) {
+      throw new Error(
+        `Unsupported failure policy "${String(requestFailurePolicy)}". Supported values: fail-fast, collect-all.`,
+      );
+    }
+    return { failurePolicy: requestFailurePolicy, passthroughOptionArgs: optionArgs };
+  }
+
+  const normalizedOptionArgs = [];
+  let failurePolicy = "fail-fast";
+
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index];
+    if (arg === "--bail") {
+      const nextValue = optionArgs[index + 1] ?? "";
+      if (nextValue === "0") {
+        failurePolicy = "collect-all";
+        index += 1;
+        continue;
+      }
+      throw new Error(
+        `Unsupported wrapper-level --bail value: ${String(nextValue || "<missing>")}. Use --bail=0, --collect-failures, or --failure-policy=collect-all.`,
+      );
+    }
+    if (arg.startsWith("--bail=")) {
+      const value = arg.slice("--bail=".length);
+      if (value === "0") {
+        failurePolicy = "collect-all";
+        continue;
+      }
+      throw new Error(
+        `Unsupported wrapper-level --bail value: ${String(value || "<missing>")}. Use --bail=0, --collect-failures, or --failure-policy=collect-all.`,
+      );
+    }
+    normalizedOptionArgs.push(arg);
+  }
+
+  return { failurePolicy, passthroughOptionArgs: normalizedOptionArgs };
 };
 
 const createPlannerContext = (request, options = {}) => {
@@ -288,6 +346,9 @@ const resolveMaxWorkersForUnit = (unit, context) => {
   if (unit.surface === "channels") {
     return budget.channelSharedWorkers ?? budget.unitSharedWorkers;
   }
+  if (unit.surface === "contracts") {
+    return budget.unitSharedWorkers;
+  }
   if (unit.surface === "gateway") {
     return budget.gatewayWorkers;
   }
@@ -383,6 +444,7 @@ const buildDefaultUnits = (context, request) => {
   const selectedSurfaceSet = new Set(selectedSurfaces);
   const unitOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("unit");
   const channelsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("channels");
+  const contractsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("contracts");
   const extensionsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("extensions");
 
   const {
@@ -413,8 +475,16 @@ const buildDefaultUnits = (context, request) => {
   const unitFastCandidateFiles = catalog.allKnownUnitFiles.filter(
     (file) => !new Set(unitFastExcludedFiles).has(file),
   );
+  const shouldPhaseUnitFastBatches =
+    !unitOnlyRun ||
+    catalog.unitForkIsolatedFiles.length > 0 ||
+    unitMemoryIsolatedFiles.length > 0 ||
+    timedHeavyUnitFiles.length > 0 ||
+    catalog.unitThreadPinnedFiles.length > 0;
   const extensionSharedCandidateFiles = catalog.allKnownTestFiles.filter(
-    (file) => file.startsWith("extensions/") && !catalog.extensionForkIsolatedFileSet.has(file),
+    (file) =>
+      file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
+      !catalog.extensionForkIsolatedFileSet.has(file),
   );
   const channelSharedCandidateFiles = catalog.allKnownTestFiles.filter(
     (file) =>
@@ -474,7 +544,7 @@ const buildDefaultUnits = (context, request) => {
             id: unitId,
             surface: "unit",
             isolate: false,
-            serialPhase: unitOnlyRun ? undefined : "unit-fast",
+            serialPhase: shouldPhaseUnitFastBatches ? "unit-fast" : undefined,
             includeFiles: batch,
             estimatedDurationMs: estimateEntryFilesDurationMs(
               { args: ["vitest", "run", "--config", "vitest.unit.config.ts"] },
@@ -610,6 +680,19 @@ const buildDefaultUnits = (context, request) => {
         }),
       );
     }
+  }
+
+  if (selectedSurfaceSet.has("contracts")) {
+    units.push(
+      createExecutionUnit(context, {
+        id: "contracts",
+        surface: "contracts",
+        isolate: false,
+        serialPhase: contractsOnlyRun ? undefined : "contracts",
+        args: ["vitest", "run", "--config", "vitest.contracts.config.ts", ...noIsolateArgs],
+        reasons: ["contracts-shared"],
+      }),
+    );
   }
 
   if (selectedSurfaceSet.has("extensions")) {
@@ -778,6 +861,16 @@ const createTargetedUnit = (context, classification, filters) => {
         "--config",
         "vitest.channels.config.ts",
         ...(classification.isolated ? ["--pool=forks"] : []),
+        ...context.noIsolateArgs,
+        ...filters,
+      ];
+    }
+    if (owner === "contracts") {
+      return [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.contracts.config.ts",
         ...context.noIsolateArgs,
         ...filters,
       ];
@@ -1018,7 +1111,7 @@ const estimateTopLevelEntryDurationMs = (unit, context) => {
     if (context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
       return totalMs + 3_000;
     }
-    if (file.startsWith("extensions/")) {
+    if (file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       return totalMs + 2_000;
     }
     return totalMs + 1_000;
@@ -1034,7 +1127,7 @@ const buildTopLevelSingleShardAssignments = (context, units) => {
     if (unit.fixedShardIndex !== undefined) {
       return false;
     }
-    const explicitFilterCount = countExplicitEntryFilters(unit.args);
+    const explicitFilterCount = countUnitEntryFilters(unit);
     if (explicitFilterCount === null) {
       return false;
     }
@@ -1117,14 +1210,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     minShards: 1,
     maxShards: 9,
   });
-  const bunShardCount = resolveDynamicShardCount({
-    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
-    fileCount: context.catalog.allKnownUnitFiles.length,
-    targetDurationMs: 30_000,
-    targetFilesPerShard: 80,
-    minShards: 1,
-    maxShards: 4,
-  });
+  const bunShardCount = windowsShardCount;
 
   const checksFastInclude = nodeEligible
     ? [
@@ -1172,8 +1258,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
                   "node openclaw.mjs --help",
                   "node openclaw.mjs status --json --timeout 1",
                   "pnpm test:build:singleton",
-                  "node scripts/stage-bundled-plugin-runtime-deps.mjs",
-                  "node --import tsx scripts/release-check.ts",
                 ].join("\n"),
               },
             ]
@@ -1238,7 +1322,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
 
   const jobs = {
     buildArtifacts: { enabled: nodeEligible, needsDistArtifacts: false },
-    releaseCheck: { enabled: isPush && !scope.docsOnly && nodeEligible },
     checksFast: { enabled: checksFastInclude.length > 0, matrix: { include: checksFastInclude } },
     checks: { enabled: checksInclude.length > 0, matrix: { include: checksInclude } },
     extensionFast: {
@@ -1287,15 +1370,56 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
       ...(docsEligible ? ["check-docs"] : []),
       ...(skillsPythonEligible ? ["skills-python"] : []),
       ...(nodeEligible ? ["build-artifacts"] : []),
-      ...(isPush && !scope.docsOnly && nodeEligible ? ["release-check"] : []),
     ],
   };
 }
 
 export const formatExecutionUnitSummary = (unit) =>
-  `${unit.id} filters=${String(countExplicitEntryFilters(unit.args) || "all")} maxWorkers=${String(
+  `${unit.id} filters=${String(countUnitEntryFilters(unit) || "all")} maxWorkers=${String(
     unit.maxWorkers ?? "default",
   )} surface=${unit.surface} isolate=${unit.isolate ? "yes" : "no"} pool=${unit.pool}`;
+
+function resolveSurfaceAwareTopLevelParallelLimit(context, units, defaultLimit) {
+  const sharedUnitBatches = units.filter(
+    (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+  );
+  const onlyUnitSurface = units.length > 0 && units.every((unit) => unit.surface === "unit");
+
+  if (!context.runtime.isCI && context.noIsolateArgs.length > 0) {
+    if (onlyUnitSurface && sharedUnitBatches.length >= 4) {
+      return Math.min(defaultLimit, 3);
+    }
+  }
+
+  if (
+    !context.runtime.isCI &&
+    context.runtime.loadBand === "saturated" &&
+    context.noIsolateArgs.length > 0
+  ) {
+    if (sharedUnitBatches.length >= 4) {
+      // Saturated local hosts regress when every unit-fast batch fans out at once.
+      // Keep the shared unit phase to a smaller burst and let later isolated lanes
+      // make forward progress instead of waiting behind a thundering herd.
+      return Math.min(defaultLimit, 3);
+    }
+  }
+
+  if (!context.runtime.isCI || context.noIsolateArgs.length === 0) {
+    return defaultLimit;
+  }
+
+  const sharedExtensionUnits = units.filter(
+    (unit) => unit.surface === "extensions" && !unit.isolate,
+  );
+  if (sharedExtensionUnits.length <= 1) {
+    return defaultLimit;
+  }
+
+  // Shared extension batches can each retain multiple GiB in CI. Limit that
+  // phase to two concurrent lanes so provider-contract checks are not starved
+  // behind unrelated memory-heavy extension suites.
+  return Math.min(defaultLimit, 2);
+}
 
 export function explainExecutionTarget(request, options = {}) {
   const context = createPlannerContext(request, options);
@@ -1338,6 +1462,7 @@ export function buildExecutionPlan(request, options = {}) {
   const { fileFilters: passthroughFileFilters, optionArgs } = parsePassthroughArgs(
     request.passthroughArgs ?? [],
   );
+  const normalizedFailurePolicy = normalizeFailurePolicy(request.failurePolicy ?? null, optionArgs);
   const fileFilters = [...explicitFileFilters, ...passthroughFileFilters];
   const passthroughMetadataFlags = new Set(["-h", "--help", "--listTags", "--clearCache"]);
   const passthroughMetadataOnly =
@@ -1350,7 +1475,7 @@ export function buildExecutionPlan(request, options = {}) {
       const [flag] = arg.split("=", 1);
       return passthroughMetadataFlags.has(flag);
     });
-  const passthroughRequiresSingleRun = optionArgs.some((arg) => {
+  const passthroughRequiresSingleRun = normalizedFailurePolicy.passthroughOptionArgs.some((arg) => {
     if (!arg.startsWith("-")) {
       return false;
     }
@@ -1361,7 +1486,7 @@ export function buildExecutionPlan(request, options = {}) {
     {
       ...request,
       fileFilters,
-      passthroughOptionArgs: optionArgs,
+      passthroughOptionArgs: normalizedFailurePolicy.passthroughOptionArgs,
     },
     options,
   );
@@ -1429,7 +1554,11 @@ export function buildExecutionPlan(request, options = {}) {
     context.noIsolateArgs.length > 0
       ? context.executionBudget.topLevelParallelLimitNoIsolate
       : context.executionBudget.topLevelParallelLimitIsolated;
-  const defaultTopLevelParallelLimit = baseTopLevelParallelLimit;
+  const defaultTopLevelParallelLimit = resolveSurfaceAwareTopLevelParallelLimit(
+    context,
+    selectedUnits,
+    baseTopLevelParallelLimit,
+  );
   const topLevelParallelLimit = Math.max(
     1,
     parseEnvNumber(env, "OPENCLAW_TEST_TOP_LEVEL_CONCURRENCY", defaultTopLevelParallelLimit),
@@ -1439,7 +1568,8 @@ export function buildExecutionPlan(request, options = {}) {
   return {
     runtimeCapabilities: context.runtime,
     executionBudget: context.executionBudget,
-    passthroughOptionArgs: optionArgs,
+    failurePolicy: normalizedFailurePolicy.failurePolicy,
+    passthroughOptionArgs: normalizedFailurePolicy.passthroughOptionArgs,
     passthroughRequiresSingleRun,
     passthroughMetadataOnly,
     fileFilters,
