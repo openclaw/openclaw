@@ -451,6 +451,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
   - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
+  - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
 
 Details: [Plugins](/tools/plugin)
 

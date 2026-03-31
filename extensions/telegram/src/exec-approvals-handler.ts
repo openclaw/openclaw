@@ -1,10 +1,13 @@
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  buildPluginApprovalPendingReplyPayload,
+  matchesApprovalRequestFilters,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
+  resolveApprovalRequestAccountId,
   resolveChannelNativeApprovalDeliveryPlan,
-  resolveExecApprovalSessionTarget,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -17,10 +20,9 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { parseAgentSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { telegramNativeApprovalAdapter } from "./approval-native.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
@@ -40,60 +42,18 @@ type PendingMessage = {
   messageId: string;
 };
 
-function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
-function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
-  if (isExecApprovalRequest(request)) {
-    return request;
-  }
-  return {
-    id: request.id,
-    request: {
-      command: request.request.title,
-      agentId: request.request.agentId ?? undefined,
-      sessionKey: request.request.sessionKey ?? undefined,
-      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
-      turnSourceTo: request.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
-    },
-    createdAtMs: request.createdAtMs,
-    expiresAtMs: request.expiresAtMs,
-  };
-}
-
 function resolveBoundTelegramAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequest;
 }): string | null {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase();
-  const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || undefined;
-  if (turnSourceChannel === "telegram") {
-    if (turnSourceAccountId) {
-      return turnSourceAccountId;
-    }
-  }
-  const allowSessionAccountFallback = turnSourceChannel === "telegram" && !turnSourceAccountId;
-  const sessionTarget = resolveExecApprovalSessionTarget({
+  return resolveApprovalRequestAccountId({
     cfg: params.cfg,
-    request: toExecLikeRequest(params.request),
-    turnSourceChannel: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceChannel ?? undefined),
-    turnSourceTo: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceTo ?? undefined),
-    turnSourceAccountId: allowSessionAccountFallback ? undefined : turnSourceAccountId,
-    turnSourceThreadId: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceThreadId ?? undefined),
+    request: params.request,
+    channel:
+      params.request.request.turnSourceChannel?.trim().toLowerCase() === "telegram"
+        ? null
+        : "telegram",
   });
-  if (!sessionTarget || sessionTarget.channel !== "telegram") {
-    return null;
-  }
-  return sessionTarget.accountId?.trim() || null;
 }
 
 export type TelegramExecApprovalHandlerOpts = {
@@ -130,29 +90,15 @@ function matchesFilters(params: {
   if (approvers.length === 0) {
     return false;
   }
-  if (config.agentFilter?.length) {
-    const agentId =
-      params.request.request.agentId ??
-      parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
-    if (!agentId || !config.agentFilter.includes(agentId)) {
-      return false;
-    }
-  }
-  if (config.sessionFilter?.length) {
-    const sessionKey = params.request.request.sessionKey;
-    if (!sessionKey) {
-      return false;
-    }
-    const matches = config.sessionFilter.some((pattern) => {
-      if (sessionKey.includes(pattern)) {
-        return true;
-      }
-      const regex = compileSafeRegex(pattern);
-      return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
-    });
-    if (!matches) {
-      return false;
-    }
+  if (
+    !matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: config.agentFilter,
+      sessionFilter: config.sessionFilter,
+      fallbackAgentIdFromSessionKey: true,
+    })
+  ) {
+    return false;
   }
   const boundAccountId = resolveBoundTelegramAccountId({
     cfg: params.cfg,

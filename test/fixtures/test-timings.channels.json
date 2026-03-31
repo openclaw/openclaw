@@ -121,7 +121,7 @@
       "durationMs": 1600
     },
     "extensions/telegram/src/bot-message-context.dm-threads.test.ts": {
-      "durationMs": 1600
+      "durationMs": 23020
     },
     "extensions/whatsapp/src/inbound/access-control.test.ts": {
       "durationMs": 1600
@@ -181,7 +181,7 @@
       "durationMs": 981
     },
     "extensions/telegram/src/bot-message-context.acp-bindings.test.ts": {
-      "durationMs": 980
+      "durationMs": 18290
     },
     "extensions/slack/src/monitor/message-handler.test.ts": {
       "durationMs": 967
@@ -226,7 +226,7 @@
       "durationMs": 701
     },
     "extensions/telegram/src/bot-message-context.thread-binding.test.ts": {
-      "durationMs": 17700
+      "durationMs": 19150
     },
     "src/browser/pw-tools-core.waits-next-download-saves-it.test.ts": {
       "durationMs": 677
@@ -241,7 +241,7 @@
       "durationMs": 610
     },
     "extensions/telegram/src/bot-message-context.dm-topic-threadid.test.ts": {
-      "durationMs": 581
+      "durationMs": 31390
     },
     "extensions/slack/src/monitor.threading.missing-thread-ts.test.ts": {
       "durationMs": 570

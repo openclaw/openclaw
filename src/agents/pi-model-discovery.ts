@@ -102,12 +102,28 @@ function normalizeRegistryModel<T>(value: T, agentDir: string): T {
   return normalizeModelCompat(transportNormalized as Model<Api>) as T;
 }
 
+type PiModelRegistryClassLike = {
+  create?: (authStorage: PiAuthStorage, modelsJsonPath: string) => PiModelRegistry;
+  new (authStorage: PiAuthStorage, modelsJsonPath: string): PiModelRegistry;
+};
+
+function instantiatePiModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+): PiModelRegistry {
+  const Registry = PiModelRegistryClass as unknown as PiModelRegistryClassLike;
+  if (typeof Registry.create === "function") {
+    return Registry.create(authStorage, modelsJsonPath);
+  }
+  return new Registry(authStorage, modelsJsonPath);
+}
+
 function createOpenClawModelRegistry(
   authStorage: PiAuthStorage,
   modelsJsonPath: string,
   agentDir: string,
 ): PiModelRegistry {
-  const registry = new PiModelRegistryClass(authStorage, modelsJsonPath);
+  const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
