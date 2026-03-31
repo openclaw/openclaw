@@ -337,9 +337,7 @@ export async function maybeMigrateLegacyStorage(params: {
   });
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
-  const { maybeCreateMatrixMigrationSnapshot } = await import(
-    "./migration-snapshot.runtime.js"
-  );
+  const { maybeCreateMatrixMigrationSnapshot } = await import("./migration-snapshot.runtime.js");
   await maybeCreateMatrixMigrationSnapshot({
     trigger: "matrix-client-fallback",
     env: params.env,
