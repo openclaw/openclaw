@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { inspectMatrixDirectRooms, repairMatrixDirectRooms } from "./direct-management.js";
+import {
+  inspectMatrixDirectRooms,
+  promoteMatrixDirectRoomCandidate,
+  repairMatrixDirectRooms,
+} from "./direct-management.js";
 import type { MatrixClient } from "./sdk.js";
 import { EventType } from "./send/types.js";
 
@@ -196,5 +200,105 @@ describe("repairMatrixDirectRooms", () => {
         remoteUserId: "alice",
       }),
     ).rejects.toThrow('Matrix user IDs must be fully qualified (got "alice")');
+  });
+});
+
+describe("promoteMatrixDirectRoomCandidate", () => {
+  it("classifies a strict room as direct and repairs m.direct", async () => {
+    const setAccountData = vi.fn(async () => undefined);
+    const client = createClient({
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      setAccountData,
+    });
+
+    const result = await promoteMatrixDirectRoomCandidate({
+      client,
+      remoteUserId: "@alice:example.org",
+      roomId: "!fresh:example.org",
+    });
+
+    expect(result).toEqual({
+      classifyAsDirect: true,
+      repaired: true,
+      roomId: "!fresh:example.org",
+      reason: "promoted",
+    });
+    expect(setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({
+        "@alice:example.org": ["!fresh:example.org"],
+      }),
+    );
+  });
+
+  it("does not classify rooms with local is_direct false as direct", async () => {
+    const setAccountData = vi.fn(async () => undefined);
+    const client = createClient({
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      getRoomStateEvent: vi.fn(async (_roomId: string, _eventType: string, stateKey: string) =>
+        stateKey === "@bot:example.org" ? { is_direct: false } : {},
+      ),
+      setAccountData,
+    });
+
+    const result = await promoteMatrixDirectRoomCandidate({
+      client,
+      remoteUserId: "@alice:example.org",
+      roomId: "!blocked:example.org",
+    });
+
+    expect(result).toEqual({
+      classifyAsDirect: false,
+      repaired: false,
+      reason: "local-explicit-false",
+    });
+    expect(setAccountData).not.toHaveBeenCalled();
+  });
+
+  it("returns already-mapped without rewriting account data", async () => {
+    const setAccountData = vi.fn(async () => undefined);
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({
+        "@alice:example.org": ["!mapped:example.org", "!older:example.org"],
+      })),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      setAccountData,
+    });
+
+    const result = await promoteMatrixDirectRoomCandidate({
+      client,
+      remoteUserId: "@alice:example.org",
+      roomId: "!mapped:example.org",
+    });
+
+    expect(result).toEqual({
+      classifyAsDirect: true,
+      repaired: false,
+      roomId: "!mapped:example.org",
+      reason: "already-mapped",
+    });
+    expect(setAccountData).not.toHaveBeenCalled();
+  });
+
+  it("still classifies the room as direct when repair fails", async () => {
+    const client = createClient({
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      setAccountData: vi.fn(async () => {
+        throw new Error("account data unavailable");
+      }),
+    });
+
+    const result = await promoteMatrixDirectRoomCandidate({
+      client,
+      remoteUserId: "@alice:example.org",
+      roomId: "!fresh:example.org",
+    });
+
+    expect(result).toEqual({
+      classifyAsDirect: true,
+      repaired: false,
+      roomId: "!fresh:example.org",
+      reason: "repair-failed",
+    });
   });
 });

@@ -1,6 +1,7 @@
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
+import { promoteMatrixDirectRoomCandidate } from "../direct-management.js";
 import type { MatrixClient } from "../sdk.js";
 
 export function registerMatrixAutoJoin(params: {
@@ -61,7 +62,7 @@ export function registerMatrixAutoJoin(params: {
   };
 
   // Handle invites directly so both "always" and "allowlist" modes share the same path.
-  client.on("room.invite", async (roomId: string, _inviteEvent: unknown) => {
+  client.on("room.invite", async (roomId: string, inviteEvent: unknown) => {
     if (autoJoin === "allowlist") {
       const allowedAliasRoomIds = await resolveAllowedAliasRoomIds();
       const allowed =
@@ -78,6 +79,28 @@ export function registerMatrixAutoJoin(params: {
     try {
       await client.joinRoom(roomId);
       logVerbose(`matrix: joined room ${roomId}`);
+      const inviteSender =
+        typeof inviteEvent === "object" &&
+        inviteEvent &&
+        typeof (inviteEvent as { sender?: unknown }).sender === "string"
+          ? (inviteEvent as { sender: string }).sender.trim()
+          : "";
+      if (inviteSender) {
+        try {
+          const promotion = await promoteMatrixDirectRoomCandidate({
+            client,
+            remoteUserId: inviteSender,
+            roomId,
+          });
+          if (promotion.classifyAsDirect) {
+            logVerbose(
+              `matrix: eager direct repair room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
+            );
+          }
+        } catch (err) {
+          logVerbose(`matrix: eager direct repair skipped room=${roomId} (${String(err)})`);
+        }
+      }
     } catch (err) {
       runtime.error?.(`matrix: failed to join room ${roomId}: ${String(err)}`);
     }

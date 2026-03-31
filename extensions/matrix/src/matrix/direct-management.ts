@@ -27,6 +27,19 @@ export type MatrixDirectRoomRepairResult = MatrixDirectRoomInspection & {
   directContentAfter: MatrixDirectAccountData;
 };
 
+export type MatrixDirectRoomPromotionResult =
+  | {
+      classifyAsDirect: true;
+      repaired: boolean;
+      roomId: string;
+      reason: "promoted" | "already-mapped" | "repair-failed";
+    }
+  | {
+      classifyAsDirect: false;
+      repaired: false;
+      reason: "not-strict" | "local-explicit-false";
+    };
+
 async function readMatrixDirectAccountData(client: MatrixClient): Promise<MatrixDirectAccountData> {
   try {
     const direct = (await client.getAccountData(EventType.Direct)) as MatrixDirectAccountData;
@@ -135,6 +148,67 @@ export async function persistMatrixDirectRoomMapping(params: {
     }),
   );
   return true;
+}
+
+export async function promoteMatrixDirectRoomCandidate(params: {
+  client: MatrixClient;
+  remoteUserId: string;
+  roomId: string;
+  selfUserId?: string | null;
+}): Promise<MatrixDirectRoomPromotionResult> {
+  const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
+  const evidence = await inspectMatrixDirectRoomEvidence({
+    client: params.client,
+    roomId: params.roomId,
+    remoteUserId,
+    selfUserId: params.selfUserId,
+  });
+  if (!evidence.strict) {
+    return {
+      classifyAsDirect: false,
+      repaired: false,
+      reason: "not-strict",
+    };
+  }
+  if (evidence.memberStateFlag === false) {
+    return {
+      classifyAsDirect: false,
+      repaired: false,
+      reason: "local-explicit-false",
+    };
+  }
+
+  const directContent = await readMatrixDirectAccountData(params.client);
+  const mappedRoomIds = normalizeMappedRoomIds(directContent, remoteUserId);
+  if (mappedRoomIds[0] === params.roomId) {
+    return {
+      classifyAsDirect: true,
+      repaired: false,
+      roomId: params.roomId,
+      reason: "already-mapped",
+    };
+  }
+
+  try {
+    const repaired = await persistMatrixDirectRoomMapping({
+      client: params.client,
+      remoteUserId,
+      roomId: params.roomId,
+    });
+    return {
+      classifyAsDirect: true,
+      repaired,
+      roomId: params.roomId,
+      reason: "promoted",
+    };
+  } catch {
+    return {
+      classifyAsDirect: true,
+      repaired: false,
+      roomId: params.roomId,
+      reason: "repair-failed",
+    };
+  }
 }
 
 export async function inspectMatrixDirectRooms(params: {

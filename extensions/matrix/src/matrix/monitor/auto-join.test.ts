@@ -4,6 +4,19 @@ import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 
+const hoisted = vi.hoisted(() => ({
+  promoteMatrixDirectRoomCandidate: vi.fn(async () => ({
+    classifyAsDirect: true as const,
+    repaired: true,
+    roomId: "!room:example.org",
+    reason: "promoted" as const,
+  })),
+}));
+
+vi.mock("../direct-management.js", () => ({
+  promoteMatrixDirectRoomCandidate: hoisted.promoteMatrixDirectRoomCandidate,
+}));
+
 type InviteHandler = (roomId: string, inviteEvent: unknown) => Promise<void>;
 
 function createClientStub() {
@@ -54,14 +67,18 @@ function registerAutoJoinHarness(params: {
   return harness;
 }
 
-async function triggerInvite(getInviteHandler: () => InviteHandler | null) {
+async function triggerInvite(
+  getInviteHandler: () => InviteHandler | null,
+  inviteEvent: unknown = {},
+) {
   const inviteHandler = getInviteHandler();
   expect(inviteHandler).toBeTruthy();
-  await inviteHandler!("!room:example.org", {});
+  await inviteHandler!("!room:example.org", inviteEvent);
 }
 
 describe("registerMatrixAutoJoin", () => {
   beforeEach(() => {
+    hoisted.promoteMatrixDirectRoomCandidate.mockClear();
     setMatrixRuntime({
       logging: {
         shouldLogVerbose: () => false,
@@ -78,6 +95,7 @@ describe("registerMatrixAutoJoin", () => {
 
     await triggerInvite(getInviteHandler);
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(hoisted.promoteMatrixDirectRoomCandidate).not.toHaveBeenCalled();
   });
 
   it("does not auto-join invites by default", async () => {
@@ -174,5 +192,34 @@ describe("registerMatrixAutoJoin", () => {
 
     await triggerInvite(getInviteHandler);
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("attempts eager direct repair after joining a sender-scoped invite", async () => {
+    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "always",
+      },
+    });
+
+    await triggerInvite(getInviteHandler, { sender: "@alice:example.org" });
+
+    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(hoisted.promoteMatrixDirectRoomCandidate).toHaveBeenCalledWith({
+      client: expect.any(Object),
+      remoteUserId: "@alice:example.org",
+      roomId: "!room:example.org",
+    });
+  });
+
+  it("skips eager direct repair when the invite sender is unavailable", async () => {
+    const { getInviteHandler } = registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "always",
+      },
+    });
+
+    await triggerInvite(getInviteHandler, {});
+
+    expect(hoisted.promoteMatrixDirectRoomCandidate).not.toHaveBeenCalled();
   });
 });
