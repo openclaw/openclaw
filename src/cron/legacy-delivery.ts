@@ -14,6 +14,12 @@ export function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
   if (typeof payload.to === "string" && payload.to.trim()) {
     return true;
   }
+  if (typeof payload.threadId === "string" && payload.threadId.trim()) {
+    return true;
+  }
+  if (typeof payload.threadId === "number" && Number.isFinite(payload.threadId)) {
+    return true;
+  }
   return false;
 }
 
@@ -29,12 +35,21 @@ export function buildDeliveryFromLegacyPayload(
         ? payload.provider.trim().toLowerCase()
         : "";
   const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
+  const threadIdRaw =
+    typeof payload.threadId === "string"
+      ? payload.threadId.trim()
+      : typeof payload.threadId === "number" && Number.isFinite(payload.threadId)
+        ? String(payload.threadId)
+        : "";
   const next: Record<string, unknown> = { mode };
   if (channelRaw) {
     next.channel = channelRaw;
   }
   if (toRaw) {
     next.to = toRaw;
+  }
+  if (threadIdRaw) {
+    next.threadId = threadIdRaw;
   }
   if (typeof payload.bestEffortDeliver === "boolean") {
     next.bestEffort = payload.bestEffortDeliver;
@@ -51,6 +66,12 @@ export function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unkn
         ? payload.provider.trim().toLowerCase()
         : "";
   const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
+  const threadIdRaw =
+    typeof payload.threadId === "string"
+      ? payload.threadId.trim()
+      : typeof payload.threadId === "number" && Number.isFinite(payload.threadId)
+        ? String(payload.threadId)
+        : "";
   const next: Record<string, unknown> = {};
   let hasPatch = false;
 
@@ -61,6 +82,7 @@ export function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unkn
     deliver === true ||
     channelRaw ||
     toRaw ||
+    threadIdRaw ||
     typeof payload.bestEffortDeliver === "boolean"
   ) {
     next.mode = "announce";
@@ -72,6 +94,10 @@ export function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unkn
   }
   if (toRaw) {
     next.to = toRaw;
+    hasPatch = true;
+  }
+  if (threadIdRaw) {
+    next.threadId = threadIdRaw;
     hasPatch = true;
   }
   if (typeof payload.bestEffortDeliver === "boolean") {
@@ -104,6 +130,10 @@ export function mergeLegacyDeliveryInto(
   }
   if ("to" in patch && patch.to !== next.to) {
     next.to = patch.to;
+    mutated = true;
+  }
+  if ("threadId" in patch && patch.threadId !== next.threadId) {
+    next.threadId = patch.threadId;
     mutated = true;
   }
   if ("bestEffort" in patch && patch.bestEffort !== next.bestEffort) {
@@ -150,6 +180,9 @@ export function stripLegacyDeliveryFields(payload: Record<string, unknown>) {
   }
   if ("to" in payload) {
     delete payload.to;
+  }
+  if ("threadId" in payload) {
+    delete payload.threadId;
   }
   if ("bestEffortDeliver" in payload) {
     delete payload.bestEffortDeliver;
