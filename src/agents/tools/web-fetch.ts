@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { hasEnvHttpProxyConfigured } from "../../infra/net/proxy-env.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
@@ -534,11 +535,21 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
+  const usesEnvHttpProxy = hasEnvHttpProxyConfigured(
+    parsedUrl.protocol === "https:" ? "https" : "http",
+  );
   try {
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      ...(usesEnvHttpProxy
+        ? {
+            dispatcherPolicy: {
+              mode: "env-proxy" as const,
+            },
+          }
+        : {}),
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",

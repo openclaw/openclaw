@@ -255,7 +255,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details?.warning).toContain("Response body truncated");
   });
 
-  it("keeps DNS pinning for untrusted web_fetch URLs even when HTTP_PROXY is configured", async () => {
+  it("uses the env proxy dispatcher for web_fetch when HTTP_PROXY is configured", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const mockFetch = installMockFetch((input: RequestInfo | URL) =>
       Promise.resolve({
@@ -274,7 +274,7 @@ describe("web_fetch extraction fallbacks", () => {
       | (RequestInit & { dispatcher?: unknown })
       | undefined;
     expect(requestInit?.dispatcher).toBeDefined();
-    expect(requestInit?.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
