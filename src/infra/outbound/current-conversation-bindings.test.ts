@@ -76,6 +76,22 @@ describe("generic current-conversation bindings", () => {
     ).toBeNull();
   });
 
+  it("keeps Slack current-conversation binding support when the runtime registry is empty", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+
+    expect(
+      getGenericCurrentConversationBindingCapabilities({
+        channel: "slack",
+        accountId: "default",
+      }),
+    ).toEqual({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    });
+  });
+
   it("reloads persisted bindings after the in-memory cache is cleared", async () => {
     const bound = await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:acp:slack-dm",

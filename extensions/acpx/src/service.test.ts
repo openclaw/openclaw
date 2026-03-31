@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
 import {
   __testing,
@@ -176,5 +179,30 @@ describe("createAcpxRuntimeService", () => {
 
     expect(startResult).toBe("started");
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
+  });
+
+  it("creates the workspace dir before probing acpx", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-service-workspace-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const { runtime, probeAvailabilitySpy } = createRuntimeStub(true);
+    const service = createAcpxRuntimeService({
+      runtimeFactory: ({ pluginConfig }) => {
+        expect(pluginConfig.cwd).toBe(workspaceDir);
+        return runtime;
+      },
+    });
+    const context = createServiceContext({ workspaceDir });
+
+    try {
+      await service.start(context);
+
+      expect(fs.existsSync(workspaceDir)).toBe(true);
+      await vi.waitFor(() => {
+        expect(probeAvailabilitySpy).toHaveBeenCalledOnce();
+      });
+    } finally {
+      await service.stop?.(context);
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });

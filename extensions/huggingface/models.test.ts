@@ -4,9 +4,9 @@ import {
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
-} from "../plugin-sdk/huggingface.js";
+} from "./api.js";
 
-describe("huggingface-models", () => {
+describe("huggingface models", () => {
   it("buildHuggingfaceModelDefinition returns config with required fields", () => {
     const entry = HUGGINGFACE_MODEL_CATALOG[0];
     const def = buildHuggingfaceModelDefinition(entry);
@@ -36,6 +36,7 @@ describe("huggingface-models", () => {
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:cheapest")).toBe(true);
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:fastest")).toBe(true);
     });
+
     it("returns false for base ref and :provider refs", () => {
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1")).toBe(false);
       expect(isHuggingfacePolicyLocked("huggingface/foo:together")).toBe(false);
