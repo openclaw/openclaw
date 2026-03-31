@@ -7,6 +7,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -30,6 +31,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -54,6 +56,12 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+// Maximum number of LiveSessionModelSwitchError retries before surfacing a
+// user-visible error. Prevents infinite ping-pong when the persisted session
+// selection keeps conflicting with fallback model choices.
+// See: https://github.com/openclaw/openclaw/issues/58348
+export const MAX_LIVE_SWITCH_RETRIES = 2;
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -178,6 +186,7 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
@@ -187,6 +196,9 @@ export async function runAgentTurnWithFallback(params: {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         const reply = resolveSendableOutboundReplyParts(payload);
+        if (params.followupRun.run.silentExpected) {
+          return { skip: true };
+        }
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
@@ -312,6 +324,7 @@ export async function runAgentTurnWithFallback(params: {
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
                   images: params.opts?.images,
+                  imageOrder: params.opts?.imageOrder,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
@@ -412,6 +425,7 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
+                imageOrder: params.opts?.imageOrder,
                 abortSignal: params.opts?.abortSignal,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
@@ -432,6 +446,9 @@ export async function runAgentTurnWithFallback(params: {
                 onReasoningStream:
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {
+                        if (params.followupRun.run.silentExpected) {
+                          return;
+                        }
                         await params.typingSignals.signalReasoningDelta();
                         await params.opts?.onReasoningStream?.({
                           text: payload.text,
@@ -604,6 +621,41 @@ export async function runAgentTurnWithFallback(params: {
 
       break;
     } catch (err) {
+      if (err instanceof LiveSessionModelSwitchError) {
+        liveModelSwitchRetries += 1;
+        if (liveModelSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
+          // Prevent infinite loop when persisted session selection keeps
+          // conflicting with fallback model choices (e.g. overloaded primary
+          // triggers fallback, but session store keeps pulling back to the
+          // overloaded model). Surface the last error to the user instead.
+          // See: https://github.com/openclaw/openclaw/issues/58348
+          defaultRuntime.error(
+            `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
+              `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
+          );
+          const switchErrorText = shouldSurfaceToControlUi
+            ? "⚠️ Agent failed before reply: model switch could not be completed. " +
+              "The requested model may be temporarily unavailable.\n" +
+              "Logs: openclaw logs --follow"
+            : "⚠️ Agent failed before reply: model switch could not be completed. " +
+              "The requested model may be temporarily unavailable. Please try again shortly.";
+          return {
+            kind: "final",
+            payload: {
+              text: switchErrorText,
+            },
+          };
+        }
+        params.followupRun.run.provider = err.provider;
+        params.followupRun.run.model = err.model;
+        params.followupRun.run.authProfileId = err.authProfileId;
+        params.followupRun.run.authProfileIdSource = err.authProfileId
+          ? err.authProfileIdSource
+          : undefined;
+        fallbackProvider = err.provider;
+        fallbackModel = err.model;
+        continue;
+      }
       const message = err instanceof Error ? err.message : String(err);
       const isBilling = isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);

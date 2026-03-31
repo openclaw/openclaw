@@ -14,6 +14,7 @@ import {
   resolveTestRunExitCode,
 } from "../../scripts/test-parallel-utils.mjs";
 import { loadTestCatalog } from "../../scripts/test-planner/catalog.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 const clearPlannerShardEnv = (env) => {
   const nextEnv = { ...env };
@@ -54,10 +55,10 @@ const sharedTargetedUnitProxyFiles = (() => {
 
 const targetedChannelProxyFiles = [
   ...sharedTargetedChannelProxyFiles,
-  "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
-  "extensions/discord/src/monitor/monitor.agent-components.test.ts",
-  "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-  "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test.ts",
+  bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
+  bundledPluginFile("discord", "src/monitor/monitor.agent-components.test.ts"),
+  bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
+  bundledPluginFile("whatsapp", "src/monitor-inbox.streams-inbound-messages.test.ts"),
 ];
 
 const targetedUnitProxyFiles = [
@@ -66,6 +67,11 @@ const targetedUnitProxyFiles = [
 ];
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+const HIGH_MEMORY_LOCAL_PLANNER_ENV = {
+  RUNNER_OS: "macOS",
+  OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+  OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+} as const;
 
 function createPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
@@ -83,22 +89,26 @@ function createLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
   });
 }
 
+function createHighMemoryLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return createLocalPlannerEnv({
+    ...HIGH_MEMORY_LOCAL_PLANNER_ENV,
+    ...overrides,
+  });
+}
+
 function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): string {
   return execFileSync("node", ["scripts/test-parallel.mjs", ...args], {
     cwd: REPO_ROOT,
     env: createPlannerEnv(envOverrides),
     encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
 function runHighMemoryLocalMultiSurfacePlan(): string {
   return runPlannerPlan(
     ["--plan", "--surface", "unit", "--surface", "extensions", "--surface", "channels"],
-    createLocalPlannerEnv({
-      RUNNER_OS: "macOS",
-      OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-    }),
+    createHighMemoryLocalPlannerEnv(),
   );
 }
 
@@ -107,6 +117,18 @@ function getPlanLines(output: string, prefix: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith(prefix));
+}
+
+function getTargetedChannelPlanLines(output: string): string[] {
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.startsWith("channels-") &&
+        line.includes("filters=") &&
+        line.includes("surface=channels"),
+    );
 }
 
 function parseNumericPlanField(line: string, key: string): number {
@@ -275,18 +297,14 @@ describe("scripts/test-parallel lane planning", () => {
     );
 
     expect(output).toContain("mode=local intent=normal memoryBand=mid");
-    expect(output).toContain("unit-fast filters=all maxWorkers=");
-    expect(output).toMatch(/extensions(?:-batch-1)? filters=all maxWorkers=/);
+    expect(output).toMatch(/unit-fast(?:-batch-\d+)? filters=\d+ maxWorkers=/);
+    expect(output).toMatch(/extensions(?:-batch-\d+)? filters=\d+ maxWorkers=/);
   });
 
   it("uses higher shared extension worker counts on high-memory local hosts", () => {
     const highMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
     const midMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
@@ -302,8 +320,8 @@ describe("scripts/test-parallel lane planning", () => {
 
     expect(midSharedBatches.length).toBeGreaterThan(0);
     expect(highSharedBatches.length).toBeGreaterThan(0);
-    expect(midSharedBatches.every((line) => line.includes("filters=all maxWorkers=3"))).toBe(true);
-    expect(highSharedBatches.every((line) => line.includes("filters=all maxWorkers=5"))).toBe(true);
+    expect(midSharedBatches.every((line) => /filters=\d+ maxWorkers=3/.test(line))).toBe(true);
+    expect(highSharedBatches.every((line) => /filters=\d+ maxWorkers=5/.test(line))).toBe(true);
     expect(highSharedBatches.length).toBeLessThanOrEqual(midSharedBatches.length);
   });
 
@@ -318,7 +336,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(firstChannelIsolated).toBeGreaterThanOrEqual(0);
     expect(firstExtensionBatch).toBeGreaterThan(firstChannelIsolated);
     expect(firstChannelBatch).toBeGreaterThan(firstExtensionBatch);
-    expect(output).toContain("channels-batch-1 filters=all maxWorkers=5");
+    expect(output).toMatch(/channels-batch-1 filters=\d+ maxWorkers=5/);
   });
 
   it("uses coarser unit-fast batching for high-memory local multi-surface runs", () => {
@@ -336,24 +354,24 @@ describe("scripts/test-parallel lane planning", () => {
         "channels",
         ...targetedChannelProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
 
     const channelBatchLines = getPlanLines(output, "channels-batch-");
     const channelBatchFilterCounts = channelBatchLines.map((line) =>
       parseNumericPlanField(line, "filters"),
     );
+    const targetedChannelPlanLines = getTargetedChannelPlanLines(output);
 
     expect(channelBatchLines.length).toBeGreaterThanOrEqual(4);
     expect(channelBatchLines.every((line) => line.includes("maxWorkers=5"))).toBe(true);
     expect(Math.max(...channelBatchFilterCounts)).toBeLessThan(30);
-    expect(channelBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
-      sharedTargetedChannelProxyFiles.length,
-    );
+    expect(
+      targetedChannelPlanLines.reduce(
+        (sum, line) => sum + parseNumericPlanField(line, "filters"),
+        0,
+      ),
+    ).toBe(targetedChannelProxyFiles.length);
   });
 
   it("uses targeted unit batching on high-memory local hosts", () => {
@@ -364,16 +382,21 @@ describe("scripts/test-parallel lane planning", () => {
         "unit",
         ...targetedUnitProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
 
-    expect(output).toContain("unit-batch-1 filters=50");
-    expect(output).toContain("unit-batch-2 filters=49");
-    expect(output).not.toContain("unit-batch-3");
+    const unitBatchLines = getPlanLines(output, "unit-batch-");
+    const unitBatchFilterCounts = unitBatchLines.map((line) =>
+      parseNumericPlanField(line, "filters"),
+    );
+
+    expect(unitBatchLines.length).toBeGreaterThanOrEqual(3);
+    expect(unitBatchLines.every((line) => line.includes("maxWorkers=6"))).toBe(true);
+    expect(Math.max(...unitBatchFilterCounts)).toBeLessThan(40);
+    expect(unitBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
+      sharedTargetedUnitProxyFiles.length,
+    );
+    expect(output).toContain("unit-qr-dashboard.integration-isolated filters=1 maxWorkers=2");
   });
 
   it("explains targeted file ownership and execution policy", () => {
@@ -382,6 +405,17 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("surface=base");
     expect(output).toContain("reasons=base-surface,base-pinned-manifest");
     expect(output).toContain("pool=forks");
+  });
+
+  it("routes targeted contract tests through the contracts config", () => {
+    const output = runPlannerPlan([
+      "--explain",
+      "src/channels/plugins/contracts/registry-backed.contract.test.ts",
+    ]);
+
+    expect(output).toContain("surface=contracts");
+    expect(output).toContain("vitest.contracts.config.ts");
+    expect(output).not.toContain("vitest.unit.config.ts");
   });
 
   it("prints the planner-backed CI manifest as JSON", () => {
@@ -456,6 +490,24 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("unit-deliver-isolated filters=1");
   });
 
+  it("prints collect-all failure policy in planner output for wrapper-native flag", () => {
+    const output = runPlannerPlan(["--plan", "--collect-failures", "--surface", "unit"]);
+
+    expect(output).toContain("failurePolicy=collect-all");
+  });
+
+  it("maps --bail=0 to collect-all failure policy in planner output", () => {
+    const output = runPlannerPlan(["--plan", "--surface", "unit", "--", "--bail=0"]);
+
+    expect(output).toContain("failurePolicy=collect-all");
+  });
+
+  it("rejects wrapper-level positive --bail values", () => {
+    expect(() => runPlannerPlan(["--plan", "--surface", "unit", "--", "--bail=2"])).toThrowError(
+      /Unsupported wrapper-level --bail value/u,
+    );
+  });
+
   it("rejects removed machine-name profiles", () => {
     expect(() => runPlannerPlan(["--plan", "--profile", "macmini"])).toThrowError(
       /Unsupported test profile "macmini"/u,
@@ -466,6 +518,13 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() => runPlannerPlan(["--plan", "--surface", "channel"])).toThrowError(
       /Unsupported --surface value\(s\): channel/u,
     );
+  });
+
+  it("supports the explicit contracts surface", () => {
+    const output = runPlannerPlan(["--plan", "--surface", "contracts"]);
+
+    expect(output).toContain("contracts filters=all");
+    expect(output).toContain("surface=contracts");
   });
 
   it("rejects wrapper --files values that look like options", () => {

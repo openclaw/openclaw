@@ -6,6 +6,7 @@ import {
   OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH,
   writeOfficialChannelCatalog,
 } from "../scripts/write-official-channel-catalog.mjs";
+import { bundledPluginRoot } from "./helpers/bundled-plugin-paths.js";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -40,7 +41,7 @@ describe("buildOfficialChannelCatalog", () => {
         },
         install: {
           npmSpec: "@openclaw/whatsapp",
-          localPath: "extensions/whatsapp",
+          localPath: bundledPluginRoot("whatsapp"),
           defaultChoice: "npm",
         },
         release: {
@@ -59,7 +60,7 @@ describe("buildOfficialChannelCatalog", () => {
           blurb: "dev only",
         },
         install: {
-          localPath: "extensions/local-only",
+          localPath: bundledPluginRoot("local-only"),
         },
         release: {
           publishToNpm: false,
@@ -84,7 +85,6 @@ describe("buildOfficialChannelCatalog", () => {
             },
             install: {
               npmSpec: "@openclaw/whatsapp",
-              localPath: "extensions/whatsapp",
               defaultChoice: "npm",
             },
           },

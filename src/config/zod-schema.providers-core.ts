@@ -866,6 +866,16 @@ export const SlackAccountSchema = z
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: z.array(z.union([z.string(), z.number()])).optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
@@ -1517,6 +1527,7 @@ export const MSTeamsConfigSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),

@@ -5,8 +5,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Mock the runtime-exported backoff sleep that the handler actually imports.
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
     sleepWithAbort: mocks.sleepWithAbort,
@@ -17,7 +17,6 @@ let createTelegramSendChatActionHandler: typeof import("./sendchataction-401-bac
 
 describe("createTelegramSendChatActionHandler", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ createTelegramSendChatActionHandler } = await import("./sendchataction-401-backoff.js"));
   });
 

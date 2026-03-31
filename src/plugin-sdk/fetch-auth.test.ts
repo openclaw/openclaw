@@ -14,60 +14,81 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     ).rejects.toThrow("URL must use HTTPS");
   });
 
-  it("returns immediately when the first attempt succeeds", async () => {
-    const fetchFn = vi.fn(async () => new Response("ok", { status: 200 }));
-    const tokenProvider = { getAccessToken: vi.fn(async () => "unused") };
-
-    const response = await fetchWithBearerAuthScopeFallback({
+  it.each([
+    {
+      name: "returns immediately when the first attempt succeeds",
       url: "https://example.com/file",
       scopes: ["https://graph.microsoft.com"],
-      fetchFn: asFetch(fetchFn),
-      tokenProvider,
-    });
-
-    expect(response.status).toBe(200);
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("retries with auth scopes after a 401 response", async () => {
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("unauthorized", { status: 401 }))
-      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
-    const tokenProvider = { getAccessToken: vi.fn(async () => "token-1") };
-
-    const response = await fetchWithBearerAuthScopeFallback({
+      responses: [new Response("ok", { status: 200 })],
+      shouldAttachAuth: undefined,
+      expectedStatus: 200,
+      expectedFetchCalls: 1,
+      expectedTokenCalls: [] as string[],
+      expectedAuthHeader: null,
+    },
+    {
+      name: "retries with auth scopes after a 401 response",
       url: "https://graph.microsoft.com/v1.0/me",
       scopes: ["https://graph.microsoft.com", "https://api.botframework.com"],
-      fetchFn: asFetch(fetchFn),
-      tokenProvider,
-    });
-
-    expect(response.status).toBe(200);
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(tokenProvider.getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
-    const secondCall = fetchFn.mock.calls[1] as [string, RequestInit | undefined];
-    const secondHeaders = new Headers(secondCall[1]?.headers);
-    expect(secondHeaders.get("authorization")).toBe("Bearer token-1");
-  });
-
-  it("does not attach auth when host predicate rejects url", async () => {
-    const fetchFn = vi.fn(async () => new Response("unauthorized", { status: 401 }));
-    const tokenProvider = { getAccessToken: vi.fn(async () => "token-1") };
-
-    const response = await fetchWithBearerAuthScopeFallback({
+      responses: [
+        new Response("unauthorized", { status: 401 }),
+        new Response("ok", { status: 200 }),
+      ],
+      shouldAttachAuth: undefined,
+      expectedStatus: 200,
+      expectedFetchCalls: 2,
+      expectedTokenCalls: ["https://graph.microsoft.com"],
+      expectedAuthHeader: "Bearer token-1",
+    },
+    {
+      name: "does not attach auth when host predicate rejects url",
       url: "https://example.com/file",
       scopes: ["https://graph.microsoft.com"],
-      fetchFn: asFetch(fetchFn),
-      tokenProvider,
+      responses: [new Response("unauthorized", { status: 401 })],
       shouldAttachAuth: () => false,
-    });
+      expectedStatus: 401,
+      expectedFetchCalls: 1,
+      expectedTokenCalls: [] as string[],
+      expectedAuthHeader: null,
+    },
+  ])(
+    "$name",
+    async ({
+      url,
+      scopes,
+      responses,
+      shouldAttachAuth,
+      expectedStatus,
+      expectedFetchCalls,
+      expectedTokenCalls,
+      expectedAuthHeader,
+    }) => {
+      const fetchFn = vi.fn();
+      for (const response of responses) {
+        fetchFn.mockResolvedValueOnce(response);
+      }
+      const tokenProvider = { getAccessToken: vi.fn(async () => "token-1") };
 
-    expect(response.status).toBe(401);
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
-  });
+      const response = await fetchWithBearerAuthScopeFallback({
+        url,
+        scopes,
+        fetchFn: asFetch(fetchFn),
+        tokenProvider,
+        shouldAttachAuth,
+      });
+
+      expect(response.status).toBe(expectedStatus);
+      expect(fetchFn).toHaveBeenCalledTimes(expectedFetchCalls);
+      const tokenCalls = tokenProvider.getAccessToken.mock.calls as unknown as Array<[string]>;
+      expect(tokenCalls.map(([scope]) => scope)).toEqual(expectedTokenCalls);
+      if (expectedAuthHeader === null) {
+        return;
+      }
+      const secondCallInit = fetchFn.mock.calls.at(1)?.[1] as RequestInit | undefined;
+      const secondHeaders = new Headers(secondCallInit?.headers);
+      expect(secondHeaders.get("authorization")).toBe(expectedAuthHeader);
+    },
+  );
 
   it("continues across scopes when token retrieval fails", async () => {
     const fetchFn = vi

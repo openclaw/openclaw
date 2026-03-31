@@ -20,7 +20,8 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { MattermostConfigSchema } from "./config-schema.js";
+import { mattermostApprovalAuth } from "./approval-auth.js";
+import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   listMattermostAccountIds,
@@ -40,7 +41,7 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import {
-  buildChannelConfigSchema,
+  chunkTextForOutbound,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -51,6 +52,7 @@ import { getMattermostRuntime } from "./runtime.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
+import type { MattermostConfig } from "./types.js";
 
 const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedMattermostAccount>({
   channelKey: "mattermost",
@@ -112,14 +114,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {
-      // Check reactions gate: per-account config takes precedence over base config
-      const mmBase = cfg?.channels?.mattermost as Record<string, unknown> | undefined;
-      const accounts = mmBase?.accounts as Record<string, Record<string, unknown>> | undefined;
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-      const acctConfig = accounts?.[resolvedAccountId];
-      const acctActions = acctConfig?.actions as { reactions?: boolean } | undefined;
-      const baseActions = mmBase?.actions as { reactions?: boolean } | undefined;
-      const reactionsEnabled = acctActions?.reactions ?? baseActions?.reactions ?? true;
+      const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
+      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      const reactionsEnabled =
+        account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
       if (!reactionsEnabled) {
         throw new Error("Mattermost reactions are disabled in config");
       }
@@ -308,7 +307,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.mattermost"] },
-    configSchema: buildChannelConfigSchema(MattermostConfigSchema),
+    configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
       isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
@@ -322,6 +321,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           },
         }),
     },
+    auth: mattermostApprovalAuth,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
@@ -440,7 +440,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMattermostRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       resolveTarget: ({ to }) => {

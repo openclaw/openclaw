@@ -280,7 +280,7 @@ export function registerCompletionCli(program: Command) {
       const config = await loadValidatedConfigForPluginRegistration();
       if (config) {
         const { registerPluginCliCommands } = await import("../plugins/cli.js");
-        registerPluginCliCommands(program, config);
+        await registerPluginCliCommands(program, config, undefined, undefined, { mode: "eager" });
       }
 
       if (options.writeState) {
@@ -411,7 +411,23 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+_${rootCmd}_register_completion() {
+  if (( ! $+functions[compdef] )); then
+    return 0
+  fi
+
+  compdef _${rootCmd}_root_completion ${rootCmd}
+  precmd_functions=(\${precmd_functions:#_${rootCmd}_register_completion})
+  unfunction _${rootCmd}_register_completion 2>/dev/null
+}
+
+_${rootCmd}_register_completion
+if (( ! $+functions[compdef] )); then
+  typeset -ga precmd_functions
+  if [[ -z "\${precmd_functions[(r)_${rootCmd}_register_completion]}" ]]; then
+    precmd_functions+=(_${rootCmd}_register_completion)
+  fi
+fi
 `;
   return script;
 }

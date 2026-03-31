@@ -42,9 +42,13 @@ async function collectRuntimeExports(filePath: string, seen = new Set<string>())
   return exportNames;
 }
 
+async function readIndexRuntimeExports() {
+  return await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
+}
+
 describe("plugin-sdk exports", () => {
   it("does not expose runtime modules", async () => {
-    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
+    const runtimeExports = await readIndexRuntimeExports();
     const forbidden = [
       "chunkMarkdownText",
       "chunkText",
@@ -87,7 +91,7 @@ describe("plugin-sdk exports", () => {
   });
 
   it("keeps the root runtime surface intentionally small", async () => {
-    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
+    const runtimeExports = await readIndexRuntimeExports();
     expect([...runtimeExports].toSorted()).toEqual([
       "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",

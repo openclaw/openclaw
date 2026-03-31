@@ -1,5 +1,3 @@
-import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
-import { z } from "openclaw/plugin-sdk/zod";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -9,7 +7,9 @@ import {
   ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
   requireOpenAllowFrom,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "openclaw/plugin-sdk/zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 export const NextcloudTalkRoomSchema = z

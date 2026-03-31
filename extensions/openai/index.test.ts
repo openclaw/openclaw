@@ -4,16 +4,16 @@ import path from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/speech-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../src/config/config.js";
-import { loadConfig } from "../../src/config/config.js";
-import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
-import type { ResolvedTtsConfig } from "../../src/tts/tts.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+} from "../../test/helpers/plugins/provider-registration.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
 
@@ -22,13 +22,17 @@ const runtimeMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
-}));
+vi.mock("@mariozechner/pi-ai/oauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai/oauth")>();
+  return {
+    ...actual,
+    refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
+  };
+});
 
 import { refreshOpenAICodexToken } from "./openai-codex-provider.runtime.js";
 
@@ -39,6 +43,9 @@ const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() 
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
+const ModelRegistryCtor = ModelRegistry as unknown as {
+  new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
+};
 
 function resolveTemplateModelId(modelId: string) {
   switch (modelId) {
@@ -54,7 +61,7 @@ function resolveTemplateModelId(modelId: string) {
 }
 
 function createTemplateModelRegistry(modelId: string): ModelRegistry {
-  const registry = new ModelRegistry(AuthStorage.inMemory());
+  const registry = new ModelRegistryCtor(AuthStorage.inMemory());
   const template = getModel("openai", resolveTemplateModelId(modelId));
   registry.registerProvider("openai", {
     apiKey: "test",

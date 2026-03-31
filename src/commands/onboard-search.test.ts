@@ -244,7 +244,8 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("grok");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.grok?.apiKey).toBe("xai-test");
+    expect(pluginWebSearchApiKey(result, "xai")).toBe("xai-test");
+    expect(result.plugins?.entries?.xai?.enabled).toBe(true);
   });
 
   it("sets provider and key for kimi", async () => {

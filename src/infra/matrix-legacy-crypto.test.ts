@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveMatrixAccountStorageRoot } from "./matrix-config-helpers.js";
 import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./matrix-legacy-crypto.js";
 import { MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE } from "./matrix-plugin-helper.js";
 import {
@@ -173,6 +173,33 @@ describe("matrix legacy encrypted-state migration", () => {
         expect(state.decryptionKeyImported).toBe(true);
       },
       { env: matrixHelperEnv },
+    );
+  });
+
+  it("skips inspector loading when no legacy Matrix plans exist", async () => {
+    await withTempHome(
+      async () => {
+        const matrixHelperModule = await import("./matrix-plugin-helper.js");
+        const loadInspectorSpy = vi.spyOn(matrixHelperModule, "loadMatrixLegacyCryptoInspector");
+
+        const result = await autoPrepareLegacyMatrixCrypto({
+          cfg: createDefaultMatrixConfig(),
+          env: process.env,
+        });
+
+        expect(result).toEqual({
+          migrated: false,
+          changes: [],
+          warnings: [],
+        });
+        expect(result.warnings).not.toContain(MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE);
+        expect(loadInspectorSpy).not.toHaveBeenCalled();
+      },
+      {
+        env: {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: (home) => path.join(home, "empty-bundled"),
+        },
+      },
     );
   });
 

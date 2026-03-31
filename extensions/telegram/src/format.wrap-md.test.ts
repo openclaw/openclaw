@@ -175,6 +175,14 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     expect(chunks.every((chunk) => chunk.html.length <= 5)).toBe(true);
   });
 
+  it("prefers word boundaries when escaped html shrinks the retry window", () => {
+    const input = "alpha <<";
+    const chunks = markdownToTelegramChunks(input, 8);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
+    expect(chunks[0]?.text).toBe("alpha ");
+    expect(chunks.every((chunk) => chunk.html.length <= 8)).toBe(true);
+  });
+
   it("prefers word boundaries when html-limit retry splits formatted prose", () => {
     const input = "**Which of these**";
     const chunks = markdownToTelegramChunks(input, 16);
@@ -182,11 +190,47 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     expect(chunks.every((chunk) => chunk.html.length <= 16)).toBe(true);
   });
 
+  it("preserves formatting while splitting at word boundaries", () => {
+    const input = "**alpha <<**";
+    const chunks = markdownToTelegramChunks(input, 13);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("alpha <<");
+    expect(chunks[0]?.text).toBe("alpha ");
+    expect(chunks.every((chunk) => chunk.html.length <= 13)).toBe(true);
+    expect(
+      chunks.every((chunk) => chunk.html.startsWith("<b>") && chunk.html.endsWith("</b>")),
+    ).toBe(true);
+  });
+
+  it("does not rely on monotonic html length for sliced file refs", () => {
+    const input = "README.md<";
+    const chunks = markdownToTelegramChunks(input, 22);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
+    expect(chunks[0]?.text).toBe("README.md");
+    expect(chunks[0]?.html).toBe("<code>README.md</code>");
+    expect(chunks.every((chunk) => chunk.html.length <= 22)).toBe(true);
+  });
+
+  it("gracefully returns the original chunk when tag overhead exceeds the limit", () => {
+    const input = "**ab**";
+    expect(() => markdownToTelegramChunks(input, 6)).not.toThrow();
+    const chunks = markdownToTelegramChunks(input, 6);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.text).toBe("ab");
+    expect(chunks[0]?.html).toBe("<b>ab</b>");
+  });
+
   it("falls back to in-paren word boundaries when the parenthesis is unbalanced", () => {
     const input = "**foo (bar baz qux quux**";
     const chunks = markdownToTelegramChunks(input, 20);
     expect(chunks.map((chunk) => chunk.text)).toEqual(["foo", "(bar baz qux ", "quux"]);
     expect(chunks.every((chunk) => chunk.html.length <= 20)).toBe(true);
+  });
+
+  it("falls back to hard splits when a single word exceeds the limit", () => {
+    const input = "supercalifragilistic";
+    const chunks = markdownToTelegramChunks(input, 8);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["supercal", "ifragili", "stic"]);
+    expect(chunks.every((chunk) => chunk.html.length <= 8)).toBe(true);
   });
 
   it("does not emit whitespace-only chunks during html-limit retry splitting", () => {

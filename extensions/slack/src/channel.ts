@@ -38,7 +38,7 @@ import {
 } from "./accounts.js";
 import type { SlackActionContext } from "./action-runtime.js";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
-import { parseSlackBlocksInput } from "./blocks-input.js";
+import { slackNativeApprovalAdapter } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
 import { resolveSlackChannelType } from "./channel-type.js";
 import {
@@ -49,7 +49,8 @@ import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { slackOutbound } from "./outbound-adapter.js";
-import type { SlackProbe } from "./probe.js";
+import { probeSlack, type SlackProbe } from "./probe.js";
+import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -85,6 +86,17 @@ const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount
       .replace(/^(slack|user):/i, "")
       .trim(),
 });
+
+function resolveSlackProbe() {
+  try {
+    return getSlackRuntime().channel.slack.probeSlack;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Slack runtime not initialized") {
+      return probeSlack;
+    }
+    throw error;
+  }
+}
 
 // Select the appropriate Slack token for read/write operations.
 function getTokenForOperation(
@@ -270,6 +282,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       }),
       resolveNames: resolveSlackAllowlistNames,
     },
+    auth: slackNativeApprovalAdapter.auth,
+    approvals: {
+      delivery: slackNativeApprovalAdapter.delivery,
+      native: slackNativeApprovalAdapter.native,
+    },
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
       resolveToolPolicy: resolveSlackGroupToolPolicy,
@@ -283,12 +300,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       enableInteractiveReplies: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId }),
       hasStructuredReplyPayload: ({ payload }) => {
-        const slackData = payload.channelData?.slack;
-        if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-          return false;
-        }
         try {
-          return Boolean(parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks)?.length);
+          return Boolean(resolveSlackReplyBlocks(payload)?.length);
         } catch {
           return false;
         }
@@ -380,7 +393,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (!token) {
           return { ok: false, error: "missing token" };
         }
-        return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
+        return await resolveSlackProbe()(token, timeoutMs);
       },
       formatCapabilitiesProbe: ({ probe }) => {
         const slackProbe = probe as SlackProbe | undefined;

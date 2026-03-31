@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createExecutionArtifacts,
+  createTempArtifactWriteStream,
   resolvePnpmCommandInvocation,
   resolveVitestFsModuleCachePath,
 } from "../../scripts/test-planner/executor.mjs";
@@ -11,6 +12,7 @@ import {
   buildExecutionPlan,
   explainExecutionTarget,
 } from "../../scripts/test-planner/planner.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -40,6 +42,7 @@ describe("test planner", () => {
     );
 
     expect(plan.runtimeCapabilities.runtimeProfileName).toBe("local-darwin");
+    expect(plan.failurePolicy).toBe("fail-fast");
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.executionBudget.unitSharedWorkers).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(8);
@@ -47,6 +50,136 @@ describe("test planner", () => {
     expect(plan.selectedUnits.some((unit) => unit.id.startsWith("unit-fast"))).toBe(true);
     expect(plan.selectedUnits.some((unit) => unit.id.startsWith("extensions"))).toBe(true);
     expect(plan.topLevelParallelLimit).toBe(8);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("uses smaller shared extension batches on constrained local hosts", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "8",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedExtensionBatches = plan.selectedUnits.filter((unit) =>
+      unit.id.startsWith("extensions-batch-"),
+    );
+
+    expect(plan.runtimeCapabilities.memoryBand).toBe("constrained");
+    expect(plan.executionBudget.extensionsBatchTargetMs).toBe(60_000);
+    expect(sharedExtensionBatches.length).toBeGreaterThan(3);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("caps CI extension batch concurrency when multiple shared batches are scheduled", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedExtensionBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "extensions" && !unit.isolate,
+    );
+
+    expect(plan.runtimeCapabilities.runtimeProfileName).toBe("ci-linux");
+    expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
+    expect(sharedExtensionBatches.length).toBeGreaterThan(1);
+    expect(plan.topLevelParallelLimit).toBe(3);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates timed-heavy extension suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.id === "extensions-cli-isolated");
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-timed-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates timed-heavy channel suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["channels"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotUnit = plan.selectedUnits.find(
+      (unit) => unit.id === "channels-bot-native-commands.plugin-auth-isolated",
+    );
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("channels-timed-heavy");
     artifacts.cleanupTempArtifacts();
   });
 
@@ -78,10 +211,94 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
     expect(plan.executionBudget.unitSharedWorkers).toBe(2);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitIsolated).toBe(1);
     expect(plan.topLevelParallelLimit).toBe(4);
     expect(plan.deferredRunConcurrency).toBe(1);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("splits saturated high-memory local unit bursts into smaller shared batches", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        loadAverage: [18, 18, 18],
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+    const baselinePlan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        loadAverage: [1, 1, 1],
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+    const baselineSharedUnitBatches = baselinePlan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(plan.runtimeCapabilities.memoryBand).toBe("high");
+    expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
+    expect(sharedUnitBatches.length).toBeGreaterThan(baselineSharedUnitBatches.length);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
+    expect(plan.executionBudget.unitFastBatchTargetMs).toBe(22_500);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("keeps full local unit runs phased when isolated and heavy lanes are present", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(sharedUnitBatches.length).toBeGreaterThanOrEqual(4);
+    expect(plan.serialPrefixUnits.some((unit) => unit.serialPhase === "unit-fast")).toBe(true);
+    expect(plan.topLevelParallelLimit).toBe(3);
     artifacts.cleanupTempArtifacts();
   });
 
@@ -127,7 +344,10 @@ describe("test planner", () => {
         surfaces: [],
         passthroughArgs: [
           "src/auto-reply/reply/followup-runner.test.ts",
-          "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          bundledPluginFile(
+            "discord",
+            "src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          ),
         ],
       },
       {
@@ -142,6 +362,25 @@ describe("test planner", () => {
         .map((unit) => unit.surface)
         .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["base", "channels"]);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("normalizes --bail=0 into collect-all failure policy", () => {
+    const artifacts = createExecutionArtifacts({});
+    const plan = buildExecutionPlan(
+      {
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: ["--bail=0"],
+      },
+      {
+        env: {},
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    expect(plan.failurePolicy).toBe("collect-all");
+    expect(plan.passthroughOptionArgs).not.toContain("--bail=0");
     artifacts.cleanupTempArtifacts();
   });
 
@@ -166,7 +405,7 @@ describe("test planner", () => {
     const explanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+        fileFilters: ["src/infra/outbound/channel-resolution.test.ts"],
       },
       {
         env: {
@@ -183,7 +422,7 @@ describe("test planner", () => {
     const relativeExplanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+        fileFilters: ["src/infra/outbound/channel-resolution.test.ts"],
       },
       {
         env: {
@@ -194,9 +433,7 @@ describe("test planner", () => {
     const absoluteExplanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: [
-          path.join(process.cwd(), "src/infra/outbound/targets.channel-resolution.test.ts"),
-        ],
+        fileFilters: [path.join(process.cwd(), "src/infra/outbound/channel-resolution.test.ts")],
       },
       {
         env: {
@@ -210,6 +447,44 @@ describe("test planner", () => {
     expect(absoluteExplanation.pool).toBe(relativeExplanation.pool);
     expect(absoluteExplanation.isolate).toBe(relativeExplanation.isolate);
     expect(absoluteExplanation.reasons).toEqual(relativeExplanation.reasons);
+  });
+
+  it("explains timed-heavy extension suites as isolated", () => {
+    const explanation = explainExecutionTarget(
+      {
+        mode: "ci",
+        fileFilters: ["extensions/matrix/src/cli.test.ts"],
+      },
+      {
+        env: {
+          CI: "true",
+          GITHUB_ACTIONS: "true",
+        },
+      },
+    );
+
+    expect(explanation.surface).toBe("extensions");
+    expect(explanation.isolate).toBe(true);
+    expect(explanation.reasons).toContain("extensions-timed-heavy");
+  });
+
+  it("explains timed-heavy channel suites as isolated", () => {
+    const explanation = explainExecutionTarget(
+      {
+        mode: "ci",
+        fileFilters: ["extensions/telegram/src/bot-native-commands.plugin-auth.test.ts"],
+      },
+      {
+        env: {
+          CI: "true",
+          GITHUB_ACTIONS: "true",
+        },
+      },
+    );
+
+    expect(explanation.surface).toBe("channels");
+    expect(explanation.isolate).toBe(true);
+    expect(explanation.reasons).toContain("channels-timed-heavy");
   });
 
   it("does not leak default-plan shard assignments into targeted units with the same id", () => {
@@ -235,9 +510,55 @@ describe("test planner", () => {
 
     expect(targetedUnit).toBeTruthy();
     expect(defaultUnitWithSameId).toBeTruthy();
-    expect(defaultUnitWithSameId).not.toBe(targetedUnit);
-    expect(plan.topLevelSingleShardAssignments.get(targetedUnit)).toBeUndefined();
-    expect(plan.topLevelSingleShardAssignments.get(defaultUnitWithSameId)).toBeDefined();
+    const targetedUnitRecord = targetedUnit!;
+    const defaultUnitRecord = defaultUnitWithSameId as typeof targetedUnitRecord;
+
+    expect(defaultUnitRecord).not.toBe(targetedUnitRecord);
+    expect(plan.topLevelSingleShardAssignments.get(targetedUnitRecord)).toBeUndefined();
+    expect(plan.topLevelSingleShardAssignments.get(defaultUnitRecord)).toBeDefined();
+
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("pins the smallest CI include-file batches to fixed shards", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_TEST_SHARDS: "4",
+      OPENCLAW_TEST_SHARD_INDEX: "1",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        mode: "ci",
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const shardableUnits = plan.parallelUnits.filter(
+      (unit) =>
+        unit.id.startsWith("unit-fast-") &&
+        Array.isArray(unit.includeFiles) &&
+        unit.includeFiles.length > 0,
+    );
+    const smallestIncludeCount = Math.min(
+      ...shardableUnits.map((unit) => unit.includeFiles.length),
+    );
+    const smallestBatches = shardableUnits.filter(
+      (unit) => unit.includeFiles.length === smallestIncludeCount,
+    );
+
+    expect(smallestBatches.length).toBeGreaterThan(0);
+    expect(smallestBatches.every((unit) => typeof unit.fixedShardIndex === "number")).toBe(true);
+    expect(
+      smallestBatches.every((unit) => plan.topLevelSingleShardAssignments.get(unit) === undefined),
+    ).toBe(true);
 
     artifacts.cleanupTempArtifacts();
   });
@@ -262,6 +583,25 @@ describe("test planner", () => {
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
+  it("keeps fd-backed artifact streams writable after temp cleanup", async () => {
+    const artifacts = createExecutionArtifacts({});
+    const artifactDir = artifacts.ensureTempArtifactDir();
+    const logPath = path.join(artifactDir, "lane.log");
+    const stream = createTempArtifactWriteStream(logPath);
+
+    stream.write("before cleanup\n");
+    artifacts.cleanupTempArtifacts();
+
+    await expect(
+      new Promise<void>((resolve, reject) => {
+        stream.on("error", reject);
+        stream.write("after cleanup\n");
+        stream.end(() => resolve());
+      }),
+    ).resolves.toBeUndefined();
+    expect(fs.existsSync(artifactDir)).toBe(false);
+  });
+
   it("builds a CI manifest with planner-owned shard counts and matrices", () => {
     const manifest = buildCIExecutionManifest(
       {
@@ -283,12 +623,26 @@ describe("test planner", () => {
 
     expect(manifest.jobs.buildArtifacts.enabled).toBe(true);
     expect(manifest.shardCounts.unit).toBe(4);
-    expect(manifest.shardCounts.channels).toBe(3);
+    expect(manifest.shardCounts.channels).toBe(4);
+    expect(manifest.shardCounts.extensionFast).toBeGreaterThanOrEqual(4);
+    expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(5);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
-    expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
+    expect(manifest.shardCounts.bun).toBe(6);
+    expect(manifest.jobs.checks.matrix.include).toHaveLength(8);
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
+    expect(manifest.jobs.bunChecks.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.checksFast.matrix.include).toHaveLength(
+      manifest.shardCounts.extensionFast + 1,
+    );
+    expect(
+      manifest.jobs.checksFast.matrix.include
+        .filter((entry) => entry.task === "extensions")
+        .every(
+          (entry) => typeof entry.shard_count === "number" && typeof entry.shard_index === "number",
+        ),
+    ).toBe(true);
     expect(manifest.jobs.macosSwift.enabled).toBe(true);
     expect(manifest.requiredCheckNames).toContain("macos-swift");
     expect(manifest.requiredCheckNames).not.toContain("macos-swift-lint");
@@ -324,7 +678,7 @@ describe("test planner", () => {
     expect(manifest.jobs.checkDocs.enabled).toBe(true);
   });
 
-  it("adds push-only compat and release lanes to push manifests", () => {
+  it("adds the push-only compat lane to push manifests", () => {
     const manifest = buildCIExecutionManifest(
       {
         eventName: "push",
@@ -342,7 +696,6 @@ describe("test planner", () => {
       },
     );
 
-    expect(manifest.jobs.releaseCheck.enabled).toBe(true);
     expect(
       manifest.jobs.checks.matrix.include.some((entry) => entry.task === "compat-node22"),
     ).toBe(true);
@@ -387,6 +740,19 @@ describe("resolveVitestFsModuleCachePath", () => {
         unitId: "unit-fast-1",
       }),
     ).toBe("/repo/node_modules/.experimental-vitest-cache/unit-fast-1");
+  });
+
+  it("honors the requested Windows platform when building the cache path", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
+        },
+        platform: "win32",
+        unitId: "unit-fast-1",
+      }),
+    ).toBe("\\repo\\node_modules\\.experimental-vitest-cache\\unit-fast-1");
   });
 
   it("respects an explicit cache path override", () => {

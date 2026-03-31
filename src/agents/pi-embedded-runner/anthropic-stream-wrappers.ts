@@ -89,6 +89,17 @@ function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): b
   );
 }
 
+function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "standard_only") {
+    return normalized;
+  }
+  return undefined;
+}
+
 function requiresAnthropicToolPayloadCompatibilityForModel(
   model: {
     api?: unknown;
@@ -361,8 +372,29 @@ export function createAnthropicFastModeWrapper(
     if (
       model.api !== "anthropic-messages" ||
       model.provider !== "anthropic" ||
-      !isAnthropicPublicApiBaseUrl(model.baseUrl) ||
-      isAnthropicOAuthApiKey(options?.apiKey)
+      !isAnthropicPublicApiBaseUrl(model.baseUrl)
+    ) {
+      return underlying(model, context, options);
+    }
+
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.service_tier === undefined) {
+        payloadObj.service_tier = serviceTier;
+      }
+    });
+  };
+}
+
+export function createAnthropicServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serviceTier: AnthropicServiceTier,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "anthropic-messages" ||
+      model.provider !== "anthropic" ||
+      !isAnthropicPublicApiBaseUrl(model.baseUrl)
     ) {
       return underlying(model, context, options);
     }
@@ -381,16 +413,14 @@ export function resolveAnthropicFastMode(
   return resolveFastModeParam(extraParams);
 }
 
-export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      cacheRetention: "none",
-    });
-}
-
-export function isAnthropicBedrockModel(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
-  return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
+export function resolveAnthropicServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+): AnthropicServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  const normalized = normalizeAnthropicServiceTier(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid Anthropic service tier param: ${rawSummary}`);
+  }
+  return normalized;
 }
