@@ -216,10 +216,7 @@ export function createBlockReplyPipeline(params: {
       sendPayload(payload, context, /* bypassSeenCheck */ false);
       return;
     }
-    if (context?.trigger) {
-      sendPayload(payload, context, /* bypassSeenCheck */ false);
-      return;
-    }
+
     if (coalescer) {
       const payloadKey = createBlockReplyPayloadKey(payload);
       if (seenKeys.has(payloadKey) || pendingKeys.has(payloadKey) || bufferedKeys.has(payloadKey)) {
