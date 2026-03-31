@@ -351,4 +351,59 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
   });
+
+  it("includes mentioned_bot and replied_to_bot in chat history entries", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      InboundHistory: [
+        { sender: "Alice", body: "hey @mybot", timestamp: 1, mentionedBot: "mybot" },
+        { sender: "Bob", body: "reply to bot", timestamp: 2, repliedToBot: "otherbot" },
+        { sender: "Carol", body: "hello", timestamp: 3, mentionedBot: null },
+      ],
+    } as TemplateContext);
+
+    const historyMatch = text.match(
+      /Chat history since last reply \(untrusted, for context\):\n```json\n([\s\S]*?)\n```/,
+    );
+    expect(historyMatch).toBeTruthy();
+    const historyEntries = JSON.parse(historyMatch![1]) as Array<Record<string, unknown>>;
+    expect(historyEntries).toHaveLength(3);
+    expect(historyEntries[0]["mentioned_bot"]).toBe("mybot");
+    expect(historyEntries[0]["replied_to_bot"]).toBeUndefined();
+    expect(historyEntries[1]["replied_to_bot"]).toBe("otherbot");
+    expect(historyEntries[1]["mentioned_bot"]).toBeUndefined();
+    expect(historyEntries[2]["mentioned_bot"]).toBeNull();
+  });
+
+  it("includes replied_to_bot in reply context when ReplyToBotUsername is set", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToBody: "some bot message",
+      ReplyToSender: "otherbot",
+      ReplyToBotUsername: "otherbot",
+    } as TemplateContext);
+
+    const replyMatch = text.match(
+      /Replied message \(untrusted, for context\):\n```json\n([\s\S]*?)\n```/,
+    );
+    expect(replyMatch).toBeTruthy();
+    const replyPayload = JSON.parse(replyMatch![1]) as Record<string, unknown>;
+    expect(replyPayload["replied_to_bot"]).toBe("otherbot");
+    expect(replyPayload["sender_label"]).toBe("otherbot");
+  });
+
+  it("omits replied_to_bot when ReplyToBotUsername is not set", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToBody: "human message",
+      ReplyToSender: "Alice",
+    } as TemplateContext);
+
+    const replyMatch = text.match(
+      /Replied message \(untrusted, for context\):\n```json\n([\s\S]*?)\n```/,
+    );
+    expect(replyMatch).toBeTruthy();
+    const replyPayload = JSON.parse(replyMatch![1]) as Record<string, unknown>;
+    expect(replyPayload["replied_to_bot"]).toBeUndefined();
+  });
 });

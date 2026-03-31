@@ -163,19 +163,19 @@ export function buildInboundUserContextPrefix(
   }
 
   if (ctx.ReplyToBody) {
+    const replyPayload: Record<string, unknown> = {
+      sender_label: safeTrim(ctx.ReplyToSender),
+      is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
+      body: ctx.ReplyToBody,
+    };
+    if (ctx.ReplyToBotUsername) {
+      replyPayload.replied_to_bot = safeTrim(ctx.ReplyToBotUsername);
+    }
     blocks.push(
       [
         "Replied message (untrusted, for context):",
         "```json",
-        JSON.stringify(
-          {
-            sender_label: safeTrim(ctx.ReplyToSender),
-            is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
-            body: ctx.ReplyToBody,
-          },
-          null,
-          2,
-        ),
+        JSON.stringify(replyPayload, null, 2),
         "```",
       ].join("\n"),
     );
@@ -210,11 +210,20 @@ export function buildInboundUserContextPrefix(
         "Chat history since last reply (untrusted, for context):",
         "```json",
         JSON.stringify(
-          ctx.InboundHistory.map((entry) => ({
-            sender: entry.sender,
-            timestamp_ms: entry.timestamp,
-            body: entry.body,
-          })),
+          ctx.InboundHistory.map((entry) => {
+            const mapped: Record<string, unknown> = {
+              sender: entry.sender,
+              timestamp_ms: entry.timestamp,
+              body: entry.body,
+            };
+            if (entry.mentionedBot !== undefined) {
+              mapped.mentioned_bot = entry.mentionedBot;
+            }
+            if (entry.repliedToBot !== undefined) {
+              mapped.replied_to_bot = entry.repliedToBot;
+            }
+            return mapped;
+          }),
           null,
           2,
         ),

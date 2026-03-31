@@ -74,3 +74,71 @@ describe("group runtime loading", () => {
     vi.doUnmock("./groups.runtime.js");
   });
 });
+
+describe("buildGroupChatContext multi-agent awareness", () => {
+  it("includes other bots in group context when OtherBotUsernames is set", async () => {
+    vi.resetModules();
+    const { buildGroupChatContext } = await import("./groups.js");
+    const result = buildGroupChatContext({
+      sessionCtx: {
+        Provider: "telegram",
+        GroupSubject: "Dev Chat",
+        BotUsername: "mybot",
+        OtherBotUsernames: ["otherbot1", "otherbot2"],
+      },
+    });
+    expect(result).toContain("@mybot");
+    expect(result).toContain("@otherbot1");
+    expect(result).toContain("@otherbot2");
+    expect(result).toContain("Do not act on messages clearly addressed to other bots");
+  });
+
+  it("does not mention multi-agent when no other bots", async () => {
+    vi.resetModules();
+    const { buildGroupChatContext } = await import("./groups.js");
+    const result = buildGroupChatContext({
+      sessionCtx: {
+        Provider: "telegram",
+        GroupSubject: "Dev Chat",
+        BotUsername: "mybot",
+      },
+    });
+    expect(result).toContain("@mybot");
+    expect(result).not.toContain("Other bots");
+  });
+});
+
+describe("buildGroupIntro multi-agent awareness", () => {
+  it("includes multi-agent guidance when OtherBotUsernames is set", async () => {
+    vi.resetModules();
+    const { buildGroupIntro } = await import("./groups.js");
+    const result = buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+        OtherBotUsernames: ["helperbot"],
+      },
+      defaultActivation: "mention",
+      silentToken: "__silent__",
+    });
+    expect(result).toContain("multiple bots");
+    expect(result).toContain("@helperbot");
+    expect(result).toContain("which bot each message mentioned or replied to");
+  });
+
+  it("omits multi-agent line when no other bots present", async () => {
+    vi.resetModules();
+    const { buildGroupIntro } = await import("./groups.js");
+    const result = buildGroupIntro({
+      cfg: {} as OpenClawConfig,
+      sessionCtx: {
+        Provider: "telegram",
+        BotUsername: "mybot",
+      },
+      defaultActivation: "mention",
+      silentToken: "__silent__",
+    });
+    expect(result).not.toContain("multiple bots");
+  });
+});

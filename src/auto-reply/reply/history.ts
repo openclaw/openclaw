@@ -32,6 +32,10 @@ export type HistoryEntry = {
   body: string;
   timestamp?: number;
   messageId?: string;
+  /** Bot username mentioned in this message (null = no bot mentioned). */
+  mentionedBot?: string | null;
+  /** Bot username this message is a reply to (null = not a reply to a bot). */
+  repliedToBot?: string | null;
 };
 
 export function buildHistoryContext(params: {

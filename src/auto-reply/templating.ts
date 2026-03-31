@@ -37,6 +37,10 @@ export type MsgContext = {
     sender: string;
     body: string;
     timestamp?: number;
+    /** Bot username mentioned in this message (null = no bot mentioned). */
+    mentionedBot?: string | null;
+    /** Bot username this message is a reply to (null = not a reply to a bot). */
+    repliedToBot?: string | null;
   }>;
   /**
    * Raw message body without structural context (history, sender labels).
@@ -76,6 +80,8 @@ export type MsgContext = {
   ReplyToBody?: string;
   ReplyToSender?: string;
   ReplyToIsQuote?: boolean;
+  /** Bot username of the author of the replied-to message, if it was from a known bot. */
+  ReplyToBotUsername?: string;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;
   ReplyToForwardedFromType?: string;
@@ -145,6 +151,12 @@ export type MsgContext = {
   Surface?: string;
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
+  /**
+   * Other bot usernames present in the same group chat.
+   * Used for multi-agent context: the current agent can distinguish messages
+   * addressed to itself vs. other agents.
+   */
+  OtherBotUsernames?: string[];
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";

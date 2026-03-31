@@ -153,6 +153,8 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
+  const botUsername = params.sessionCtx.BotUsername?.trim();
+  const otherBots = params.sessionCtx.OtherBotUsernames?.filter(Boolean) ?? [];
 
   const lines: string[] = [];
   if (subject) {
@@ -162,6 +164,15 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   }
   if (members) {
     lines.push(`Participants: ${members}.`);
+  }
+  if (botUsername) {
+    if (otherBots.length > 0) {
+      lines.push(
+        `Your bot username is @${botUsername}. Other bots in this group: ${otherBots.map((b) => `@${b}`).join(", ")}. Only respond to messages addressed to you (via @${botUsername} mention or reply to your messages). Do not act on messages clearly addressed to other bots.`,
+      );
+    } else {
+      lines.push(`Your bot username is @${botUsername}.`);
+    }
   }
   lines.push(
     "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.",
@@ -196,7 +207,20 @@ export function buildGroupIntro(params: {
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
   const styleLine =
     "Write like a human. Avoid Markdown tables. Don't type literal \\n sequences; use real line breaks sparingly.";
-  return [activationLine, providerIdsLine, silenceLine, cautionLine, lurkLine, styleLine]
+  const otherBots = params.sessionCtx.OtherBotUsernames?.filter(Boolean) ?? [];
+  const multiAgentLine =
+    otherBots.length > 0
+      ? `This group contains multiple bots (${otherBots.map((b) => `@${b}`).join(", ")}). The chat history includes which bot each message mentioned or replied to — use that to ignore messages not addressed to you.`
+      : undefined;
+  return [
+    activationLine,
+    providerIdsLine,
+    silenceLine,
+    cautionLine,
+    lurkLine,
+    styleLine,
+    multiAgentLine,
+  ]
     .filter(Boolean)
     .join(" ")
     .concat(" Address the specific sender noted in the message context.");
