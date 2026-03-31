@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import {
   clearFastTestEnv,
@@ -9,8 +9,9 @@ import {
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
+  resolveSessionAuthProfileOverrideMock,
   resetRunCronIsolatedAgentTurnHarness,
-  restoreFastTestEnv,
+  runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
   updateSessionStoreMock,
 } from "./run.test-harness.js";
@@ -70,8 +71,7 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   let previousFastTestEnv: string | undefined;
 
   beforeEach(async () => {
-    previousFastTestEnv = restoreFastTestEnv();
-    clearFastTestEnv();
+    previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
 
     resolveConfiguredModelRefMock.mockReturnValue({
@@ -110,17 +110,23 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     });
 
     let callCount = 0;
-    runWithModelFallbackMock.mockImplementation(async (params: { provider: string; model: string; run: (p: string, m: string) => Promise<unknown> }) => {
-      callCount++;
-      if (callCount === 1) {
-        // First attempt: session started with opus, throw to request sonnet
-        throw switchError;
-      }
-      // Second attempt: should now be called with sonnet
-      expect(params.provider).toBe("anthropic");
-      expect(params.model).toBe("claude-sonnet-4-6");
-      return makeSuccessfulRunResult("claude-sonnet-4-6");
-    });
+    runWithModelFallbackMock.mockImplementation(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (p: string, m: string) => Promise<unknown>;
+      }) => {
+        callCount++;
+        if (callCount === 1) {
+          // First attempt: session started with opus, throw to request sonnet
+          throw switchError;
+        }
+        // Second attempt: should now be called with sonnet
+        expect(params.provider).toBe("anthropic");
+        expect(params.model).toBe("claude-sonnet-4-6");
+        return makeSuccessfulRunResult("claude-sonnet-4-6");
+      },
+    );
 
     const result = await runCronIsolatedAgentTurn(makeParams());
 
@@ -128,26 +134,91 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(callCount).toBe(2);
   });
 
-  it("updates provider/model on session entry after catching LiveSessionModelSwitchError", async () => {
+  it("persists switched provider/model before retrying", async () => {
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        model: undefined,
+        modelProvider: undefined,
+      }),
+      isNewSession: true,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     const switchError = new LiveSessionModelSwitchError({
       provider: "anthropic",
       model: "claude-sonnet-4-6",
     });
 
-    let callCount = 0;
     runWithModelFallbackMock.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) {
-        throw switchError;
-      }
-      return makeSuccessfulRunResult("claude-sonnet-4-6");
+      throw switchError;
     });
+    runWithModelFallbackMock
+      .mockRejectedValueOnce(switchError)
+      .mockRejectedValueOnce(new Error("transient network error"));
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("error");
+    expect(String(result.error)).toContain("transient network error");
+    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(cronSession.sessionEntry).toMatchObject({
+      model: "claude-sonnet-4-6",
+      modelProvider: "anthropic",
+    });
+  });
+
+  it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        model: undefined,
+        modelProvider: undefined,
+        authProfileOverride: "profile-a",
+        authProfileOverrideSource: "auto",
+        compactionCount: 7,
+      }),
+      isNewSession: true,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+    runEmbeddedPiAgentMock
+      .mockRejectedValueOnce(
+        new LiveSessionModelSwitchError({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          authProfileId: "profile-b",
+          authProfileIdSource: "user",
+        }),
+      )
+      .mockResolvedValueOnce({
+        payloads: [{ text: "task complete" }],
+        meta: {
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: { input: 100, output: 50 },
+          },
+        },
+      });
 
     const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("ok");
-    // Session should have been persisted with the corrected model
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      authProfileId: "profile-b",
+      authProfileIdSource: "user",
+    });
+    expect(cronSession.sessionEntry).toMatchObject({
+      authProfileOverride: "profile-b",
+      authProfileOverrideSource: "user",
+    });
   });
 
   it("returns error (not infinite loop) when LiveSessionModelSwitchError is thrown repeatedly", async () => {
