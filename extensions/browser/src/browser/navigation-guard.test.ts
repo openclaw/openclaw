@@ -314,7 +314,43 @@ describe("browser navigation guard", () => {
     expect(routeAbort).not.toHaveBeenCalled();
   });
 
-  it("ignores requests without isNavigationRequest in the request-time guard", async () => {
+  it("guards top-frame requests when isNavigationRequest is unavailable", async () => {
+    let handler: TestRouteHandler<BrowserNavigationInterceptRequestLike> | undefined;
+    const routeContinue = vi.fn(async () => {});
+    const routeAbort = vi.fn(async () => {});
+    const page: BrowserNavigationRouteInstallerLike = {
+      route: vi.fn(
+        async (
+          _matcher: string,
+          nextHandler: TestRouteHandler<BrowserNavigationInterceptRequestLike>,
+        ) => {
+          handler = nextHandler;
+        },
+      ),
+      unroute: vi.fn(async () => {}),
+    };
+
+    await expect(
+      withRequestTimeBrowserNavigationGuard({
+        page,
+        navigate: async () => {
+          await handler?.(
+            { abort: routeAbort, continue: routeContinue },
+            {
+              url: () => "http://127.0.0.1:18080/internal-asset",
+              frame: () => ({ parentFrame: () => null }),
+            },
+          );
+          return "done";
+        },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    expect(routeContinue).not.toHaveBeenCalled();
+    expect(routeAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("still ignores child-frame requests when isNavigationRequest is unavailable", async () => {
     let handler: TestRouteHandler<BrowserNavigationInterceptRequestLike> | undefined;
     const routeContinue = vi.fn(async () => {});
     const routeAbort = vi.fn(async () => {});
@@ -336,8 +372,8 @@ describe("browser navigation guard", () => {
         await handler?.(
           { abort: routeAbort, continue: routeContinue },
           {
-            url: () => "http://127.0.0.1:18080/internal-asset",
-            frame: () => ({ parentFrame: () => null }),
+            url: () => "http://127.0.0.1:18080/iframe-hop",
+            frame: () => ({ parentFrame: () => ({}) }),
           },
         );
         return "done";

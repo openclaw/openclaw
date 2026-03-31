@@ -335,4 +335,23 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     expect(pwMocks.closePageViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.cookiesGetViaPlaywright).not.toHaveBeenCalled();
   });
+
+  it("logs when the follow-up guard falls back to cached tab metadata", async () => {
+    currentTabUrl = "https://example.com/public";
+    pwMocks.getPageForTargetId.mockRejectedValueOnce(new Error("session dropped"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await startBrowserControlServerFromConfig();
+    const realFetch = getBrowserTestFetch();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const cookiesRes = (await realFetch(`${base}/cookies`).then((r) => r.json())) as {
+      ok?: boolean;
+    };
+
+    expect(cookiesRes.ok).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to resolve live Playwright page URL for SSRF guard"),
+    );
+    expect(pwMocks.cookiesGetViaPlaywright).toHaveBeenCalledTimes(1);
+  });
 });

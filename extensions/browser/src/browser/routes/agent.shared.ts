@@ -107,7 +107,9 @@ export async function assertPlaywrightTabTargetAllowed(params: {
         guardUrl = liveUrl;
       }
     } catch {
-      // Fall back to the already-resolved tab metadata if a fresh page lookup fails.
+      console.warn(
+        `browser: failed to resolve live Playwright page URL for SSRF guard; falling back to cached tab metadata for target ${params.targetId}`,
+      );
     }
     await assertBrowserNavigationResultAllowed({
       url: guardUrl,

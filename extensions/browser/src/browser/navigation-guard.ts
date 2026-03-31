@@ -164,11 +164,17 @@ export async function assertBrowserNavigationRedirectChainAllowed(
 }
 
 function isMainFrameNavigationRequest(request: BrowserNavigationInterceptRequestLike): boolean {
-  if (request.isNavigationRequest?.() !== true) {
+  const frame = request.frame?.();
+  if (frame?.parentFrame?.() != null) {
     return false;
   }
-  const frame = request.frame?.();
-  return frame?.parentFrame?.() == null;
+  if (typeof request.isNavigationRequest !== "function") {
+    // Fail closed for top-frame requests when Playwright cannot tell us whether
+    // the request is a navigation. This is stricter than the normal path, but
+    // avoids silently bypassing SSRF enforcement on older or incompatible builds.
+    return true;
+  }
+  return request.isNavigationRequest() === true;
 }
 
 export async function withRequestTimeBrowserNavigationGuard<T>(
