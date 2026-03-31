@@ -77,6 +77,14 @@ async function resolveBotUserId(client: WebClient) {
   return auth.user_id;
 }
 
+function matchesSlackErrorCode(error: unknown, code: string) {
+  const dataError =
+    typeof error === "object" && error !== null
+      ? (error as { data?: { error?: unknown } }).data?.error
+      : undefined;
+  return (typeof dataError === "string" && dataError === code) || String(error).includes(code);
+}
+
 export async function reactSlackMessage(
   channelId: string,
   messageId: string,
@@ -84,11 +92,18 @@ export async function reactSlackMessage(
   opts: SlackActionClientOpts = {},
 ) {
   const client = await getClient(opts);
-  await client.reactions.add({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  try {
+    await client.reactions.add({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (error) {
+    if (matchesSlackErrorCode(error, "already_reacted")) {
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function removeSlackReaction(
