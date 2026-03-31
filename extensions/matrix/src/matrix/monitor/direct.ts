@@ -1,3 +1,4 @@
+import { promoteMatrixDirectRoomCandidate } from "../direct-management.js";
 import {
   hasDirectMatrixMemberFlag,
   isStrictDirectMembership,
@@ -13,9 +14,11 @@ type DirectMessageCheck = {
 
 type DirectRoomTrackerOptions = {
   log?: (message: string) => void;
+  canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
 };
 
 const DM_CACHE_TTL_MS = 30_000;
+const RECENT_INVITE_TTL_MS = 30_000;
 const MAX_TRACKED_DM_ROOMS = 1024;
 const MAX_TRACKED_DM_MEMBER_FLAGS = 2048;
 
@@ -38,6 +41,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   let cachedSelfUserId: string | null = null;
   const joinedMembersCache = new Map<string, { members: string[]; ts: number }>();
   const directMemberFlagCache = new Map<string, { isDirect: boolean | null; ts: number }>();
+  const recentInviteCandidates = new Map<string, { remoteUserId: string; ts: number }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -98,6 +102,31 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     return isDirect;
   };
 
+  const hasRecentInviteCandidate = (roomId: string, remoteUserId?: string | null): boolean => {
+    const normalizedRemoteUserId = remoteUserId?.trim();
+    if (!normalizedRemoteUserId) {
+      return false;
+    }
+    const cached = recentInviteCandidates.get(roomId);
+    if (!cached) {
+      return false;
+    }
+    if (Date.now() - cached.ts >= RECENT_INVITE_TTL_MS) {
+      recentInviteCandidates.delete(roomId);
+      return false;
+    }
+    return cached.remoteUserId === normalizedRemoteUserId;
+  };
+
+  const canPromoteRecentInvite = async (roomId: string): Promise<boolean> => {
+    try {
+      return (await opts.canPromoteRecentInvite?.(roomId)) ?? true;
+    } catch (err) {
+      log(`matrix: recent invite promotion veto failed room=${roomId} (${String(err)})`);
+      return false;
+    }
+  };
+
   return {
     invalidateRoom: (roomId: string): void => {
       joinedMembersCache.delete(roomId);
@@ -108,6 +137,17 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       }
       lastDmUpdateMs = 0;
       log(`matrix: invalidated dm cache room=${roomId}`);
+    },
+    rememberInvite: (roomId: string, remoteUserId: string): void => {
+      const normalizedRemoteUserId = remoteUserId.trim();
+      if (!normalizedRemoteUserId) {
+        return;
+      }
+      rememberBounded(recentInviteCandidates, roomId, {
+        remoteUserId: normalizedRemoteUserId,
+        ts: Date.now(),
+      });
+      log(`matrix: remembered invite candidate room=${roomId} sender=${normalizedRemoteUserId}`);
     },
     isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
       const { roomId, senderId } = params;
@@ -149,6 +189,21 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
             `matrix: dm detected via exact 2-member fallback before dm cache seed room=${roomId}`,
           );
           return true;
+        }
+
+        if (hasRecentInviteCandidate(roomId, senderId) && (await canPromoteRecentInvite(roomId))) {
+          const promotion = await promoteMatrixDirectRoomCandidate({
+            client,
+            remoteUserId: senderId ?? "",
+            roomId,
+            selfUserId,
+          });
+          if (promotion.classifyAsDirect) {
+            log(
+              `matrix: dm detected via recent invite room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
+            );
+            return true;
+          }
         }
       }
 
