@@ -614,20 +614,27 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         if (forceFetchStep.exitCode !== 0) {
           return buildGitErrorResult("force-fetch-failed");
         }
-        // Find the latest semver tag across all remotes, without assuming
-        // a specific remote name or branch.
+        // Find the latest semver tag across all remotes.  Use
+        // for-each-ref --count=1 so the output is always a single line,
+        // avoiding truncation issues with stdoutTail on repos with many tags.
         const latestTagStep = await runStep(
           step(
             "git tag latest (force)",
-            ["git", "-C", gitRoot, "tag", "--sort=-v:refname", "--list", "v*"],
+            [
+              "git",
+              "-C",
+              gitRoot,
+              "for-each-ref",
+              "--sort=-v:refname",
+              "--count=1",
+              "--format=%(refname:short)",
+              "refs/tags/v*",
+            ],
             gitRoot,
           ),
         );
         steps.push(latestTagStep);
-        const latestTag = (latestTagStep.stdoutTail ?? "")
-          .split("\n")
-          .map((l) => l.trim())
-          .find(Boolean);
+        const latestTag = latestTagStep.stdoutTail?.trim() || null;
         if (latestTagStep.exitCode !== 0 || !latestTag) {
           return buildGitErrorResult("force-no-tag-found");
         }
