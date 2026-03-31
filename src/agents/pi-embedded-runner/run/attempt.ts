@@ -76,6 +76,7 @@ import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settin
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import { filterToolsByPolicy, resolveSubagentToolPolicyForSession } from "../../pi-tools.policy.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -509,11 +510,17 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
+    // Resolve subagent tool policy for MCP/LSP filtering (built-in tools are already filtered via pipeline)
+    const subagentToolPolicy =
+      params.sessionKey && isSubagentSessionKey(params.sessionKey)
+        ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey)
+        : undefined;
+
+    // Filter MCP/LSP tools through subagent policy (same filtering applied to built-in tools)
+    const filteredMcpTools = filterToolsByPolicy(bundleMcpRuntime?.tools ?? [], subagentToolPolicy);
+    const filteredLspTools = filterToolsByPolicy(bundleLspRuntime?.tools ?? [], subagentToolPolicy);
+
+    const effectiveTools = [...tools, ...filteredMcpTools, ...filteredLspTools];
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
