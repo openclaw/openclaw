@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 type PackageJson = {
   name?: string;
   version?: string;
-  devDependencies?: Record<string, string>;
 };
 
 function ensureChangelogEntry(changelogPath: string, version: string): boolean {
