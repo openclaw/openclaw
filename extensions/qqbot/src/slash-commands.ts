@@ -100,12 +100,43 @@ interface SlashCommand {
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
 
+/** Framework command definition for commands that require authorization. */
+export interface QQBotFrameworkCommand {
+  name: string;
+  description: string;
+  usage?: string;
+  handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
+}
+
 // ============ Command registry ============
 
+// Pre-dispatch commands (requireAuth: false) — handled immediately before queuing.
 const commands: Map<string, SlashCommand> = new Map();
 
+// Framework commands (requireAuth: true) — registered via api.registerCommand() so that
+// resolveCommandAuthorization() applies commands.allowFrom.qqbot precedence and
+// qqbot: prefix normalization before the handler runs.
+const frameworkCommands: Map<string, SlashCommand> = new Map();
+
 function registerCommand(cmd: SlashCommand): void {
-  commands.set(cmd.name.toLowerCase(), cmd);
+  if (cmd.requireAuth) {
+    frameworkCommands.set(cmd.name.toLowerCase(), cmd);
+  } else {
+    commands.set(cmd.name.toLowerCase(), cmd);
+  }
+}
+
+/**
+ * Return all commands that require authorization, for registration with the
+ * framework via api.registerCommand() in registerFull().
+ */
+export function getFrameworkCommands(): QQBotFrameworkCommand[] {
+  return Array.from(frameworkCommands.values()).map((cmd) => ({
+    name: cmd.name,
+    description: cmd.description,
+    usage: cmd.usage,
+    handler: cmd.handler,
+  }));
 }
 
 // ============ Built-in commands ============
@@ -183,6 +214,9 @@ registerCommand({
   handler: () => {
     const lines = [`### QQBot 内置命令`, ``];
     for (const [name, cmd] of commands) {
+      lines.push(`<qqbot-cmd-input text="/${name}" show="/${name}"/> ${cmd.description}`);
+    }
+    for (const [name, cmd] of frameworkCommands) {
       lines.push(`<qqbot-cmd-input text="/${name}" show="/${name}"/> ${cmd.description}`);
     }
     return lines.join("\n");
@@ -400,6 +434,91 @@ function tailFileLines(
   }
 }
 
+/**
+ * Build the /bot-logs result: collect recent log files, write them to a temp
+ * file, and return the summary text plus the temp file path.
+ *
+ * Authorization is enforced upstream by the framework (registerCommand with
+ * requireAuth:true); this function contains no auth logic.
+ *
+ * Returns a SlashCommandFileResult on success (text + filePath), or a plain
+ * string error message when no logs are found or files cannot be read.
+ */
+function buildBotLogsResult(): SlashCommandResult {
+  const logDirs = collectCandidateLogDirs();
+  const recentFiles = collectRecentLogFiles(logDirs).slice(0, 4);
+
+  if (recentFiles.length === 0) {
+    const existingDirs = logDirs.filter((d) => {
+      try {
+        return fs.existsSync(d);
+      } catch {
+        return false;
+      }
+    });
+    const searched =
+      existingDirs.length > 0
+        ? existingDirs.map((d) => `  • ${d}`).join("\n")
+        : logDirs
+            .slice(0, 6)
+            .map((d) => `  • ${d}`)
+            .join("\n") + (logDirs.length > 6 ? `\n  …以及另外 ${logDirs.length - 6} 个路径` : "");
+    return [
+      `⚠️ 未找到日志文件`,
+      ``,
+      `已搜索以下${existingDirs.length > 0 ? "存在的" : ""}路径：`,
+      searched,
+      ``,
+      `💡 如果日志存放在自定义路径，请在配置中添加：`,
+      `  "logging": { "file": "/path/to/your/logfile.log" }`,
+    ].join("\n");
+  }
+
+  const lines: string[] = [];
+  let totalIncluded = 0;
+  let totalOriginal = 0;
+  let truncatedCount = 0;
+  const MAX_LINES_PER_FILE = 1000;
+  for (const logFile of recentFiles) {
+    try {
+      const { tail, totalFileLines } = tailFileLines(logFile.filePath, MAX_LINES_PER_FILE);
+      if (tail.length > 0) {
+        const fileName = path.basename(logFile.filePath);
+        lines.push(
+          `\n========== ${fileName} (last ${tail.length} of ${totalFileLines} lines) ==========`,
+        );
+        lines.push(`from: ${logFile.sourceDir}`);
+        lines.push(...tail);
+        totalIncluded += tail.length;
+        totalOriginal += totalFileLines;
+        if (totalFileLines > MAX_LINES_PER_FILE) truncatedCount++;
+      }
+    } catch {
+      lines.push(`[Failed to read ${path.basename(logFile.filePath)}]`);
+    }
+  }
+
+  if (lines.length === 0) {
+    return `⚠️ 找到了日志文件，但无法读取。请检查文件权限。`;
+  }
+
+  const tmpDir = getQQBotDataDir("downloads");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const tmpFile = path.join(tmpDir, `bot-logs-${timestamp}.txt`);
+  fs.writeFileSync(tmpFile, lines.join("\n"), "utf8");
+
+  const fileCount = recentFiles.length;
+  const topSources = Array.from(new Set(recentFiles.map((item) => item.sourceDir))).slice(0, 3);
+  let summaryText = `共 ${fileCount} 个日志文件，包含 ${totalIncluded} 行内容`;
+  if (truncatedCount > 0) {
+    summaryText += `（其中 ${truncatedCount} 个文件已截断为最后 ${MAX_LINES_PER_FILE} 行，总计原始 ${totalOriginal} 行）`;
+  }
+  return {
+    text: `📋 ${summaryText}\n📂 来源：${topSources.join(" | ")}`,
+    filePath: tmpFile,
+  };
+}
+
 registerCommand({
   name: "bot-logs",
   description: "导出本地日志文件",
@@ -410,82 +529,7 @@ registerCommand({
     `导出最近的 OpenClaw 日志文件（最多 4 个文件）。`,
     `每个文件只保留最后 1000 行，并作为附件返回。`,
   ].join("\n"),
-  handler: () => {
-    const logDirs = collectCandidateLogDirs();
-    const recentFiles = collectRecentLogFiles(logDirs).slice(0, 4);
-
-    if (recentFiles.length === 0) {
-      const existingDirs = logDirs.filter((d) => {
-        try {
-          return fs.existsSync(d);
-        } catch {
-          return false;
-        }
-      });
-      const searched =
-        existingDirs.length > 0
-          ? existingDirs.map((d) => `  • ${d}`).join("\n")
-          : logDirs
-              .slice(0, 6)
-              .map((d) => `  • ${d}`)
-              .join("\n") +
-            (logDirs.length > 6 ? `\n  …以及另外 ${logDirs.length - 6} 个路径` : "");
-      return [
-        `⚠️ 未找到日志文件`,
-        ``,
-        `已搜索以下${existingDirs.length > 0 ? "存在的" : ""}路径：`,
-        searched,
-        ``,
-        `💡 如果日志存放在自定义路径，请在配置中添加：`,
-        `  "logging": { "file": "/path/to/your/logfile.log" }`,
-      ].join("\n");
-    }
-
-    const lines: string[] = [];
-    let totalIncluded = 0;
-    let totalOriginal = 0;
-    let truncatedCount = 0;
-    const MAX_LINES_PER_FILE = 1000;
-    for (const logFile of recentFiles) {
-      try {
-        const { tail, totalFileLines } = tailFileLines(logFile.filePath, MAX_LINES_PER_FILE);
-        if (tail.length > 0) {
-          const fileName = path.basename(logFile.filePath);
-          lines.push(
-            `\n========== ${fileName} (last ${tail.length} of ${totalFileLines} lines) ==========`,
-          );
-          lines.push(`from: ${logFile.sourceDir}`);
-          lines.push(...tail);
-          totalIncluded += tail.length;
-          totalOriginal += totalFileLines;
-          if (totalFileLines > MAX_LINES_PER_FILE) truncatedCount++;
-        }
-      } catch {
-        lines.push(`[Failed to read ${path.basename(logFile.filePath)}]`);
-      }
-    }
-
-    if (lines.length === 0) {
-      return `⚠️ 找到了日志文件，但无法读取。请检查文件权限。`;
-    }
-
-    const tmpDir = getQQBotDataDir("downloads");
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const tmpFile = path.join(tmpDir, `bot-logs-${timestamp}.txt`);
-    fs.writeFileSync(tmpFile, lines.join("\n"), "utf8");
-
-    const fileCount = recentFiles.length;
-    const topSources = Array.from(new Set(recentFiles.map((item) => item.sourceDir))).slice(0, 3);
-    // Keep the summary compact and mention truncation when it happened.
-    let summaryText = `共 ${fileCount} 个日志文件，包含 ${totalIncluded} 行内容`;
-    if (truncatedCount > 0) {
-      summaryText += `（其中 ${truncatedCount} 个文件已截断为最后 ${MAX_LINES_PER_FILE} 行，总计原始 ${totalOriginal} 行）`;
-    }
-    return {
-      text: `📋 ${summaryText}\n📂 来源：${topSources.join(" | ")}`,
-      filePath: tmpFile,
-    };
-  },
+  handler: () => buildBotLogsResult(),
 });
 
 // Slash command entry point.

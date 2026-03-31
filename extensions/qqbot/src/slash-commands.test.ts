@@ -25,34 +25,21 @@ function buildCtx(overrides: Partial<SlashCommandContext> = {}): SlashCommandCon
 }
 
 describe("slash command authorization", () => {
-  // ---- /bot-logs (requireAuth: true) ----
+  // ---- /bot-logs (moved to framework registerCommand) ----
+  // /bot-logs is registered with the framework via registerCommand() so that
+  // resolveCommandAuthorization() enforces commands.allowFrom.qqbot precedence
+  // and qqbot: prefix normalization. It is no longer in the pre-dispatch
+  // slash-command registry, so matchSlashCommand returns null and lets the
+  // normal inbound queue handle it.
 
-  it("rejects /bot-logs for unauthorized sender", async () => {
-    const ctx = buildCtx({
-      rawContent: "/bot-logs",
-      commandAuthorized: false,
-    });
-    const result = await matchSlashCommand(ctx);
-    expect(result).toBeTypeOf("string");
-    expect(result as string).toContain("权限不足");
-    expect(result as string).toContain("/bot-logs");
+  it("passes /bot-logs through to the framework (returns null)", async () => {
+    const ctx = buildCtx({ rawContent: "/bot-logs", commandAuthorized: false });
+    expect(await matchSlashCommand(ctx)).toBeNull();
   });
 
-  it("allows /bot-logs for authorized sender", async () => {
-    const ctx = buildCtx({
-      rawContent: "/bot-logs",
-      commandAuthorized: true,
-    });
-    const result = await matchSlashCommand(ctx);
-    // Authorized call should not return the rejection message.
-    // It may return a string (no logs found) or a file result — either way, not a rejection.
-    if (typeof result === "string") {
-      expect(result).not.toContain("权限不足");
-    } else {
-      // SlashCommandFileResult with text + filePath
-      expect(result).toHaveProperty("text");
-      expect(result).toHaveProperty("filePath");
-    }
+  it("passes /bot-logs ? through to the framework (returns null)", async () => {
+    const ctx = buildCtx({ rawContent: "/bot-logs ?", commandAuthorized: false });
+    expect(await matchSlashCommand(ctx)).toBeNull();
   });
 
   // ---- /bot-ping (no requireAuth) ----
@@ -121,25 +108,5 @@ describe("slash command authorization", () => {
     expect(result).toBeNull();
   });
 
-  // ---- usage query (?) ----
-
-  it("rejects /bot-logs ? for unauthorized sender", async () => {
-    const ctx = buildCtx({
-      rawContent: "/bot-logs ?",
-      commandAuthorized: false,
-    });
-    const result = await matchSlashCommand(ctx);
-    expect(result).toBeTypeOf("string");
-    expect(result as string).toContain("权限不足");
-  });
-
-  it("shows /bot-logs usage for authorized sender", async () => {
-    const ctx = buildCtx({
-      rawContent: "/bot-logs ?",
-      commandAuthorized: true,
-    });
-    const result = await matchSlashCommand(ctx);
-    expect(result).toBeTypeOf("string");
-    expect(result as string).toContain("用法");
-  });
+  // ---- usage query (?) for remaining pre-dispatch commands ----
 });

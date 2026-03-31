@@ -16,6 +16,7 @@ import {
   onMessageSent,
   PLUGIN_USER_AGENT,
 } from "./api.js";
+import { qqbotPlugin } from "./channel.js";
 import { processAttachments, formatVoiceText } from "./inbound-attachments.js";
 import { recordKnownUser, flushKnownUsers } from "./known-users.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
@@ -242,16 +243,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     const receivedAt = Date.now();
     const peerId = msgQueue.getMessagePeerId(msg);
 
-    // Compute authorization for slash commands that require it.
-    const slashAllowFromList = account.config?.allowFrom ?? [];
-    const slashAllowAll =
-      slashAllowFromList.length === 0 || slashAllowFromList.some((entry: string) => entry === "*");
-    const slashCommandAuthorized =
-      slashAllowAll ||
-      slashAllowFromList.some(
-        (entry: string) => entry.toUpperCase() === msg.senderId.toUpperCase(),
-      );
-
+    // commandAuthorized is not meaningful for pre-dispatch commands: requireAuth:true
+    // commands are in frameworkCommands (not in the local registry) and are never
+    // matched by matchSlashCommand, so the auth gate inside it never fires here.
     const cmdCtx: SlashCommandContext = {
       type: msg.type,
       senderId: msg.senderId,
@@ -266,7 +260,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       accountId: account.accountId,
       appId: account.appId,
       accountConfig: account.config,
-      commandAuthorized: slashCommandAuthorized,
+      commandAuthorized: true,
       queueSnapshot: msgQueue.getSnapshot(peerId),
     };
 
@@ -284,6 +278,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       const token = await getAccessToken(account.appId, account.clientSecret);
 
       // Handle either a plain-text reply or a reply with an attached file.
+      // Note: all current pre-dispatch commands return plain strings; the file
+      // path below is retained for forward-compatibility if a future requireAuth:false
+      // command returns a SlashCommandFileResult.
       const isFileResult = typeof reply === "object" && reply !== null && "filePath" in reply;
       const replyText = isFileResult ? (reply as SlashCommandFileResult).text : (reply as string);
       const replyFile = isFileResult ? (reply as SlashCommandFileResult).filePath : null;
@@ -717,14 +714,18 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               : `qqbot:c2c:${event.senderId}`;
         const toAddress = fromAddress;
 
-        const allowFromList = account.config?.allowFrom ?? [];
+        const rawAllowFrom = account.config?.allowFrom ?? [];
+        const normalizedAllowFrom = qqbotPlugin.config?.formatAllowFrom
+          ? qqbotPlugin.config.formatAllowFrom({
+              cfg: cfg as OpenClawConfig,
+              accountId: account.accountId,
+              allowFrom: rawAllowFrom,
+            })
+          : rawAllowFrom.map((e: string) => e.replace(/^qqbot:/i, "").toUpperCase());
+        const normalizedSenderId = event.senderId.replace(/^qqbot:/i, "").toUpperCase();
         const allowAll =
-          allowFromList.length === 0 || allowFromList.some((entry: string) => entry === "*");
-        const commandAuthorized =
-          allowAll ||
-          allowFromList.some(
-            (entry: string) => entry.toUpperCase() === event.senderId.toUpperCase(),
-          );
+          normalizedAllowFrom.length === 0 || normalizedAllowFrom.some((e) => e === "*");
+        const commandAuthorized = allowAll || normalizedAllowFrom.includes(normalizedSenderId);
 
         // Split local media paths from remote URLs for framework-native media handling.
         const localMediaPaths: string[] = [];
