@@ -151,7 +151,7 @@
       "durationMs": 1300
     },
     "extensions/telegram/src/bot-message-context.named-account-dm.test.ts": {
-      "durationMs": 1200
+      "durationMs": 24070
     },
     "extensions/slack/src/monitor/events/pins.test.ts": {
       "durationMs": 1200
@@ -442,7 +442,7 @@
       "durationMs": 19
     },
     "extensions/telegram/src/bot-message-context.topic-agentid.test.ts": {
-      "durationMs": 19
+      "durationMs": 26500
     },
     "src/browser/routes/agent.existing-session.test.ts": {
       "durationMs": 19
