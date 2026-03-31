@@ -142,8 +142,10 @@ function decodeLiteralEscapes(input: string): string {
 
 export function sanitizeIrcOutboundText(text: string): string {
   const decoded = decodeLiteralEscapes(text);
-  // Preserve newlines for draft/multiline support - flattening happens in client if needed
-  return stripIrcControlChars(decoded).trim();
+  // Normalize \r\n and \r to spaces (sendRaw strips all newlines, so \r\n would collapse tokens)
+  // Preserve standalone \n for draft/multiline support - flattening happens in client if needed
+  const normalized = decoded.replace(/\r\n/g, " ").replace(/\r/g, " ");
+  return stripIrcControlChars(normalized).trim();
 }
 
 export function sanitizeIrcTarget(raw: string): string {
