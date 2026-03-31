@@ -5,6 +5,7 @@ import {
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { createExecApprovalCard } from "./card-ux-exec-approval.js";
+import { resolveFeishuExecApprovalTarget } from "./exec-approvals.js";
 
 // Unlike Telegram (which has an independent TelegramExecApprovalHandler gateway
 // client to take over delivery), Feishu currently delivers exec approval cards
@@ -20,10 +21,32 @@ export function shouldSuppressFeishuExecApprovalForwardingFallback(_params: {
   return false;
 }
 
+// Determine whether a Feishu target address is a DM (user:*) or group (chat:*).
+function isFeishuDmTarget(to: string): boolean {
+  return to.startsWith("user:");
+}
+
 export function buildFeishuExecApprovalPendingPayload(params: {
+  cfg: OpenClawConfig;
   request: ExecApprovalRequest;
+  target: { channel: string; to: string; accountId?: string | null };
   nowMs: number;
 }) {
+  // Defense-in-depth: if the configured target routing doesn't match this
+  // specific forward target, return null so the framework falls back to
+  // plain text instead of leaking an Interactive Card into an excluded chat.
+  const configuredTarget = resolveFeishuExecApprovalTarget({
+    cfg: params.cfg,
+    accountId: params.target.accountId,
+  });
+  const isDm = isFeishuDmTarget(params.target.to);
+  if (configuredTarget === "dm" && !isDm) {
+    return null;
+  }
+  if (configuredTarget === "channel" && isDm) {
+    return null;
+  }
+
   const commandDisplay = resolveExecApprovalCommandDisplay(params.request.request);
   const payload = buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,

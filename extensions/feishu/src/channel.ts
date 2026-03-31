@@ -1106,8 +1106,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }),
         shouldSuppressForwardingFallback: (params) =>
           shouldSuppressFeishuExecApprovalForwardingFallback(params),
-        buildPendingPayload: ({ request, nowMs }) =>
-          buildFeishuExecApprovalPendingPayload({ request, nowMs }),
+        buildPendingPayload: ({ cfg, request, target, nowMs }) =>
+          buildFeishuExecApprovalPendingPayload({ cfg, request, target, nowMs }),
       },
       directory: createChannelDirectoryAdapter({
         listPeers: async ({ cfg, query, limit, accountId }) =>
