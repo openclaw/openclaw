@@ -18,13 +18,13 @@ describe("syncPluginVersions", () => {
     }
   });
 
-  it("preserves workspace openclaw devDependencies while bumping versions", () => {
+  it("preserves workspace openclaw devDependencies while bumping plugin host constraints", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sync-plugin-versions-"));
     tempDirs.push(rootDir);
 
     writeJson(path.join(rootDir, "package.json"), {
       name: "openclaw",
-      version: "2026.3.31",
+      version: "2026.4.1",
     });
     writeJson(path.join(rootDir, "extensions/bluebubbles/package.json"), {
       name: "@openclaw/bluebubbles",
@@ -35,6 +35,11 @@ describe("syncPluginVersions", () => {
       peerDependencies: {
         openclaw: ">=2026.3.30",
       },
+      openclaw: {
+        install: {
+          minHostVersion: ">=2026.3.30",
+        },
+      },
     });
 
     const summary = syncPluginVersions(rootDir);
@@ -43,10 +48,18 @@ describe("syncPluginVersions", () => {
     ) as {
       version?: string;
       devDependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      openclaw?: {
+        install?: {
+          minHostVersion?: string;
+        };
+      };
     };
 
     expect(summary.updated).toContain("@openclaw/bluebubbles");
-    expect(updatedPackage.version).toBe("2026.3.31");
+    expect(updatedPackage.version).toBe("2026.4.1");
     expect(updatedPackage.devDependencies?.openclaw).toBe("workspace:*");
+    expect(updatedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
+    expect(updatedPackage.openclaw?.install?.minHostVersion).toBe(">=2026.4.1");
   });
 });

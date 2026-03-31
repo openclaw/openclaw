@@ -1,17 +1,17 @@
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { loadConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
 
 /**
  * Extract deliveryContext and threadId from a sessionKey.
- * Supports both :thread: (most channels) and :topic: (Telegram).
+ * Supports generic :thread: suffixes plus plugin-owned thread/session grammars.
  */
 export function parseSessionThreadInfo(sessionKey: string | undefined): {
   baseSessionKey: string | undefined;
   threadId: string | undefined;
 } {
-  return parseThreadSessionSuffix(sessionKey);
+  return resolveSessionThreadInfo(sessionKey);
 }
 
 export function extractDeliveryInfo(sessionKey: string | undefined): {

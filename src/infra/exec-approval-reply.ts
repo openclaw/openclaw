@@ -140,7 +140,7 @@ export function parseExecApprovalCommandText(
 ): { approvalId: string; decision: ExecApprovalReplyDecision } | null {
   const trimmed = raw.trim();
   const match = trimmed.match(
-    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
+    /^\/?approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
   );
   if (!match) {
     return null;

@@ -267,8 +267,8 @@ function resolveConfigRestartRequest(params: unknown): {
 } {
   const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
 
-  // Extract deliveryContext + threadId for routing after restart
-  // Supports both :thread: (most channels) and :topic: (Telegram)
+  // Extract deliveryContext + threadId for routing after restart.
+  // Uses generic :thread: parsing plus plugin-owned session grammars.
   const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
 
   return {
