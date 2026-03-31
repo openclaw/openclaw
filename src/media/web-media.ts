@@ -40,6 +40,8 @@ type WebMediaOptions = {
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
+  /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
+  hostReadCapability?: boolean;
 };
 
 function resolveWebMediaOptions(params: {
@@ -65,6 +67,24 @@ function resolveWebMediaOptions(params: {
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
+const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
+  "application/msword",
+  "application/pdf",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+const HOST_READ_ALLOWED_DOCUMENT_EXTS = new Set([
+  ".doc",
+  ".docx",
+  ".pdf",
+  ".ppt",
+  ".pptx",
+  ".xls",
+  ".xlsx",
+]);
 const MB = 1024 * 1024;
 
 function formatMb(bytes: number, digits = 2): string {
@@ -94,6 +114,32 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
     return true;
   }
   return false;
+}
+
+function assertHostReadMediaAllowed(params: {
+  contentType?: string;
+  kind: MediaKind | undefined;
+  mediaUrl: string;
+  fileName?: string;
+}): void {
+  if (params.kind !== "document") {
+    return;
+  }
+  const normalizedMime = params.contentType?.trim().toLowerCase();
+  if (normalizedMime && HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)) {
+    return;
+  }
+  const ext = path
+    .extname(params.fileName ?? params.mediaUrl)
+    .trim()
+    .toLowerCase();
+  if (ext && HOST_READ_ALLOWED_DOCUMENT_EXTS.has(ext)) {
+    return;
+  }
+  throw new LocalMediaAccessError(
+    "path-not-allowed",
+    `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${normalizedMime ?? "unknown"}).`,
+  );
 }
 
 function toJpegFileName(fileName?: string): string | undefined {
@@ -174,6 +220,7 @@ async function loadWebMediaInternal(
     localRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
+    hostReadCapability = false,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -332,6 +379,14 @@ async function loadWebMediaInternal(
     if (ext) {
       fileName = `${fileName}${ext}`;
     }
+  }
+  if (hostReadCapability) {
+    assertHostReadMediaAllowed({
+      contentType: mime,
+      kind,
+      mediaUrl,
+      fileName,
+    });
   }
   return await clampAndFinalize({
     buffer: data,

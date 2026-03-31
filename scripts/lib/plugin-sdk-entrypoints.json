@@ -37,6 +37,8 @@
   "speech-core",
   "plugin-runtime",
   "tasks",
+  "tasks-empty-summary",
+  "tasks-summary",
   "security-runtime",
   "gateway-runtime",
   "github-copilot-login",

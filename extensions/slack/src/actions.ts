@@ -159,7 +159,12 @@ export async function sendSlackMessage(
   content: string,
   opts: SlackActionClientOpts & {
     mediaUrl?: string;
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     threadTs?: string;
     uploadFileName?: string;
     uploadTitle?: string;
@@ -170,7 +175,9 @@ export async function sendSlackMessage(
     accountId: opts.accountId,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
+    mediaAccess: opts.mediaAccess,
     mediaLocalRoots: opts.mediaLocalRoots,
+    mediaReadFile: opts.mediaReadFile,
     client: opts.client,
     threadTs: opts.threadTs,
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
