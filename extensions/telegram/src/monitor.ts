@@ -189,6 +189,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       });
     const telegramTransport = createTelegramTransportForPolling();
 
+    const timeoutSeconds =
+      typeof account.config.timeoutSeconds === "number" &&
+      Number.isFinite(account.config.timeoutSeconds)
+        ? Math.max(1, Math.floor(account.config.timeoutSeconds))
+        : undefined;
+
     pollingSession = new TelegramPollingSession({
       token,
       config: cfg,
@@ -203,6 +209,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
       apiBase: resolveTelegramApiBase(account.config.apiRoot?.trim() || undefined),
+      timeoutSeconds,
     });
     await pollingSession.runUntilAbort();
   } finally {

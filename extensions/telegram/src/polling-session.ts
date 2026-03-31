@@ -62,6 +62,7 @@ type TelegramPollingSessionOpts = {
   createTelegramTransport?: () => TelegramTransport;
   /** Pre-resolved API base for lightweight heartbeat probes. */
   apiBase: string;
+  timeoutSeconds?: number;
 };
 
 export class TelegramPollingSession {
@@ -622,7 +623,10 @@ export class TelegramPollingSession {
       : this.#transportState.currentTransport();
     const fetchImpl = transport?.fetch ?? this.opts.proxyFetch ?? globalThis.fetch;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HEARTBEAT_TIMEOUT_MS);
+    const probeTimeoutMs = this.opts.timeoutSeconds
+      ? this.opts.timeoutSeconds * 1000
+      : HEARTBEAT_TIMEOUT_MS;
+    const timeout = setTimeout(() => controller.abort(), probeTimeoutMs);
     timeout.unref?.();
     const onSessionAbort = () => controller.abort();
     const onStopAbort = () => controller.abort();
