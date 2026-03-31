@@ -89,7 +89,6 @@ Docs: https://docs.openclaw.ai
 - Status/auto-reply: stop status-only turns from replying twice when inline `/status` handling already produced the reply, so Discord and other chat surfaces no longer emit duplicate status cards. Thanks @vincentkoc.
 - Exec/approvals: keep `awk` and `sed` family binaries out of the low-risk `safeBins` fast path, and stop doctor profile scaffolding from treating them like ordinary custom filters. Thanks @vincentkoc.
 - Exec/env: block proxy, TLS, and Docker endpoint env overrides in host execution so request-scoped commands cannot silently reroute outbound traffic or trust attacker-supplied certificate settings. Thanks @AntAISecurityLab.
-- Ollama/model picker: include configured Ollama models in the opted-in non-PI-native model catalog path so Ollama onboarding shows available models directly after provider selection. (#55290) Thanks @Luckymingxuan.
 - Exec/env: block Python package index override variables from request-scoped host exec environment sanitization so package fetches cannot be redirected through a caller-supplied index. Thanks @nexrin and @vincentkoc.
 - Exec/node: stop gateway-side workdir fallback from rewriting explicit `host=node` cwd values to the gateway filesystem, so remote node exec approval and runs keep using the intended node-local directory. (#50961) Thanks @openperf.
 - Exec/runtime: default implicit exec to `host=auto`, resolve that target to sandbox only when a sandbox runtime exists, keep explicit `host=sandbox` fail-closed without sandbox, and show `/exec` effective host state in runtime status/docs.
@@ -116,6 +115,7 @@ Docs: https://docs.openclaw.ai
 - LINE/ACP: add current-conversation binding and inbound binding-routing parity so `/acp spawn ... --thread here`, configured ACP bindings, and active conversation-bound ACP sessions work on LINE like the other conversation channels.
 - LINE/markdown: preserve underscores inside Latin, Cyrillic, and CJK words when stripping markdown, while still removing standalone `_italic_` markers on the shared text-runtime path used by LINE and TTS. (#47465) Thanks @jackjin1997.
 - Agents/failover: make overloaded same-provider retry count and retry delay configurable via `auth.cooldowns`, default to one retry with no delay, and document the model-fallback behavior.
+- Ollama/model picker: include configured Ollama models in the opted-in non-PI-native model catalog path so Ollama onboarding shows available models directly after provider selection. (#55290) Thanks @Luckymingxuan.
 
 ## 2026.3.31-beta.1
 
