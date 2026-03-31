@@ -62,8 +62,8 @@ describe("QueuedFileWriter", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("warning fires on every failure at or past threshold, not just once", async () => {
-    const dir = path.join(os.tmpdir(), "qfw-repeat-warn-" + process.pid);
+  it("warns at threshold and then periodically, not on every failure", async () => {
+    const dir = path.join(os.tmpdir(), "qfw-periodic-warn-" + process.pid);
     const filePath = path.join(dir, "sub", "test.log");
 
     await fs.mkdir(path.join(dir, "sub"), { recursive: true });
@@ -73,19 +73,43 @@ describe("QueuedFileWriter", () => {
 
     const writer = getQueuedFileWriter(writers, filePath);
 
-    // Trigger 5 write failures — should warn on failures 3, 4, and 5
-    writer.write("a\n");
-    writer.write("b\n");
-    writer.write("c\n");
-    writer.write("d\n");
-    writer.write("e\n");
+    // Trigger 5 write failures — should warn only on failure #3 (threshold)
+    // Failures 4 and 5 are silent (not at a periodic interval)
+    for (let i = 0; i < 5; i++) {
+      writer.write(`fail-${i}\n`);
+    }
+
+    await writer.drain();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("3 consecutive write failures");
+
+    warnSpy.mockRestore();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("re-warns periodically at every 30 consecutive failures after threshold", async () => {
+    const dir = path.join(os.tmpdir(), "qfw-periodic-30-" + process.pid);
+    const filePath = path.join(dir, "sub", "test.log");
+
+    await fs.mkdir(path.join(dir, "sub"), { recursive: true });
+    await fs.mkdir(filePath, { recursive: true });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const writer = getQueuedFileWriter(writers, filePath);
+
+    // Trigger 63 write failures — should warn at 3, 30, and 60
+    for (let i = 0; i < 63; i++) {
+      writer.write(`fail-${i}\n`);
+    }
 
     await writer.drain();
 
     expect(warnSpy).toHaveBeenCalledTimes(3);
     expect(warnSpy.mock.calls[0]?.[0]).toContain("3 consecutive write failures");
-    expect(warnSpy.mock.calls[1]?.[0]).toContain("4 consecutive write failures");
-    expect(warnSpy.mock.calls[2]?.[0]).toContain("5 consecutive write failures");
+    expect(warnSpy.mock.calls[1]?.[0]).toContain("30 consecutive write failures");
+    expect(warnSpy.mock.calls[2]?.[0]).toContain("60 consecutive write failures");
 
     warnSpy.mockRestore();
     await fs.rm(dir, { recursive: true, force: true });

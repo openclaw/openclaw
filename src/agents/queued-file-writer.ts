@@ -36,7 +36,10 @@ export function getQueuedFileWriter(
         })
         .catch((err: unknown) => {
           consecutiveFailures++;
-          if (consecutiveFailures >= WARN_AFTER_FAILURES) {
+          if (
+            consecutiveFailures === WARN_AFTER_FAILURES ||
+            (consecutiveFailures > WARN_AFTER_FAILURES && consecutiveFailures % 30 === 0)
+          ) {
             const msg = err instanceof Error ? err.message : String(err);
             console.warn(
               `QueuedFileWriter: ${consecutiveFailures} consecutive write failures to ${filePath}: ${msg}`,
