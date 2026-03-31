@@ -246,6 +246,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: dinference":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dinference/**"
+          - "docs/providers/dinference.md"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:

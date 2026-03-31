@@ -1,0 +1,28 @@
+{
+  "id": "dinference",
+  "enabledByDefault": true,
+  "providers": ["dinference"],
+  "providerAuthEnvVars": {
+    "dinference": ["DINFERENCE_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "dinference",
+      "method": "api-key",
+      "choiceId": "dinference-api-key",
+      "choiceLabel": "DInference API key",
+      "groupId": "dinference",
+      "groupLabel": "DInference",
+      "groupHint": "Open source models (GLM-5, GLM-4.7, GPT-OSS-120B)",
+      "optionKey": "dinferenceApiKey",
+      "cliFlag": "--dinference-api-key",
+      "cliOption": "--dinference-api-key <key>",
+      "cliDescription": "DInference API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

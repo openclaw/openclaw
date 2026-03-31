@@ -1,0 +1,66 @@
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+
+export const DINFERENCE_BASE_URL = "https://api.dinference.com/v1";
+
+export const DINFERENCE_MODEL_CATALOG: ModelDefinitionConfig[] = [
+  {
+    id: "glm-5",
+    name: "GLM 5",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 200_000,
+    maxTokens: 128_000,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
+    id: "glm-4.7",
+    name: "GLM 4.7",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 200_000,
+    maxTokens: 128_000,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
+    id: "gpt-oss-120b",
+    name: "GPT-OSS 120B",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 131_000,
+    maxTokens: 32_000,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+] as const;
+
+export function buildDinferenceModelDefinition(
+  model: (typeof DINFERENCE_MODEL_CATALOG)[number],
+): ModelDefinitionConfig {
+  return {
+    id: model.id,
+    name: model.name,
+    api: "openai-completions",
+    reasoning: model.reasoning,
+    input: model.input,
+    cost: model.cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    compat: {
+      supportsTools: true,
+    },
+  };
+}
