@@ -209,6 +209,45 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
+  it("rate limits invalid signatures before verify work fans out", async () => {
+    mockState.verifyEvent.mockReturnValue(false);
+    const onMessage = vi.fn(async () => {});
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      onMetric: () => {},
+      guardPolicy: {
+        rateLimit: {
+          windowMs: 60_000,
+          maxGlobalPerWindow: 1,
+          maxPerSenderPerWindow: 1,
+          maxTrackedSenderKeys: 32,
+        },
+      },
+    });
+
+    await emitEvent(
+      createEvent({
+        id: "invalid-event-1",
+        pubkey: `sender1${"a".repeat(57)}`,
+      }),
+    );
+    await emitEvent(
+      createEvent({
+        id: "invalid-event-2",
+        pubkey: `sender2${"b".repeat(57)}`,
+      }),
+    );
+
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(mockState.decrypt).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(bus.getMetrics().eventsRejected.invalidSignature).toBe(1);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(1);
+
+    bus.close();
+  });
+
   it("rejects far-future events before crypto", async () => {
     const onMessage = vi.fn(async () => {});
     const bus = await startNostrBus({

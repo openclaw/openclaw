@@ -89,6 +89,7 @@ export interface NostrBusOptions {
 
 type FixedWindowRateLimiter = {
   isRateLimited: (key: string, nowMs?: number) => boolean;
+  refund: (key: string, nowMs?: number) => void;
   size: () => number;
   clear: () => void;
 };
@@ -137,6 +138,24 @@ function createFixedWindowRateLimiter(params: {
       const nextCount = existing.count + 1;
       touch(key, { count: nextCount, windowStartMs: existing.windowStartMs });
       return nextCount > maxRequests;
+    },
+    refund: (key: string, nowMs = Date.now()) => {
+      if (!key) {
+        return;
+      }
+      prune(nowMs);
+      const existing = state.get(key);
+      if (!existing) {
+        return;
+      }
+      if (nowMs - existing.windowStartMs >= windowMs || existing.count <= 1) {
+        state.delete(key);
+        return;
+      }
+      touch(key, {
+        count: existing.count - 1,
+        windowStartMs: existing.windowStartMs,
+      });
     },
     size: () => state.size,
     clear: () => state.clear(),
@@ -553,6 +572,21 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
+      updateRateLimiterSizeMetric();
+      if (globalRateLimiter.isRateLimited("global")) {
+        metrics.emit("rate_limit.global");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
+        metrics.emit("rate_limit.per_sender");
+        metrics.emit("event.rejected.rate_limited");
+        updateRateLimiterSizeMetric();
+        return;
+      }
+      updateRateLimiterSizeMetric();
+
       if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
         metrics.emit("event.rejected.oversized_ciphertext");
         return;
@@ -571,24 +605,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           reply: replyTo,
         });
         if (decision !== "allow") {
+          globalRateLimiter.refund("global");
+          perSenderRateLimiter.refund(event.pubkey);
+          updateRateLimiterSizeMetric();
           return;
         }
       }
-
-      updateRateLimiterSizeMetric();
-      if (globalRateLimiter.isRateLimited("global")) {
-        metrics.emit("rate_limit.global");
-        metrics.emit("event.rejected.rate_limited");
-        updateRateLimiterSizeMetric();
-        return;
-      }
-      if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
-        metrics.emit("rate_limit.per_sender");
-        metrics.emit("event.rejected.rate_limited");
-        updateRateLimiterSizeMetric();
-        return;
-      }
-      updateRateLimiterSizeMetric();
 
       // Mark seen AFTER verify (don't cache invalid IDs)
       seen.add(event.id);
