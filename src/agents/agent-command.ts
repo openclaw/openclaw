@@ -867,7 +867,7 @@ async function agentCommandInternal(
           // accepting the switch, matching the stored/explicit override paths.
           const switchRef = normalizeModelRef(err.provider, err.model);
           const switchKey = modelKey(switchRef.provider, switchRef.model);
-          if (!allowAnyModel && allowedModelKeys.size > 0 && !allowedModelKeys.has(switchKey)) {
+          if (!allowAnyModel && !allowedModelKeys.has(switchKey)) {
             log.info(
               `Live session model switch in subagent run ${runId}: ` +
                 `rejected ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} (not in allowlist)`,
@@ -885,7 +885,7 @@ async function agentCommandInternal(
               });
             }
             throw new Error(
-              `Live model switch rejected: ${err.provider}/${err.model} is not in the agent allowlist`,
+              `Live model switch rejected: ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} is not in the agent allowlist`,
               { cause: err },
             );
           }
