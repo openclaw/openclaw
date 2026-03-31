@@ -5,16 +5,19 @@ import { describe, expect, it } from "vitest";
 const TASK_ROOT = path.resolve(import.meta.dirname);
 const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
-const ALLOWED_IMPORTERS = new Set([
-  "agents/tools/session-status-tool.ts",
-  "auto-reply/reply/commands-acp/runtime-options.ts",
-  "auto-reply/reply/commands-subagents/action-info.ts",
-  "commands/doctor-workspace-status.ts",
-  "commands/flows.ts",
-  "tasks/flow-runtime.ts",
-  "tasks/operations-runtime.ts",
-  "tasks/task-executor.ts",
-  "tasks/task-registry.maintenance.ts",
+const RAW_TASK_MUTATORS = [
+  "createTaskRecord",
+  "markTaskRunningByRunId",
+  "markTaskTerminalByRunId",
+  "markTaskTerminalById",
+  "setTaskRunDeliveryStatusByRunId",
+] as const;
+
+const ALLOWED_CALLERS = new Set([
+  "src/operations-runtime.ts",
+  "src/task-executor.ts",
+  "src/task-registry.ts",
+  "src/task-registry.maintenance.ts",
 ]);
 
 async function listSourceFiles(root: string): Promise<string[]> {
@@ -34,16 +37,21 @@ async function listSourceFiles(root: string): Promise<string[]> {
   return files;
 }
 
-describe("task registry import boundary", () => {
-  it("keeps direct task-registry imports on the approved read-model seam", async () => {
-    const importers: string[] = [];
+describe("task executor boundary", () => {
+  it("keeps raw task lifecycle mutators behind task internals", async () => {
+    const offenders: string[] = [];
     for (const file of await listSourceFiles(SRC_ROOT)) {
       const relative = path.relative(SRC_ROOT, file).replaceAll(path.sep, "/");
+      if (ALLOWED_CALLERS.has(relative)) {
+        continue;
+      }
       const source = await fs.readFile(file, "utf8");
-      if (source.includes("task-registry.js")) {
-        importers.push(relative);
+      for (const symbol of RAW_TASK_MUTATORS) {
+        if (source.includes(`${symbol}(`)) {
+          offenders.push(`${relative}:${symbol}`);
+        }
       }
     }
-    expect(importers.toSorted()).toEqual([...ALLOWED_IMPORTERS].toSorted());
+    expect(offenders).toEqual([]);
   });
 });

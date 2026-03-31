@@ -52,11 +52,11 @@ vi.mock("../plugins/memory-state.js", () => ({
   hasMemoryRuntime: hasMemoryRuntimeMock,
 }));
 
-vi.mock("../tasks/task-registry.js", () => ({
+vi.mock("openclaw/plugin-sdk/tasks", () => ({
   ensureTaskRegistryReady: ensureTaskRegistryReadyMock,
 }));
 
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
+vi.mock("openclaw/plugin-sdk/tasks", () => ({
   startTaskRegistryMaintenance: startTaskRegistryMaintenanceMock,
 }));
 

@@ -59,7 +59,7 @@ vi.mock("../infra/system-events.js", () => ({
   peekSystemEvents: vi.fn(() => []),
 }));
 
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
+vi.mock("openclaw/plugin-sdk/tasks", () => ({
   getInspectableTaskRegistrySummary: vi.fn(() => ({
     total: 0,
     active: 0,

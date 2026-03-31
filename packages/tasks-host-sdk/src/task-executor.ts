@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import {
   createFlowForTask,
   createFlowRecord,

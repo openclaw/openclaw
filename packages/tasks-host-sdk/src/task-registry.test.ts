@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { startAcpSpawnParentStreamRelay } from "../../../src/agents/acp-spawn-parent-stream.js";
+import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import {
   hasPendingHeartbeatWake,
   resetHeartbeatWakeStateForTests,
-} from "../infra/heartbeat-wake.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import { installInMemoryTaskAndFlowRegistryRuntime } from "../test-utils/task-flow-registry-runtime.js";
+} from "../../../src/infra/heartbeat-wake.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../../src/infra/system-events.js";
+import { withTempDir } from "../../../src/test-helpers/temp-dir.js";
+import { installInMemoryTaskAndFlowRegistryRuntime } from "../../../src/test-utils/task-flow-registry-runtime.js";
 import { createFlowRecord, getFlowById, resetFlowRegistryForTests } from "./flow-registry.js";
 import {
   createTaskRecord,

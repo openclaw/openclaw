@@ -10,8 +10,8 @@ import type {
   PluginOperationSummary,
   PluginOperationsCancelResult,
   PluginOperationsRuntime,
-} from "../plugins/operations-state.js";
-import { summarizeOperationRecords } from "../plugins/operations-state.js";
+} from "../../../src/plugins/operations-state.js";
+import { summarizeOperationRecords } from "../../../src/plugins/operations-state.js";
 import {
   listTaskAuditFindings,
   type TaskAuditFinding,

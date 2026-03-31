@@ -1,3 +1,4 @@
+import { defaultTaskOperationsRuntime } from "openclaw/plugin-sdk/tasks";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -6,7 +7,6 @@ import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "../../shared/lazy-runtime.js";
-import { defaultTaskOperationsRuntime } from "../../tasks/operations-runtime.js";
 import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { getRegisteredOperationsRuntime } from "../operations-state.js";

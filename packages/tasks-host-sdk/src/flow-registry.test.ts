@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTempDir } from "../../../src/test-helpers/temp-dir.js";
 import {
   createFlowRecord,
   deleteFlowRecordById,

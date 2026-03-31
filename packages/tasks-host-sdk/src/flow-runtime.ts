@@ -1,7 +1,7 @@
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { requestHeartbeatNow } from "../../../src/infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../../../src/infra/system-events.js";
+import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+import { isDeliverableMessageChannel } from "../../../src/utils/message-channel.js";
 import { createFlowRecord, getFlowById, updateFlowRecordById } from "./flow-registry.js";
 import type { FlowOutputBag, FlowOutputValue, FlowRecord } from "./flow-registry.types.js";
 import { createQueuedTaskRun, createRunningTaskRun } from "./task-executor.js";

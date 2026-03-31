@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTempDir } from "../../../src/test-helpers/temp-dir.js";
 import { defaultTaskOperationsRuntime } from "./operations-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "./task-registry.js";
 

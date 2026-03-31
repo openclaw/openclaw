@@ -1,6 +1,8 @@
-import { createDefaultOperationsMaintenanceService } from "openclaw/plugin-sdk/operations-default";
-import { defaultOperationsRuntime } from "openclaw/plugin-sdk/operations-default";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createDefaultOperationsMaintenanceService,
+  defaultOperationsRuntime,
+} from "./runtime-api.js";
 import { registerTasksCli } from "./src/cli.js";
 
 export default definePluginEntry({

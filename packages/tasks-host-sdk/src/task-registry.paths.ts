@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../../src/config/paths.js";
 
 export function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.OPENCLAW_STATE_DIR?.trim();
