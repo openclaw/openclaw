@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
+import {
+  buildEmbeddedCompactionRuntimeContext,
+  resolveEmbeddedCompactionTarget,
+} from "./compaction-runtime-context.js";
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves sender and current message routing for compaction", () => {
@@ -121,5 +124,24 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("ollama");
     expect(result.model).toBe("minimax-m2.7:cloud");
     expect(result.authProfileId).toBe("ollama:default");
+  });
+
+  it("applies runtime defaults when resolving the effective compaction target", () => {
+    expect(
+      resolveEmbeddedCompactionTarget({
+        config: {
+          agents: { defaults: { compaction: { model: "anthropic/" } } },
+        } as OpenClawConfig,
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        authProfileId: "openai:p1",
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "gpt-5.4",
+      authProfileId: undefined,
+    });
   });
 });

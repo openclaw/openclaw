@@ -28,29 +28,31 @@ export type EmbeddedCompactionRuntimeContext = {
 };
 
 /**
- * Resolve the compaction model override from config, falling back to the
- * caller-supplied provider/model. This ensures the runtime context always
- * carries the correct compaction model regardless of which context engine
- * handles the actual compact() call.
+ * Resolve the effective compaction target from config, falling back to the
+ * caller-supplied provider/model and optionally applying runtime defaults.
  */
-function resolveCompactionModel(params: {
+export function resolveEmbeddedCompactionTarget(params: {
   config?: OpenClawConfig;
   provider?: string | null;
   modelId?: string | null;
   authProfileId?: string | null;
+  defaultProvider?: string;
+  defaultModel?: string;
 }): { provider: string | undefined; model: string | undefined; authProfileId: string | undefined } {
+  const provider = params.provider?.trim() || params.defaultProvider;
+  const model = params.modelId?.trim() || params.defaultModel;
   const override = params.config?.agents?.defaults?.compaction?.model?.trim();
   if (!override) {
     return {
-      provider: params.provider ?? undefined,
-      model: params.modelId ?? undefined,
+      provider,
+      model,
       authProfileId: params.authProfileId ?? undefined,
     };
   }
   const slashIdx = override.indexOf("/");
   if (slashIdx > 0) {
     const overrideProvider = override.slice(0, slashIdx).trim();
-    const overrideModel = override.slice(slashIdx + 1).trim() || undefined;
+    const overrideModel = override.slice(slashIdx + 1).trim() || params.defaultModel;
     // When switching provider via override, drop the primary auth profile to
     // avoid sending the wrong credentials.
     const authProfileId =
@@ -60,7 +62,7 @@ function resolveCompactionModel(params: {
     return { provider: overrideProvider, model: overrideModel, authProfileId };
   }
   return {
-    provider: params.provider ?? undefined,
+    provider,
     model: override,
     authProfileId: params.authProfileId ?? undefined,
   };
@@ -89,7 +91,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
 }): EmbeddedCompactionRuntimeContext {
-  const resolved = resolveCompactionModel({
+  const resolved = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.modelId,

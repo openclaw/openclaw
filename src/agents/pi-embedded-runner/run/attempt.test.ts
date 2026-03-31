@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
+import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
+import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   isOllamaCompatProvider,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "./attempt.js";
-import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
@@ -1903,15 +1903,10 @@ describe("buildAfterTurnRuntimeContext", () => {
     // so that context engines (including third-party ones) receive the correct
     // compaction model in the runtime context.
     expect(legacy).toMatchObject({
-<<<<<<< HEAD
-      provider: "openai-codex",
-      model: "gpt-5.4",
-=======
       provider: "openrouter",
       model: "anthropic/claude-sonnet-4-5",
       // Auth profile dropped because provider changed from openai-codex to openrouter
       authProfileId: undefined,
->>>>>>> f4e9b57a9c (test(compaction): update attempt test for eager override resolution)
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
