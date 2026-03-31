@@ -16,6 +16,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
+({ slackOutbound } = await import("./outbound-adapter.js"));
 
 describe("slackOutbound", () => {
   const cfg = {
@@ -27,13 +28,11 @@ describe("slackOutbound", () => {
     },
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     sendMessageSlackMock.mockReset();
     hasHooksMock.mockReset();
     runMessageSendingMock.mockReset();
     hasHooksMock.mockReturnValue(false);
-    ({ slackOutbound } = await import("./outbound-adapter.js"));
   });
 
   it("sends payload media first, then finalizes with blocks", async () => {
