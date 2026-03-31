@@ -10,7 +10,7 @@ const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 10_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
 const MAX_THREAD_TITLE_CHANNEL_NAME_CHARS = 120;
 const MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS = 320;
-const DISCORD_THREAD_TITLE_MAX_TOKENS = 24;
+const DISCORD_THREAD_TITLE_MAX_TOKENS = 512;
 const DISCORD_THREAD_TITLE_TEMPERATURE = 0.2;
 const DISCORD_THREAD_TITLE_SYSTEM_PROMPT =
   "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
