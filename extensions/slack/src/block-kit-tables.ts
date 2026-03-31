@@ -75,9 +75,11 @@ export function markdownTableToSlackTableBlock(table: MarkdownTableData): SlackT
   // Reserve rows for header and truncation indicator so we never exceed SLACK_MAX_TABLE_ROWS
   const hasHeaders = hasVisibleHeaders(table.headers);
   const headerCount = hasHeaders ? 1 : 0;
-  const needsTruncation =
-    table.rows.length + headerCount > SLACK_MAX_TABLE_ROWS || truncatedColumns > 0;
-  const indicatorCount = needsTruncation ? 1 : 0;
+  // Only reserve an indicator row when rows actually overflow the cap.
+  // Column-only truncation appends an indicator but doesn't need to evict a data row
+  // because the indicator is informational about missing columns, not a data replacement.
+  const rowsOverflow = table.rows.length + headerCount > SLACK_MAX_TABLE_ROWS;
+  const indicatorCount = rowsOverflow ? 1 : 0;
   const dataRowLimit = SLACK_MAX_TABLE_ROWS - headerCount - indicatorCount;
   const truncatedRows = Math.max(0, table.rows.length - dataRowLimit);
 
@@ -92,6 +94,12 @@ export function markdownTableToSlackTableBlock(table: MarkdownTableData): SlackT
     if (truncatedColumns > 0) parts.push(`+${truncatedColumns} more columns`);
     const indicatorCells = Array.from({ length: columnCount }, () => "");
     indicatorCells[0] = parts.join(", ");
+    // When only columns are truncated (no row overflow), the indicator is an extra
+    // row beyond the data — cap the total to SLACK_MAX_TABLE_ROWS by evicting the
+    // last data row only if adding the indicator would exceed the limit.
+    if (rows.length >= SLACK_MAX_TABLE_ROWS) {
+      rows.pop();
+    }
     rows.push(makeRow(indicatorCells));
   }
 
@@ -168,7 +176,19 @@ export function renderSlackTableFallbackText(table: MarkdownTableData): string {
     const parts: string[] = [];
     if (truncatedRows > 0) parts.push(`+${truncatedRows} more rows`);
     if (truncatedCols > 0) parts.push(`+${truncatedCols} more columns`);
-    if (parts.length > 0) lines.push(parts.join(", "));
+    if (parts.length > 0) {
+      const indicator = parts.join(", ");
+      // Ensure the indicator fits within the length budget; drop trailing
+      // data lines if necessary so the total stays under the cap.
+      while (
+        lines.length > 1 &&
+        totalLength + indicator.length + 1 > SLACK_MAX_FALLBACK_TEXT_LENGTH
+      ) {
+        const removed = lines.pop()!;
+        totalLength -= removed.length + 1;
+      }
+      lines.push(indicator);
+    }
   }
 
   return lines.length > 0 ? lines.join("\n") : "Table";
