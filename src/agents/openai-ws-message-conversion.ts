@@ -276,12 +276,21 @@ export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] 
   if (!tools || tools.length === 0) {
     return [];
   }
-  return tools.map((tool) => ({
-    type: "function" as const,
-    name: tool.name,
-    description: typeof tool.description === "string" ? tool.description : undefined,
-    parameters: (tool.parameters ?? {}) as Record<string, unknown>,
-  }));
+  return tools.map((tool) => {
+    const params = (tool.parameters ?? {}) as Record<string, unknown>;
+    // Ensure `type: "object"` schemas include `properties` — the OpenAI Responses
+    // API rejects bare `{ type: "object" }` from MCP tools with no parameters.
+    const normalizedParams =
+      params.type === "object" && !("properties" in params)
+        ? { ...params, properties: {} }
+        : params;
+    return {
+      type: "function" as const,
+      name: tool.name,
+      description: typeof tool.description === "string" ? tool.description : undefined,
+      parameters: normalizedParams,
+    };
+  });
 }
 
 export function planTurnInput(params: {

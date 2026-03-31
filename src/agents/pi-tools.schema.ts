@@ -133,6 +133,22 @@ export function normalizeToolParameters(
     });
   }
 
+  // MCP tools with no parameters produce `{ type: "object" }` without `properties`.
+  // The OpenAI function-calling API rejects bare `{ type: "object" }` schemas.
+  // Inject an empty `properties` object — semantically identical in JSON Schema.
+  if (
+    "type" in schema &&
+    !("properties" in schema) &&
+    !Array.isArray(schema.anyOf) &&
+    !Array.isArray(schema.oneOf)
+  ) {
+    const schemaWithProperties = { ...schema, properties: {} };
+    return preserveToolMeta({
+      ...tool,
+      parameters: applyProviderCleaning(schemaWithProperties),
+    });
+  }
+
   const variantKey = Array.isArray(schema.anyOf)
     ? "anyOf"
     : Array.isArray(schema.oneOf)
