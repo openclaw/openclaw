@@ -35,9 +35,22 @@ describe("createMatrixRoomInfoResolver", () => {
     const client = createClientStub();
     const resolver = createMatrixRoomInfoResolver(client);
 
+    await expect(resolver.getRoomInfo("!room:example.org")).resolves.toEqual({
+      name: "Room !room:example.org",
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: false,
+    });
     await resolver.getRoomInfo("!room:example.org");
-    await resolver.getRoomInfo("!room:example.org");
-    await resolver.getRoomInfo("!room:example.org", { includeAliases: true });
+    await expect(
+      resolver.getRoomInfo("!room:example.org", { includeAliases: true }),
+    ).resolves.toEqual({
+      name: "Room !room:example.org",
+      canonicalAlias: "#alias-!room:example.org:example.org",
+      altAliases: ["#alt-!room:example.org:example.org"],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
     await resolver.getRoomInfo("!room:example.org", { includeAliases: true });
     await resolver.getMemberDisplayName("!room:example.org", "@alice:example.org");
     await resolver.getMemberDisplayName("!room:example.org", "@alice:example.org");
@@ -68,6 +81,28 @@ describe("createMatrixRoomInfoResolver", () => {
     ).resolves.toBe("@alice:example.org");
 
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks unresolved room metadata when room info lookups fail", async () => {
+    const client = {
+      getRoomStateEvent: vi.fn(async (_roomId: string, eventType: string) => {
+        if (eventType === "m.room.member") {
+          return {};
+        }
+        throw new Error("room info unavailable");
+      }),
+    } as unknown as MatrixClient & {
+      getRoomStateEvent: ReturnType<typeof vi.fn>;
+    };
+    const resolver = createMatrixRoomInfoResolver(client);
+
+    await expect(
+      resolver.getRoomInfo("!room:example.org", { includeAliases: true }),
+    ).resolves.toEqual({
+      altAliases: [],
+      aliasesResolved: false,
+      nameResolved: false,
+    });
   });
 
   it("caches fallback user IDs when member display-name lookups fail", async () => {

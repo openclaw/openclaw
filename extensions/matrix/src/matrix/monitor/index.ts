@@ -26,8 +26,8 @@ import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
-import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 
 export type MonitorMatrixOpts = {
@@ -217,19 +217,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
   const directTracker = createDirectRoomTracker(client, {
     log: logVerboseMessage,
-    canPromoteRecentInvite: async (roomId) => {
-      const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
-      const roomAliases = [roomInfo.canonicalAlias ?? "", ...roomInfo.altAliases].filter(Boolean);
-      if ((roomInfo.name?.trim() ?? "") || roomAliases.length > 0) {
-        return false;
-      }
-      const roomConfig = resolveMatrixRoomConfig({
-        rooms: roomsConfig,
+    canPromoteRecentInvite: async (roomId) =>
+      shouldPromoteRecentInviteRoom({
         roomId,
-        aliases: roomAliases,
-      });
-      return roomConfig.matchSource !== "direct";
-    },
+        roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+        rooms: roomsConfig,
+      }),
   });
   registerMatrixAutoJoin({ client, accountConfig, runtime });
   const warnedEncryptedRooms = new Set<string>();
