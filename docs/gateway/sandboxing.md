@@ -50,8 +50,8 @@ Not sandboxed:
 
 `agents.defaults.sandbox.scope` controls **how many containers** are created:
 
-- `"session"` (default): one container per session.
-- `"agent"`: one container per agent.
+- `"agent"` (default): one container per agent.
+- `"session"`: one container per session.
 - `"shared"`: one container shared by all sandboxed sessions.
 
 ## Backend
