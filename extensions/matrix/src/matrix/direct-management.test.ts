@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   inspectMatrixDirectRooms,
+  persistMatrixDirectRoomMapping,
   promoteMatrixDirectRoomCandidate,
   repairMatrixDirectRooms,
 } from "./direct-management.js";
@@ -299,6 +300,49 @@ describe("promoteMatrixDirectRoomCandidate", () => {
       repaired: false,
       roomId: "!fresh:example.org",
       reason: "repair-failed",
+    });
+  });
+
+  it("serializes concurrent m.direct writes so distinct mappings are not lost", async () => {
+    let directContent: Record<string, string[]> = {};
+    let releaseFirstWrite: (() => void) | null = null;
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let writeCount = 0;
+    const setAccountData = vi.fn(async (_eventType: string, content: Record<string, string[]>) => {
+      writeCount += 1;
+      if (writeCount === 1) {
+        await firstWriteStarted;
+      }
+      directContent = { ...content };
+    });
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({ ...directContent })),
+      setAccountData,
+    });
+
+    const firstWrite = persistMatrixDirectRoomMapping({
+      client,
+      remoteUserId: "@alice:example.org",
+      roomId: "!alice:example.org",
+    });
+    await vi.waitFor(() => {
+      expect(setAccountData).toHaveBeenCalledTimes(1);
+    });
+
+    const secondWrite = persistMatrixDirectRoomMapping({
+      client,
+      remoteUserId: "@bob:example.org",
+      roomId: "!bob:example.org",
+    });
+
+    releaseFirstWrite?.();
+    await expect(Promise.all([firstWrite, secondWrite])).resolves.toEqual([true, true]);
+
+    expect(directContent).toEqual({
+      "@alice:example.org": ["!alice:example.org"],
+      "@bob:example.org": ["!bob:example.org"],
     });
   });
 });
