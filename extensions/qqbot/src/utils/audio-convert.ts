@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { decode, encode, isSilk } from "silk-wasm";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
@@ -346,7 +347,9 @@ export async function textToSpeechPCM(
 
       // MP3 responses must be decoded back into PCM.
       debugLog(`[tts] Decoding mp3 response (${rawBuffer.length} bytes) to PCM...`);
-      const tmpDir = path.join(fs.mkdtempSync(path.join(require("node:os").tmpdir(), "tts-")));
+      const tmpDir = path.join(
+        fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "qqbot-tts-")),
+      );
       const tmpMp3 = path.join(tmpDir, "tts.mp3");
       fs.writeFileSync(tmpMp3, rawBuffer);
 

@@ -268,7 +268,12 @@ export async function sendPhoto(
   imagePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(imagePath));
+  let mediaPath: string;
+  try {
+    mediaPath = resolveQQBotLocalMediaPath(normalizePath(imagePath));
+  } catch (err) {
+    return { channel: "qqbot", error: err instanceof Error ? err.message : String(err) };
+  }
   const isLocal = isLocalFilePath(mediaPath);
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const isData = mediaPath.startsWith("data:");
@@ -397,7 +402,12 @@ export async function sendVoice(
   transcodeEnabled: boolean = true,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(voicePath));
+  let mediaPath: string;
+  try {
+    mediaPath = resolveQQBotLocalMediaPath(normalizePath(voicePath));
+  } catch (err) {
+    return { channel: "qqbot", error: err instanceof Error ? err.message : String(err) };
+  }
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   if (isHttp) {
@@ -536,7 +546,12 @@ export async function sendVideoMsg(
   videoPath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(videoPath));
+  let mediaPath: string;
+  try {
+    mediaPath = resolveQQBotLocalMediaPath(normalizePath(videoPath));
+  } catch (err) {
+    return { channel: "qqbot", error: err instanceof Error ? err.message : String(err) };
+  }
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
@@ -657,7 +672,12 @@ export async function sendDocument(
   filePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(filePath));
+  let mediaPath: string;
+  try {
+    mediaPath = resolveQQBotLocalMediaPath(normalizePath(filePath));
+  } catch (err) {
+    return { channel: "qqbot", error: err instanceof Error ? err.message : String(err) };
+  }
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
@@ -1263,7 +1283,12 @@ export async function sendProactiveMessage(
 /** Send rich media, auto-routing by media type and source. */
 export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResult> {
   const { to, text, replyToId, account, mimeType } = ctx;
-  const mediaUrl = resolveQQBotLocalMediaPath(normalizePath(ctx.mediaUrl));
+  let mediaUrl: string;
+  try {
+    mediaUrl = resolveQQBotLocalMediaPath(normalizePath(ctx.mediaUrl));
+  } catch (err) {
+    return { channel: "qqbot", error: err instanceof Error ? err.message : String(err) };
+  }
 
   if (!account.appId || !account.clientSecret) {
     return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };

@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { debugLog, debugWarn } from "./debug-log.js";
 
 // Basic platform information.
@@ -74,6 +75,10 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
   return dir;
 }
 
+export function getQQBotWorkspaceDir(...subPaths: string[]): string {
+  return path.join(getHomeDir(), ".openclaw", "workspace", "qqbot", ...subPaths);
+}
+
 // Temporary directory helpers.
 
 /** Return the OS temp directory. */
@@ -120,19 +125,67 @@ function isPathWithinRoot(candidate: string, root: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function tryRealpathSync(targetPath: string): string | null {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function getQQBotAllowedLocalRoots(): string[] {
+  return [
+    getQQBotMediaDir(),
+    getQQBotDataDir(),
+    getQQBotWorkspaceDir(),
+    resolvePreferredOpenClawTmpDir(),
+  ];
+}
+
+function isQQBotAllowedLocalPath(candidatePath: string): boolean {
+  const absoluteCandidate = path.resolve(candidatePath);
+  const candidateCanonicalPath = tryRealpathSync(absoluteCandidate);
+
+  for (const root of getQQBotAllowedLocalRoots()) {
+    const absoluteRoot = path.resolve(root);
+    const rootCanonicalPath = tryRealpathSync(absoluteRoot) ?? absoluteRoot;
+
+    if (candidateCanonicalPath) {
+      if (isPathWithinRoot(candidateCanonicalPath, rootCanonicalPath)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (isPathWithinRoot(absoluteCandidate, absoluteRoot)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Remap legacy or hallucinated QQ Bot local media paths to real files when possible.
  */
 export function resolveQQBotLocalMediaPath(p: string): string {
   const normalized = normalizePath(p);
-  if (!isLocalPath(normalized) || fs.existsSync(normalized)) {
+  if (!isLocalPath(normalized)) {
     return normalized;
+  }
+
+  const absolutePath = path.resolve(normalized);
+  if (fs.existsSync(absolutePath)) {
+    if (!isQQBotAllowedLocalPath(absolutePath)) {
+      throw new Error(`[qqbot] Local media path is outside allowed roots: ${normalized}`);
+    }
+    return absolutePath;
   }
 
   const homeDir = getHomeDir();
   const mediaRoot = getQQBotMediaDir();
   const dataRoot = getQQBotDataDir();
-  const workspaceRoot = path.join(homeDir, ".openclaw", "workspace", "qqbot");
+  const workspaceRoot = getQQBotWorkspaceDir();
   const candidateRoots = [
     { from: workspaceRoot, to: mediaRoot },
     { from: dataRoot, to: mediaRoot },
@@ -140,18 +193,22 @@ export function resolveQQBotLocalMediaPath(p: string): string {
   ];
 
   for (const { from, to } of candidateRoots) {
-    if (!isPathWithinRoot(normalized, from)) {
+    if (!isPathWithinRoot(absolutePath, from)) {
       continue;
     }
-    const relative = path.relative(from, normalized);
+    const relative = path.relative(from, absolutePath);
     const candidate = path.join(to, relative);
-    if (fs.existsSync(candidate)) {
+    if (fs.existsSync(candidate) && isQQBotAllowedLocalPath(candidate)) {
       debugWarn(`[platform] Remapped missing QQBot media path ${normalized} -> ${candidate}`);
       return candidate;
     }
   }
 
-  return normalized;
+  if (!isQQBotAllowedLocalPath(absolutePath)) {
+    throw new Error(`[qqbot] Local media path is outside allowed roots: ${normalized}`);
+  }
+
+  return absolutePath;
 }
 
 // Filename normalization.

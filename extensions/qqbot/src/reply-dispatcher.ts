@@ -196,7 +196,13 @@ export async function handleStructuredPayload(
 
 async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
-  let imageUrl = resolveQQBotLocalMediaPath(normalizePath(payload.path));
+  let imageUrl: string;
+  try {
+    imageUrl = resolveQQBotLocalMediaPath(normalizePath(payload.path));
+  } catch (err) {
+    log?.error(`[qqbot:${account.accountId}] Blocked image path: ${err}`);
+    return;
+  }
   const originalImagePath = payload.source === "file" ? imageUrl : undefined;
 
   if (payload.source === "file") {
