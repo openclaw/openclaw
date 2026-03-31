@@ -66,6 +66,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     };
   }
 
+  function createTempExecutable(params: { dir: string; name: string }): string {
+    const fileName = process.platform === "win32" ? `${params.name}.exe` : params.name;
+    const executablePath = path.join(params.dir, fileName);
+    fs.writeFileSync(executablePath, "");
+    fs.chmodSync(executablePath, 0o755);
+    return executablePath;
+  }
+
   function expectInvokeOk(
     sendInvokeResult: MockedSendInvokeResult,
     params?: { payloadContains?: string },
@@ -366,6 +374,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     cwd?: string;
     security?: "full" | "allowlist";
     ask?: "off" | "on-miss" | "always";
+    approvalDecision?: "allow" | "allow-always" | "deny" | null;
     approved?: boolean;
     runCommand?: HandleSystemRunInvokeOptions["runCommand"];
     runViaMacAppExecHost?: HandleSystemRunInvokeOptions["runViaMacAppExecHost"];
@@ -420,6 +429,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         rawCommand: params.rawCommand,
         systemRunPlan: params.systemRunPlan,
         cwd: params.cwd,
+        approvalDecision: params.approvalDecision,
         approved: params.approved ?? false,
         sessionKey: "agent:main:main",
       },
@@ -1254,7 +1264,32 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
-  it("requires explicit approval for inline eval when strictInlineEval is enabled", async () => {
+  it.each([
+    {
+      command: ["python3", "-c", "print('hi')"],
+      expected: "python3 -c requires explicit approval in strictInlineEval mode",
+    },
+    {
+      command: ["awk", 'BEGIN{system("id")}', "/dev/null"],
+      expected: "awk inline program requires explicit approval in strictInlineEval mode",
+    },
+    {
+      command: ["find", ".", "-exec", "id", "{}", ";"],
+      expected: "find -exec requires explicit approval in strictInlineEval mode",
+    },
+    {
+      command: ["xargs", "id"],
+      expected: "xargs inline command requires explicit approval in strictInlineEval mode",
+    },
+    {
+      command: ["make", "-f", "evil.mk"],
+      expected: "make -f requires explicit approval in strictInlineEval mode",
+    },
+    {
+      command: ["sed", "s/.*/id/e", "/dev/null"],
+      expected: "sed inline program requires explicit approval in strictInlineEval mode",
+    },
+  ] as const)("requires explicit approval for strict inline-eval carrier %j", async (testCase) => {
     setRuntimeConfigSnapshot({
       tools: {
         exec: {
@@ -1265,7 +1300,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     try {
       const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
         preferMacAppExecHost: false,
-        command: ["python3", "-c", "print('hi')"],
+        command: [...testCase.command],
         security: "full",
         ask: "off",
       });
@@ -1277,14 +1312,64 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect.objectContaining({ reason: "approval-required" }),
       );
       expectInvokeErrorMessage(sendInvokeResult, {
-        message: "python3 -c requires explicit approval in strictInlineEval mode",
+        message: testCase.expected,
       });
     } finally {
       clearRuntimeConfigSnapshot();
     }
   });
 
-  it("does not persist allow-always interpreter approvals when strictInlineEval is enabled", async () => {
+  it.each([
+    { executable: "python3", args: ["-c", "print('hi')"] },
+    { executable: "awk", args: ['BEGIN{system("id")}', "/dev/null"] },
+    { executable: "find", args: [".", "-exec", "id", "{}", ";"] },
+    { executable: "xargs", args: ["id"] },
+    { executable: "sed", args: ["s/.*/id/e", "/dev/null"] },
+  ] as const)(
+    "does not persist allow-always approvals for strict inline-eval carrier %j",
+    async (testCase) => {
+      setRuntimeConfigSnapshot({
+        tools: {
+          exec: {
+            strictInlineEval: true,
+          },
+        },
+      });
+      try {
+        await withTempApprovalsHome({
+          approvals: createAllowlistOnMissApprovals(),
+          run: async () => {
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-eval-bin-"));
+            try {
+              const executablePath = createTempExecutable({
+                dir: tempDir,
+                name: testCase.executable,
+              });
+              const { runCommand, sendInvokeResult } = await runSystemInvoke({
+                preferMacAppExecHost: false,
+                command: [executablePath, ...testCase.args],
+                security: "allowlist",
+                ask: "on-miss",
+                approvalDecision: "allow-always",
+                approved: true,
+                runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
+              });
+
+              expect(runCommand).toHaveBeenCalledTimes(1);
+              expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
+              expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+            } finally {
+              fs.rmSync(tempDir, { recursive: true, force: true });
+            }
+          },
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it("does not persist allow-always approvals for strict inline-eval make carriers", async () => {
     setRuntimeConfigSnapshot({
       tools: {
         exec: {
@@ -1296,18 +1381,42 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       await withTempApprovalsHome({
         approvals: createAllowlistOnMissApprovals(),
         run: async () => {
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: ["python3", "-c", "print('hi')"],
-            security: "allowlist",
-            ask: "on-miss",
-            approved: true,
-            runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
-          });
+          const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-eval-make-"));
+          try {
+            const executablePath = createTempExecutable({
+              dir: tempDir,
+              name: "make",
+            });
+            const makefilePath = path.join(tempDir, "Makefile");
+            fs.writeFileSync(makefilePath, "all:\n\t@echo inline-eval-ok\n");
+            const prepared = buildSystemRunApprovalPlan({
+              command: [executablePath, "-f", makefilePath],
+              cwd: tempDir,
+            });
+            expect(prepared.ok).toBe(true);
+            if (!prepared.ok) {
+              throw new Error("unreachable");
+            }
 
-          expect(runCommand).toHaveBeenCalledTimes(1);
-          expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
-          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+            const { runCommand, sendInvokeResult } = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.commandText,
+              systemRunPlan: prepared.plan,
+              cwd: prepared.plan.cwd ?? tempDir,
+              security: "allowlist",
+              ask: "on-miss",
+              approvalDecision: "allow-always",
+              approved: true,
+              runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
+            });
+
+            expect(runCommand).toHaveBeenCalledTimes(1);
+            expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
+            expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+          } finally {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+          }
         },
       });
     } finally {

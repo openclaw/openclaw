@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
@@ -22,8 +23,7 @@ export async function buildTelegramMessageContextForTest(
 ): Promise<
   Awaited<ReturnType<typeof import("./bot-message-context.js").buildTelegramMessageContext>>
 > {
-  const { vi } = await import("vitest");
-  const { buildTelegramMessageContext } = await import("./bot-message-context.js");
+  const buildTelegramMessageContext = await loadBuildTelegramMessageContext();
   return await buildTelegramMessageContext({
     primaryCtx: {
       message: {
@@ -63,4 +63,16 @@ export async function buildTelegramMessageContextForTest(
       })),
     sendChatActionHandler: { sendChatAction: vi.fn() } as never,
   });
+}
+
+let buildTelegramMessageContextLoader:
+  | typeof import("./bot-message-context.js").buildTelegramMessageContext
+  | undefined;
+
+async function loadBuildTelegramMessageContext() {
+  if (!buildTelegramMessageContextLoader) {
+    ({ buildTelegramMessageContext: buildTelegramMessageContextLoader } =
+      await import("./bot-message-context.js"));
+  }
+  return buildTelegramMessageContextLoader;
 }

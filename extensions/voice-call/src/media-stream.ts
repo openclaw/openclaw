@@ -9,7 +9,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { WebSocket, WebSocketServer } from "ws";
+import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
@@ -76,6 +76,7 @@ const DEFAULT_PRE_START_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_PENDING_CONNECTIONS = 32;
 const DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP = 4;
 const DEFAULT_MAX_CONNECTIONS = 128;
+const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
@@ -88,6 +89,16 @@ export function sanitizeLogText(value: string, maxChars: number): string {
     return sanitized;
   }
   return `${sanitized.slice(0, maxChars)}...`;
+}
+
+function normalizeWsMessageData(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data);
+  }
+  return Buffer.from(data);
 }
 
 /**
@@ -126,7 +137,11 @@ export class MediaStreamHandler {
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.wss) {
-      this.wss = new WebSocketServer({ noServer: true });
+      this.wss = new WebSocketServer({
+        noServer: true,
+        // Reject oversized frames before app-level parsing runs on unauthenticated sockets.
+        maxPayload: MAX_INBOUND_MESSAGE_BYTES,
+      });
       this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
     }
 
@@ -154,9 +169,10 @@ export class MediaStreamHandler {
       return;
     }
 
-    ws.on("message", async (data: Buffer) => {
+    ws.on("message", async (data: RawData) => {
       try {
-        const message = JSON.parse(data.toString()) as TwilioMediaMessage;
+        const raw = normalizeWsMessageData(data);
+        const message = JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
 
         switch (message.event) {
           case "connected":

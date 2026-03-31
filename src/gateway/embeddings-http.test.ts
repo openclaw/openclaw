@@ -167,7 +167,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(json.error?.type).toBe("invalid_request_error");
   });
 
-  it("rejects operator scopes that lack write access", async () => {
+  it("ignores narrower declared scopes for shared-secret bearer auth", async () => {
     const res = await postEmbeddings(
       {
         model: "openclaw/default",
@@ -175,17 +175,14 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       },
       { "x-openclaw-scopes": "operator.read" },
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.write",
-      },
+      object: "list",
+      data: [{ object: "embedding", embedding: [0.1, 0.2] }],
     });
   });
 
-  it("rejects requests with no declared operator scopes", async () => {
+  it("allows requests with an empty declared scopes header", async () => {
     const res = await postEmbeddings(
       {
         model: "openclaw/default",
@@ -193,17 +190,14 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       },
       { "x-openclaw-scopes": "" },
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.write",
-      },
+      object: "list",
+      data: [{ object: "embedding", embedding: [0.1, 0.2] }],
     });
   });
 
-  it("rejects requests when the operator scopes header is missing", async () => {
+  it("allows requests when the operator scopes header is missing", async () => {
     const res = await fetch(`http://127.0.0.1:${enabledPort}/v1/embeddings`, {
       method: "POST",
       headers: {
@@ -215,13 +209,10 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
         input: "hello",
       }),
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.write",
-      },
+      object: "list",
+      data: [{ object: "embedding", embedding: [0.1, 0.2] }],
     });
   });
 

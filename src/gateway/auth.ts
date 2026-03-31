@@ -19,6 +19,7 @@ import {
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
+import { checkBrowserOrigin } from "./origin-check.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 export type ResolvedGatewayAuthModeSource =
@@ -81,6 +82,13 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
+  /** Optional browser-origin policy for trusted-proxy HTTP requests. */
+  browserOriginPolicy?: {
+    requestHost?: string;
+    origin?: string;
+    allowedOrigins?: string[];
+    allowHostHeaderOriginFallback?: boolean;
+  };
 };
 
 type TailscaleUser = {
@@ -367,6 +375,32 @@ function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolea
   return authSurface === "ws-control-ui";
 }
 
+function authorizeTrustedProxyBrowserOrigin(params: {
+  authSurface: GatewayAuthSurface;
+  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+}): { ok: false; reason: string } | null {
+  if (params.authSurface !== "http") {
+    return null;
+  }
+
+  const origin = params.browserOriginPolicy?.origin?.trim();
+  if (!origin) {
+    return null;
+  }
+
+  const originCheck = checkBrowserOrigin({
+    requestHost: params.browserOriginPolicy?.requestHost,
+    origin,
+    allowedOrigins: params.browserOriginPolicy?.allowedOrigins,
+    allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
+    isLocalClient: false,
+  });
+  if (originCheck.ok) {
+    return null;
+  }
+  return { ok: false, reason: "trusted_proxy_origin_not_allowed" };
+}
+
 function authorizeTokenAuth(params: {
   authToken?: string;
   connectToken?: string;
@@ -452,6 +486,13 @@ export async function authorizeGatewayConnect(
     });
 
     if ("user" in result) {
+      const originResult = authorizeTrustedProxyBrowserOrigin({
+        authSurface,
+        browserOriginPolicy: params.browserOriginPolicy,
+      });
+      if (originResult) {
+        return originResult;
+      }
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     return { ok: false, reason: result.reason };

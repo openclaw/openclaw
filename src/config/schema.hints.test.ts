@@ -47,6 +47,8 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
     expect(isSensitiveConfigPath("channels.feishu.encryptKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.nostr.privateKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.nostr.accounts.default.privateKey")).toBe(true);
   });
 });
 
