@@ -387,6 +387,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      // Direct web_fetch stays on the strict pinned-routing path even when
+      // env proxies are configured; otherwise HTTP_PROXY / HTTPS_PROXY from
+      // the environment would be honored for untrusted user-supplied URLs.
+      // Trusted env-proxy routing is reserved for operator-trusted endpoints.
       lookupFn: params.lookupFn,
       init: {
         headers: {

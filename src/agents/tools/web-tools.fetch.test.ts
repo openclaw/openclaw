@@ -1,4 +1,4 @@
-import { EnvHttpProxyAgent } from "undici";
+import { EnvHttpProxyAgent, ProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
@@ -273,6 +273,7 @@ describe("web_fetch extraction fallbacks", () => {
       | undefined;
     expect(requestInit?.dispatcher).toBeDefined();
     expect(requestInit?.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    expect(requestInit?.dispatcher).not.toBeInstanceOf(ProxyAgent);
   });
 
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
