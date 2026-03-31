@@ -41,6 +41,15 @@ let createTelegramBot: (
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
+const PUZZLE_EMOJI = "\u{1F9E9}";
+const CROSS_MARK_EMOJI = "\u{274C}";
+const INFO_EMOJI = "\u{2139}\u{FE0F}";
+const CHECK_MARK_EMOJI = "\u{2705}";
+const THUMBS_UP_EMOJI = "\u{1F44D}";
+const FIRE_EMOJI = "\u{1F525}";
+const PARTY_EMOJI = "\u{1F389}";
+const EYES_EMOJI = "\u{1F440}";
+const HEART_EMOJI = "\u{2764}\u{FE0F}";
 
 function createSignal() {
   let resolve!: () => void;
@@ -427,7 +436,7 @@ describe("createTelegramBot", () => {
           date: 1736380800,
           message_id: 21,
           text: [
-            "🧩 Yep-needs approval again.",
+            `${PUZZLE_EMOJI} Yep-needs approval again.`,
             "",
             "Run:",
             "/approve 138e9b8c allow-once",
@@ -666,7 +675,7 @@ describe("createTelegramBot", () => {
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(
-      "❌ Failed to submit approval. Please try again or contact an admin.",
+      `${CROSS_MARK_EMOJI} Failed to submit approval. Please try again or contact an admin.`,
     );
   });
 
@@ -794,7 +803,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledWith(
       1234,
-      "❌ Failed to submit approval. Please try again or contact an admin.",
+      `${CROSS_MARK_EMOJI} Failed to submit approval. Please try again or contact an admin.`,
       undefined,
     );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-legacy-plugin-fallback-blocked");
@@ -881,7 +890,7 @@ describe("createTelegramBot", () => {
     const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
     expect(chatId).toBe(1234);
     expect(messageId).toBe(12);
-    expect(String(text)).toContain("ℹ️ Commands");
+    expect(String(text)).toContain(`${INFO_EMOJI} Commands`);
     expect(params).toEqual(
       expect.objectContaining({
         reply_markup: expect.any(Object),
@@ -1014,7 +1023,9 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("✅ Model reset to default");
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        `${CHECK_MARK_EMOJI} Model reset to default`,
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1078,7 +1089,9 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("✅ Model reset to default");
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        `${CHECK_MARK_EMOJI} Model reset to default`,
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -2115,13 +2128,13 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada", username: "ada_bot" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
       },
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
-      "Telegram reaction added: 👍 by Ada (@ada_bot) on msg 42",
+      `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42`,
       expect.objectContaining({
         contextKey: expect.stringContaining("telegram:reaction:add:1234:42:9"),
       }),
@@ -2139,7 +2152,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
       },
       expectedEnqueueCalls: 0,
     },
@@ -2157,7 +2170,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
       },
       expectedEnqueueCalls: 0,
     },
@@ -2171,7 +2184,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
       },
       expectedEnqueueCalls: 1,
     },
@@ -2190,7 +2203,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🔥" }],
+        new_reaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
       },
       expectedEnqueueCalls: 0,
     },
@@ -2241,7 +2254,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
       },
     });
 
@@ -2272,7 +2285,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
       },
     });
 
@@ -2303,13 +2316,13 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+        new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
-      "Telegram reaction added: 🎉 by Ada on msg 99",
+      `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99`,
       expect.any(Object),
     );
   });
@@ -2338,7 +2351,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+        new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
     });
 
@@ -2369,7 +2382,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+        new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
     });
 
@@ -2400,7 +2413,7 @@ describe("createTelegramBot", () => {
         user: { id: 9, first_name: "Bot", is_bot: true },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+        new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
     });
 
@@ -2429,7 +2442,7 @@ describe("createTelegramBot", () => {
         message_id: 42,
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
-        old_reaction: [{ type: "emoji", emoji: "👍" }],
+        old_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
         new_reaction: [],
       },
     });
@@ -2459,19 +2472,19 @@ describe("createTelegramBot", () => {
         message_id: 42,
         user: { id: 9, first_name: "Ada" },
         date: 1736380800,
-        old_reaction: [{ type: "emoji", emoji: "👍" }],
+        old_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
         new_reaction: [
-          { type: "emoji", emoji: "👍" },
-          { type: "emoji", emoji: "🔥" },
-          { type: "emoji", emoji: "🎉" },
+          { type: "emoji", emoji: THUMBS_UP_EMOJI },
+          { type: "emoji", emoji: FIRE_EMOJI },
+          { type: "emoji", emoji: PARTY_EMOJI },
         ],
       },
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(2);
     expect(enqueueSystemEventSpy.mock.calls.map((call) => call[0])).toEqual([
-      "Telegram reaction added: 🔥 by Ada on msg 42",
-      "Telegram reaction added: 🎉 by Ada on msg 42",
+      `Telegram reaction added: ${FIRE_EMOJI} by Ada on msg 42`,
+      `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 42`,
     ]);
   });
 
@@ -2500,13 +2513,13 @@ describe("createTelegramBot", () => {
         user: { id: 10, first_name: "Bob", username: "bob_user" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🔥" }],
+        new_reaction: [{ type: "emoji", emoji: FIRE_EMOJI }],
       },
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
-      "Telegram reaction added: 🔥 by Bob (@bob_user) on msg 100",
+      `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
       expect.objectContaining({
         sessionKey: expect.stringContaining("telegram:group:5678:topic:1"),
         contextKey: expect.stringContaining("telegram:reaction:add:5678:100:10"),
@@ -2538,13 +2551,13 @@ describe("createTelegramBot", () => {
         user: { id: 10, first_name: "Bob" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👀" }],
+        new_reaction: [{ type: "emoji", emoji: EYES_EMOJI }],
       },
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
-      "Telegram reaction added: 👀 by Bob on msg 101",
+      `Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101`,
       expect.objectContaining({
         sessionKey: expect.stringContaining("telegram:group:5678:topic:1"),
         contextKey: expect.stringContaining("telegram:reaction:add:5678:101:10"),
@@ -2575,13 +2588,13 @@ describe("createTelegramBot", () => {
         user: { id: 11, first_name: "Charlie" },
         date: 1736380800,
         old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "❤️" }],
+        new_reaction: [{ type: "emoji", emoji: HEART_EMOJI }],
       },
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
-      "Telegram reaction added: ❤️ by Charlie on msg 200",
+      `Telegram reaction added: ${HEART_EMOJI} by Charlie on msg 200`,
       expect.objectContaining({
         sessionKey: expect.stringContaining("telegram:group:9999"),
         contextKey: expect.stringContaining("telegram:reaction:add:9999:200:11"),

@@ -459,6 +459,8 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
 
       - name: Strict TS build smoke

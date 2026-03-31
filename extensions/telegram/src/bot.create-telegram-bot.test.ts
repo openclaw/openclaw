@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
+const EYES_EMOJI = "\u{1F440}";
 const {
   answerCallbackQuerySpy,
   botCtorSpy,
@@ -1716,7 +1717,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       messages: {
-        ackReaction: "👀",
+        ackReaction: EYES_EMOJI,
         ackReactionScope: "group-mentions",
         groupChat: { mentionPatterns: ["\\bbert\\b"] },
       },
@@ -1738,7 +1739,9 @@ describe("createTelegramBot", () => {
       },
     });
 
-    expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [{ type: "emoji", emoji: "👀" }]);
+    expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [
+      { type: "emoji", emoji: EYES_EMOJI },
+    ]);
   });
   it("clears native commands when disabled", () => {
     resetHarnessSpies();
