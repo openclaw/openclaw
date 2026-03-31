@@ -50,4 +50,19 @@ describe("minimax model definitions", () => {
     expect(model.name).toBe("MiniMax MiniMax-Future");
     expect(model.reasoning).toBe(false);
   });
+
+  it("M2.7 model includes image input", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
+    expect(model.input).toEqual(["text", "image"]);
+  });
+
+  it("M2.7-highspeed model includes image input", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
+    expect(model.input).toEqual(["text", "image"]);
+  });
+
+  it("M2.5 model remains text-only", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.5");
+    expect(model.input).toEqual(["text"]);
+  });
 });
