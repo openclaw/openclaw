@@ -117,7 +117,11 @@ actor TalkModeRuntime {
         }
 
         if self.phase == .idle || self.phase == .listening {
-            await self.startRecognition()
+            let recognitionOk = await self.startRecognition()
+            guard recognitionOk else {
+                await self.resetToIdleAfterFailedRecognition()
+                return
+            }
             self.phase = .listening
             await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
             self.startSilenceMonitor()
@@ -126,6 +130,15 @@ actor TalkModeRuntime {
 
     private func isCurrent(_ generation: Int) -> Bool {
         generation == self.lifecycleGeneration && self.isEnabled
+    }
+
+    /// After `startRecognition()` returns `false`, avoid a dead “listening” UI.
+    private func resetToIdleAfterFailedRecognition() async {
+        self.phase = .idle
+        await MainActor.run {
+            TalkModeController.shared.updateLevel(0)
+            TalkModeController.shared.updatePhase(.idle)
+        }
     }
 
     private func start() async {
@@ -177,8 +190,12 @@ actor TalkModeRuntime {
             return
         }
         self.logger.debug("talk: starting recognition (useExecuTorch=\(self.useExecuTorch))...")
-        await self.startRecognition()
+        let recognitionOk = await self.startRecognition()
         guard self.isCurrent(gen) else { return }
+        guard recognitionOk else {
+            await self.resetToIdleAfterFailedRecognition()
+            return
+        }
         self.phase = .listening
         self.logger.debug("talk: recognition started, phase=listening")
         await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
@@ -211,7 +228,7 @@ actor TalkModeRuntime {
     private func handleExecuTorchLoadFailure() async {
         await self.etBridge.shutdown()
         self.useExecuTorch = false
-        self.logger.debug("talk: STT backend falling back to Apple Speech")
+        self.logger.debug("talk: STT backend falling back to Apple Speech (Speech Recognition re-checked in startRecognition)")
     }
 
     private func handleExecuTorchRecognitionFailure(_ error: Error) async {
@@ -229,12 +246,13 @@ actor TalkModeRuntime {
         let generation: Int
     }
 
-    private func startRecognition() async {
+    /// Starts STT for the current backend. Returns `false` if recognition did not start (permissions, hardware, etc.).
+    private func startRecognition() async -> Bool {
         if self.useExecuTorch, await self.etBridge.currentState == .listening {
             // Bridge already capturing (e.g. after TTS); just re-enable emission.
             await self.etBridge.setEmissionEnabled(true)
             self.logger.debug("talk: startRecognition() ExecuTorch already listening — emission re-enabled")
-            return
+            return true
         }
         await self.stopRecognition()
         self.recognitionGeneration &+= 1
@@ -243,8 +261,18 @@ actor TalkModeRuntime {
 
         if self.useExecuTorch {
             self.logger.debug("talk: starting ExecuTorch recognition...")
-            await self.startExecuTorchRecognition(generation: generation)
-            return
+            return await self.startExecuTorchRecognition(generation: generation)
+        }
+
+        // Mic-only users may start with ExecuTorch; after load/capture failure we fall back to Apple
+        // Speech, which requires Speech Recognition. Re-check here so we prompt instead of a dead listen UI.
+        if !PermissionManager.talkModePermissionsGranted(useExecuTorch: false) {
+            self.logger.debug("talk: Apple Speech path — requesting Speech Recognition (needed after ExecuTorch fallback or if permissions changed)")
+            let granted = await PermissionManager.ensureTalkModePermissions(useExecuTorch: false, interactive: true)
+            if !granted {
+                self.logger.warning("talk: Apple Speech aborted — Speech Recognition not granted")
+                return false
+            }
         }
 
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
@@ -252,7 +280,7 @@ actor TalkModeRuntime {
         self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk: Apple Speech recognizer unavailable (locale=\(locale, privacy: .public))")
-            return
+            return false
         }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -262,12 +290,12 @@ actor TalkModeRuntime {
         if self.audioEngine == nil {
             self.audioEngine = AVAudioEngine()
         }
-        guard let audioEngine = self.audioEngine else { return }
+        guard let audioEngine = self.audioEngine else { return false }
 
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.audioEngine = nil
             self.logger.error("talk mode: no usable audio input device")
-            return
+            return false
         }
 
         let input = audioEngine.inputNode
@@ -286,7 +314,7 @@ actor TalkModeRuntime {
             try audioEngine.start()
         } catch {
             self.logger.error("talk audio engine start failed: \(error.localizedDescription, privacy: .public)")
-            return
+            return false
         }
 
         self.startRMSTicker(meter: meter)
@@ -303,11 +331,12 @@ actor TalkModeRuntime {
                 generation: generation)
             Task { await self.handleRecognition(update) }
         }
+        return true
     }
 
     // MARK: - ExecuTorch Recognition
 
-    private func startExecuTorchRecognition(generation: Int) async {
+    private func startExecuTorchRecognition(generation: Int) async -> Bool {
         self.logger.debug("talk: startExecuTorchRecognition() calling etBridge.startListening...")
         do {
             try await self.etBridge.startListening { [weak self, generation] token, replaceFullHypothesis in
@@ -320,10 +349,11 @@ actor TalkModeRuntime {
                 }
             }
             self.logger.debug("talk: ExecuTorch startListening returned (offline poll active)")
+            return true
         } catch {
             await self.handleExecuTorchRecognitionFailure(error)
-            guard generation == self.recognitionGeneration else { return }
-            await self.startRecognition()
+            guard generation == self.recognitionGeneration else { return false }
+            return await self.startRecognition()
         }
     }
 
@@ -470,7 +500,10 @@ actor TalkModeRuntime {
 
         guard !finalTranscript.isEmpty else {
             await self.startListening()
-            await self.startRecognition()
+            let recognitionOk = await self.startRecognition()
+            if !recognitionOk {
+                await self.resetToIdleAfterFailedRecognition()
+            }
             return
         }
 
@@ -524,7 +557,10 @@ actor TalkModeRuntime {
             else {
                 self.logger.warning("talk assistant text missing after timeout")
                 await self.startListening()
-                await self.startRecognition()
+                let recognitionOk = await self.startRecognition()
+                if !recognitionOk {
+                    await self.resetToIdleAfterFailedRecognition()
+                }
                 return
             }
             guard self.isCurrent(gen) else { return }
@@ -552,7 +588,10 @@ actor TalkModeRuntime {
             return
         }
         await self.startListening()
-        await self.startRecognition()
+        let recognitionOk = await self.startRecognition()
+        if !recognitionOk {
+            await self.resetToIdleAfterFailedRecognition()
+        }
     }
 
     private func buildPrompt(transcript: String) -> String {
@@ -847,7 +886,8 @@ actor TalkModeRuntime {
             self.lastSpeechEnergyAt = nil
             await self.etBridge.setEmissionEnabled(false)
         } else {
-            await self.startRecognition()
+            // Barge-in path: best-effort; if recognition cannot start, still allow TTS (prior behavior).
+            _ = await self.startRecognition()
         }
         return self.isCurrent(generation)
     }
@@ -1010,7 +1050,10 @@ actor TalkModeRuntime {
         }
         if reason == .speech || reason == .userTap {
             await self.startListening()
-            await self.startRecognition()
+            let recognitionOk = await self.startRecognition()
+            if !recognitionOk {
+                await self.resetToIdleAfterFailedRecognition()
+            }
             return
         }
         self.phase = .thinking
