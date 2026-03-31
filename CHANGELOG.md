@@ -118,6 +118,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/direct rooms: stop trusting remote `is_direct`, honor explicit local `is_direct: false` for discovered DM candidates, and avoid extra member-state lookups for shared rooms so DM routing and repair stay aligned. (#57124) Thanks @w-sss.
 - Agents/sandbox: make remote FS bridge reads pin the parent path and open the file atomically in the helper so read access cannot race path resolution. Thanks @AntAISecurityLab and @vincentkoc.
 - Exec/env: block Python package index override variables from request-scoped host exec environment sanitization so package fetches cannot be redirected through a caller-supplied index. Thanks @nexrin and @vincentkoc.
+- Telegram/audio: transcode Telegram voice-note `.ogg` attachments before the local `whisper-cli` auto fallback runs, and keep mention-preflight transcription enabled in auto mode when `tools.media.audio` is unset.
 
 ## 2026.3.28
 
