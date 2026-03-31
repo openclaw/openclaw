@@ -44,6 +44,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry.js");
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);
 
+// Verify CLI backend runtime is emitted as a standalone entry so that
+// `isCliProvider()` can resolve it at runtime via `require()`.
+const cliBackendsRuntimePath = path.join(repoRoot, "dist", "plugins", "cli-backends.runtime.js");
+assert.ok(
+  fs.existsSync(cliBackendsRuntimePath),
+  `missing build output: ${cliBackendsRuntimePath} — CLI backends will silently fail at runtime`,
+);
+
 const { clearPluginCommands, getPluginCommandSpecs, loadOpenClawPlugins, matchPluginCommand } =
   await import(pathToFileURL(smokeEntryPath).href);
 

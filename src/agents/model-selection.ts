@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -30,9 +31,15 @@ let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
 type CliBackendRuntimeModule = typeof import("../plugins/cli-backends.runtime.js");
 
+// Use a local `createRequire(import.meta.url)` so the bundler emits a require
+// anchored to this chunk's file URL.  A bare `require()` gets hoisted into a
+// shared helpers chunk whose `import.meta.url` points elsewhere, breaking the
+// relative path resolution at runtime.
+const requireFromHere = createRequire(import.meta.url);
 const CLI_BACKEND_RUNTIME_CANDIDATES = [
   "../plugins/cli-backends.runtime.js",
   "../plugins/cli-backends.runtime.ts",
+  "./plugins/cli-backends.runtime.js",
 ] as const;
 
 let cliBackendRuntimeModule: CliBackendRuntimeModule | undefined;
@@ -43,7 +50,7 @@ function loadCliBackendRuntime(): CliBackendRuntimeModule | null {
   }
   for (const candidate of CLI_BACKEND_RUNTIME_CANDIDATES) {
     try {
-      cliBackendRuntimeModule = require(candidate) as CliBackendRuntimeModule;
+      cliBackendRuntimeModule = requireFromHere(candidate) as CliBackendRuntimeModule;
       return cliBackendRuntimeModule;
     } catch {
       // Try source/runtime candidates in order.

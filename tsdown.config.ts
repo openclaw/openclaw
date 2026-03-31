@@ -123,6 +123,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "plugins/cli-backends.runtime": "src/plugins/cli-backends.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
     "plugins/runtime/runtime-line.contract": "src/plugins/runtime/runtime-line.contract.ts",
     extensionAPI: "src/extensionAPI.ts",
