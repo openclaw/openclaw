@@ -101,6 +101,10 @@
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"
     },
+    "./plugin-sdk/reply-chunking": {
+      "types": "./dist/plugin-sdk/reply-chunking.d.ts",
+      "default": "./dist/plugin-sdk/reply-chunking.js"
+    },
     "./plugin-sdk/reply-payload": {
       "types": "./dist/plugin-sdk/reply-payload.d.ts",
       "default": "./dist/plugin-sdk/reply-payload.js"
