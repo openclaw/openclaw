@@ -130,10 +130,10 @@ export function registerMatrixMonitorEvents(params: {
     const invitee = typeof event?.state_key === "string" ? event.state_key.trim() : "";
     const senderIsInvitee =
       typeof event?.sender === "string" && invitee && event.sender.trim() === invitee;
+    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
     if (typeof event?.sender === "string" && event.sender.trim() && !senderIsInvitee) {
       directTracker?.rememberInvite?.(roomId, event.sender);
     }
-    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
     logVerboseMessage(
       `matrix: invite room=${roomId} sender=${sender} direct=${String(isDirect)} id=${eventId}`,
     );
