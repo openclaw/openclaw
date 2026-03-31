@@ -199,6 +199,12 @@ export class TelnyxProvider implements VoiceCallProvider {
           digits: data.payload?.digit || "",
         };
 
+      // Playback lifecycle (from playback_start API — Cartesia audio)
+      case "call.playback.started":
+        return { ...baseEvent, type: "call.speaking", text: "" };
+      case "call.playback.ended":
+        return { ...baseEvent, type: "call.active" };
+
       // Audio streaming lifecycle — log but no action needed
       case "streaming.started":
       case "streaming.stopped":

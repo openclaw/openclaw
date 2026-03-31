@@ -31,6 +31,7 @@ import type { STTProvider } from "./providers/stt-openai-realtime.js";
 import type { TelephonyTtsProvider } from "./telephony-tts.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import { DeepgramSTTProvider } from "./providers/stt-deepgram.js";
+import { streamVoiceResponse } from "./streaming-response.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
@@ -84,6 +85,12 @@ export class VoiceCallWebhookServer {
   private answeredCalls = new Set<string>();
   /** Greeting text stashed from manager to speak via Cartesia instead of native TTS */
   private pendingGreetings = new Map<string, string>();
+  /** Track which calls are currently speaking (turn management — suppress STT during TTS) */
+  private speakingCalls = new Set<string>();
+  /** Queued user utterances received while bot was speaking — process after playback ends */
+  private pendingUtterances = new Map<string, string>();
+  /** Track which calls have active Deepgram streaming (suppress native transcription handler) */
+  private streamingActiveCalls = new Set<string>();
 
   constructor(
     config: VoiceCallConfig,
@@ -634,7 +641,10 @@ export class VoiceCallWebhookServer {
             voiceDebug(`Starting audio stream for ${cid} → ${streamUrl}`);
             void this.provider
               .startStreaming!({ providerCallId: pcid, streamUrl })
-              .then(() => voiceDebug(`Audio streaming started for ${cid}`))
+              .then(() => {
+                voiceDebug(`Audio streaming started for ${cid}`);
+                this.streamingActiveCalls.add(cid);
+              })
               .catch((err) => {
                 voiceDebug(`Failed to start audio streaming: ${err}`);
                 voiceDebug(`Falling back to native transcription for ${cid}`);
@@ -660,6 +670,25 @@ export class VoiceCallWebhookServer {
     // Only needed for native transcription — streaming mode keeps audio fork active during speak.
     // Suppress Telnyx error 90054 ("transcription already in progress") — harmless race.
     if (event.type === "call.active") {
+      // Clear speaking flag — playback finished, ready for next turn
+      const activeCall =
+        this.manager.getCall(event.callId) ??
+        this.manager.getCallByProviderCallId(event.providerCallId || event.callId);
+      if (activeCall) {
+        this.speakingCalls.delete(activeCall.callId);
+        voiceDebug(`Playback ended for ${activeCall.callId} — ready for next turn`);
+
+        // Process any queued utterance that came in while we were speaking
+        const queued = this.pendingUtterances.get(activeCall.callId);
+        if (queued) {
+          this.pendingUtterances.delete(activeCall.callId);
+          voiceDebug(`Processing queued utterance for ${activeCall.callId}: "${queued}"`);
+          void this.handleInboundResponse(activeCall.callId, queued).catch((err) => {
+            voiceDebug(`Queued response error: ${err}`);
+          });
+        }
+      }
+
       // Streaming mode: audio fork stays active during speak, no restart needed
       if (this.config.streaming.enabled) {
         return;
@@ -684,16 +713,21 @@ export class VoiceCallWebhookServer {
       return;
     }
 
-    // Auto-respond to final speech transcripts (non-streaming conversation loop).
-    // When streaming is enabled, transcripts come from the media stream onTranscript callback
-    // (see initializeMediaStreaming), not from native provider transcription events.
+    // Auto-respond to final speech transcripts from native provider transcription.
+    // Skip if Deepgram streaming is active for this call (it handles transcripts separately).
     if (
       event.type === "call.speech" &&
-      !this.config.streaming.enabled &&
       "isFinal" in event &&
       event.isFinal &&
       "transcript" in event
     ) {
+      // Check if streaming is handling this call's transcripts
+      const speechCall = this.manager.getCall(event.callId) ??
+        this.manager.getCallByProviderCallId(event.callId);
+      if (speechCall && this.streamingActiveCalls.has(speechCall.callId)) {
+        voiceDebug(`Ignoring native transcript — Deepgram streaming active for ${speechCall.callId}`);
+        return;
+      }
       const transcript = event.transcript.trim();
       voiceDebug(`Speech event: callId=${event.callId} transcript="${transcript}"`);
       if (!transcript) {
@@ -742,7 +776,6 @@ export class VoiceCallWebhookServer {
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
     console.log(`[voice-call] Auto-responding to inbound call ${callId}: "${userMessage}"`);
 
-    // Get call context for conversation history
     const call = this.manager.getCall(callId);
     if (!call) {
       console.warn(`[voice-call] Call ${callId} not found for auto-response`);
@@ -751,16 +784,105 @@ export class VoiceCallWebhookServer {
 
     voiceDebug(`handleInboundResponse START callId=${callId} msg="${userMessage}"`);
 
+    const providerCallId = call.providerCallId ?? callId;
+
+    // Turn management: queue utterance if we're currently speaking (prevents overlapping responses)
+    if (this.speakingCalls.has(callId)) {
+      voiceDebug(`Queuing utterance — call ${callId} is still speaking: "${userMessage}"`);
+      this.pendingUtterances.set(callId, userMessage);
+      return;
+    }
+
+    // Resolve Anthropic API key
+    const apiKey = process.env.OPENCLAW_LIVE_ANTHROPIC_KEY
+      || process.env.ANTHROPIC_API_KEY
+      || "";
+
+    // Use streaming pipeline when we have an API key and Cartesia TTS
+    if (apiKey && this.telephonyTtsProvider && this.provider.name === "telnyx") {
+      const baseUrl = (this.coreConfig as any)?.providers?.anthropic?.baseUrl
+        || "https://api.anthropic.com";
+      const startTime = Date.now();
+      let sentenceCount = 0;
+      let firstSentenceTime = 0;
+
+      voiceDebug(`Streaming response with model=${this.config.responseModel}...`);
+
+      // Queue of TTS promises to await in order (Telnyx queues playback automatically)
+      const ttsQueue: Promise<void>[] = [];
+
+      await streamVoiceResponse({
+        voiceConfig: this.config,
+        apiKey,
+        baseUrl,
+        from: call.from,
+        transcript: call.transcript,
+        userMessage,
+        timeoutMs: this.config.responseTimeoutMs ?? 15000,
+
+        onSentence: (sentence) => {
+          sentenceCount++;
+          if (sentenceCount === 1) {
+            firstSentenceTime = Date.now() - startTime;
+            voiceDebug(`First sentence in ${firstSentenceTime}ms: "${sentence}"`);
+          } else {
+            voiceDebug(`Sentence #${sentenceCount}: "${sentence}"`);
+          }
+
+          // Check for transfer signal
+          if (sentence.toUpperCase().startsWith("[TRANSFER]")) {
+            const spokenText = sentence.replace(/\[TRANSFER\]/i, "").trim();
+            voiceDebug(`Transfer signal in stream`);
+            ttsQueue.push(
+              this.speakToCall(callId, providerCallId, spokenText).then(() =>
+                this.handleCallForward(callId, call, "")
+              )
+            );
+            return;
+          }
+
+          // Fire-and-forget TTS for this sentence (Telnyx queues playbacks)
+          const ttsPromise = this.speakToCall(callId, providerCallId, sentence).catch((err) => {
+            voiceDebug(`Streaming TTS error for sentence: ${err}`);
+          });
+          ttsQueue.push(ttsPromise);
+        },
+
+        onDone: (fullText) => {
+          const totalTime = Date.now() - startTime;
+          voiceDebug(`Stream complete: ${sentenceCount} sentences, ${totalTime}ms total, first sentence at ${firstSentenceTime}ms`);
+          // Add full response to transcript
+          if (fullText) {
+            call.transcript.push({ timestamp: Date.now(), speaker: "bot", text: fullText, isFinal: true });
+          }
+        },
+
+        onError: (error) => {
+          voiceDebug(`Stream error: ${error.message}`);
+        },
+      });
+
+      // Wait for all queued TTS to finish sending to Telnyx
+      await Promise.all(ttsQueue);
+
+      // If no sentences were produced, speak a fallback
+      if (sentenceCount === 0) {
+        voiceDebug(`No sentences from stream - speaking fallback`);
+        await this.speakToCall(callId, providerCallId, "I'm sorry, could you say that again?");
+      }
+      return;
+    }
+
+    // Fallback: non-streaming path (no API key or non-Telnyx provider)
     if (!this.coreConfig) {
       voiceDebug(`coreConfig is NULL - speaking fallback`);
-      await this.manager.speak(callId, "I'm sorry, I'm having a technical issue. Please try again later or I can transfer you to our team.");
+      await this.manager.speak(callId, "I'm sorry, I'm having a technical issue.");
       return;
     }
 
     try {
       const { generateVoiceResponse } = await import("./response-generator.js");
-
-      voiceDebug(`Calling generateVoiceResponse with model=${this.config.responseModel}...`);
+      voiceDebug(`Calling generateVoiceResponse (non-streaming) with model=${this.config.responseModel}...`);
       const result = await generateVoiceResponse({
         voiceConfig: this.config,
         coreConfig: this.coreConfig,
@@ -772,31 +894,20 @@ export class VoiceCallWebhookServer {
 
       voiceDebug(`generateVoiceResponse returned: text=${result.text ? `"${result.text.slice(0,80)}"` : "null"} error=${result.error || "none"}`);
 
-      if (result.error) {
-        voiceDebug(`Response error - speaking fallback`);
-        await this.manager.speak(callId, "I'm sorry, I didn't catch that. Could you please repeat?");
-        return;
-      }
-
       if (result.text) {
-        // Check for transfer signal from the AI (case-insensitive, may appear at start)
         const transferSignal = result.text.toUpperCase().startsWith("[TRANSFER]");
         if (transferSignal) {
           const spokenText = result.text.replace(/\[TRANSFER\]/i, "").trim();
-          voiceDebug(`Transfer signal detected, forwarding to ${this.config.fallbackForward?.number}`);
           await this.handleCallForward(callId, call, spokenText);
           return;
         }
-
-        voiceDebug(`Speaking AI response`);
-        await this.speakToCall(callId, call.providerCallId ?? callId, result.text);
+        await this.speakToCall(callId, providerCallId, result.text);
       } else {
-        voiceDebug(`No text returned - speaking fallback`);
-        await this.speakToCall(callId, call.providerCallId ?? callId, "I'm sorry, could you say that again?");
+        await this.speakToCall(callId, providerCallId, "I'm sorry, could you say that again?");
       }
     } catch (err) {
       voiceDebug(`CAUGHT ERROR in handleInboundResponse: ${err}`);
-      await this.speakToCall(callId, call.providerCallId ?? callId, "I'm sorry, I'm experiencing a technical issue. Would you like me to transfer you to our team?");
+      await this.speakToCall(callId, providerCallId, "I'm sorry, I'm experiencing a technical issue. Would you like me to transfer you to our team?");
     }
   }
 
@@ -807,6 +918,25 @@ export class VoiceCallWebhookServer {
    * Otherwise falls back to native provider TTS (e.g. Telnyx speak action).
    */
   private async speakToCall(callId: string, providerCallId: string, text: string): Promise<void> {
+    this.speakingCalls.add(callId);
+    // Safety valve: auto-clear speaking flag if playback.ended webhook doesn't arrive.
+    // Estimate audio duration from text length (~150ms per word) + 3s buffer for TTS generation.
+    const wordCount = text.split(/\s+/).length;
+    const estimatedMs = Math.max(5000, wordCount * 150 + 3000);
+    setTimeout(() => {
+      if (this.speakingCalls.has(callId)) {
+        voiceDebug(`Speaking timeout for ${callId} after ${estimatedMs}ms — forcing turn open`);
+        this.speakingCalls.delete(callId);
+        // Process any queued utterance
+        const queued = this.pendingUtterances.get(callId);
+        if (queued) {
+          this.pendingUtterances.delete(callId);
+          voiceDebug(`Processing queued utterance after timeout: "${queued}"`);
+          void this.handleInboundResponse(callId, queued).catch(() => {});
+        }
+      }
+    }, estimatedMs);
+
     // Telnyx: use Cartesia TTS → playback_start API (media stream is inbound-only, can't inject audio via WebSocket)
     if (this.telephonyTtsProvider && this.provider.name === "telnyx") {
       try {
