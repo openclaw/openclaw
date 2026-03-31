@@ -66,6 +66,7 @@ import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
@@ -625,7 +626,7 @@ async function agentCommandInternal(
     }
 
     const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-    const storedModelOverride = sessionEntry?.modelOverride?.trim();
+    let storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
@@ -635,7 +636,7 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
-    const providerForAuthProfileValidation = provider;
+    let providerForAuthProfileValidation = provider;
     if (hasExplicitRunOverride) {
       const explicitRef = explicitModelOverride
         ? explicitProviderOverride
@@ -739,109 +740,152 @@ async function agentCommandInternal(
     let result: Awaited<ReturnType<typeof runAgentAttempt>>;
     let fallbackProvider = provider;
     let fallbackModel = model;
-    try {
-      const runContext = resolveAgentRunContext(opts);
-      const messageChannel = resolveMessageChannel(
-        runContext.messageChannel,
-        opts.replyChannel ?? opts.channel,
-      );
-      const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
-      // Keep fallback candidate resolution centralized so session model overrides,
-      // per-agent overrides, and default fallbacks stay consistent across callers.
-      const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
-        cfg,
-        agentId: sessionAgentId,
-        hasSessionModelOverride: Boolean(storedModelOverride),
-      });
+    // Retry loop: when the embedded runner detects a live session model switch
+    // (e.g. a subagent whose persisted session targets a different provider/model),
+    // it throws LiveSessionModelSwitchError.  Catch it and restart the full
+    // runWithModelFallback cycle with the updated provider/model, mirroring the
+    // same retry logic used by the main auto-reply runner
+    // (see: agent-runner-execution.ts).
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const runContext = resolveAgentRunContext(opts);
+        const messageChannel = resolveMessageChannel(
+          runContext.messageChannel,
+          opts.replyChannel ?? opts.channel,
+        );
+        const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
+        // Keep fallback candidate resolution centralized so session model overrides,
+        // per-agent overrides, and default fallbacks stay consistent across callers.
+        const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
+          cfg,
+          agentId: sessionAgentId,
+          hasSessionModelOverride: Boolean(storedModelOverride),
+        });
 
-      // Track model fallback attempts so retries on an existing session don't
-      // re-inject the original prompt as a duplicate user message.
-      let fallbackAttemptIndex = 0;
-      const fallbackResult = await runWithModelFallback({
-        cfg,
-        provider,
-        model,
-        runId,
-        agentDir,
-        fallbacksOverride: effectiveFallbacksOverride,
-        run: async (providerOverride, modelOverride, runOptions) => {
-          const isFallbackRetry = fallbackAttemptIndex > 0;
-          fallbackAttemptIndex += 1;
-          return runAgentAttempt({
-            providerOverride,
-            modelOverride,
-            cfg,
-            sessionEntry,
-            sessionId,
-            sessionKey,
-            sessionAgentId,
-            sessionFile,
-            workspaceDir,
-            body,
-            isFallbackRetry,
-            resolvedThinkLevel,
-            timeoutMs,
+        // Track model fallback attempts so retries on an existing session don't
+        // re-inject the original prompt as a duplicate user message.
+        let fallbackAttemptIndex = 0;
+        const fallbackResult = await runWithModelFallback({
+          cfg,
+          provider,
+          model,
+          runId,
+          agentDir,
+          fallbacksOverride: effectiveFallbacksOverride,
+          run: async (providerOverride, modelOverride, runOptions) => {
+            const isFallbackRetry = fallbackAttemptIndex > 0;
+            fallbackAttemptIndex += 1;
+            return runAgentAttempt({
+              providerOverride,
+              modelOverride,
+              cfg,
+              sessionEntry,
+              sessionId,
+              sessionKey,
+              sessionAgentId,
+              sessionFile,
+              workspaceDir,
+              body,
+              isFallbackRetry,
+              resolvedThinkLevel,
+              timeoutMs,
+              runId,
+              opts,
+              runContext,
+              spawnedBy,
+              messageChannel,
+              skillsSnapshot,
+              resolvedVerboseLevel,
+              agentDir,
+              authProfileProvider: providerForAuthProfileValidation,
+              sessionStore,
+              storePath,
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              sessionHasHistory: !isNewSession || (await sessionFileHasContent(sessionFile)),
+              onAgentEvent: (evt) => {
+                // Track lifecycle end for fallback emission below.
+                if (
+                  evt.stream === "lifecycle" &&
+                  typeof evt.data?.phase === "string" &&
+                  (evt.data.phase === "end" || evt.data.phase === "error")
+                ) {
+                  lifecycleEnded = true;
+                }
+              },
+            });
+          },
+        });
+        result = fallbackResult.result;
+        fallbackProvider = fallbackResult.provider;
+        fallbackModel = fallbackResult.model;
+        if (!lifecycleEnded) {
+          const stopReason = result.meta.stopReason;
+          if (stopReason && stopReason !== "end_turn") {
+            console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+          }
+          emitAgentEvent({
             runId,
-            opts,
-            runContext,
-            spawnedBy,
-            messageChannel,
-            skillsSnapshot,
-            resolvedVerboseLevel,
-            agentDir,
-            authProfileProvider: providerForAuthProfileValidation,
-            sessionStore,
-            storePath,
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-            sessionHasHistory: !isNewSession || (await sessionFileHasContent(sessionFile)),
-            onAgentEvent: (evt) => {
-              // Track lifecycle end for fallback emission below.
-              if (
-                evt.stream === "lifecycle" &&
-                typeof evt.data?.phase === "string" &&
-                (evt.data.phase === "end" || evt.data.phase === "error")
-              ) {
-                lifecycleEnded = true;
-              }
+            stream: "lifecycle",
+            data: {
+              phase: "end",
+              startedAt,
+              endedAt: Date.now(),
+              aborted: result.meta.aborted ?? false,
+              stopReason,
             },
           });
-        },
-      });
-      result = fallbackResult.result;
-      fallbackProvider = fallbackResult.provider;
-      fallbackModel = fallbackResult.model;
-      if (!lifecycleEnded) {
-        const stopReason = result.meta.stopReason;
-        if (stopReason && stopReason !== "end_turn") {
-          console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
         }
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "end",
-            startedAt,
-            endedAt: Date.now(),
-            aborted: result.meta.aborted ?? false,
-            stopReason,
-          },
-        });
+        break;
+      } catch (err) {
+        if (err instanceof LiveSessionModelSwitchError) {
+          // Capture the pre-switch model before mutating, so the guard below
+          // can detect whether the model actually changed.
+          const previousModel = model;
+          provider = err.provider;
+          model = err.model;
+          fallbackProvider = err.provider;
+          fallbackModel = err.model;
+          // Keep auth-profile validation in sync so the next attempt resolves
+          // the correct session-level auth profile for the new provider.
+          providerForAuthProfileValidation = err.provider;
+          // Forward auth-profile fields carried by the switch request so the
+          // retried run uses the right credentials (mirrors the main runner).
+          if (sessionEntry) {
+            sessionEntry.authProfileOverride = err.authProfileId;
+            sessionEntry.authProfileOverrideSource = err.authProfileId
+              ? err.authProfileIdSource
+              : undefined;
+          }
+          // Only update storedModelOverride when the model actually changed
+          // (or was already overridden).  Auth-only switches that keep the same
+          // provider/model should not flip hasSessionModelOverride to true,
+          // because that would alter fallback candidate resolution.
+          if (storedModelOverride || err.model !== previousModel) {
+            storedModelOverride = err.model;
+          }
+          // Reset lifecycle tracking for the retry iteration.
+          lifecycleEnded = false;
+          log.info(
+            `Live session model switch in subagent run ${runId}: switching to ${err.provider}/${err.model}`,
+          );
+          continue;
+        }
+        if (!lifecycleEnded) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "error",
+              startedAt,
+              endedAt: Date.now(),
+              error: String(err),
+            },
+          });
+        }
+        throw err;
       }
-    } catch (err) {
-      if (!lifecycleEnded) {
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "error",
-            startedAt,
-            endedAt: Date.now(),
-            error: String(err),
-          },
-        });
-      }
-      throw err;
-    }
+    } // end while
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {
