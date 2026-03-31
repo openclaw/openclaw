@@ -16,7 +16,9 @@ import javax.net.ssl.SSLParameters
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLEngine
 import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 
 data class GatewayTlsParams(
@@ -41,9 +43,17 @@ fun buildGatewayTlsConfig(
   val defaultTrust = defaultTrustManager()
   @SuppressLint("CustomX509TrustManager")
   val trustManager =
-    object : X509TrustManager {
+    object : X509ExtendedTrustManager() {
       override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
         defaultTrust.checkClientTrusted(chain, authType)
+      }
+
+      override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String, socket: java.net.Socket) {
+        checkClientTrusted(chain, authType)
+      }
+
+      override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) {
+        checkClientTrusted(chain, authType)
       }
 
       override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
@@ -60,6 +70,14 @@ fun buildGatewayTlsConfig(
           return
         }
         defaultTrust.checkServerTrusted(chain, authType)
+      }
+
+      override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, socket: java.net.Socket) {
+        checkServerTrusted(chain, authType)
+      }
+
+      override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) {
+        checkServerTrusted(chain, authType)
       }
 
       override fun getAcceptedIssuers(): Array<X509Certificate> = defaultTrust.acceptedIssuers
@@ -93,11 +111,15 @@ suspend fun probeGatewayTlsFingerprint(
   return withContext(Dispatchers.IO) {
     val trustAll =
       @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
-      object : X509TrustManager {
+      object : X509ExtendedTrustManager() {
         @SuppressLint("TrustAllX509TrustManager")
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String, socket: java.net.Socket) {}
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) {}
         @SuppressLint("TrustAllX509TrustManager")
         override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, socket: java.net.Socket) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String, engine: SSLEngine) {}
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
       }
 
