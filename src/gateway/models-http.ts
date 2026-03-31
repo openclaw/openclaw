@@ -10,7 +10,7 @@ import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
   resolveAgentIdFromModel,
-  resolveTrustedHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
@@ -89,7 +89,7 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

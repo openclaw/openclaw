@@ -138,4 +138,42 @@ describe("handleGatewayPostJsonEndpoint", () => {
     );
     expect(vi.mocked(readJsonBodyOrError)).not.toHaveBeenCalled();
   });
+
+  it("uses a custom operator scope resolver when provided", async () => {
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
+      authMethod: "token",
+      trustDeclaredOperatorScopes: false,
+    });
+    vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({ allowed: true });
+    vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
+    const resolveOperatorScopes = vi.fn(() => ["operator.admin", "operator.write"]);
+
+    const result = await handleGatewayPostJsonEndpoint(
+      {
+        url: "/v1/ok",
+        method: "POST",
+        headers: { host: "localhost" },
+      } as unknown as IncomingMessage,
+      {} as unknown as ServerResponse,
+      {
+        pathname: "/v1/ok",
+        auth: {} as unknown as ResolvedGatewayAuth,
+        maxBodyBytes: 123,
+        requiredOperatorMethod: "chat.send",
+        resolveOperatorScopes,
+      },
+    );
+
+    expect(resolveOperatorScopes).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        authMethod: "token",
+        trustDeclaredOperatorScopes: false,
+      }),
+    );
+    expect(result).toEqual({
+      body: { ok: true },
+      requestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+    });
+  });
 });

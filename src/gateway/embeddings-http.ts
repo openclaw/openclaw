@@ -19,6 +19,7 @@ import {
   getHeader,
   resolveAgentIdForRequest,
   resolveAgentIdFromModel,
+  resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 
 type OpenAiEmbeddingsHttpOptions = {
@@ -210,6 +211,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/embeddings",
     requiredOperatorMethod: "chat.send",
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
