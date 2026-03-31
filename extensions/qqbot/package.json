@@ -7,10 +7,10 @@
   "dependencies": {
     "mpg123-decoder": "^1.0.3",
     "silk-wasm": "^3.7.1",
-    "ws": "^8.18.0"
+    "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.0",
+    "@types/ws": "^8.18.1",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
