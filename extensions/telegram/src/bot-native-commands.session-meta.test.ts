@@ -206,6 +206,7 @@ function registerAndResolveCommandHandlerBase(params: {
       modelNames: new Map<string, string>(),
     })),
     listSkillCommandsForAgents: vi.fn(() => []),
+    syncTelegramMenuCommands: vi.fn(),
     wasSentByBot: vi.fn(() => false),
   };
   registerTelegramNativeCommands({

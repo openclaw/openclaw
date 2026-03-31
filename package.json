@@ -1241,6 +1241,7 @@
     "overrides": {
       "hono": "4.12.9",
       "@hono/node-server": "1.19.10",
+      "axios": "1.13.6",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",

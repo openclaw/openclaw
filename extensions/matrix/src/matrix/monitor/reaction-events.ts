@@ -1,4 +1,4 @@
-import { getSessionBindingService } from "../../runtime-api.js";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { PluginRuntime } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../accounts.js";

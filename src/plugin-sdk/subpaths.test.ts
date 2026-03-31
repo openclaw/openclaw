@@ -575,7 +575,13 @@ describe("plugin-sdk subpath exports", () => {
       "createTopLevelChannelReplyToModeResolver",
     ]);
 
-    expectSourceMentions("thread-bindings-runtime", ["resolveThreadBindingLifecycle"]);
+    expectSourceMentions("thread-bindings-runtime", [
+      "resolveThreadBindingFarewellText",
+      "resolveThreadBindingLifecycle",
+      "registerSessionBindingAdapter",
+      "unregisterSessionBindingAdapter",
+      "SessionBindingAdapter",
+    ]);
     expectSourceMentions("matrix-runtime-shared", ["formatZonedTimestamp"]);
     expectSourceMentions("ssrf-runtime", [
       "closeDispatcher",
