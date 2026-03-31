@@ -322,11 +322,11 @@ describe("plugin-sdk subpath exports", () => {
     );
     expectSourceContains(
       "memory-core-host-session-fts",
-      'from "../../extensions/memory-core/src/memory/hybrid.js"',
+      "../../extensions/memory-core/src/memory/hybrid.js",
     );
     expectSourceContains(
       "memory-core-host-session-fts",
-      'from "../../extensions/memory-core/src/memory/manager-search.js"',
+      "../../extensions/memory-core/src/memory/manager-search.js",
     );
   });
 
