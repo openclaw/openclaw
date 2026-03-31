@@ -847,9 +847,13 @@ async function agentCommandInternal(
               ? err.authProfileIdSource
               : undefined;
           }
-          // After a live switch the session effectively has a model override,
-          // so fallback candidate resolution picks up default fallbacks too.
-          storedModelOverride = err.model;
+          // Only update storedModelOverride when the model actually changed
+          // (or was already overridden).  Auth-only switches that keep the same
+          // provider/model should not flip hasSessionModelOverride to true,
+          // because that would alter fallback candidate resolution.
+          if (storedModelOverride || err.model !== model) {
+            storedModelOverride = err.model;
+          }
           // Reset lifecycle tracking for the retry iteration.
           lifecycleEnded = false;
           log.info(

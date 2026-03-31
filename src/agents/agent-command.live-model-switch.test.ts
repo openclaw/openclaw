@@ -501,4 +501,51 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       hasSessionModelOverride: true,
     });
   });
+
+  it("does not flip hasSessionModelOverride on auth-only switch with same model", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: FallbackRunnerParams) => {
+        invocation += 1;
+        if (invocation === 1) {
+          // Auth-only switch: same default provider/model, only authProfileId changes.
+          throw new LiveSessionModelSwitchError({
+            provider: "anthropic",
+            model: "claude",
+            authProfileId: "profile-99",
+            authProfileIdSource: "admin",
+          });
+        }
+        const result = await params.run(params.provider, params.model);
+        return {
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
+        };
+      },
+    );
+    state.runAgentAttemptMock.mockResolvedValue(
+      makeSuccessResult("anthropic", "claude"),
+    );
+
+    resolveEffectiveModelFallbacksMock.mockClear();
+
+    const agentCommand = await getAgentCommand();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+    });
+
+    // Both calls should see hasSessionModelOverride: false because the model
+    // did not actually change — only the auth profile was switched.
+    expect(resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
+    expect(resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
+      hasSessionModelOverride: false,
+    });
+    expect(resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
+      hasSessionModelOverride: false,
+    });
+  });
 });
