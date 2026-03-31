@@ -22,6 +22,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import { listTasksForSessionKey } from "../../tasks/task-registry.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
@@ -52,6 +53,25 @@ function shouldLoadUsageSummary(params: {
   }
   const auth = params.selectedModelAuth?.trim().toLowerCase();
   return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
+}
+
+function formatSessionTaskLine(sessionKey: string): string | undefined {
+  const tasks = listTasksForSessionKey(sessionKey);
+  if (tasks.length === 0) {
+    return undefined;
+  }
+  const latest = tasks[0];
+  const active = tasks.filter(
+    (task) => task.status === "queued" || task.status === "running",
+  ).length;
+  const headline = `${active} active · ${tasks.length} total`;
+  const title = latest.label?.trim() || latest.task.trim();
+  const detail =
+    latest.status === "running" || latest.status === "queued"
+      ? latest.progressSummary?.trim()
+      : latest.error?.trim() || latest.terminalSummary?.trim();
+  const parts = [headline, latest.runtime, title, detail].filter(Boolean);
+  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
 export async function buildStatusReply(params: {
@@ -184,9 +204,11 @@ export async function buildStatusReply(params: {
   );
 
   let subagentsLine: string | undefined;
+  let taskLine: string | undefined;
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+    taskLine = formatSessionTaskLine(requesterKey);
     const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     if (runs.length > 0) {
@@ -261,6 +283,7 @@ export async function buildStatusReply(params: {
       showDetails: queueOverrides,
     },
     subagentsLine,
+    taskLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
   });
