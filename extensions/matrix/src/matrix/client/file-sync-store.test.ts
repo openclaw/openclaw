@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ISyncResponse } from "matrix-js-sdk";
+import * as jsonStore from "openclaw/plugin-sdk/json-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as runtimeApi from "../../runtime-api.js";
 import { FileBackedMatrixSyncStore } from "./file-sync-store.js";
 
 function createSyncResponse(nextBatch: string): ISyncResponse {
@@ -142,7 +142,7 @@ describe("FileBackedMatrixSyncStore", () => {
   it("coalesces background persistence until the debounce window elapses", async () => {
     vi.useFakeTimers();
     const storagePath = createStoragePath();
-    const writeSpy = vi.spyOn(runtimeApi, "writeJsonFileAtomically").mockResolvedValue();
+    const writeSpy = vi.spyOn(jsonStore, "writeJsonFileAtomically").mockResolvedValue();
 
     const store = new FileBackedMatrixSyncStore(storagePath);
     await store.setSyncData(createSyncResponse("s111"));
@@ -177,7 +177,7 @@ describe("FileBackedMatrixSyncStore", () => {
     const storagePath = createStoragePath();
     const writeDeferred = createDeferred();
     const writeSpy = vi
-      .spyOn(runtimeApi, "writeJsonFileAtomically")
+      .spyOn(jsonStore, "writeJsonFileAtomically")
       .mockImplementation(async () => writeDeferred.promise);
 
     const store = new FileBackedMatrixSyncStore(storagePath);
