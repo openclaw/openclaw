@@ -171,7 +171,7 @@ describe("control UI routing", () => {
     expect(headerStyles.justifyContent).toBe("center");
   });
 
-  it("keeps the selected session when opening chat from sidebar navigation", async () => {
+  it("resets to the main session when opening chat from sidebar navigation", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
 
@@ -181,9 +181,9 @@ describe("control UI routing", () => {
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
-    expect(app.sessionKey).toBe("agent:main:subagent:task-123");
+    expect(app.sessionKey).toBe("main");
     expect(window.location.pathname).toBe("/chat");
-    expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
+    expect(window.location.search).toBe("?session=main");
   });
 
   it("keeps chat and nav usable on narrow viewports", async () => {
