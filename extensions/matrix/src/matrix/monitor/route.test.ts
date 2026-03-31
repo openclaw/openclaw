@@ -208,6 +208,7 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
 
     expect(route.sessionKey).toContain(":thread:$thread-root");
     expect(route.mainSessionKey).not.toContain(":thread:");
+    expect(route.lastRoutePolicy).toBe("session");
   });
 
   it("preserves mixed-case matrix thread ids in session keys", () => {

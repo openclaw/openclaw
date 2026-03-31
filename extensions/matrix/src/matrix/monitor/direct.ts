@@ -42,6 +42,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   const joinedMembersCache = new Map<string, { members: string[]; ts: number }>();
   const directMemberFlagCache = new Map<string, { isDirect: boolean | null; ts: number }>();
   const recentInviteCandidates = new Map<string, { remoteUserId: string; ts: number }>();
+  const locallyPromotedDirectRooms = new Map<string, { remoteUserId: string }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -127,6 +128,24 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     }
   };
 
+  const hasLocallyPromotedDirectRoom = (roomId: string, remoteUserId?: string | null): boolean => {
+    const normalizedRemoteUserId = remoteUserId?.trim();
+    if (!normalizedRemoteUserId) {
+      return false;
+    }
+    return locallyPromotedDirectRooms.get(roomId)?.remoteUserId === normalizedRemoteUserId;
+  };
+
+  const rememberLocallyPromotedDirectRoom = (roomId: string, remoteUserId: string): void => {
+    const normalizedRemoteUserId = remoteUserId.trim();
+    if (!normalizedRemoteUserId) {
+      return;
+    }
+    rememberBounded(locallyPromotedDirectRooms, roomId, {
+      remoteUserId: normalizedRemoteUserId,
+    });
+  };
+
   return {
     invalidateRoom: (roomId: string): void => {
       joinedMembersCache.delete(roomId);
@@ -135,6 +154,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           directMemberFlagCache.delete(key);
         }
       }
+      locallyPromotedDirectRooms.delete(roomId);
       lastDmUpdateMs = 0;
       log(`matrix: invalidated dm cache room=${roomId}`);
     },
@@ -191,6 +211,11 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           return true;
         }
 
+        if (hasLocallyPromotedDirectRoom(roomId, senderId)) {
+          log(`matrix: dm detected via local promotion room=${roomId}`);
+          return true;
+        }
+
         if (hasRecentInviteCandidate(roomId, senderId) && (await canPromoteRecentInvite(roomId))) {
           const promotion = await promoteMatrixDirectRoomCandidate({
             client,
@@ -199,6 +224,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
             selfUserId,
           });
           if (promotion.classifyAsDirect) {
+            rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
             log(
               `matrix: dm detected via recent invite room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
             );
