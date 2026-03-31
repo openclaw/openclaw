@@ -617,9 +617,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       actions: {
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
+          // Use agentAccountId if available (for subagents), otherwise fall back to ctx.accountId
+          const effectiveAccountId = (ctx as any).agentAccountId ?? ctx.accountId ?? undefined;
           const account = resolveFeishuAccount({
             cfg: ctx.cfg,
-            accountId: ctx.accountId ?? undefined,
+            accountId: effectiveAccountId,
           });
           if (
             (ctx.action === "react" || ctx.action === "reactions") &&
@@ -666,7 +668,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 cfg: ctx.cfg,
                 to,
                 card,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
                 replyToMessageId,
                 replyInThread: ctx.action === "thread-reply",
               });
@@ -676,7 +678,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 to,
                 text: text ?? "",
                 mediaUrl,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
                 mediaLocalRoots: ctx.mediaLocalRoots,
                 replyToId: replyToMessageId,
               });
@@ -685,7 +687,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 cfg: ctx.cfg,
                 to,
                 text: text!,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
                 replyToMessageId,
                 replyInThread: ctx.action === "thread-reply",
               });
@@ -707,7 +709,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const message = await getMessageFeishu({
               cfg: ctx.cfg,
               messageId,
-              accountId: ctx.accountId ?? undefined,
+              accountId: effectiveAccountId,
             });
             if (!message) {
               return {
@@ -742,7 +744,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               messageId,
               text,
               card,
-              accountId: ctx.accountId ?? undefined,
+              accountId: effectiveAccountId,
             });
             return jsonActionResult({
               ok: true,
@@ -761,7 +763,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const pin = await createPinFeishu({
               cfg: ctx.cfg,
               messageId,
-              accountId: ctx.accountId ?? undefined,
+              accountId: effectiveAccountId,
             });
             return jsonActionResult({ ok: true, channel: "feishu", action: "pin", pin });
           }
@@ -775,7 +777,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             await removePinFeishu({
               cfg: ctx.cfg,
               messageId,
-              accountId: ctx.accountId ?? undefined,
+              accountId: effectiveAccountId,
             });
             return jsonActionResult({
               ok: true,
@@ -798,7 +800,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               endTime: readFirstString(ctx.params, ["endTime", "end_time"]),
               pageSize: readOptionalNumber(ctx.params, ["pageSize", "page_size"]),
               pageToken: readFirstString(ctx.params, ["pageToken", "page_token"]),
-              accountId: ctx.accountId ?? undefined,
+              accountId: effectiveAccountId,
             });
             return jsonActionResult({
               ok: true,
@@ -894,7 +896,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 query,
                 limit,
                 fallbackToStatic: false,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
               });
               return jsonActionResult({
                 ok: true,
@@ -916,7 +918,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 query,
                 limit,
                 fallbackToStatic: false,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
               });
               return jsonActionResult({
                 ok: true,
@@ -931,14 +933,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 query,
                 limit,
                 fallbackToStatic: false,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
               }),
               runtime.listFeishuDirectoryPeersLive({
                 cfg: ctx.cfg,
                 query,
                 limit,
                 fallbackToStatic: false,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
               }),
             ]);
             return jsonActionResult({
@@ -968,7 +970,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 cfg: ctx.cfg,
                 messageId,
                 emojiType: emoji,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
               });
               const ownReaction = matches.find((entry) => entry.operatorType === "app");
               if (!ownReaction) {
@@ -978,7 +980,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 cfg: ctx.cfg,
                 messageId,
                 reactionId: ownReaction.reactionId,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
               });
               return jsonActionResult({ ok: true, removed: emoji });
             }
@@ -993,7 +995,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               const reactions = await listReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
-                accountId: ctx.accountId ?? undefined,
+                accountId: effectiveAccountId,
               });
               let removed = 0;
               for (const reaction of reactions.filter((entry) => entry.operatorType === "app")) {
@@ -1001,7 +1003,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   cfg: ctx.cfg,
                   messageId,
                   reactionId: reaction.reactionId,
-                  accountId: ctx.accountId ?? undefined,
+                  accountId: effectiveAccountId,
                 });
                 removed += 1;
               }
@@ -1012,7 +1014,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               cfg: ctx.cfg,
               messageId,
               emojiType: emoji,
-              accountId: ctx.accountId ?? undefined,
+              accountId: effectiveAccountId,
             });
             return jsonActionResult({ ok: true, added: emoji });
           }
@@ -1026,7 +1028,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const reactions = await listReactionsFeishu({
               cfg: ctx.cfg,
               messageId,
-              accountId: ctx.accountId ?? undefined,
+              accountId: effectiveAccountId,
             });
             return jsonActionResult({ ok: true, reactions });
           }
@@ -1135,19 +1137,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         startAccount: async (ctx) => {
           const { monitorFeishuProvider } = await import("./monitor.js");
           const account = resolveFeishuRuntimeAccount(
-            { cfg: ctx.cfg, accountId: ctx.accountId },
+            { cfg: ctx.cfg, accountId: effectiveAccountId },
             { requireEventSecrets: true },
           );
           const port = account.config?.webhookPort ?? null;
-          ctx.setStatus({ accountId: ctx.accountId, port });
+          ctx.setStatus({ accountId: effectiveAccountId, port });
           ctx.log?.info(
-            `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
+            `starting feishu[${effectiveAccountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
           );
           return monitorFeishuProvider({
             config: ctx.cfg,
             runtime: ctx.runtime,
             abortSignal: ctx.abortSignal,
-            accountId: ctx.accountId,
+            accountId: effectiveAccountId,
           });
         },
       },
