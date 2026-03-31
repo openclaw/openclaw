@@ -32,7 +32,6 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createOpenAIAttributionHeadersWrapper,
-  createCodexDefaultTransportWrapper,
   createCodexNativeWebSearchWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
