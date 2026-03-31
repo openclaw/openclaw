@@ -373,7 +373,14 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
 
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
-  resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
+  resolveAllowedModelRefMock.mockImplementation((params) => {
+    return {
+      ref: {
+        provider: params.raw?.split("/")[0] || "openai",
+        model: params.raw?.split("/")[1] || "gpt-4",
+      },
+    };
+  });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
