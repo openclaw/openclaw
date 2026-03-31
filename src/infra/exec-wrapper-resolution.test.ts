@@ -133,6 +133,16 @@ describe("unwrapEnvInvocation", () => {
 describe("unwrapKnownDispatchWrapperInvocation", () => {
   test.each([
     {
+      argv:
+        process.platform === "darwin"
+          ? ["arch", "-arm64", "bash", "-lc", "echo hi"]
+          : ["caffeinate", "-d", "-w", "42", "bash", "-lc", "echo hi"],
+      expected:
+        process.platform === "darwin"
+          ? { kind: "unwrapped", wrapper: "arch", argv: ["bash", "-lc", "echo hi"] }
+          : { kind: "unwrapped", wrapper: "caffeinate", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["caffeinate", "-d", "-w", "42", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "caffeinate", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -187,6 +197,13 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       },
     },
     {
+      argv: ["xcrun", "bash", "-lc", "echo hi"],
+      expected:
+        process.platform === "darwin"
+          ? { kind: "unwrapped", wrapper: "xcrun", argv: ["bash", "-lc", "echo hi"] }
+          : { kind: "blocked", wrapper: "xcrun" },
+    },
+    {
       argv: ["script", "-q", "/dev/null"],
       expected: { kind: "blocked", wrapper: "script" },
     },
@@ -197,6 +214,14 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     {
       argv: ["timeout", "--bogus", "5s", "bash", "-lc", "echo hi"],
       expected: { kind: "blocked", wrapper: "timeout" },
+    },
+    {
+      argv: ["arch", "-e", "FOO=bar", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "arch" },
+    },
+    {
+      argv: ["xcrun", "--sdk", "macosx", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "xcrun" },
     },
   ])("unwraps known dispatch wrappers for %j", ({ argv, expected }) => {
     expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
@@ -223,6 +248,14 @@ describe("resolveDispatchWrapperTrustPlan", () => {
   });
 
   test.each([
+    {
+      argv:
+        process.platform === "darwin"
+          ? ["arch", "-arm64", "bash", "-lc", "echo hi"]
+          : ["caffeinate", "-d", "-t", "60", "bash", "-lc", "echo hi"],
+      wrapper: process.platform === "darwin" ? "arch" : "caffeinate",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
     {
       argv: ["caffeinate", "-d", "-t", "60", "bash", "-lc", "echo hi"],
       wrapper: "caffeinate",
@@ -263,6 +296,15 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       wrapper: "timeout",
       effectiveArgv: ["bash", "-lc", "echo hi"],
     },
+    ...(process.platform === "darwin"
+      ? [
+          {
+            argv: ["xcrun", "bash", "-lc", "echo hi"],
+            wrapper: "xcrun",
+            effectiveArgv: ["bash", "-lc", "echo hi"],
+          },
+        ]
+      : []),
   ])("keeps transparent wrapper handling in sync for %s", ({ argv, wrapper, effectiveArgv }) => {
     expectTransparentDispatchWrapperCase({ argv, wrapper, effectiveArgv });
   });

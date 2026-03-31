@@ -48,6 +48,22 @@ const BSD_SCRIPT_OPTIONS_WITH_VALUE = new Set(["-F", "-t"]);
 const SANDBOX_EXEC_OPTIONS_WITH_VALUE = new Set(["-f", "-p", "-d"]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
+const XCRUN_FLAG_OPTIONS = new Set([
+  "-k",
+  "--kill-cache",
+  "-l",
+  "--log",
+  "-n",
+  "--no-cache",
+  "-r",
+  "--run",
+  "-v",
+  "--verbose",
+]);
+
+function isArchSelectorToken(token: string): boolean {
+  return /^-[A-Za-z0-9_]+$/.test(token);
+}
 
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
 
@@ -347,6 +363,41 @@ function unwrapTimeoutInvocation(argv: string[]): string[] | null {
   });
 }
 
+function unwrapArchInvocation(argv: string[]): string[] | null {
+  return scanWrapperInvocation(argv, {
+    onToken: (token, lower) => {
+      if (!token.startsWith("-") || token === "-") {
+        return "stop";
+      }
+      if (lower === "-32" || lower === "-64") {
+        return "continue";
+      }
+      if (lower === "-arch") {
+        return "consume-next";
+      }
+      // `arch` can also mutate the launched environment, which is not transparent.
+      if (lower === "-c" || lower === "-d" || lower === "-e" || lower === "-h") {
+        return "invalid";
+      }
+      return isArchSelectorToken(token) ? "continue" : "invalid";
+    },
+  });
+}
+
+function unwrapXcrunInvocation(argv: string[]): string[] | null {
+  return scanWrapperInvocation(argv, {
+    onToken: (token, lower) => {
+      if (!token.startsWith("-") || token === "-") {
+        return "stop";
+      }
+      if (XCRUN_FLAG_OPTIONS.has(lower)) {
+        return "continue";
+      }
+      return "invalid";
+    },
+  });
+}
+
 type DispatchWrapperSpec = {
   name: string;
   unwrap?: (argv: string[]) => string[] | null;
@@ -354,6 +405,7 @@ type DispatchWrapperSpec = {
 };
 
 const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
+  { name: "arch", unwrap: unwrapArchInvocation, transparentUsage: true },
   { name: "caffeinate", unwrap: unwrapCaffeinateInvocation, transparentUsage: true },
   { name: "chrt" },
   { name: "doas" },
@@ -373,6 +425,7 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "taskset" },
   { name: "time", unwrap: unwrapTimeInvocation, transparentUsage: true },
   { name: "timeout", unwrap: unwrapTimeoutInvocation, transparentUsage: true },
+  { name: "xcrun", unwrap: unwrapXcrunInvocation, transparentUsage: true },
 ];
 
 const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
