@@ -87,9 +87,12 @@ export function buildDenchCloudConfigPatch(params: {
     },
     messages: {
       tts: {
-        elevenlabs: {
-          baseUrl: params.gatewayUrl,
-          apiKey: params.apiKey,
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            baseUrl: params.gatewayUrl,
+            apiKey: params.apiKey,
+          },
         },
       },
     },

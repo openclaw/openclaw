@@ -1,3 +1,4 @@
+import type { ExecFileException, ExecFileOptions } from "node:child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/workspace", () => ({
@@ -219,7 +220,7 @@ describe("integrations state", () => {
       ]),
     );
     expect(elevenlabs?.healthIssues).toEqual(
-      expect.arrayContaining(["missing_auth", "missing_override"]),
+      expect.arrayContaining(["missing_auth", "missing_api_key", "missing_override"]),
     );
     expect(exa?.health).toMatchObject({
       status: "disabled",
@@ -674,10 +675,21 @@ describe("integrations state", () => {
   it("restarts the OpenClaw gateway for the active profile", async () => {
     const { execFile } = await import("node:child_process");
     const mockExecFile = vi.mocked(execFile);
-    mockExecFile.mockImplementationOnce(((_file, _args, _options, callback) => {
+    mockExecFile.mockImplementationOnce(((
+      _file: string,
+      _args: readonly string[] | null | undefined,
+      _options: ExecFileOptions | null | undefined,
+      callback:
+        | ((
+            error: ExecFileException | null,
+            stdout: string | Buffer,
+            stderr: string | Buffer,
+          ) => void)
+        | undefined,
+    ) => {
       callback?.(null, "", "");
       return undefined as never;
-    }) as typeof execFile);
+    }) as unknown as typeof execFile);
 
     const { refreshIntegrationsRuntime } = await import("./integrations.js");
     const result = await refreshIntegrationsRuntime();
@@ -741,6 +753,109 @@ describe("integrations state", () => {
     expect(writtenConfig.agents).toEqual(originalConfig.agents);
     expect(writtenConfig.gateway).toEqual(originalConfig.gateway);
     expect(writtenConfig.plugins.entries["apollo-enrichment"]).toEqual({ enabled: false });
+  });
+
+  it("reports ElevenLabs as disabled when apiKey is missing from config", async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    const mockExists = vi.mocked(existsSync);
+    const mockRead = vi.mocked(readFileSync);
+
+    mockExists.mockImplementation((path) => String(path).endsWith("openclaw.json"));
+    mockRead.mockImplementation((path) => {
+      if (String(path).endsWith("openclaw.json")) {
+        return JSON.stringify({
+          agents: {
+            defaults: {
+              model: { primary: "dench-cloud/claude-sonnet-4.6" },
+            },
+          },
+          models: {
+            providers: {
+              "dench-cloud": { apiKey: "dench-key" },
+            },
+          },
+          plugins: {
+            entries: {
+              "dench-ai-gateway": {
+                enabled: true,
+                config: { gatewayUrl: "https://gateway.merseoriginals.com" },
+              },
+            },
+          },
+          messages: {
+            tts: {
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  baseUrl: "https://gateway.merseoriginals.com",
+                },
+              },
+            },
+          },
+        }) as never;
+      }
+      return "" as never;
+    });
+
+    const { getIntegrationsState } = await import("./integrations.js");
+    const state = getIntegrationsState();
+    const elevenlabs = state.integrations.find((i) => i.id === "elevenlabs");
+    expect(elevenlabs?.enabled).toBe(false);
+    expect(elevenlabs?.overrideActive).toBe(false);
+    expect(elevenlabs?.healthIssues).toContain("missing_api_key");
+    expect(elevenlabs?.healthIssues).toContain("missing_override");
+  });
+
+  it("reports ElevenLabs as enabled when all runtime fields are present", async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    const mockExists = vi.mocked(existsSync);
+    const mockRead = vi.mocked(readFileSync);
+
+    mockExists.mockImplementation((path) => String(path).endsWith("openclaw.json"));
+    mockRead.mockImplementation((path) => {
+      if (String(path).endsWith("openclaw.json")) {
+        return JSON.stringify({
+          agents: {
+            defaults: {
+              model: { primary: "dench-cloud/claude-sonnet-4.6" },
+            },
+          },
+          models: {
+            providers: {
+              "dench-cloud": { apiKey: "dench-key" },
+            },
+          },
+          plugins: {
+            entries: {
+              "dench-ai-gateway": {
+                enabled: true,
+                config: { gatewayUrl: "https://gateway.merseoriginals.com" },
+              },
+            },
+          },
+          messages: {
+            tts: {
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  baseUrl: "https://gateway.merseoriginals.com",
+                  apiKey: "dench-key",
+                },
+              },
+            },
+          },
+        }) as never;
+      }
+      return "" as never;
+    });
+
+    const { getIntegrationsState } = await import("./integrations.js");
+    const state = getIntegrationsState();
+    const elevenlabs = state.integrations.find((i) => i.id === "elevenlabs");
+    expect(elevenlabs?.enabled).toBe(true);
+    expect(elevenlabs?.overrideActive).toBe(true);
+    expect(elevenlabs?.healthIssues).not.toContain("missing_api_key");
+    expect(elevenlabs?.healthIssues).not.toContain("missing_override");
   });
 
   it("repairs older profiles by copying and re-registering bundled plugins", async () => {

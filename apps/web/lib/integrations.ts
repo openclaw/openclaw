@@ -52,6 +52,7 @@ export type IntegrationHealthIssue =
   | "missing_auth"
   | "missing_gateway"
   | "missing_override"
+  | "missing_api_key"
   | "built_in_search_still_enabled";
 
 export type DenchIntegrationState = {
@@ -811,16 +812,19 @@ function buildElevenLabsState(
   const providers = asRecord(tts?.providers);
   const elevenlabs = asRecord(providers?.elevenlabs);
   const overrideBaseUrl = readString(elevenlabs?.baseUrl) ?? null;
+  const overrideApiKey = readString(elevenlabs?.apiKey) ?? null;
   const ttsProvider = readString(tts?.provider);
   const overrideActive = Boolean(
     ttsProvider === "elevenlabs" &&
     overrideBaseUrl &&
+    overrideApiKey &&
     gatewayBaseUrl &&
     overrideBaseUrl === gatewayBaseUrl,
   );
   const healthIssues: IntegrationHealthIssue[] = [];
   if (!auth.configured) healthIssues.push("missing_auth");
   if (!gatewayBaseUrl) healthIssues.push("missing_gateway");
+  if (!overrideApiKey) healthIssues.push("missing_api_key");
   if (!overrideActive) healthIssues.push("missing_override");
 
   return {

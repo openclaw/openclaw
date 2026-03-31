@@ -147,6 +147,7 @@ describe("dench-cloud helpers", () => {
       baseUrl: "https://gateway.merseoriginals.com",
       apiKey: "dench_live_key",
     });
+    expect((patch.messages.tts as Record<string, unknown>).elevenlabs).toBeUndefined();
   });
 
   it("reads existing Dench Cloud gateway config from openclaw.json", () => {
