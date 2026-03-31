@@ -1607,7 +1607,70 @@ export const chatHandlers: GatewayRequestHandlers = {
     let parsedImages: ChatImageContent[] = [];
     let parsedImageOrder: PromptImageOrderEntry[] = [];
     let parsedOffloadedRefs: OffloadedRef[] = [];
+    let imageModelOverride: string | undefined;
+    let imageModelFallbacks: string[] | undefined;
 
+    // Move timeout/runId calculation and early-return checks before attachment parsing
+    // to avoid unnecessary CPU/IO work on duplicate/in-flight requests that return early.
+    const timeoutMs = resolveAgentTimeoutMs({
+      cfg,
+      overrideMs: p.timeoutMs,
+    });
+    const now = Date.now();
+    const clientRunId = p.idempotencyKey;
+
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry,
+      sessionKey,
+      channel: entry?.channel,
+      chatType: entry?.chatType,
+    });
+    if (sendPolicy === "deny") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+      );
+      return;
+    }
+
+    if (stopCommand) {
+      const res = abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context),
+        sessionKey: rawSessionKey,
+        abortOrigin: "stop-command",
+        stopReason: "stop",
+        requester: resolveChatAbortRequester(client),
+      });
+      if (res.unauthorized) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
+      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+      return;
+    }
+
+    const cached = context.dedupe.get(`chat:${clientRunId}`);
+    if (cached) {
+      respond(cached.ok, cached.payload, cached.error, {
+        cached: true,
+      });
+      return;
+    }
+
+    const activeExisting = context.chatAbortControllers.get(clientRunId);
+    if (activeExisting) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+
+    // Now perform attachment parsing and image model switching
+    // after all early-return checks have passed.
     if (normalizedAttachments.length > 0) {
       const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
@@ -1617,10 +1680,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       // but a valid imageModel is configured.
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+      const imageModelConfigFallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+
+      // Consider imageModel configured if we have either a primary or fallbacks.
+      // This handles fallback-only configs like imageModel: { fallbacks: ["openai/gpt-4o"] }
+      const hasImageModelConfig = imageModelPrimary || imageModelConfigFallbacks.length > 0;
 
       // If imageModel is configured, preserve images for the switch logic.
       // Otherwise, check if the current model supports images.
-      const supportsImages = imageModelPrimary
+      const supportsImages = hasImageModelConfig
         ? true
         : await resolveGatewayModelSupportsImages({
             loadGatewayModelCatalog: context.loadGatewayModelCatalog,
@@ -1656,7 +1724,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
 
-    // Resolve agentId early for image model allowlist check
+    // Resolve agentId for image model allowlist check
     const agentId = resolveSessionAgentId({
       sessionKey,
       config: cfg,
@@ -1664,8 +1732,6 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // When images are detected, switch to the configured image model.
     // This ensures non-vision models don't fail when users send images via Dashboard.
-    let imageModelOverride: string | undefined;
-    let imageModelFallbacks: string[] | undefined;
     if (parsedImages.length > 0) {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       let imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
@@ -1953,65 +2019,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         );
       }
     }
-    const timeoutMs = resolveAgentTimeoutMs({
-      cfg,
-      overrideMs: p.timeoutMs,
-    });
-    const now = Date.now();
-    const clientRunId = p.idempotencyKey;
-
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry,
-      sessionKey,
-      channel: entry?.channel,
-      chatType: entry?.chatType,
-    });
-    if (sendPolicy === "deny") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-      );
-      return;
-    }
-
-    if (stopCommand) {
-      const res = abortChatRunsForSessionKeyWithPartials({
-        context,
-        ops: createChatAbortOps(context),
-        sessionKey: rawSessionKey,
-        abortOrigin: "stop-command",
-        stopReason: "stop",
-        requester: resolveChatAbortRequester(client),
-      });
-      if (res.unauthorized) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
-        return;
-      }
-      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
-      return;
-    }
-
-    const cached = context.dedupe.get(`chat:${clientRunId}`);
-    if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
-        cached: true,
-      });
-      return;
-    }
-
-    const activeExisting = context.chatAbortControllers.get(clientRunId);
-    if (activeExisting) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
-    }
-
-    // Reuse attachment parsing results from earlier (lines 1618-1626)
-    // to avoid duplicate parsing and potential orphaned offloaded blobs.
+    // Attachment parsing and image model switching already done above
+    // after early-return checks.
 
     try {
       const abortController = new AbortController();
