@@ -27,6 +27,7 @@
     "README.md",
     "assets/",
     "dist/",
+    "!dist/**/*.map",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",

@@ -465,6 +465,15 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
   );
 }
 
+function isOllamaUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("ollama could not be reached") ||
+    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
+    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
+  );
+}
+
 function isInstructionsRequiredError(error: string): boolean {
   return /instructions are required/i.test(error);
 }
@@ -1584,10 +1593,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
           if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
+            skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
             break;
           }
           if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
+            skippedCount += 1;
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
             break;
           }
@@ -1628,6 +1639,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (isMissingProfileError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (missing auth profile)`);
+            break;
+          }
+          if (model.provider === "ollama" && isOllamaUnavailableErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (ollama unavailable)`);
             break;
           }
           if (params.label.startsWith("minimax-")) {

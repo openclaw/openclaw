@@ -10,6 +10,13 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
+function resolveFallbackBundleMcpCapability(provider: string): boolean {
+  // Claude CLI consumes explicit MCP config overlays even when the runtime
+  // plugin registry is not initialized yet (for example direct runner tests or
+  // narrow non-gateway entrypoints).
+  return provider === "claude-cli";
+}
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -114,5 +121,9 @@ export function resolveCliBackendConfig(
   if (!command) {
     return null;
   }
-  return { id: normalized, config: { ...override, command }, bundleMcp: false };
+  return {
+    id: normalized,
+    config: { ...override, command },
+    bundleMcp: resolveFallbackBundleMcpCapability(normalized),
+  };
 }

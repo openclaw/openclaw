@@ -19,6 +19,7 @@ function createStoredTask(): TaskRecord {
     taskId: "task-restored",
     runtime: "acp",
     sourceId: "run-restored",
+    requesterSessionKey: "agent:main:main",
     ownerKey: "agent:main:main",
     scopeKind: "session",
     childSessionKey: "agent:codex:acp:restored",
