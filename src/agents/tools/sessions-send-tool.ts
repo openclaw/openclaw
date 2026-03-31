@@ -135,7 +135,8 @@ export function createSessionsSendTool(opts?: {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
-            error: "Sandboxed sessions_send label lookup is limited to this agent",
+            error:
+              "Blocked: sandboxed sessions_send label lookup is limited to the current agent. Use a session in this agent, or relax the sandbox/session visibility policy.",
           });
         }
 
@@ -176,7 +177,8 @@ export function createSessionsSendTool(opts?: {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
+              error:
+                "Blocked: this session is outside the current sandboxed session tree. Use a spawned child session from this agent, or relax the sandbox session visibility policy.",
             });
           }
           return jsonResult({
@@ -191,7 +193,8 @@ export function createSessionsSendTool(opts?: {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
+              error:
+                "Blocked: this session is outside the current sandboxed session tree. Use a spawned child session from this agent, or relax the sandbox session visibility policy.",
             });
           }
           return jsonResult({

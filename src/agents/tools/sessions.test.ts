@@ -529,7 +529,7 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
   });
 
-  it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
+  it("blocks cross-agent sends with an actionable visibility message", async () => {
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call1", {
@@ -541,6 +541,12 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
+    expect((result.details as { error?: string } | undefined)?.error).toContain(
+      "outside the current visibility scope",
+    );
+    expect((result.details as { error?: string } | undefined)?.error).toContain(
+      "tools.sessions.visibility=all",
+    );
   });
 
   it("does not reuse a stale assistant reply when no new reply appears", async () => {

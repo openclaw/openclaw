@@ -136,43 +136,32 @@ function actionPrefix(action: SessionAccessAction): string {
   return "Session list";
 }
 
-function a2aDisabledMessage(action: SessionAccessAction): string {
+function actionNoun(action: SessionAccessAction): string {
   if (action === "history") {
-    return "Agent-to-agent history is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
+    return "session history";
   }
   if (action === "send") {
-    return "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.";
+    return "session send";
   }
   if (action === "status") {
-    return "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.";
+    return "session status";
   }
-  return "Agent-to-agent listing is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent visibility.";
+  return "session list";
+}
+
+function a2aDisabledMessage(action: SessionAccessAction): string {
+  const noun = actionNoun(action);
+  return `Blocked: ${noun} is targeting another agent, but agent-to-agent access is disabled. To allow this, set tools.agentToAgent.enabled=true.`;
 }
 
 function a2aDeniedMessage(action: SessionAccessAction): string {
-  if (action === "history") {
-    return "Agent-to-agent history denied by tools.agentToAgent.allow.";
-  }
-  if (action === "send") {
-    return "Agent-to-agent messaging denied by tools.agentToAgent.allow.";
-  }
-  if (action === "status") {
-    return "Agent-to-agent status denied by tools.agentToAgent.allow.";
-  }
-  return "Agent-to-agent listing denied by tools.agentToAgent.allow.";
+  const noun = actionNoun(action);
+  return `Blocked: ${noun} is targeting another agent, but tools.agentToAgent.allow does not permit this agent pair. Add both agent IDs (or a matching pattern) to tools.agentToAgent.allow.`;
 }
 
 function crossVisibilityMessage(action: SessionAccessAction): string {
-  if (action === "history") {
-    return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
-  }
-  if (action === "send") {
-    return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
-  }
-  if (action === "status") {
-    return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
-  }
-  return "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+  const noun = actionNoun(action);
+  return `Blocked: ${noun} is targeting a session outside the current visibility scope. To allow cross-agent targeting, set tools.sessions.visibility=all. Cross-agent access still requires tools.agentToAgent.enabled=true.`;
 }
 
 function selfVisibilityMessage(action: SessionAccessAction): string {

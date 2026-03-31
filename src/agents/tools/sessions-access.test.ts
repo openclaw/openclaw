@@ -141,7 +141,7 @@ describe("createSessionVisibilityGuard", () => {
     sessionsResolutionTesting.setDepsForTest();
   });
 
-  it("blocks cross-agent send when agent-to-agent is disabled", async () => {
+  it("blocks cross-agent send when agent-to-agent is disabled with an actionable message", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "send",
       requesterSessionKey: "agent:main:main",
@@ -153,7 +153,7 @@ describe("createSessionVisibilityGuard", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+        "Blocked: session send is targeting another agent, but agent-to-agent access is disabled. To allow this, set tools.agentToAgent.enabled=true.",
     });
   });
 
@@ -171,6 +171,29 @@ describe("createSessionVisibilityGuard", () => {
       status: "forbidden",
       error:
         "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
+    });
+  });
+
+  it("explains allowlist-denied cross-agent sends", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["main"],
+          },
+        },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:ops:main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Blocked: session send is targeting another agent, but tools.agentToAgent.allow does not permit this agent pair. Add both agent IDs (or a matching pattern) to tools.agentToAgent.allow.",
     });
   });
 });
