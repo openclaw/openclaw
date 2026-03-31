@@ -2683,7 +2683,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 1073,
+            "line": 1075,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2692,7 +2692,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 1082,
+            "line": 1084,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2728,7 +2728,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 868,
+            "line": 870,
             "path": "src/auto-reply/status.ts"
           }
         },
