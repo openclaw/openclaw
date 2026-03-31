@@ -9,7 +9,7 @@ A personal AI that learns how you think.
 [![Phase](https://img.shields.io/badge/phase-0%20%E2%80%94%20foundation-c06cff?style=flat-square&labelColor=0a0a0a)](docs/bodhi/ROADMAP.md)
 [![Fork of](https://img.shields.io/badge/fork%20of-openclaw%2Fopenclaw-00d4ff?style=flat-square&labelColor=0a0a0a)](https://github.com/openclaw/openclaw)
 [![License](https://img.shields.io/badge/license-MIT-00f5d4?style=flat-square&labelColor=0a0a0a)](LICENSE)
-[![Follow the build](https://img.shields.io/badge/substack-follow%20the%20build-ff6b9d?style=flat-square&labelColor=0a0a0a)](https://growmindspace.substack.com)
+[![Discussions](https://img.shields.io/badge/discussions-open-ff6b9d?style=flat-square&labelColor=0a0a0a)](https://github.com/Qenjin/OpenBodhi/discussions)
 
 <img src="docs/bodhi/assets/banner.webp" width="100%" alt="OpenBodhi knowledge graph" />
 
@@ -140,9 +140,7 @@ OpenBodhi is a fork of [openclaw/openclaw](https://github.com/openclaw/openclaw)
 
 ## Follow the build
 
-Building this in public. Every phase ships on Substack when it works.
-
-**[growmindspace.substack.com](https://growmindspace.substack.com)**
+Building this in public. Follow on GitHub Discussions or watch the repo for updates.
 
 ---
 
@@ -153,5 +151,5 @@ MIT, same as OpenClaw.
 ---
 
 <div align="center">
-<sub>Built by <a href="https://qenjin.io">Qenjin.io</a> · Ideas reach their own readiness.</sub>
+<sub>Ideas reach their own readiness.</sub>
 </div>

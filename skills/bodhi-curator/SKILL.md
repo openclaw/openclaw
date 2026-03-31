@@ -174,9 +174,46 @@ Claude (Sonnet/Opus) handles classification, tagging, energy inference, and imag
 
 ## Confirmation
 
-Reply with "Captured." or a relevant 1-sentence observation. Nothing more. No summaries, no reformulations. If the thought was a question, answer it after confirming capture.
+Reply with "Captured." followed by the inferred type and primary domain tag on the same line. Then optionally a 1-sentence observation. Nothing more. No summaries, no reformulations.
 
-For images: reply with "Captured." and optionally note what was recognized (e.g., "Captured. Looks like a solid post-workout meal.").
+Format: `Captured. [Type · domain]`
+
+Examples:
+- `Captured. Practice · fitness` — for "starting my morning walk tomorrow"
+- `Captured. Pattern · mental-health` — for "I keep avoiding hard conversations"
+- `Captured. Idea · cognitive` — for most standalone thoughts
+- `Captured. Decision · wellness` — for "I'm cutting alcohol this month"
+
+If the thought was a question, answer it after the capture line.
+For images: `Captured. Idea · [domain]` plus what was recognized ("Looks like a solid post-workout meal.").
+
+## On `/log [thought]`
+
+Ultra-low-cost capture. Calls `write_cli.py` directly — no LLM classification, no domain inference. Use when budget is at Tier 2/3 or when the user wants zero-latency capture.
+
+```bash
+cd ~/openbodhi && python3 -m bodhi_vault.write_cli \
+  "${BODHI_LOG_TEXT}" \
+  --type Idea \
+  --energy 3 \
+  --source telegram \
+  --tags log,unclassified \
+  --domain wellness \
+  --vault ~/openbodhi/vault \
+  --schema ~/openbodhi/vault/schema/nodes.json 2>&1
+```
+
+Set `BODHI_LOG_TEXT` to the user's message text (everything after `/log `).
+
+Reply: `Logged. [unclassified — enricher will tag later]`
+
+Rules for `/log`:
+- No domain inference, no type classification — defaults are fine.
+- Domain `wellness` is the catch-all default. The enricher will reclassify during the next enrichment pass.
+- If no text follows `/log`, reply: `Usage: /log [your thought]`
+- This command works even when the API budget is exhausted, because the model is not invoked for the response — just run the shell command and reply with the static string above.
+
+---
 
 ## Rules
 

@@ -1,0 +1,686 @@
+#!/usr/bin/env bash
+# openbodhi — OpenBodhi CLI
+# Your third brain. Alive and running.
+#
+# Usage:
+#   openbodhi               — system status dashboard
+#   openbodhi start         — start the gateway
+#   openbodhi stop          — stop the gateway
+#   openbodhi restart       — restart the gateway
+#   openbodhi setup         — guided setup wizard
+#   openbodhi logs          — tail live gateway logs
+#   openbodhi vault         — vault stats
+#   openbodhi backup        — backup Obsidian vault to S3
+#   openbodhi help          — show this help
+
+set -euo pipefail
+
+# ─── Colors ───────────────────────────────────────────────────────────────────
+GOLD='\033[38;2;212;175;55m'        # #D4AF37 — OpenBodhi gold
+GOLD_DIM='\033[38;2;150;120;30m'    # dimmed gold for secondary elements
+WHITE='\033[38;2;255;248;225m'      # warm white
+MUTED='\033[38;2;100;100;120m'      # muted gray
+SUCCESS='\033[38;2;80;200;120m'     # green
+WARN='\033[38;2;255;176;32m'        # amber warn
+ERROR='\033[38;2;210;60;60m'        # red
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ─── Paths ─────────────────────────────────────────────────────────────────────
+BODHI_DIR="${OPENBODHI_DIR:-$HOME/openbodhi}"
+OPENCLAW_DIR="$HOME/.openclaw"
+OPENCLAW_CONFIG="$OPENCLAW_DIR/openclaw.json"
+VAULT_NODES="$HOME/.alfred/vault/nodes.json"
+SOMATIC_STATE="$OPENCLAW_DIR/somatic-state.json"
+BUDGET_STATE="$OPENCLAW_DIR/budget-state.json"
+GATEWAY_LOG="$OPENCLAW_DIR/gateway.log"
+GATEWAY_PID="$OPENCLAW_DIR/gateway.pid"
+BACKUP_SCRIPT="$BODHI_DIR/docs/bodhi/scripts/vault-backup.sh"
+
+# ─── Header ───────────────────────────────────────────────────────────────────
+print_header() {
+  echo ""
+  echo -e "${GOLD}${BOLD}  OpenBodhi${NC}${MUTED} •${NC}"
+  echo -e "${MUTED}  your third brain${NC}"
+  echo ""
+}
+
+print_divider() {
+  echo -e "${GOLD_DIM}  ────────────────────────────────────${NC}"
+}
+
+# ─── Gateway Status ───────────────────────────────────────────────────────────
+gateway_pid() {
+  if [[ -f "$GATEWAY_PID" ]]; then
+    local pid
+    pid="$(cat "$GATEWAY_PID" 2>/dev/null || echo "")"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "$pid"
+      return 0
+    fi
+  fi
+  # Fallback: check process name
+  pgrep -f "openclaw.*start\|node.*openclaw\|openclaw\.mjs" 2>/dev/null | head -1 || true
+}
+
+is_running() {
+  [[ -n "$(gateway_pid)" ]]
+}
+
+# ─── Vault Stats ──────────────────────────────────────────────────────────────
+vault_stats() {
+  if [[ ! -f "$VAULT_NODES" ]]; then
+    echo "0"
+    return
+  fi
+  python3 -c "
+import json, sys
+try:
+    data = json.load(open('$VAULT_NODES'))
+    print(len(data))
+except:
+    print(0)
+" 2>/dev/null || echo "0"
+}
+
+vault_mode() {
+  local count="$1"
+  if [[ "$count" -lt 5 ]]; then
+    echo -e "${WARN}INTAKE${NC}${MUTED} — building${NC}"
+  else
+    echo -e "${SUCCESS}SYNTHESIS${NC}${MUTED} — patterns active${NC}"
+  fi
+}
+
+# ─── Somatic Tier ─────────────────────────────────────────────────────────────
+current_tier() {
+  if [[ ! -f "$SOMATIC_STATE" ]]; then
+    echo "unknown"
+    return
+  fi
+  python3 -c "
+import json
+try:
+    d = json.load(open('$SOMATIC_STATE'))
+    print(d.get('tier', 'unknown'))
+except:
+    print('unknown')
+" 2>/dev/null || echo "unknown"
+}
+
+tier_display() {
+  local tier="$1"
+  case "$tier" in
+    green)   echo -e "${SUCCESS}GREEN${NC}" ;;
+    yellow)  echo -e "${WARN}YELLOW${NC}" ;;
+    orange)  echo -e "\033[38;2;255;140;0mORANGE${NC}" ;;
+    red)     echo -e "${ERROR}RED${NC}" ;;
+    *)       echo -e "${MUTED}—${NC}" ;;
+  esac
+}
+
+# ─── Budget ───────────────────────────────────────────────────────────────────
+budget_display() {
+  if [[ ! -f "$BUDGET_STATE" ]]; then
+    echo -e "${MUTED}no data${NC}"
+    return
+  fi
+  python3 -c "
+import json
+try:
+    d = json.load(open('$BUDGET_STATE'))
+    day = d.get('daily_cost_usd', 0)
+    limit = d.get('daily_limit_usd', 2.00)
+    pct = int((day / limit) * 100) if limit > 0 else 0
+    print(f'\$\${day:.3f} / \$\${limit:.2f} today ({pct}%)')
+except Exception as e:
+    print('read error')
+" 2>/dev/null || echo -e "${MUTED}—${NC}"
+}
+
+# ─── Telegram Config ──────────────────────────────────────────────────────────
+telegram_token_preview() {
+  if [[ ! -f "$OPENCLAW_CONFIG" ]]; then
+    echo -e "${MUTED}not configured${NC}"
+    return
+  fi
+  python3 -c "
+import json
+try:
+    # openclaw.json uses JSON5 (comments) — strip them first
+    import re
+    raw = open('$OPENCLAW_CONFIG').read()
+    # Remove single-line comments
+    raw = re.sub(r'//[^\n]*', '', raw)
+    # Remove trailing commas before } or ]
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+    d = json.loads(raw)
+    channels = d.get('channels', {})
+    tg = channels.get('telegram', {})
+    token = tg.get('token', '')
+    if token:
+        parts = token.split(':')
+        bot_id = parts[0] if parts else '?'
+        masked = token[:6] + '...' + token[-4:] if len(token) > 10 else '???'
+        print(f'{masked} (id: {bot_id})')
+    else:
+        print('not set')
+except Exception as e:
+    print('read error')
+" 2>/dev/null || echo -e "${MUTED}—${NC}"
+}
+
+# ─── Status Dashboard ─────────────────────────────────────────────────────────
+cmd_status() {
+  print_header
+
+  # Gateway
+  print_divider
+  echo -e "  ${MUTED}Gateway${NC}"
+  if is_running; then
+    local pid
+    pid="$(gateway_pid)"
+    echo -e "  ${SUCCESS}● running${NC}  ${MUTED}pid ${pid}${NC}"
+  else
+    echo -e "  ${MUTED}○ stopped${NC}"
+    echo -e "  ${MUTED}  → openbodhi start${NC}"
+  fi
+
+  echo ""
+
+  # Vault
+  local node_count
+  node_count="$(vault_stats)"
+  echo -e "  ${MUTED}Vault${NC}"
+  echo -e "  ${WHITE}${node_count} nodes${NC}   $(vault_mode "$node_count")"
+
+  echo ""
+
+  # Somatic tier (most recent Bo context)
+  local tier
+  tier="$(current_tier)"
+  if [[ "$tier" != "unknown" ]]; then
+    echo -e "  ${MUTED}Bo tier${NC}"
+    echo -e "  $(tier_display "$tier")"
+    echo ""
+  fi
+
+  # Budget
+  echo -e "  ${MUTED}Budget${NC}"
+  echo -e "  ${WHITE}$(budget_display)${NC}"
+
+  echo ""
+
+  # Telegram
+  echo -e "  ${MUTED}Telegram bot${NC}"
+  echo -e "  ${WHITE}$(telegram_token_preview)${NC}"
+
+  echo ""
+  print_divider
+
+  # Quick commands hint
+  echo -e "  ${MUTED}openbodhi start${NC}   ${MUTED}·${NC}   ${MUTED}openbodhi logs${NC}   ${MUTED}·${NC}   ${MUTED}openbodhi setup${NC}"
+  echo ""
+}
+
+# ─── Start ────────────────────────────────────────────────────────────────────
+cmd_start() {
+  print_header
+
+  if is_running; then
+    echo -e "  ${SUCCESS}● already running${NC}  ${MUTED}(pid $(gateway_pid))${NC}"
+    echo ""
+    return 0
+  fi
+
+  echo -e "  ${GOLD}starting gateway...${NC}"
+  echo ""
+
+  if [[ ! -d "$BODHI_DIR" ]]; then
+    echo -e "  ${ERROR}✗ openbodhi not found at ${BODHI_DIR}${NC}"
+    echo -e "  ${MUTED}Set OPENBODHI_DIR env var or reinstall.${NC}"
+    echo ""
+    exit 1
+  fi
+
+  cd "$BODHI_DIR"
+
+  # Start gateway in background, capture PID
+  nohup node openclaw.mjs start > "$GATEWAY_LOG" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$GATEWAY_PID"
+
+  # Brief wait to verify it started
+  sleep 2
+
+  if kill -0 "$pid" 2>/dev/null; then
+    echo -e "  ${SUCCESS}● running${NC}  ${MUTED}pid ${pid}${NC}"
+    echo ""
+    echo -e "  ${MUTED}logs:     openbodhi logs${NC}"
+    echo -e "  ${MUTED}status:   openbodhi${NC}"
+  else
+    rm -f "$GATEWAY_PID"
+    echo -e "  ${ERROR}✗ gateway failed to start${NC}"
+    echo -e "  ${MUTED}→ openbodhi logs${NC}"
+    echo ""
+    exit 1
+  fi
+
+  echo ""
+}
+
+# ─── Stop ─────────────────────────────────────────────────────────────────────
+cmd_stop() {
+  print_header
+
+  if ! is_running; then
+    echo -e "  ${MUTED}○ not running${NC}"
+    echo ""
+    return 0
+  fi
+
+  local pid
+  pid="$(gateway_pid)"
+  echo -e "  ${GOLD}stopping gateway${NC}  ${MUTED}pid ${pid}${NC}"
+
+  kill "$pid" 2>/dev/null || true
+  rm -f "$GATEWAY_PID"
+
+  sleep 1
+
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+
+  echo -e "  ${MUTED}○ stopped${NC}"
+  echo ""
+}
+
+# ─── Restart ──────────────────────────────────────────────────────────────────
+cmd_restart() {
+  cmd_stop
+  sleep 1
+  cmd_start
+}
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+cmd_logs() {
+  if [[ ! -f "$GATEWAY_LOG" ]]; then
+    echo -e "\n  ${MUTED}No log file yet. Start the gateway first.${NC}\n"
+    exit 1
+  fi
+  echo -e "\n${GOLD}  OpenBodhi Gateway Logs${NC}  ${MUTED}(ctrl+c to exit)${NC}\n"
+  tail -f "$GATEWAY_LOG"
+}
+
+# ─── Vault ────────────────────────────────────────────────────────────────────
+cmd_vault() {
+  print_header
+  echo -e "  ${MUTED}Vault${NC}  ${GOLD_DIM}~/.alfred/vault/${NC}"
+  echo ""
+
+  local node_count
+  node_count="$(vault_stats)"
+  echo -e "  ${WHITE}${BOLD}${node_count}${NC}  ${WHITE}total nodes${NC}"
+  echo -e "  $(vault_mode "$node_count")"
+  echo ""
+
+  if [[ -f "$VAULT_NODES" ]] && [[ "$node_count" -gt 0 ]]; then
+    echo -e "  ${MUTED}by domain:${NC}"
+    python3 -c "
+import json
+from collections import Counter
+data = json.load(open('$VAULT_NODES'))
+domains = Counter(n.get('domain', 'unknown') for n in data)
+for domain, count in sorted(domains.items(), key=lambda x: -x[1]):
+    bar = '█' * min(count, 20)
+    print(f'    {domain:<20} {count:>4}  {bar}')
+" 2>/dev/null || true
+    echo ""
+  fi
+
+  print_divider
+  echo ""
+}
+
+# ─── Setup Wizard ─────────────────────────────────────────────────────────────
+cmd_setup() {
+  print_header
+  echo -e "  ${GOLD}${BOLD}Setup${NC}"
+  echo -e "  ${MUTED}Configure OpenBodhi for your instance.${NC}"
+  echo ""
+  print_divider
+  echo ""
+
+  # Check for --telegram-token flag
+  local token=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --telegram-token)
+        token="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  # ── Step 1: Telegram Bot Token ──
+  echo -e "  ${GOLD}[1/3]${NC} ${WHITE}Telegram Bot Token${NC}"
+  echo ""
+
+  local current_token_preview
+  current_token_preview="$(telegram_token_preview)"
+  echo -e "  ${MUTED}current:${NC} ${current_token_preview}"
+  echo ""
+
+  if [[ -z "$token" ]]; then
+    echo -e "  ${MUTED}Create a bot via @BotFather on Telegram, then paste the token here.${NC}"
+    echo -e "  ${MUTED}Format: 1234567890:AABBCCDDEEFFaabbccddeeff1234567890${NC}"
+    echo ""
+    echo -ne "  ${GOLD}token:${NC} "
+    read -r token
+  fi
+
+  if [[ -z "$token" ]]; then
+    echo -e "\n  ${MUTED}Skipped — token unchanged.${NC}\n"
+  else
+    # Validate token format
+    if [[ ! "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{35,}$ ]]; then
+      echo -e "\n  ${ERROR}✗ Token format looks wrong.${NC}"
+      echo -e "  ${MUTED}Expected: 1234567890:AABBCCDDEEFFaabbccddeeff${NC}\n"
+      exit 1
+    fi
+
+    # Validate with Telegram API
+    echo ""
+    echo -e "  ${MUTED}validating with Telegram...${NC}"
+    local api_result
+    api_result="$(curl -sfS "https://api.telegram.org/bot${token}/getMe" 2>/dev/null || echo '{"ok":false}')"
+    local ok
+    ok="$(echo "$api_result" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('ok') else 'false')" 2>/dev/null || echo 'false')"
+
+    if [[ "$ok" != "true" ]]; then
+      echo -e "  ${ERROR}✗ Telegram rejected this token.${NC}"
+      echo -e "  ${MUTED}Check you copied it correctly from @BotFather.${NC}"
+      echo ""
+      exit 1
+    fi
+
+    local bot_name
+    bot_name="$(echo "$api_result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result',{}).get('username',''))" 2>/dev/null || echo '')"
+
+    echo -e "  ${SUCCESS}✓ valid${NC}  ${MUTED}@${bot_name}${NC}"
+    echo ""
+
+    # Update openclaw.json
+    write_token "$token"
+    echo -e "  ${SUCCESS}✓ token saved${NC}"
+    echo ""
+  fi
+
+  # ── Step 2: Allowlist ──
+  echo -e "  ${GOLD}[2/3]${NC} ${WHITE}User Allowlist${NC}"
+  echo ""
+  echo -e "  ${MUTED}Your Telegram user ID controls who can message the bot.${NC}"
+  echo -e "  ${MUTED}Find yours: message @userinfobot on Telegram.${NC}"
+  echo ""
+
+  if [[ -f "$OPENCLAW_CONFIG" ]]; then
+    local current_allow
+    current_allow="$(python3 -c "
+import json, re
+raw = open('$OPENCLAW_CONFIG').read()
+raw = re.sub(r'//[^\n]*', '', raw)
+raw = re.sub(r',\s*([}\]])', r'\1', raw)
+d = json.loads(raw)
+ids = d.get('channels', {}).get('telegram', {}).get('allowFrom', [])
+print(', '.join(str(i) for i in ids) if ids else 'none')
+" 2>/dev/null || echo 'read error')"
+    echo -e "  ${MUTED}current allowlist:${NC} ${WHITE}${current_allow}${NC}"
+  fi
+
+  echo ""
+  echo -e "  ${MUTED}To add your ID: openclaw config set channels.telegram.allowFrom '[YOUR_ID]'${NC}"
+  echo -e "  ${MUTED}Or press enter to skip.${NC}"
+  echo ""
+
+  # ── Step 3: Start ──
+  echo -e "  ${GOLD}[3/3]${NC} ${WHITE}Start Gateway${NC}"
+  echo ""
+
+  if is_running; then
+    echo -e "  ${SUCCESS}● gateway already running${NC}"
+    echo -e "  ${MUTED}Restart to apply changes: openbodhi restart${NC}"
+  else
+    echo -ne "  ${GOLD}start gateway now?${NC} ${MUTED}[Y/n]:${NC} "
+    read -r answer
+    answer="${answer:-Y}"
+    if [[ "$answer" =~ ^[Yy] ]]; then
+      cmd_start
+    else
+      echo ""
+      echo -e "  ${MUTED}Run: openbodhi start${NC}"
+      echo ""
+    fi
+  fi
+
+  # ── Step 4: Vault Backup ──
+  print_divider
+  echo ""
+  echo -e "  ${GOLD}[4/4]${NC} ${WHITE}Vault Backup${NC}"
+  echo ""
+  echo -e "  ${MUTED}Creating a snapshot of ~/.alfred/vault/ before going live.${NC}"
+  echo ""
+
+  # Run backup — pass "silent" to suppress redundant header
+  cmd_backup "silent" || echo -e "  ${MUTED}Skipping backup — configure AWS credentials to enable.${NC}"
+
+  print_divider
+  echo ""
+  echo -e "  ${SUCCESS}Setup complete.${NC}"
+  echo ""
+  echo -e "  ${MUTED}Next steps:${NC}"
+  echo -e "  ${MUTED}  openbodhi         — system status${NC}"
+  echo -e "  ${MUTED}  openbodhi logs    — watch the gateway${NC}"
+  echo -e "  ${MUTED}  openbodhi vault   — vault progress${NC}"
+  echo -e "  ${MUTED}  openbodhi backup  — manual vault snapshot${NC}"
+  echo ""
+}
+
+# ─── Token Write ──────────────────────────────────────────────────────────────
+write_token() {
+  local new_token="$1"
+
+  if [[ ! -f "$OPENCLAW_CONFIG" ]]; then
+    echo -e "  ${ERROR}✗ openclaw.json not found at ${OPENCLAW_CONFIG}${NC}"
+    exit 1
+  fi
+
+  # Use Python to safely update the token (handles JSON5 comments)
+  python3 << PYEOF
+import re, os, tempfile
+
+config_path = "$OPENCLAW_CONFIG"
+new_token = "$new_token"
+
+raw = open(config_path).read()
+
+# Match the token field inside the telegram channel block
+# Pattern: "token": "..." inside channels.telegram
+# We do a targeted replacement to preserve all comments and formatting
+pattern = r'("token"\s*:\s*")[^"]*(")'
+
+def replace_in_telegram_block(content, new_token):
+    # Find telegram channel block and replace only its token
+    # Strategy: find the telegram: { block, replace token within it
+    tg_start = content.find('"telegram"')
+    if tg_start == -1:
+        tg_start = content.find("'telegram'")
+    if tg_start == -1:
+        raise ValueError("telegram channel not found in config")
+
+    # Find the opening brace after "telegram"
+    brace_start = content.find('{', tg_start)
+    if brace_start == -1:
+        raise ValueError("telegram block not found")
+
+    # Find matching closing brace
+    depth = 0
+    pos = brace_start
+    for i, c in enumerate(content[brace_start:], brace_start):
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                pos = i
+                break
+
+    block = content[brace_start:pos+1]
+    new_block = re.sub(r'("token"\s*:\s*")[^"]*(")', r'\g<1>' + new_token + r'\2', block)
+
+    return content[:brace_start] + new_block + content[pos+1:]
+
+updated = replace_in_telegram_block(raw, new_token)
+
+# Atomic write
+tmp = config_path + ".tmp"
+with open(tmp, 'w') as f:
+    f.write(updated)
+os.replace(tmp, config_path)
+print("ok")
+PYEOF
+}
+
+# ─── Backup ───────────────────────────────────────────────────────────────────
+cmd_backup() {
+  local silent="${1:-}"   # pass "silent" to suppress header (called from setup)
+
+  if [[ "$silent" != "silent" ]]; then
+    print_header
+    echo -e "  ${GOLD}Vault Backup${NC}"
+    echo ""
+  fi
+
+  # Verify vault exists
+  local vault_dir="${OBSIDIAN_VAULT_DIR:-$HOME/.alfred/vault}"
+  if [[ ! -d "$vault_dir" ]]; then
+    echo -e "  ${ERROR}✗ vault not found at ${vault_dir}${NC}"
+    echo -e "  ${MUTED}Set OBSIDIAN_VAULT_DIR if your vault is elsewhere.${NC}"
+    echo ""
+    return 1
+  fi
+
+  # Verify backup script exists
+  if [[ ! -f "$BACKUP_SCRIPT" ]]; then
+    echo -e "  ${ERROR}✗ backup script not found:${NC}"
+    echo -e "  ${MUTED}  $BACKUP_SCRIPT${NC}"
+    echo ""
+    return 1
+  fi
+
+  # Check AWS credentials are configured
+  local has_creds=false
+  if [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+    has_creds=true
+  elif aws configure list --profile bodhi-backup &>/dev/null 2>&1; then
+    has_creds=true
+  fi
+
+  if [[ "$has_creds" == "false" ]]; then
+    echo -e "  ${WARN}⚠ AWS credentials not configured.${NC}"
+    echo ""
+    echo -e "  ${MUTED}Set up the bodhi-backup profile:${NC}"
+    echo -e "  ${MUTED}  aws configure --profile bodhi-backup${NC}"
+    echo ""
+    echo -e "  ${MUTED}  AWS Access Key:  hudadata access key (Bitwarden)${NC}"
+    echo -e "  ${MUTED}  AWS Secret Key:  hudadata secret key (Bitwarden)${NC}"
+    echo -e "  ${MUTED}  Region:          nbg1${NC}"
+    echo -e "  ${MUTED}  Output:          json${NC}"
+    echo ""
+    echo -e "  ${MUTED}Or export credentials before running:${NC}"
+    echo -e "  ${MUTED}  export AWS_ACCESS_KEY_ID=...${NC}"
+    echo -e "  ${MUTED}  export AWS_SECRET_ACCESS_KEY=...${NC}"
+    echo -e "  ${MUTED}  export S3_ENDPOINT_URL=https://nbg1.your-objectstorage.com${NC}"
+    echo ""
+    return 1
+  fi
+
+  local file_count
+  file_count="$(find "$vault_dir" -type f ! -name "*.tmp" ! -name ".DS_Store" | wc -l | tr -d ' ')"
+  echo -e "  ${MUTED}vault:${NC}  ${WHITE}${vault_dir}${NC}"
+  echo -e "  ${MUTED}files:${NC}  ${WHITE}${file_count}${NC}"
+  echo -e "  ${MUTED}dest:${NC}   ${WHITE}s3://hudadata/backups/obsidian/${NC}"
+  echo ""
+  echo -e "  ${GOLD}backing up...${NC}"
+
+  local result
+  result="$(bash "$BACKUP_SCRIPT" 2>&1)" || true
+
+  if echo "$result" | grep -q "^BACKUP_OK:"; then
+    local dest
+    dest="$(echo "$result" | grep "^BACKUP_OK:" | sed 's/^BACKUP_OK://')"
+    echo -e "  ${SUCCESS}✓ backup complete${NC}"
+    echo -e "  ${MUTED}  $dest${NC}"
+    echo ""
+  else
+    local reason
+    reason="$(echo "$result" | grep "^BACKUP_FAIL:" | sed 's/^BACKUP_FAIL://' || echo "unknown error")"
+    echo -e "  ${ERROR}✗ backup failed:${NC} ${reason}"
+    echo -e "  ${MUTED}Check: ~/.openclaw/backup.log${NC}"
+    echo ""
+    return 1
+  fi
+}
+
+# ─── Help ─────────────────────────────────────────────────────────────────────
+cmd_help() {
+  print_header
+  echo -e "  ${WHITE}Usage:${NC}"
+  echo ""
+  echo -e "  ${GOLD}openbodhi${NC}               system status dashboard"
+  echo -e "  ${GOLD}openbodhi start${NC}          start the gateway"
+  echo -e "  ${GOLD}openbodhi stop${NC}           stop the gateway"
+  echo -e "  ${GOLD}openbodhi restart${NC}        restart the gateway"
+  echo -e "  ${GOLD}openbodhi setup${NC}          guided setup wizard"
+  echo -e "  ${GOLD}openbodhi logs${NC}           tail live gateway logs"
+  echo -e "  ${GOLD}openbodhi vault${NC}          vault node stats"
+  echo -e "  ${GOLD}openbodhi backup${NC}         backup Obsidian vault to S3"
+  echo -e "  ${GOLD}openbodhi help${NC}           show this help"
+  echo ""
+  echo -e "  ${MUTED}Advanced:${NC}"
+  echo -e "  ${MUTED}openbodhi setup --telegram-token <token>${NC}"
+  echo -e "  ${MUTED}  Set bot token non-interactively.${NC}"
+  echo ""
+  echo -e "  ${MUTED}Env:${NC}"
+  echo -e "  ${MUTED}OPENBODHI_DIR  — repo path (default: ~/openbodhi)${NC}"
+  echo ""
+}
+
+# ─── Router ───────────────────────────────────────────────────────────────────
+main() {
+  local cmd="${1:-status}"
+  shift || true
+
+  case "$cmd" in
+    status|"")     cmd_status ;;
+    start)         cmd_start ;;
+    stop)          cmd_stop ;;
+    restart)       cmd_restart ;;
+    setup)         cmd_setup "$@" ;;
+    logs|log)      cmd_logs ;;
+    vault)         cmd_vault ;;
+    backup)        cmd_backup ;;
+    help|--help|-h) cmd_help ;;
+    *)
+      echo -e "\n  ${ERROR}Unknown command: ${cmd}${NC}"
+      echo -e "  ${MUTED}Run: openbodhi help${NC}\n"
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

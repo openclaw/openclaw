@@ -70,24 +70,26 @@ Map:
 - `haiku`  → `anthropic/claude-haiku-4-5`
 
 ```bash
-python3 -c "
-import json, os, pathlib, sys
-name = sys.argv[1] if len(sys.argv) > 1 else 'sonnet'
+BODHI_MODEL='<name>' python3 -c "
+import json, os, pathlib
+name = os.environ.get('BODHI_MODEL', 'sonnet').lower()
 MAP = {
     'sonnet': 'anthropic/claude-sonnet-4-6',
     'opus': 'anthropic/claude-opus-4-6',
     'haiku': 'anthropic/claude-haiku-4-5',
 }
-model = MAP.get(name.lower())
+model = MAP.get(name)
 if not model:
     print('UNKNOWN')
     exit()
 cfg = pathlib.Path(os.path.expanduser('~/.openclaw/openclaw.json'))
 d = json.loads(cfg.read_text())
 d['agents']['defaults']['model'] = model
-cfg.write_text(json.dumps(d, indent=2))
+tmp = cfg.with_suffix('.tmp')
+tmp.write_text(json.dumps(d, indent=2))
+tmp.replace(cfg)
 print(model)
-" <name>
+"
 ```
 
 - For `opus`: warn before switching — `⚠️ Opus is 5× more expensive ($15/$75 per MTok vs $3/$15). Today remaining: $X.XX. Confirm? Reply /model opus confirm`
@@ -100,18 +102,20 @@ print(model)
 Switch thinking depth. Accepted: `low`, `medium`, `high`.
 
 ```bash
-python3 -c "
-import json, os, pathlib, sys
-level = sys.argv[1] if len(sys.argv) > 1 else 'low'
+BODHI_EFFORT='<level>' python3 -c "
+import json, os, pathlib
+level = os.environ.get('BODHI_EFFORT', 'low').lower()
 if level not in ('low', 'medium', 'high'):
     print('UNKNOWN')
     exit()
 cfg = pathlib.Path(os.path.expanduser('~/.openclaw/openclaw.json'))
 d = json.loads(cfg.read_text())
 d['agents']['defaults']['thinkingDefault'] = level
-cfg.write_text(json.dumps(d, indent=2))
+tmp = cfg.with_suffix('.tmp')
+tmp.write_text(json.dumps(d, indent=2))
+tmp.replace(cfg)
 print(level)
-" <level>
+"
 ```
 
 Cost context:
@@ -138,7 +142,9 @@ f = pathlib.Path(os.path.expanduser('~/.openclaw/tasks.md'))
 lines = f.read_text().splitlines() if f.exists() else []
 open_tasks = [l for l in lines if l.startswith('☐')]
 n = len(open_tasks) + 1
-f.write_text('\n'.join(lines + [f'☐ {n}. {desc}']) + '\n')
+tmp = f.with_suffix('.tmp')
+tmp.write_text('\n'.join(lines + [f'☐ {n}. {desc}']) + '\n')
+tmp.replace(f)
 print(f'added #{n}')
 "
 ```
@@ -165,12 +171,13 @@ Format reply as the raw task list (preserve ☐/☑ markers). If empty: `No open
 Mark task n complete:
 
 ```bash
-python3 -c "
-import pathlib, os, sys
-if len(sys.argv) < 2 or not sys.argv[1].isdigit():
+BODHI_TASK_N='<n>' python3 -c "
+import pathlib, os
+n_str = os.environ.get('BODHI_TASK_N', '').strip()
+if not n_str.isdigit():
     print('INVALID_ARG')
     exit()
-n = int(sys.argv[1])
+n = int(n_str)
 f = pathlib.Path(os.path.expanduser('~/.openclaw/tasks.md'))
 if not f.exists():
     print('NO_FILE')
@@ -184,9 +191,11 @@ for l in lines:
         found = True
     else:
         updated.append(l)
-f.write_text('\n'.join(updated) + '\n')
+tmp = f.with_suffix('.tmp')
+tmp.write_text('\n'.join(updated) + '\n')
+tmp.replace(f)
 print('done' if found else 'NOT_FOUND')
-" <n>
+"
 ```
 
 Reply: `Task <n> marked done. ☑`
@@ -220,7 +229,9 @@ if not key or not val:
 f = pathlib.Path(os.path.expanduser('~/.openclaw/pm-memory.md'))
 existing = f.read_text() if f.exists() else ''
 entry = f'**{key}**: {val}'
-f.write_text(existing.rstrip() + '\n' + entry + '\n')
+tmp = f.with_suffix('.tmp')
+tmp.write_text(existing.rstrip() + '\n' + entry + '\n')
+tmp.replace(f)
 print('saved')
 "
 ```

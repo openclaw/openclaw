@@ -1,76 +1,512 @@
 {
+  // ─── OpenBodhi — bodhi1 personal instance ───────────────────────────────────
+  // Canonical config. DO NOT edit on the server directly.
+  // Deploy with: bash docs/bodhi/scripts/deploy-config.sh
+  //
+  // Required env vars (set in ~/.openclaw/.env on bodhi1):
+  //   TELEGRAM_BOT_TOKEN        — personal bot token from BotFather
+  //   BODHI_TELEGRAM_USER_ID    — your Telegram numeric user ID (from @userinfobot)
+  //   OPENROUTER_API_KEY        — OpenRouter API key
+  //   ANTHROPIC_API_KEY         — Anthropic API key (set by openclaw auth)
+  //   OBSIDIAN_VAULT_DIR        — vault path, default: ~/.alfred/vault
+  //   S3_ENDPOINT_URL           — https://nbg1.your-objectstorage.com
+  //   AWS_ACCESS_KEY_ID         — hudadata bucket access key
+  //   AWS_SECRET_ACCESS_KEY     — hudadata bucket secret key
+
   "logging": { "level": "info" },
   "gateway": { "mode": "local" },
 
+  "env": {
+    "vars": {
+      "OPENROUTER_API_KEY":      "${OPENROUTER_API_KEY}",
+      "TELEGRAM_BOT_TOKEN":      "${TELEGRAM_BOT_TOKEN}",
+      "BODHI_TELEGRAM_USER_ID":  "${BODHI_TELEGRAM_USER_ID}",
+      "OBSIDIAN_VAULT_DIR":      "${OBSIDIAN_VAULT_DIR:-$HOME/.alfred/vault}",
+      "S3_ENDPOINT_URL":         "${S3_ENDPOINT_URL:-https://nbg1.your-objectstorage.com}"
+    }
+  },
+
+  // ─── Agents ───────────────────────────────────────────────────────────────
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-sonnet-4-6",
-      "workspace": "~/.openclaw/workspace",
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": [
+          "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+          "openrouter/google/gemma-3-12b-it:free",
+          "ollama/gemma3:12b"
+        ]
+      },
       "thinkingDefault": "low",
       "timeoutSeconds": 300,
       "models": {
-        "anthropic/claude-sonnet-4-6": {
-          "params": { "cacheRetention": "short" }
-        },
-        "anthropic/claude-haiku-4-5": {
-          "params": { "cacheRetention": "short" }
-        },
-        "anthropic/claude-opus-4-6": {
-          "params": { "cacheRetention": "short" }
-        }
+        "anthropic/claude-sonnet-4-6": { "params": { "cacheRetention": "short" } },
+        "anthropic/claude-haiku-4-5":  { "params": { "cacheRetention": "short" } },
+        "anthropic/claude-opus-4-6":   { "params": { "cacheRetention": "short" } }
       }
-    }
+    },
+
+    "list": [
+      {
+        "id": "bodhi",
+        "name": "Bodhi",
+        "default": true,
+        "workspace": "~/.openclaw/workspace-bodhi",
+        "identity": {
+          "name": "Bodhi",
+          "avatar": "🪷",
+          "bio": "Thinking partner. Socratic companion. Asks better questions. Warm, reflective, curious. Default mode. Soul: souls/bodhi-soul.md. Operator permissions: souls/operator-permissions.md."
+        },
+        "skills": [
+          "bodhi-pm",
+          "bodhi-budget",
+          "bodhi-model-switch",
+          "bodhi-switch",
+          "bodhi-msf"
+        ]
+      },
+      {
+        "id": "bo",
+        "name": "Bo",
+        "workspace": "~/.openclaw/workspace-bo",
+        "identity": {
+          "name": "Bo",
+          "avatar": "🧘",
+          "bio": "Wellness criticality monitor. Buddhist writer. Calm, precise, never prescriptive. Surfaces patterns. Soul: souls/bo-soul.md. Operator permissions: souls/operator-permissions.md."
+        },
+        "skills": [
+          "bodhi-curator",
+          "bodhi-enricher",
+          "bodhi-distiller",
+          "bodhi-surveyor",
+          "bodhi-janitor",
+          "bodhi-nudge",
+          "bodhi-substack",
+          "bodhi-viz",
+          "bodhi-checkin",
+          "bodhi-tasks",
+          "bodhi-calendar",
+          "bodhi-accountability",
+          "bodhi-query",
+          "bodhi-safety",
+          "bodhi-switch"
+        ]
+      },
+      {
+        "id": "qenjin",
+        "name": "Qenjin",
+        "workspace": "~/.openclaw/workspace-qenjin",
+        "identity": {
+          "name": "Qenjin",
+          "avatar": "⚙️",
+          "bio": "Business operator for qenjin.io. Clipped, military-brief, zero filler. CRM, pipeline, outreach, content, analytics, security. Subject. Verb. Object. Done. Soul: souls/qenjin-soul.md. Operator permissions: souls/operator-permissions.md."
+        },
+        "skills": [
+          "qenjin-crm",
+          "qenjin-outreach",
+          "qenjin-content",
+          "qenjin-n8n",
+          "qenjin-osint",
+          "qenjin-mautic",
+          "qenjin-analytics",
+          "qenjin-security",
+          "qenjin-video",
+          "bodhi-switch"
+        ]
+      },
+      {
+        "id": "moonman",
+        "name": "Moonman",
+        "workspace": "~/.openclaw/workspace-moonman",
+        "identity": {
+          "name": "Moonman",
+          "avatar": "🌙",
+          "bio": "Edge hunter. Numbers-first. Paper before live — always. Polymarket, crypto, TA, wallet analysis. Trader slang, no filler. Soul: souls/moonman-soul.md. Operator permissions: souls/operator-permissions.md."
+        },
+        "skills": [
+          "trader-scan",
+          "trader-ta",
+          "trader-signals",
+          "trader-backtest",
+          "trader-polymarket",
+          "trader-wallet",
+          "trader-risk",
+          "trader-cron",
+          "trader-dashboard",
+          "bodhi-switch"
+        ]
+      }
+    ]
   },
 
-  "budget": {
-    "dailyDollars": 2.00,
-    "weeklyDollars": 10.00,
-    "alertAt": 0.80,
-    "hardStop": true,
-    "persistPath": "~/.openclaw/budget-state.json"
-  },
-
+  // ─── Channels ─────────────────────────────────────────────────────────────
   "channels": {
     "telegram": {
-      "dmPolicy": "allowlist",
-      "allowFrom": ["$BODHI_TELEGRAM_USER_ID"]
+      // token is NOT set here — managed via: openclaw channels add --channel telegram --token <token>
+      "dmPolicy":  "allowlist",
+      "allowFrom": ["${BODHI_TELEGRAM_USER_ID}"]
     }
   },
 
+  // ─── Skills ───────────────────────────────────────────────────────────────
   "skills": {
     "load": {
+      "watch": false,
       "extraDirs": [
+        // ── Bo — wellness ──────────────────────────────────────────────────
         "skills/bodhi-curator",
         "skills/bodhi-enricher",
         "skills/bodhi-distiller",
         "skills/bodhi-surveyor",
         "skills/bodhi-janitor",
+        "skills/bodhi-nudge",
+        "skills/bodhi-substack",
+        "skills/bodhi-viz",
+        "skills/bodhi-checkin",
+        "skills/bodhi-tasks",
+        "skills/bodhi-calendar",
+        "skills/bodhi-accountability",
+        "skills/bodhi-query",
+        "skills/bodhi-safety",
+        // ── Bodhi — core ──────────────────────────────────────────────────
         "skills/bodhi-budget",
         "skills/bodhi-pm",
-        "skills/bodhi-model-switch"
-      ],
-      "watch": false
+        "skills/bodhi-model-switch",
+        "skills/bodhi-msf",
+        "skills/bodhi-switch",
+        // ── Qenjin — business (personal, on bodhi1 at ~/openbodhi/skills/) ─
+        "skills/qenjin-crm",
+        "skills/qenjin-outreach",
+        "skills/qenjin-content",
+        "skills/qenjin-n8n",
+        "skills/qenjin-osint",
+        "skills/qenjin-mautic",
+        "skills/qenjin-analytics",
+        "skills/qenjin-security",
+        "skills/qenjin-video",
+        // ── Moonman — trading (personal, on bodhi1 at ~/openbodhi/skills/) ─
+        "skills/trader-scan",
+        "skills/trader-ta",
+        "skills/trader-signals",
+        "skills/trader-backtest",
+        "skills/trader-polymarket",
+        "skills/trader-wallet",
+        "skills/trader-risk",
+        "skills/trader-cron",
+        "skills/trader-dashboard"
+      ]
     }
   },
 
-  "cron": {
-    "enabled": true,
-    "maxConcurrentRuns": 1,
-    "sessionRetention": "48h",
-    "retry": {
-      "maxAttempts": 3,
-      "backoffMs": [30000, 60000, 300000],
-      "retryOn": ["rate_limit", "overloaded", "network", "server_error"]
+  // ─── Hooks ────────────────────────────────────────────────────────────────
+  "hooks": {
+    "load": {
+      "extraDirs": [
+        "docs/bodhi/hooks/bodhi-session-context"
+      ]
+    },
+    "events": {
+      "agent:bootstrap": ["bodhi-session-context"]
     }
   },
 
+  // ─── Session ──────────────────────────────────────────────────────────────
   "session": {
     "scope": "per-sender",
     "resetTriggers": ["/new", "/reset"],
     "reset": {
-      "mode": "daily",
-      "atHour": 4,
+      "mode":        "daily",
+      "atHour":      4,     // 4am UTC = 11pm CDT
       "idleMinutes": 1440
     }
+  },
+
+  // ─── Tools ────────────────────────────────────────────────────────────────
+  "tools": {
+    "exec": {
+      "host":       "local",
+      "timeoutSec": 30,
+      "ask":        true,
+      "security":   "strict"
+    }
+  },
+
+  // ─── Cron ─────────────────────────────────────────────────────────────────
+  // All schedules in UTC. User timezone: CDT (UTC-5 summer) / CST (UTC-6 winter).
+  // CDT quick ref: 8am CDT=13UTC, 9am=14UTC, 10am=15UTC, 12pm=17UTC,
+  //                4pm=21UTC, 8pm=01UTC+1, 9pm=02UTC+1, 10pm=03UTC+1, midnight=05UTC
+  //
+  // Delivery shorthand used throughout:
+  //   announce → { mode: "announce", channel: "telegram", to: "${BODHI_TELEGRAM_USER_ID}" }
+  //   silent   → omitted (no Telegram delivery; agent still runs)
+
+  "cron": {
+    "enabled":           true,
+    "maxConcurrentRuns": 1,
+    "sessionRetention":  "48h",
+    "retry": {
+      "maxAttempts": 3,
+      "backoffMs":   [30000, 60000, 300000],
+      "retryOn":     ["rate_limit", "overloaded", "network", "server_error"]
+    },
+
+    "jobs": [
+
+      // ── BO — wellness ──────────────────────────────────────────────────────
+
+      {
+        // 10am CDT — runs nudge logic, sends only if cluster criticality warrants
+        "id":        "nudge-daily",
+        "schedule":  "0 15 * * *",
+        "agent":     "bo",
+        "prompt":    "Run /nudge — check vault clusters for criticality and deliver any pending nudges.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // Every hour — silent refresh of viz data
+        "id":        "viz-export-hourly",
+        "schedule":  "0 * * * *",
+        "agent":     "bo",
+        "prompt":    "Run: cd ~/openbodhi && python3 -m bodhi_viz.export — refresh visualization data from latest vault nodes. No message needed, just confirm success.",
+        "recurring": true
+        // silent — no delivery
+      },
+      {
+        // 8am CDT — morning check-in ritual
+        "id":        "morning-checkin",
+        "schedule":  "0 13 * * *",
+        "agent":     "bo",
+        "prompt":    "Send the morning check-in ritual. Run /morning",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 8pm CDT — evening check-in ritual
+        "id":        "evening-checkin",
+        "schedule":  "0 1 * * *",
+        "agent":     "bo",
+        "prompt":    "Send the evening check-in ritual. Run /evening",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 9am CDT — daily vault digest (was 1am CDT — fixed)
+        "id":        "distiller-daily",
+        "schedule":  "0 14 * * *",
+        "agent":     "bo",
+        "prompt":    "Run the daily digest. Run /distiller — query last 7 days of vault nodes and send morning synthesis.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 9pm CDT Friday — weekly vault survey (runs just as the week closes)
+        "id":        "surveyor-weekly",
+        "schedule":  "0 2 * * 6",
+        "agent":     "bo",
+        "prompt":    "Run the weekly vault survey. Run /surveyor — cluster all vault nodes, detect bridges, surface SOC signals, and send the weekly digest.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 10:30pm CDT Saturday — weekly vault hygiene
+        "id":        "janitor-weekly",
+        "schedule":  "30 3 * * 0",
+        "agent":     "bo",
+        "prompt":    "Run /janitor — weekly vault hygiene check. Scan for orphans, duplicates, broken edges. Report only, no auto-cleanup.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 5pm CDT — afternoon surface (patterns / nudges from midday activity)
+        "id":        "midday-surface",
+        "schedule":  "0 22 * * *",
+        "agent":     "bo",
+        "prompt":    "Mid-afternoon surface. Review vault nodes added since this morning's distiller. Any emerging pattern or bridge worth surfacing now? Send only if something is genuinely notable. Otherwise silent.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+
+      // ── BODHI — system ────────────────────────────────────────────────────
+
+      {
+        // midnight CDT — daily budget reset notification
+        "id":        "budget-reset-notify",
+        "schedule":  "1 5 * * *",
+        "agent":     "bodhi",
+        "prompt":    "Budget has reset for the new day. Run /usage and send a brief one-line status: today's spend ($0.00) and daily limit. No extra commentary.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // Every 30min — silent health heartbeat
+        "id":        "health-ping",
+        "schedule":  "*/30 * * * *",
+        "agent":     "bodhi",
+        "prompt":    "Silent health check. Run: python3 -c \"import pathlib, json, os; p=pathlib.Path(os.path.expanduser('~/.openclaw/health.json')); import datetime; d={'ts': datetime.datetime.utcnow().isoformat(), 'ok': True}; p.write_text(json.dumps(d))\" — write timestamp to health.json. No Telegram message.",
+        "recurring": true
+        // silent
+      },
+      {
+        // Every 15min — Tailscale watchdog, alert only if down
+        "id":        "tailscale-check",
+        "schedule":  "*/15 * * * *",
+        "agent":     "bodhi",
+        "prompt":    "Silent Tailscale check. Run: bash ~/openbodhi/docs/bodhi/scripts/tailscale-watchdog.sh — alert via Telegram only if Tailscale is down. No message if healthy.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // midnight CDT Sunday — weekly vault backup to S3
+        "id":        "vault-backup-weekly",
+        "schedule":  "0 5 * * 0",
+        "agent":     "bodhi",
+        "prompt":    "Run vault backup: bash ~/openbodhi/docs/bodhi/scripts/vault-backup.sh — send result as Telegram message. Format: 'Vault backup: [OK/FAIL] — N files, key: <s3-key>'",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 8am CDT — disk usage check, alert only if WARN/CRITICAL
+        "id":        "disk-monitor-daily",
+        "schedule":  "0 13 * * *",
+        "agent":     "bodhi",
+        "prompt":    "Run: bash ~/openbodhi/docs/bodhi/scripts/disk-monitor.sh — send alert only if output starts with DISK_WARN or DISK_CRITICAL. Silent if healthy.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 9am CDT 1st of month — monthly security audit
+        "id":        "secrets-audit-monthly",
+        "schedule":  "0 14 1 * *",
+        "agent":     "bodhi",
+        "prompt":    "Run: bash ~/openbodhi/docs/bodhi/scripts/secrets-audit.sh — send the full output as a Telegram message. This is the monthly security audit reminder.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+
+      // ── QENJIN — business ─────────────────────────────────────────────────
+
+      {
+        // 7am CDT Monday — weekly competitive intel brief
+        "id":        "qenjin-intel-weekly",
+        "schedule":  "0 12 * * 1",
+        "agent":     "qenjin",
+        "prompt":    "Run /intel weekly — competitive intelligence brief. Scan competitor content, FDA announcements relevant to psychedelic therapeutics, market trends, funding rounds. Store to SiYuan Qenjin-Research. Send brief to Telegram.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 9am CDT daily — check CRM for accepted connections, generate DMs
+        "id":        "qenjin-outreach-daily",
+        "schedule":  "0 14 * * *",
+        "agent":     "qenjin",
+        "prompt":    "Run /q outreach today — check Twenty CRM for connections accepted in last 24-48h. Generate DM for each. Send list to Telegram for manual review and sending. Format: one DM per contact, name + message.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 12pm CDT Friday — weekly analytics numbers
+        "id":        "qenjin-analytics-weekly",
+        "schedule":  "0 17 * * 5",
+        "agent":     "qenjin",
+        "prompt":    "Run /q analytics weekly — content performance (pageviews, subscribers), outreach funnel (connections, replies, calls booked), pipeline status (MRR, leads warm, calls scheduled). Send brief to Telegram. Numbers only, no narrative.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 9am CDT 1st of month — full monthly business report
+        "id":        "qenjin-business-report-monthly",
+        "schedule":  "0 14 1 * *",
+        "agent":     "qenjin",
+        "prompt":    "Run /q analytics monthly — full monthly business report: MRR, churn, pipeline value, content output vs target, outreach volume vs target, AI budget spend, top wins, top gaps. Send to Telegram.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+
+      // ── MOONMAN — trading ─────────────────────────────────────────────────
+
+      {
+        // 8am CDT — morning market brief
+        "id":        "moonman-morning-brief",
+        "schedule":  "0 13 * * *",
+        "agent":     "moonman",
+        "prompt":    "Run /scan morning — market morning brief. BTC price + 24h change, top 3 movers (crypto), macro headline if any. Polymarket: top 5 markets by volume today. Any active paper trade setups triggered? Send to Telegram. Keep it under 10 lines.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 12pm CDT — silent signal check, announce only if high-confidence signal
+        "id":        "moonman-midday-check",
+        "schedule":  "0 17 * * *",
+        "agent":     "moonman",
+        "prompt":    "Silent midday check. Run: python3 -c \"import pathlib, json; f=pathlib.Path('~/.openclaw/trader/signals/signals.json').expanduser(); d=json.loads(f.read_text()) if f.exists() else {}; alerts=[s for s in d.get('active',[]) if s.get('confidence',0)>0.75]; print('SIGNAL' if alerts else 'QUIET')\" — send Telegram message ONLY if output is SIGNAL. Include signal details. Silent if QUIET.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 4pm CDT — end of day review
+        "id":        "moonman-eod-review",
+        "schedule":  "0 21 * * *",
+        "agent":     "moonman",
+        "prompt":    "Run /scan eod — end of day review. Paper trade P&L today (read from ~/.openclaw/trader/paper-trades/trades.json, filter today's date). Active signals still open. Any new setups for tomorrow's session? Send to Telegram. Numbers first, always.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 9pm CDT — Asian session setup scan
+        "id":        "moonman-evening-scan",
+        "schedule":  "0 2 * * *",
+        "agent":     "moonman",
+        "prompt":    "Run /scan evening — Asian session setup scan. BTC/ETH overnight key levels. Any Polymarket markets closing in next 12h that have edge? Send only if there is something actionable. Otherwise: 'Evening scan: quiet.' One line.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // Every 15min 24/7 — silent Polymarket arb monitor, alert only on edge
+        "id":        "moonman-polymarket-monitor",
+        "schedule":  "*/15 * * * *",
+        "agent":     "moonman",
+        "prompt":    "Silent Polymarket monitor. Run: python3 ~/openbodhi/docs/bodhi/scripts/polymarket-check.py — script writes to ~/.openclaw/trader/signals/pm-state.json and outputs ALERT or QUIET. Send Telegram message ONLY if output is ALERT. Include market name, current odds, edge estimate. Silent otherwise.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // Hourly — silent wallet activity tracker
+        "id":        "moonman-wallet-tracker",
+        "schedule":  "0 * * * *",
+        "agent":     "moonman",
+        "prompt":    "Silent wallet check. Run: python3 ~/openbodhi/docs/bodhi/scripts/wallet-check.py — script checks monitored wallets for new trades in last hour, writes to ~/.openclaw/trader/wallets/activity.json, outputs ACTIVITY or QUIET. Send Telegram message ONLY if output is ACTIVITY. Include wallet alias, trade direction, size estimate. Silent otherwise.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 9am CDT Sunday — weekly strategy performance review
+        "id":        "moonman-strategy-review-weekly",
+        "schedule":  "0 14 * * 0",
+        "agent":     "moonman",
+        "prompt":    "Run /backtest review — weekly strategy performance. For each active strategy in ~/.openclaw/trader/strategies/: win rate, expectancy, Sharpe ratio, trade count this week. Flag any strategy with win rate below 45% or Sharpe below 0.8 for review. Send full table to Telegram.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 10am CDT Sunday — edge decay check (runs after strategy review)
+        "id":        "moonman-edge-decay-weekly",
+        "schedule":  "0 15 * * 0",
+        "agent":     "moonman",
+        "prompt":    "Run /scan edge-decay — compare last 30 trades vs prior 30 trades for each strategy. If edge is degrading (win rate dropping, expectancy shrinking): flag it. Send decay report to Telegram. No decay = 'Edge stable. Nothing to flag.'",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      },
+      {
+        // 8am CDT 1st of month — monthly trading report
+        "id":        "moonman-monthly-report",
+        "schedule":  "0 13 1 * *",
+        "agent":     "moonman",
+        "prompt":    "Run the monthly trading report. Read all paper trades from ~/.openclaw/trader/paper-trades/trades.json for last 30 days. Compute: total P&L, win rate, best strategy, worst strategy, largest win, largest loss, current drawdown, strategies ready to go live (30+ trades + positive expectancy). Send full report to Telegram.",
+        "recurring": true,
+        "delivery":  { "mode": "announce", "channel": "telegram", "to": "${BODHI_TELEGRAM_USER_ID}" }
+      }
+
+    ]
   }
 }

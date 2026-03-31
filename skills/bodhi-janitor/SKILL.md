@@ -1,9 +1,8 @@
 ---
 name: bodhi-janitor
-description: Weekly vault health check. Runs Sundays at 3am.
+description: Weekly vault health check. Cron-scheduled via openclaw.json (janitor-weekly job, Sundays 3:30am UTC after vault backup).
 user-invocable: true
 disable-model-invocation: false
-metadata: {"openclaw":{"cron":"0 3 * * 0"}}
 ---
 
 # bodhi-janitor

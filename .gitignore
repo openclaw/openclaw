@@ -21,6 +21,9 @@ ui/test-results/
 packages/dashboard-next/.next/
 packages/dashboard-next/out/
 
+# OpenClaw workspace state (auto-created in soul dirs on bodhi1)
+souls/**/.openclaw/
+
 # Mise configuration files
 mise.toml
 
@@ -138,3 +141,10 @@ vault/chroma/
 **/tasks.md
 packages/bodhi_vault/.venv/
 **/.venv/
+
+# Personal agent configs — not part of the public product
+souls/
+docs/qenjin/
+skills/qenjin-*/
+skills/trader-*/
+docs/superpowers/

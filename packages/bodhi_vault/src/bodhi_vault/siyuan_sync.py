@@ -38,6 +38,13 @@ DOMAIN_NOTEBOOK: dict[str | None, str] = {
 PEOPLE_NOTEBOOK = "OpenBodhi-People"
 DIGESTS_NOTEBOOK = "OpenBodhi-Digests"
 
+# Notebooks that belong exclusively to Bo (wellness agent)
+_BO_NOTEBOOKS = frozenset({
+    "OpenBodhi-Wellness", "OpenBodhi-Fitness", "OpenBodhi-Health",
+    "OpenBodhi-Mental", "OpenBodhi-Cognitive", "OpenBodhi-People",
+    "OpenBodhi-Digests", "OpenBodhi-Substack",
+})
+
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
@@ -87,13 +94,19 @@ class SiYuanClient:
         data = self._post("/api/notebook/lsNotebooks", {})
         if data is not None:
             for nb in data.get("notebooks", []):
-                self._notebook_ids[nb["name"]] = nb["id"]
+                nb_id = nb.get("id", "")
+                # Validate before caching — guards against compromised/MITM SiYuan response
+                if self._validate_notebook_id(nb_id):
+                    self._notebook_ids[nb["name"]] = nb_id
+                else:
+                    log.warning("siyuan: skipping notebook with unexpected id format: %r", nb_id)
 
         if name not in self._notebook_ids:
             created = self._post("/api/notebook/createNotebook", {"name": name})
             if created and created.get("notebook", {}).get("id"):
                 nb_id = created["notebook"]["id"]
-                self._notebook_ids[name] = nb_id
+                if self._validate_notebook_id(nb_id):
+                    self._notebook_ids[name] = nb_id
             else:
                 return None
 
@@ -124,7 +137,10 @@ class SiYuanClient:
         if not self._validate_notebook_id(notebook_id):
             log.debug("siyuan: skipping person doc lookup — unexpected notebook_id format")
             return None
-        safe_name = person_name.replace("'", "''")
+        # Sanitise person_name for SQL string literal embedding.
+        # SiYuan uses SQLite internally; the standard escape is '' for single quotes.
+        # Truncate to 255 chars to guard against oversized inputs.
+        safe_name = person_name[:255].replace("'", "''")
         data = self._post(
             "/api/query/sql",
             {"stmt": f"SELECT id FROM blocks WHERE type='d' AND content='{safe_name}' AND box='{notebook_id}' LIMIT 1"},
@@ -285,6 +301,7 @@ def sync_to_siyuan(node: dict[str, Any]) -> None:
     disabled when SIYUAN_API_TOKEN is not set in the environment.
 
     Never raises. Vault writes are independent of SiYuan availability.
+    Routes to the correct notebook based on domain.
     """
     client = _get_client()
     if client is None:
@@ -297,3 +314,18 @@ def sync_to_siyuan(node: dict[str, Any]) -> None:
     except Exception as exc:  # noqa: BLE001
         # Best-effort — never propagate to caller
         log.debug("siyuan sync skipped: %s", exc)
+
+
+def sync_bo_node(node: dict[str, Any]) -> None:
+    """
+    Sync a Bo (wellness agent) vault node to SiYuan.
+
+    Identical to sync_to_siyuan but guards against writing to notebooks
+    that don't belong to Bo. Silently drops if domain maps outside
+    OpenBodhi-* notebooks.
+    """
+    target = DOMAIN_NOTEBOOK.get(node.get("domain"))
+    if target is not None and target not in _BO_NOTEBOOKS:
+        log.debug("sync_bo_node: domain %s maps to %s — not a Bo notebook, skipping", node.get("domain"), target)
+        return
+    sync_to_siyuan(node)

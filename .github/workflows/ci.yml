@@ -259,6 +259,14 @@ jobs:
       - name: Test skill Python scripts
         run: python -m pytest -q skills
 
+      - name: Install bodhi-vault package
+        run: |
+          python -m pip install jsonschema httpx
+          python -m pip install -e packages/bodhi_vault
+
+      - name: Test bodhi-vault
+        run: python -m pytest -q packages/bodhi_vault/tests
+
   secrets:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:

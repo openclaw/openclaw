@@ -1,9 +1,8 @@
 ---
 name: bodhi-distiller
-description: Morning synthesis of recent thoughts. Runs daily at 6am.
+description: Morning synthesis of recent thoughts. Cron-scheduled via openclaw.json (distiller-daily job, 6am UTC daily).
 user-invocable: true
 disable-model-invocation: false
-metadata: {"openclaw":{"cron":"0 6 * * *"}}
 ---
 
 # bodhi-distiller
@@ -50,7 +49,17 @@ If approved, write a Pattern node with `SURFACES_FROM` edges connecting to the s
 
 ## Silence Rule
 
-If fewer than 3 total nodes exist in the 7-day window, skip entirely. Send nothing. Silence is correct when the vault is quiet.
+If fewer than 3 total nodes exist in the 7-day window, send a brief onboarding nudge instead of silence:
+
+```
+Good morning.
+
+The vault is quiet (fewer than 3 captures this week).
+
+Send anything — a thought, a question, something on your mind. Bo listens.
+```
+
+This prevents new users from seeing nothing on their first week. After the first 3 nodes exist, normal digest behavior applies.
 
 ## Energy Handling
 

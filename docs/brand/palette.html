@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenBodhi — Brand Palette</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --lotus:    #f472b6;
+    --deep:     #0f0a1e;
+    --surface:  #1a1035;
+    --rim:      #2d1f5e;
+    --text:     #f8fafc;
+    --muted:    #94a3b8;
+    --slate:    #1e293b;
+
+    --wellness: #4ade80;
+    --fitness:  #60a5fa;
+    --health:   #f97316;
+    --mental:   #c084fc;
+    --cognitive:#facc15;
+  }
+
+  html, body {
+    background: var(--deep);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+  }
+
+  .page { max-width: 900px; margin: 0 auto; padding: 64px 40px 80px; }
+
+  /* ── Header ── */
+  .header { margin-bottom: 64px; }
+
+  .wordmark {
+    font-family: 'DM Serif Display', serif;
+    font-size: 52px;
+    letter-spacing: -1.5px;
+    line-height: 1;
+    color: var(--text);
+  }
+  .wordmark em {
+    font-style: italic;
+    background: linear-gradient(135deg, var(--lotus), var(--mental));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .tagline {
+    margin-top: 12px;
+    font-size: 12px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+  }
+
+  /* ── Section labels ── */
+  .section { margin-bottom: 56px; }
+  .section-label {
+    font-size: 9px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 20px;
+    font-family: 'DM Mono', monospace;
+  }
+
+  /* ── Swatch row ── */
+  .swatches { display: flex; gap: 12px; flex-wrap: wrap; }
+
+  .swatch {
+    flex: 1; min-width: 120px;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.07);
+  }
+
+  .swatch-color {
+    height: 88px;
+    position: relative;
+  }
+
+  .swatch-info {
+    background: rgba(0,0,0,0.3);
+    padding: 12px 14px;
+  }
+
+  .swatch-name {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+
+  .swatch-hex {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── Domain swatch: taller, labeled ── */
+  .swatch-domain .swatch-color { height: 72px; }
+  .swatch-domain-label {
+    position: absolute;
+    bottom: 8px; left: 12px;
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(0,0,0,0.55);
+    font-weight: 500;
+  }
+
+  /* ── Type specimen ── */
+  .type-row {
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .type-item { display: flex; align-items: baseline; gap: 20px; }
+  .type-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    min-width: 120px;
+  }
+  .t-display {
+    font-family: 'DM Serif Display', serif;
+    font-size: 36px;
+    letter-spacing: -0.5px;
+    color: var(--text);
+    line-height: 1;
+  }
+  .t-display-italic {
+    font-family: 'DM Serif Display', serif;
+    font-style: italic;
+    font-size: 36px;
+    background: linear-gradient(135deg, var(--lotus), var(--mental));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1;
+  }
+  .t-body {
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .t-mono {
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+  .t-caption {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ── Logo concept ── */
+  .logo-row { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
+  .logo-mark {
+    width: 72px; height: 72px;
+    border-radius: 20px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 38px;
+    flex-shrink: 0;
+  }
+  .logo-mark.dark { background: var(--surface); border: 1px solid var(--rim); }
+  .logo-mark.light { background: #f8fafc; }
+  .logo-mark.gradient { background: linear-gradient(135deg, var(--lotus), var(--mental)); }
+  .logo-mark.lotus-grad {
+    background: linear-gradient(135deg, #1a1035, var(--rim));
+    border: 1px solid var(--lotus);
+    box-shadow: 0 0 24px rgba(244,114,182,0.2);
+  }
+
+  .logo-word {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    letter-spacing: -0.5px;
+    line-height: 1.1;
+  }
+  .logo-word .open { color: var(--muted); font-size: 20px; }
+  .logo-word .bodhi { color: var(--text); }
+
+  /* ── Usage examples ── */
+  .usage-row { display: flex; gap: 16px; flex-wrap: wrap; }
+
+  .usage-card {
+    flex: 1; min-width: 200px;
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid rgba(255,255,255,0.07);
+  }
+  .usage-card.dark-bg { background: var(--deep); }
+  .usage-card.surface-bg { background: var(--surface); }
+  .usage-card.light-bg { background: #f8fafc; color: #0f0a1e; }
+  .usage-card.lotus-bg { background: var(--lotus); color: #0f0a1e; }
+
+  .usage-title {
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    font-family: 'DM Mono', monospace;
+    margin-bottom: 8px;
+    opacity: 0.6;
+  }
+  .usage-body { font-size: 14px; line-height: 1.5; }
+
+  /* ── Gradient bar ── */
+  .gradient-bar {
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(90deg,
+      var(--wellness), var(--fitness), var(--mental), var(--lotus), var(--cognitive));
+    margin: 20px 0 8px;
+  }
+  .gradient-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ── Divider ── */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--rim);
+    margin: 48px 0;
+  }
+
+  /* ── Copy helper ── */
+  .hex-table {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 32px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .hex-row { display: flex; align-items: center; gap: 10px; }
+  .hex-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  }
+  .hex-name { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── Wordmark ── -->
+  <div class="header">
+    <div class="wordmark">Open<em>Bodhi</em></div>
+    <div class="tagline">Your private AI health intelligence system</div>
+  </div>
+
+  <!-- ── Brand core ── -->
+  <div class="section">
+    <div class="section-label">Brand Core</div>
+    <div class="swatches">
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#f472b6;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Lotus</div>
+          <div class="swatch-hex">#f472b6</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#0f0a1e;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Deep</div>
+          <div class="swatch-hex">#0f0a1e</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#1a1035;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Surface</div>
+          <div class="swatch-hex">#1a1035</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#2d1f5e;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Rim</div>
+          <div class="swatch-hex">#2d1f5e</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#f8fafc;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Snow</div>
+          <div class="swatch-hex">#f8fafc</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#94a3b8;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Slate</div>
+          <div class="swatch-hex">#94a3b8</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Gradient ── -->
+  <div class="gradient-bar"></div>
+  <div class="gradient-label">Domain spectrum — wellness → fitness → mental → lotus → cognitive</div>
+
+  <hr class="divider">
+
+  <!-- ── Five domains ── -->
+  <div class="section">
+    <div class="section-label">The Five Domains</div>
+    <div class="swatches">
+
+      <div class="swatch swatch-domain">
+        <div class="swatch-color" style="background:#4ade80;">
+          <div class="swatch-domain-label">Wellness</div>
+        </div>
+        <div class="swatch-info">
+          <div class="swatch-name">Wellness</div>
+          <div class="swatch-hex">#4ade80</div>
+        </div>
+      </div>
+
+      <div class="swatch swatch-domain">
+        <div class="swatch-color" style="background:#60a5fa;">
+          <div class="swatch-domain-label">Fitness</div>
+        </div>
+        <div class="swatch-info">
+          <div class="swatch-name">Fitness</div>
+          <div class="swatch-hex">#60a5fa</div>
+        </div>
+      </div>
+
+      <div class="swatch swatch-domain">
+        <div class="swatch-color" style="background:#f97316;">
+          <div class="swatch-domain-label">Health</div>
+        </div>
+        <div class="swatch-info">
+          <div class="swatch-name">Health</div>
+          <div class="swatch-hex">#f97316</div>
+        </div>
+      </div>
+
+      <div class="swatch swatch-domain">
+        <div class="swatch-color" style="background:#c084fc;">
+          <div class="swatch-domain-label">Mental</div>
+        </div>
+        <div class="swatch-info">
+          <div class="swatch-name">Mental</div>
+          <div class="swatch-hex">#c084fc</div>
+        </div>
+      </div>
+
+      <div class="swatch swatch-domain">
+        <div class="swatch-color" style="background:#facc15;">
+          <div class="swatch-domain-label">Cognitive</div>
+        </div>
+        <div class="swatch-info">
+          <div class="swatch-name">Cognitive</div>
+          <div class="swatch-hex">#facc15</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ── Typography ── -->
+  <div class="section">
+    <div class="section-label">Typography</div>
+    <div class="type-row">
+      <div class="type-item">
+        <div class="type-label">Display</div>
+        <div class="t-display">DM Serif Display</div>
+      </div>
+      <div class="type-item">
+        <div class="type-label">Display Italic</div>
+        <div class="t-display-italic">OpenBodhi</div>
+      </div>
+      <div class="type-item">
+        <div class="type-label">Body</div>
+        <div class="t-body">Inter — calm, legible, human. Grade 7–8 reading level.</div>
+      </div>
+      <div class="type-item">
+        <div class="type-label">Mono / Data</div>
+        <div class="t-mono">DM Mono — vault IDs, hex values, timestamps</div>
+      </div>
+      <div class="type-item">
+        <div class="type-label">Labels</div>
+        <div class="t-caption">Uppercase Mono — Section labels, tags, status</div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ── Logo concepts ── -->
+  <div class="section">
+    <div class="section-label">Logo Concepts (Pick One)</div>
+    <div class="logo-row">
+
+      <div class="logo-mark dark">🪷</div>
+      <div style="margin-right:24px">
+        <div class="logo-word"><span class="open">Open</span><span class="bodhi">Bodhi</span></div>
+        <div class="t-caption" style="margin-top:6px">Dark surface · emoji mark · DM Serif</div>
+      </div>
+
+      <div class="logo-mark lotus-grad">🪷</div>
+      <div style="margin-right:24px">
+        <div class="logo-word"><span class="open">Open</span><span class="bodhi">Bodhi</span></div>
+        <div class="t-caption" style="margin-top:6px">Lotus glow · recommended</div>
+      </div>
+
+      <div class="logo-mark gradient">🪷</div>
+      <div>
+        <div class="logo-word"><span class="open">Open</span><span class="bodhi">Bodhi</span></div>
+        <div class="t-caption" style="margin-top:6px">Gradient fill · bold option</div>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ── Usage ── -->
+  <div class="section">
+    <div class="section-label">Usage Examples</div>
+    <div class="usage-row">
+
+      <div class="usage-card dark-bg" style="border-color: rgba(244,114,182,0.2);">
+        <div class="usage-title" style="color:#f472b6">Dark · Primary</div>
+        <div class="usage-body">The default surface. All viz, all chat, all mobile UI.</div>
+      </div>
+
+      <div class="usage-card surface-bg">
+        <div class="usage-title">Dark · Elevated</div>
+        <div class="usage-body">Cards, modals, sidepanels over the primary dark.</div>
+      </div>
+
+      <div class="usage-card light-bg">
+        <div class="usage-title" style="color:#0f0a1e; opacity:0.5">Light · Docs</div>
+        <div class="usage-body" style="color:#1e293b">README, landing page, printed materials.</div>
+      </div>
+
+      <div class="usage-card lotus-bg">
+        <div class="usage-title">Lotus · Accent</div>
+        <div class="usage-body" style="color:#0f0a1e">CTAs, alerts, the brand mark. Use sparingly.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ── Quick ref ── -->
+  <div class="section">
+    <div class="section-label">Quick Reference</div>
+    <div class="hex-table">
+      <div class="hex-row"><div class="hex-dot" style="background:#f472b6"></div><span class="hex-name">Lotus</span> #f472b6</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#4ade80"></div><span class="hex-name">Wellness</span> #4ade80</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#0f0a1e; border:1px solid #2d1f5e"></div><span class="hex-name">Deep</span> #0f0a1e</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#60a5fa"></div><span class="hex-name">Fitness</span> #60a5fa</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#1a1035"></div><span class="hex-name">Surface</span> #1a1035</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#f97316"></div><span class="hex-name">Health</span> #f97316</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#2d1f5e"></div><span class="hex-name">Rim</span> #2d1f5e</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#c084fc"></div><span class="hex-name">Mental</span> #c084fc</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#f8fafc; border:1px solid #2d1f5e"></div><span class="hex-name">Snow</span> #f8fafc</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#facc15"></div><span class="hex-name">Cognitive</span> #facc15</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#94a3b8"></div><span class="hex-name">Slate</span> #94a3b8</div>
+      <div class="hex-row"><div class="hex-dot" style="background:#1e293b"></div><span class="hex-name">Dark Slate</span> #1e293b</div>
+    </div>
+  </div>
+
+  <!-- ── Gradient combinations ── -->
+  <div class="section">
+    <div class="section-label">Gradient Recipes</div>
+    <div class="swatches">
+      <div class="swatch">
+        <div class="swatch-color" style="background: linear-gradient(135deg, #f472b6, #c084fc);"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Lotus → Mental</div>
+          <div class="swatch-hex">Brand hero gradient</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background: linear-gradient(135deg, #0f0a1e, #2d1f5e);"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Deep → Rim</div>
+          <div class="swatch-hex">Dark background gradient</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background: linear-gradient(90deg, #4ade80, #60a5fa, #c084fc, #f472b6, #facc15);"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Domain Spectrum</div>
+          <div class="swatch-hex">All five domains</div>
+        </div>
+      </div>
+      <div class="swatch">
+        <div class="swatch-color" style="background: linear-gradient(135deg, #f472b6 0%, #facc15 100%); opacity:0.15; position:relative;">
+          <div style="position:absolute;inset:0;background:linear-gradient(135deg, #f472b6 0%, #facc15 100%);opacity:0.15;"></div>
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.6);font-family:'DM Mono',monospace;">glow overlay</div>
+        </div>
+        <div class="swatch-info" style="background:linear-gradient(135deg, rgba(244,114,182,0.12), rgba(250,204,21,0.08));">
+          <div class="swatch-name">Lotus → Cognitive</div>
+          <div class="swatch-hex">Subtle glow effect</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

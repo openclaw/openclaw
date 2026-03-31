@@ -1,0 +1,31 @@
+[Unit]
+Description=OpenClaw AI agent (Telegram bot)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bodhi
+WorkingDirectory=/home/bodhi/openbodhi
+ExecStart=/usr/bin/node /home/bodhi/openbodhi/dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw
+
+# Environment
+EnvironmentFile=/home/bodhi/.openclaw/.env
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=80%
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/bodhi/.openclaw /home/bodhi/openbodhi/vault
+
+[Install]
+WantedBy=multi-user.target
