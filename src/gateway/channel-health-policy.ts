@@ -106,12 +106,19 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  // Skip stale-socket check for Telegram (long-polling mode) and any channel
-  // explicitly operating in webhook mode. In these cases, there is no persistent
-  // outgoing socket that can go half-dead, so the lack of incoming events
-  // does not necessarily indicate a connection failure.
+  // Skip stale-socket check for Telegram (long-polling mode), Discord, and any
+  // channel explicitly operating in webhook mode.
+  //
+  // Telegram: no persistent outgoing socket that can go half-dead; the lack of
+  // incoming events does not necessarily indicate a connection failure.
+  //
+  // Discord (Carbon): its connected state is maintained by transport-level
+  // heartbeat ACK. If the WebSocket dies, Carbon sets connected=false, which is
+  // caught by the disconnected check above. Idle channels with no user activity
+  // do not indicate a stale socket.
   if (
     policy.channelId !== "telegram" &&
+    policy.channelId !== "discord" &&
     snapshot.mode !== "webhook" &&
     snapshot.connected === true &&
     snapshot.lastEventAt != null
