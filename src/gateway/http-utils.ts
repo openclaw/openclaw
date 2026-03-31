@@ -62,6 +62,19 @@ export type AuthorizedGatewayHttpRequest = {
   trustDeclaredOperatorScopes: boolean;
 };
 
+export function resolveHttpBrowserOriginPolicy(
+  req: IncomingMessage,
+  cfg = loadConfig(),
+): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
+  return {
+    requestHost: getHeader(req, "host"),
+    origin: getHeader(req, "origin"),
+    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
+    allowHostHeaderOriginFallback:
+      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  };
+}
+
 function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
   return auth?.mode === "token" || auth?.mode === "password";
 }

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let createNativeCommandsHarness: typeof import("./bot-native-commands.test-helpers.js").createNativeCommandsHarness;
 let deliverReplies: typeof import("./bot-native-commands.test-helpers.js").deliverReplies;
@@ -27,7 +27,7 @@ let executePluginCommandMock: {
 };
 
 describe("registerTelegramNativeCommands (plugin auth)", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({
       createNativeCommandsHarness,
@@ -40,6 +40,9 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       getPluginCommandSpecs as unknown as typeof getPluginCommandSpecsMock;
     matchPluginCommandMock = matchPluginCommand as unknown as typeof matchPluginCommandMock;
     executePluginCommandMock = executePluginCommand as unknown as typeof executePluginCommandMock;
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
   });
 
