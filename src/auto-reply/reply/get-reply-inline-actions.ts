@@ -26,7 +26,7 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import type { createModelSelectionState } from "./model-selection.js";
-import { extractInlineSimpleCommand } from "./reply-inline.js";
+import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
 let builtinSlashCommands: Set<string> | null = null;
@@ -337,6 +337,7 @@ export async function handleInlineActions(params: {
       agentId,
       isGroup,
     }) && inlineStatusRequested;
+  let didSendInlineStatus = false;
   if (handleInlineStatus) {
     const { buildStatusReply } = await import("./commands.runtime.js");
     const inlineStatusReply = await buildStatusReply({
@@ -359,6 +360,7 @@ export async function handleInlineActions(params: {
       mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
     await sendInlineReply(inlineStatusReply);
+    didSendInlineStatus = true;
     directives = { ...directives, hasStatusDirective: false };
   }
 
@@ -455,6 +457,13 @@ export async function handleInlineActions(params: {
       directives,
       abortedLastRun,
     };
+  }
+  const statusOnlyCommand =
+    command.commandBodyNormalized.trim().length > 0 &&
+    stripInlineStatus(command.commandBodyNormalized).cleaned.length === 0;
+  if (didSendInlineStatus && statusOnlyCommand) {
+    typing.cleanup();
+    return { kind: "reply", reply: undefined };
   }
 
   const commandResult = await runCommands(command);
