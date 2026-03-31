@@ -6,6 +6,9 @@ import type { MatrixRoomInfo } from "./room-info.js";
 
 type DirectRoomTrackerOptions = {
   canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
+  shouldKeepLocallyPromotedDirectRoom?:
+    | ((roomId: string) => boolean | undefined | Promise<boolean | undefined>)
+    | undefined;
 };
 
 const hoisted = vi.hoisted(() => {
@@ -554,6 +557,25 @@ describe("monitorMatrixProvider", () => {
     });
 
     await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
+  });
+
+  it("treats unresolved room metadata as indeterminate for local promotion revalidation", async () => {
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
+    if (!trackerOpts?.shouldKeepLocallyPromotedDirectRoom) {
+      throw new Error("local promotion revalidation callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      altAliases: [],
+      nameResolved: false,
+      aliasesResolved: false,
+    });
+
+    await expect(
+      trackerOpts.shouldKeepLocallyPromotedDirectRoom("!room:example.org"),
+    ).resolves.toBeUndefined();
   });
 });
 
