@@ -285,6 +285,38 @@ describe("loadModelCatalog", () => {
     );
   });
 
+  it("merges configured models for opted-in ollama provider", async () => {
+    mockSingleOpenAiCatalogModel();
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [
+                {
+                  id: "llama3.2",
+                  name: "Llama 3.2",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1048576,
+                  maxTokens: 65536,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({ provider: "ollama", id: "llama3.2", name: "Llama 3.2" }),
+    );
+  });
+
   it("does not merge configured models for providers that are not opted in", async () => {
     mockSingleOpenAiCatalogModel();
 
