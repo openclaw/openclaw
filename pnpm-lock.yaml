@@ -599,8 +599,6 @@ importers:
 
   extensions/synthetic: {}
 
-  extensions/tasks: {}
-
   extensions/tavily: {}
 
   extensions/telegram:
@@ -729,8 +727,6 @@ importers:
         version: link:../..
 
   packages/plugin-package-contract: {}
-
-  packages/tasks-host-sdk: {}
 
   ui:
     dependencies:

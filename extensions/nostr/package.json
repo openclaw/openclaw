@@ -6,6 +6,9 @@
   "dependencies": {
     "nostr-tools": "^2.23.3"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.3.31"
   },
