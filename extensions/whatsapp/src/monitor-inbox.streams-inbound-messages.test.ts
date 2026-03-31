@@ -147,6 +147,34 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("does not block inbound listeners while group hydration is pending", async () => {
+    let resolveHydration!: () => void;
+    const sock = getSock();
+    const pendingHydration = new Promise<Record<string, never>>((resolve) => {
+      resolveHydration = () => resolve({});
+    });
+    sock.groupFetchAllParticipating.mockImplementationOnce(() => pendingHydration);
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("pending-hydration"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    resolveHydration();
+    await listener.close();
+  });
+
   it("deduplicates redelivered messages by id", async () => {
     const onMessage = vi.fn(async () => {
       return;
