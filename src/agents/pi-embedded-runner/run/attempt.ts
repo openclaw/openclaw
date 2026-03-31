@@ -165,6 +165,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
+  normalizeOutboundReplayToolCalls,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -275,6 +276,7 @@ function resolveBeforeModelCallRequestMessages(params: {
   context: unknown;
   transcriptPolicy: TranscriptPolicy;
   model: Model<Api>;
+  allowedToolNames?: Set<string>;
 }): unknown[] {
   const messages = (params.context as { messages?: unknown[] } | null | undefined)?.messages;
   if (!Array.isArray(messages)) {
@@ -303,6 +305,15 @@ function resolveBeforeModelCallRequestMessages(params: {
       normalized as AgentMessage[],
     ) as unknown[];
   }
+
+  normalized = normalizeOutboundReplayToolCalls({
+    messages: normalized as AgentMessage[],
+    allowedToolNames: params.allowedToolNames,
+    transcriptPolicy: {
+      validateGeminiTurns: params.transcriptPolicy.validateGeminiTurns,
+      validateAnthropicTurns: params.transcriptPolicy.validateAnthropicTurns,
+    },
+  }) as unknown[];
 
   return normalized;
 }
@@ -1183,6 +1194,7 @@ export async function runEmbeddedAttempt(
             context,
             transcriptPolicy,
             model: model,
+            allowedToolNames,
           });
           if (hookRunner?.hasHooks("before_model_call")) {
             hookRunner

@@ -550,6 +550,32 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+export function normalizeOutboundReplayToolCalls(params: {
+  messages: AgentMessage[];
+  allowedToolNames?: Set<string>;
+  transcriptPolicy?: Pick<TranscriptPolicy, "validateGeminiTurns" | "validateAnthropicTurns">;
+}): AgentMessage[] {
+  const sanitized = sanitizeReplayToolCallInputs(params.messages, params.allowedToolNames);
+  if (sanitized.messages === params.messages) {
+    return params.messages;
+  }
+
+  let nextMessages = sanitizeToolUseResultPairing(sanitized.messages);
+  if (params.transcriptPolicy?.validateAnthropicTurns) {
+    nextMessages = sanitizeAnthropicReplayToolResults(nextMessages);
+  }
+  if (sanitized.droppedAssistantMessages > 0 || params.transcriptPolicy?.validateAnthropicTurns) {
+    if (params.transcriptPolicy?.validateGeminiTurns) {
+      nextMessages = validateGeminiTurns(nextMessages);
+    }
+    if (params.transcriptPolicy?.validateAnthropicTurns) {
+      nextMessages = validateAnthropicTurns(nextMessages);
+    }
+  }
+
+  return nextMessages;
+}
+
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -561,21 +587,13 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
-    const sanitized = sanitizeReplayToolCallInputs(messages as AgentMessage[], allowedToolNames);
-    if (sanitized.messages === messages) {
+    const nextMessages = normalizeOutboundReplayToolCalls({
+      messages: messages as AgentMessage[],
+      allowedToolNames,
+      transcriptPolicy,
+    });
+    if (nextMessages === messages) {
       return baseFn(model, context, options);
-    }
-    let nextMessages = sanitizeToolUseResultPairing(sanitized.messages);
-    if (transcriptPolicy?.validateAnthropicTurns) {
-      nextMessages = sanitizeAnthropicReplayToolResults(nextMessages);
-    }
-    if (sanitized.droppedAssistantMessages > 0 || transcriptPolicy?.validateAnthropicTurns) {
-      if (transcriptPolicy?.validateGeminiTurns) {
-        nextMessages = validateGeminiTurns(nextMessages);
-      }
-      if (transcriptPolicy?.validateAnthropicTurns) {
-        nextMessages = validateAnthropicTurns(nextMessages);
-      }
     }
     const nextContext = {
       ...(context as unknown as Record<string, unknown>),
