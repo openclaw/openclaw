@@ -456,6 +456,13 @@ actor TalkModeRuntime {
 
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
+
+        // Play the Voice Wake "send" chime before TTS starts (AI is about to speak)
+        let sendChime = await MainActor.run { AppStateStore.shared.voiceWakeSendChime }
+        if sendChime != .none {
+            await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.response") }
+        }
+
         switch Self.playbackPlan(apiKey: input.apiKey, voiceId: input.voiceId) {
         case let .elevenLabsThenSystemVoice(apiKey, voiceId):
             do {
