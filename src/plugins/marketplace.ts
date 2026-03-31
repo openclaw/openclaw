@@ -590,6 +590,9 @@ async function downloadUrlToTempFile(url: string): Promise<
       error: string;
     }
 > {
+  const sourcePathname = new URL(url).pathname;
+  const sourceFileName = path.basename(sourcePathname) || "plugin.tgz";
+  let tmpDir: string | undefined;
   try {
     const { response, finalUrl, release } = await fetchWithSsrFGuard({
       url,
@@ -603,23 +606,28 @@ async function downloadUrlToTempFile(url: string): Promise<
         return { ok: false, error: `failed to download ${url}: empty response body` };
       }
 
-      const pathname = new URL(finalUrl).pathname;
-      const fileName = path.basename(pathname) || "plugin.tgz";
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
-      const targetPath = path.join(tmpDir, fileName);
+      const finalPathname = new URL(finalUrl).pathname;
+      const finalFileName = path.basename(finalPathname) || sourceFileName;
+      const fileName = resolveArchiveKind(finalFileName) ? finalFileName : sourceFileName;
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
+      const createdTmpDir = tmpDir;
+      const targetPath = path.join(createdTmpDir, fileName);
       const fileStream = createWriteStream(targetPath);
       await response.body.pipeTo(Writable.toWeb(fileStream));
       return {
         ok: true,
         path: targetPath,
         cleanup: async () => {
-          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+          await fs.rm(createdTmpDir, { recursive: true, force: true }).catch(() => undefined);
         },
       };
     } finally {
-      await release();
+      await release().catch(() => undefined);
     }
   } catch (error) {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
     return {
       ok: false,
       error: `failed to download ${url}: ${error instanceof Error ? error.message : String(error)}`,

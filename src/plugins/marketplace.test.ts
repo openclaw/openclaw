@@ -55,6 +55,16 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
+async function listMarketplaceDownloadTempDirs(): Promise<string[]> {
+  const entries = await fs.readdir(os.tmpdir(), { withFileTypes: true });
+  return entries
+    .filter(
+      (entry) => entry.isDirectory() && entry.name.startsWith("openclaw-marketplace-download-"),
+    )
+    .map((entry) => entry.name)
+    .toSorted();
+}
+
 async function writeMarketplaceManifest(rootDir: string, manifest: unknown): Promise<string> {
   const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
@@ -332,12 +342,14 @@ describe("marketplace plugins", () => {
 
   it("downloads archive plugin sources through the SSRF guard", async () => {
     await withTempDir(async (rootDir) => {
-      const release = vi.fn(async () => undefined);
+      const release = vi.fn(async () => {
+        throw new Error("dispatcher close failed");
+      });
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
         response: new Response(new Blob([Buffer.from("tgz-bytes")]), {
           status: 200,
         }),
-        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        finalUrl: "https://cdn.example.com/releases/12345",
         release,
       });
       installPluginFromPathMock.mockResolvedValue({
@@ -377,6 +389,44 @@ describe("marketplace plugins", () => {
         }),
       );
       expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("cleans up a partial download temp dir when streaming the archive fails", async () => {
+    await withTempDir(async (rootDir) => {
+      const beforeTempDirs = await listMarketplaceDownloadTempDirs();
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          body: {
+            pipeTo: vi.fn(async () => {
+              throw new Error("stream failed");
+            }),
+          },
+        } as unknown as Response,
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "failed to download https://example.com/frontend-design.tgz: stream failed",
+      });
+      expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });
 
