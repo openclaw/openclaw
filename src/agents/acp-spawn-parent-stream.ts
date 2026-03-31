@@ -1,12 +1,12 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { recordTaskRunProgressByRunId } from "openclaw/plugin-sdk/tasks";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
-import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;

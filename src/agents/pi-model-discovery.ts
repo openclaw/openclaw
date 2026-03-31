@@ -102,19 +102,36 @@ function normalizeRegistryModel<T>(value: T, agentDir: string): T {
   return normalizeModelCompat(transportNormalized as Model<Api>) as T;
 }
 
+type PiModelRegistryClassLike = {
+  create?: (authStorage: PiAuthStorage, modelsJsonPath: string) => PiModelRegistry;
+  new (authStorage: PiAuthStorage, modelsJsonPath: string): PiModelRegistry;
+};
+
+function instantiatePiModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+): PiModelRegistry {
+  const Registry = PiModelRegistryClass as unknown as PiModelRegistryClassLike;
+  if (typeof Registry.create === "function") {
+    return Registry.create(authStorage, modelsJsonPath);
+  }
+  return new Registry(authStorage, modelsJsonPath);
+}
+
 function createOpenClawModelRegistry(
   authStorage: PiAuthStorage,
   modelsJsonPath: string,
   agentDir: string,
 ): PiModelRegistry {
-  const registry = PiModelRegistryClass.create(authStorage, modelsJsonPath);
+  const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
 
-  registry.getAll = () => getAll().map((entry) => normalizeRegistryModel(entry, agentDir));
+  registry.getAll = () =>
+    getAll().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
   registry.getAvailable = () =>
-    getAvailable().map((entry) => normalizeRegistryModel(entry, agentDir));
+    getAvailable().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
   registry.find = (provider: string, modelId: string) =>
     normalizeRegistryModel(find(provider, modelId), agentDir);
 

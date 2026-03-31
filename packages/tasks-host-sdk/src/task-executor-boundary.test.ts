@@ -14,9 +14,10 @@ const RAW_TASK_MUTATORS = [
 ] as const;
 
 const ALLOWED_CALLERS = new Set([
-  "tasks/task-executor.ts",
-  "tasks/task-registry.ts",
-  "tasks/task-registry.maintenance.ts",
+  "src/operations-runtime.ts",
+  "src/task-executor.ts",
+  "src/task-registry.ts",
+  "src/task-registry.maintenance.ts",
 ]);
 
 async function listSourceFiles(root: string): Promise<string[]> {

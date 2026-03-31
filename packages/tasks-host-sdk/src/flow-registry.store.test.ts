@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTempDir } from "../../../src/test-helpers/temp-dir.js";
 import { createFlowRecord, getFlowById, resetFlowRegistryForTests } from "./flow-registry.js";
 import { resolveFlowRegistryDir, resolveFlowRegistrySqlitePath } from "./flow-registry.paths.js";
 import { configureFlowRegistryRuntime } from "./flow-registry.store.js";

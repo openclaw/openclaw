@@ -401,10 +401,6 @@ vi.mock("../agents/pi-model-discovery.js", async () => {
       }
     }
 
-    static create(authStorage: unknown, modelsFile: string) {
-      return new MockModelRegistry(authStorage, modelsFile);
-    }
-
     getAll() {
       if (!piSdkMock.enabled) {
         return this.actualRegistry?.getAll() ?? [];

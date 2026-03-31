@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTempDir } from "../../../src/test-helpers/temp-dir.js";
 import { getFlowById, resetFlowRegistryForTests, updateFlowRecordById } from "./flow-registry.js";
 import {
   appendFlowOutput,

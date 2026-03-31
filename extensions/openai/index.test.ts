@@ -58,7 +58,7 @@ function resolveTemplateModelId(modelId: string) {
 }
 
 function createTemplateModelRegistry(modelId: string): ModelRegistry {
-  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  const registry = new ModelRegistry(AuthStorage.inMemory());
   const template = getModel("openai", resolveTemplateModelId(modelId));
   registry.registerProvider("openai", {
     apiKey: "test",

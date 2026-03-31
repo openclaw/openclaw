@@ -1,6 +1,6 @@
-import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { readAcpSessionEntry } from "../../../src/acp/runtime/session-meta.js";
+import { loadSessionStore, resolveStorePath } from "../../../src/config/sessions.js";
+import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import {
