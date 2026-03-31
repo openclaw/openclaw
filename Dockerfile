@@ -99,9 +99,13 @@ ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
 # Prune dev dependencies and strip build-only metadata before copying
-# runtime assets into the final image.
+# runtime assets into the final image. Keep prune out of CI mode: the strict
+# frozen-lockfile validation already happened during `pnpm install`, and after
+# `COPY . .` the workspace contains source plugin manifests that were not part
+# of the earlier Docker-layer install context. Re-checking in CI mode here can
+# fail with false-positive `ERR_PNPM_OUTDATED_LOCKFILE` during smoke builds.
 FROM build AS runtime-assets
-RUN CI=true pnpm prune --prod && \
+RUN pnpm prune --prod && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # ── Runtime base images ─────────────────────────────────────────
