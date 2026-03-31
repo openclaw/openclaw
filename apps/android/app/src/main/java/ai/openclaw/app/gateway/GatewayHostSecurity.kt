@@ -19,6 +19,7 @@ internal fun isLoopbackGatewayHost(rawHost: String?): Boolean {
   }
   if (host.isEmpty()) return false
   if (host == "localhost") return true
+  if (host == "10.0.2.2") return true
 
   parseIpv4Address(host)?.let { ipv4 ->
     return ipv4.first() == 127.toByte()

@@ -77,6 +77,21 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointAllowsAndroidEmulatorCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://10.0.2.2:18789")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "10.0.2.2",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://10.0.2.2:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
   fun parseGatewayEndpointAllowsIpv6LoopbackCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://[::1]")
 
