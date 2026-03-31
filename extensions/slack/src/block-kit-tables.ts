@@ -61,7 +61,7 @@ export function markdownTableToSlackTableBlock(table: MarkdownTableData): SlackT
   const makeRow = (cells: string[]): SlackTableCell[] =>
     Array.from({ length: columnCount }, (_, index) => ({
       type: "raw_text",
-      text: cells[index] ?? "",
+      text: cells[index] || " ",
     }));
 
   // Compute raw column count from ALL rows without capping (handles ragged tables)

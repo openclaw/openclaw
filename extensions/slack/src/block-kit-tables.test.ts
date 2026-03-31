@@ -24,7 +24,7 @@ describe("markdownTableToSlackTableBlock", () => {
     // 120 input - 97 shown = 23 truncated rows, 25 - 20 = 5 truncated columns
     const lastRow = block.rows[block.rows.length - 1];
     expect(lastRow?.[0]?.text).toBe("+23 more rows, +5 more columns");
-    expect(lastRow?.[1]?.text).toBe("");
+    expect(lastRow?.[1]?.text).toBe(" ");
   });
 
   it("shows column truncation indicator when columns exceed limit", () => {
