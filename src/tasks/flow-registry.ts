@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { getFlowRegistryStore, resetFlowRegistryRuntimeForTests } from "./flow-registry.store.js";
-import type { FlowRecord, FlowStatus } from "./flow-registry.types.js";
+import type { FlowRecord, FlowShape, FlowStatus } from "./flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
 const flows = new Map<string, FlowRecord>();
@@ -19,6 +19,10 @@ function snapshotFlowRecords(source: ReadonlyMap<string, FlowRecord>): FlowRecor
 
 function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
   return notifyPolicy ?? "done_only";
+}
+
+function ensureFlowShape(shape?: FlowShape): FlowShape {
+  return shape ?? "linear";
 }
 
 function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
@@ -111,6 +115,7 @@ function persistFlowDelete(flowId: string) {
 }
 
 export function createFlowRecord(params: {
+  shape?: FlowShape;
   ownerSessionKey: string;
   requesterOrigin?: FlowRecord["requesterOrigin"];
   status?: FlowStatus;
@@ -127,6 +132,7 @@ export function createFlowRecord(params: {
   const now = params.createdAt ?? Date.now();
   const record: FlowRecord = {
     flowId: crypto.randomUUID(),
+    shape: ensureFlowShape(params.shape),
     ownerSessionKey: params.ownerSessionKey,
     ...(params.requesterOrigin ? { requesterOrigin: { ...params.requesterOrigin } } : {}),
     status: params.status ?? "queued",
@@ -173,6 +179,7 @@ export function createFlowForTask(params: {
     ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
     : undefined;
   return createFlowRecord({
+    shape: "single_task",
     ownerSessionKey: params.task.requesterSessionKey,
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
@@ -238,6 +245,13 @@ export function syncFlowFromTask(
   if (!flowId) {
     return null;
   }
+  const flow = getFlowById(flowId);
+  if (!flow) {
+    return null;
+  }
+  if (flow.shape !== "single_task") {
+    return flow;
+  }
   const terminalFlowStatus = deriveFlowStatusFromTask(task);
   const isTerminal =
     terminalFlowStatus === "succeeded" ||
@@ -249,15 +263,15 @@ export function syncFlowFromTask(
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: resolveFlowGoal(task),
-    blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || undefined : undefined,
+    blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
     blockedSummary:
-      terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? undefined) : undefined,
+      terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     updatedAt: task.lastEventAt ?? Date.now(),
     ...(isTerminal
       ? {
           endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
         }
-      : { endedAt: undefined }),
+      : { endedAt: null }),
   });
 }
 
@@ -267,11 +281,36 @@ export function getFlowById(flowId: string): FlowRecord | undefined {
   return flow ? cloneFlowRecord(flow) : undefined;
 }
 
+export function listFlowsForOwnerSessionKey(sessionKey: string): FlowRecord[] {
+  ensureFlowRegistryReady();
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return [];
+  }
+  return [...flows.values()]
+    .filter((flow) => flow.ownerSessionKey.trim() === normalizedSessionKey)
+    .map((flow) => cloneFlowRecord(flow))
+    .toSorted((left, right) => right.createdAt - left.createdAt);
+}
+
+export function findLatestFlowForOwnerSessionKey(sessionKey: string): FlowRecord | undefined {
+  const flow = listFlowsForOwnerSessionKey(sessionKey)[0];
+  return flow ? cloneFlowRecord(flow) : undefined;
+}
+
+export function resolveFlowForLookupToken(token: string): FlowRecord | undefined {
+  const lookup = token.trim();
+  if (!lookup) {
+    return undefined;
+  }
+  return getFlowById(lookup) ?? findLatestFlowForOwnerSessionKey(lookup);
+}
+
 export function listFlowRecords(): FlowRecord[] {
   ensureFlowRegistryReady();
   return [...flows.values()]
     .map((flow) => cloneFlowRecord(flow))
-    .toSorted((left, right) => left.createdAt - right.createdAt);
+    .toSorted((left, right) => right.createdAt - left.createdAt);
 }
 
 export function deleteFlowRecordById(flowId: string): boolean {

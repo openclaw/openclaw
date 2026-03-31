@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { getFlowById, listFlowRecords, resetFlowRegistryForTests } from "./flow-registry.js";
 import {
+  getFlowById,
+  listFlowRecords,
+  resetFlowRegistryForTests,
+  updateFlowRecordById,
+} from "./flow-registry.js";
+import {
+  cancelFlowById,
   completeTaskRunByRunId,
+  createLinearFlow,
   createQueuedTaskRun,
   createRunningTaskRun,
   failTaskRunByRunId,
@@ -338,6 +345,120 @@ describe("task-executor", () => {
         reason: "Flow is not blocked.",
       });
       expect(findTaskByRunId("run-should-not-exist")).toBeUndefined();
+    });
+  });
+
+  it("keeps linear flows under explicit control instead of auto-syncing child task status", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createLinearFlow({
+        ownerSessionKey: "agent:main:main",
+        goal: "Triage a PR cluster",
+        currentStep: "wait_for",
+        notifyPolicy: "done_only",
+      });
+
+      const child = createRunningTaskRun({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-linear-child",
+        task: "Inspect a PR",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-linear-child",
+        endedAt: 40,
+        lastEventAt: 40,
+        terminalSummary: "Done.",
+      });
+
+      expect(child.parentFlowId).toBe(flow.flowId);
+      expect(getFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        shape: "linear",
+        status: "queued",
+        currentStep: "wait_for",
+      });
+    });
+  });
+
+  it("cancels active child tasks and marks a linear flow cancelled", async () => {
+    await withTaskExecutorStateDir(async () => {
+      hoisted.cancelSessionMock.mockResolvedValue(undefined);
+
+      const flow = createLinearFlow({
+        ownerSessionKey: "agent:main:main",
+        goal: "Cluster related PRs",
+        currentStep: "wait_for",
+      });
+
+      const child = createRunningTaskRun({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-linear-cancel",
+        task: "Inspect a PR",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+        flow: expect.objectContaining({
+          flowId: flow.flowId,
+          status: "cancelled",
+        }),
+      });
+      expect(findTaskByRunId("run-linear-cancel")).toMatchObject({
+        taskId: child.taskId,
+        status: "cancelled",
+      });
+      expect(getFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "cancelled",
+      });
+      expect(hoisted.cancelSessionMock).toHaveBeenCalled();
+    });
+  });
+
+  it("refuses to rewrite terminal linear flows when cancel is requested", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createLinearFlow({
+        ownerSessionKey: "agent:main:main",
+        goal: "Cluster related PRs",
+        currentStep: "finish",
+      });
+      updateFlowRecordById(flow.flowId, {
+        status: "succeeded",
+        endedAt: 55,
+        updatedAt: 55,
+      });
+
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Flow is already succeeded.",
+      });
+      expect(getFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "succeeded",
+        endedAt: 55,
+      });
     });
   });
 });

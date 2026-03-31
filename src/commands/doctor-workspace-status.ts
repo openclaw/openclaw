@@ -1,9 +1,52 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginCompatibilityWarnings, buildPluginStatusReport } from "../plugins/status.js";
+import { listFlowRecords } from "../tasks/flow-registry.js";
+import { listTasksForFlowId } from "../tasks/task-registry.js";
 import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
+
+function noteFlowRecoveryHints() {
+  const suspicious = listFlowRecords().flatMap((flow) => {
+    const tasks = listTasksForFlowId(flow.flowId);
+    const findings: string[] = [];
+    if (
+      flow.shape === "linear" &&
+      (flow.status === "running" || flow.status === "waiting" || flow.status === "blocked") &&
+      tasks.length === 0
+    ) {
+      findings.push(
+        `${flow.flowId}: ${flow.status} linear flow has no linked tasks; inspect or cancel it manually.`,
+      );
+    }
+    if (
+      flow.status === "blocked" &&
+      flow.blockedTaskId &&
+      !tasks.some((task) => task.taskId === flow.blockedTaskId)
+    ) {
+      findings.push(
+        `${flow.flowId}: blocked flow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
+      );
+    }
+    return findings;
+  });
+  if (suspicious.length === 0) {
+    return;
+  }
+  note(
+    [
+      ...suspicious.slice(0, 5),
+      suspicious.length > 5 ? `...and ${suspicious.length - 5} more.` : null,
+      `Inspect: ${formatCliCommand("openclaw flows show <flow-id>")}`,
+      `Cancel: ${formatCliCommand("openclaw flows cancel <flow-id>")}`,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n"),
+    "ClawFlow recovery",
+  );
+}
 
 export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
@@ -73,6 +116,8 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     });
     note(lines.join("\n"), "Plugin diagnostics");
   }
+
+  noteFlowRecoveryHints();
 
   return { workspaceDir };
 }
