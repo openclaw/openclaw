@@ -5,6 +5,7 @@ import {
   createSandbox,
   createSandboxFsBridge,
   createSeededSandboxFsBridge,
+  getDockerScript,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
@@ -138,6 +139,35 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
     expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(false);
     expect(scripts.some((script) => script.includes("os.replace("))).toBe(true);
+  });
+
+  it("surfaces actionable guidance when sandbox python3 is missing", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    const baseImpl = mockedExecDockerRaw.getMockImplementation();
+    mockedExecDockerRaw.mockImplementation(async (...callArgs) => {
+      const args = callArgs[0] as string[];
+      if (getDockerScript(args).includes("operation = sys.argv[1]")) {
+        const message = "moltbot-sandbox-fs: 2: python3: not found";
+        const err = Object.assign(new Error(message), {
+          code: 127,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.from(message),
+        });
+        throw err;
+      }
+      if (baseImpl) {
+        return await baseImpl(...callArgs);
+      }
+      return {
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      };
+    });
+
+    await expect(bridge.writeFile({ filePath: "b.txt", data: "hello" })).rejects.toThrow(
+      /requires `python3` inside the sandbox container/i,
+    );
   });
 
   it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
