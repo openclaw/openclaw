@@ -311,4 +311,40 @@ describe("generic current-conversation bindings", () => {
     });
     expect(restored?.metadata?.restoredFrom).toBe("agent:coder:acp:2");
   });
+
+  it("does not delete restored binding when late bindingId unbind races with TTL expiry", async () => {
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "dm:U444",
+    };
+
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+      conversation,
+    });
+
+    const specialist = await bindGenericCurrentConversation({
+      targetSessionKey: "agent:coder:acp:2",
+      targetKind: "session",
+      conversation,
+      ttlMs: 1,
+    });
+
+    // Wait for TTL to expire
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Late unbind by stale bindingId — should not destroy the restored main binding
+    await unbindGenericCurrentConversationBindings({
+      bindingId: specialist!.bindingId,
+      reason: "session-end",
+    });
+
+    const afterUnbind = resolveGenericCurrentConversationBinding(conversation);
+    expect(afterUnbind).toMatchObject({
+      targetSessionKey: "agent:main:session:1",
+      targetKind: "session",
+    });
+  });
 });
