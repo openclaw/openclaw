@@ -6,6 +6,7 @@ import {
   InboxOnMessage,
   buildNotifyMessageUpsert,
   getAuthDir,
+  getSock,
   installWebMonitorInboxUnitTestHooks,
   startInboxMonitor,
   waitForMessageCalls,
@@ -122,6 +123,26 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
+
+    await listener.close();
+  });
+
+  it("hydrates participating groups once after connect", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+
+    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("continues when group hydration fails on connect", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
+
+    const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+
+    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
 
     await listener.close();
   });

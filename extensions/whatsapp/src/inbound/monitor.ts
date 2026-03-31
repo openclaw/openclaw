@@ -53,6 +53,14 @@ export async function monitorWebInbox(options: {
     authDir: options.authDir,
   });
   await waitForWaConnection(sock);
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    if (shouldLogVerbose()) {
+      logVerbose(`Hydrated ${Object.keys(groups ?? {}).length} participating groups on connect`);
+    }
+  } catch (err) {
+    logVerbose(`Failed to hydrate participating groups on connect: ${String(err)}`);
+  }
   const connectedAtMs = Date.now();
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
