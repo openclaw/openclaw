@@ -493,3 +493,10 @@ Related:
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
 - [Skills](/tools/skills)
+
+## Related
+
+- [Exec](/tools/exec) — shell command execution tool
+- [Sandboxing](/gateway/sandboxing) — sandbox modes and workspace access
+- [Security](/gateway/security) — security model and hardening
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — when to use each
