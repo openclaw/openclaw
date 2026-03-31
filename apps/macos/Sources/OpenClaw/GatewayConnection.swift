@@ -403,11 +403,12 @@ actor GatewayConnection {
             await client.shutdown()
         }
         self.lastSnapshot = nil
+        let session = self.sessionBox ?? GatewayTLSPinningSupport.pinnedSessionBox(url: url)
         self.client = GatewayChannelActor(
             url: url,
             token: token,
             password: password,
-            session: self.sessionBox,
+            session: session,
             pushHandler: { [weak self] push in
                 await self?.handle(push: push)
             })
