@@ -224,6 +224,7 @@ function logClawHubPackageSummary(params: {
 }
 
 export async function installPluginFromClawHub(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
   spec: string;
   baseUrl?: string;
   token?: string;
@@ -305,6 +306,7 @@ export async function installPluginFromClawHub(params: {
     );
     const installResult = await installPluginFromArchive({
       archivePath: archive.archivePath,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
       mode: params.mode,
       dryRun: params.dryRun,

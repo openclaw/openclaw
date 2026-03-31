@@ -353,6 +353,69 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("passes dangerous force unsafe install to marketplace installs", async () => {
+    await expect(
+      runPluginsCommand([
+        "plugins",
+        "install",
+        "alpha",
+        "--marketplace",
+        "local/repo",
+        "--dangerously-force-unsafe-install",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromMarketplace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        marketplace: "local/repo",
+        plugin: "alpha",
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+  });
+
+  it("passes dangerous force unsafe install to npm installs", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
+      code: "package_not_found",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: cliInstallPath("demo"),
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "demo",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/demo/-/demo-1.2.3.tgz",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "demo", "--dangerously-force-unsafe-install"]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+  });
+
   it("does not fall back to npm when ClawHub rejects a real package", async () => {
     installPluginFromClawHub.mockResolvedValue({
       ok: false,
