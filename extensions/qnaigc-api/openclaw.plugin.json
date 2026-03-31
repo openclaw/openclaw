@@ -20,7 +20,6 @@
       "cliDescription": "QNAIGC API key (or set QNAIGC_API_KEY)"
     }
   ],
-  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
