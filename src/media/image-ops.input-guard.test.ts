@@ -33,4 +33,24 @@ describe("image input pixel guard", () => {
       }),
     ).rejects.toThrow(/pixel input limit/i);
   });
+
+  it("fails closed when sips cannot determine image dimensions", async () => {
+    const previousBackend = process.env.OPENCLAW_IMAGE_BACKEND;
+    process.env.OPENCLAW_IMAGE_BACKEND = "sips";
+    try {
+      await expect(
+        resizeToJpeg({
+          buffer: Buffer.from("not-an-image"),
+          maxSide: 2_048,
+          quality: 80,
+        }),
+      ).rejects.toThrow(/unable to determine image dimensions/i);
+    } finally {
+      if (previousBackend === undefined) {
+        delete process.env.OPENCLAW_IMAGE_BACKEND;
+      } else {
+        process.env.OPENCLAW_IMAGE_BACKEND = previousBackend;
+      }
+    }
+  });
 });

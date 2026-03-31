@@ -209,9 +209,13 @@ async function readImageMetadataForLimit(buffer: Buffer): Promise<ImageMetadata 
 
 async function assertImagePixelLimit(buffer: Buffer): Promise<void> {
   const meta = await readImageMetadataForLimit(buffer);
-  if (meta) {
-    validateImagePixelLimit(meta);
+  if (!meta) {
+    if (prefersSips()) {
+      throw new Error("Unable to determine image dimensions; refusing to process");
+    }
+    return;
   }
+  validateImagePixelLimit(meta);
 }
 
 /**
