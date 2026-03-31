@@ -20,8 +20,8 @@ const TOKEN = "test-graph-token";
 
 describe("listChannelsMSTeams", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+    mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
+    mockState.fetchGraphJson.mockReset();
   });
 
   it("returns channels with all fields mapped", async () => {
@@ -88,12 +88,75 @@ describe("listChannelsMSTeams", () => {
 
     expect(result.channels).toEqual([]);
   });
+
+  it("follows @odata.nextLink across multiple pages", async () => {
+    mockState.fetchGraphJson
+      .mockResolvedValueOnce({
+        value: [
+          { id: "ch-1", displayName: "General", description: null, membershipType: "standard" },
+        ],
+        "@odata.nextLink":
+          "https://graph.microsoft.com/v1.0/teams/team-paged/channels?$select=id,displayName,description,membershipType&$skip=1",
+      })
+      .mockResolvedValueOnce({
+        value: [
+          { id: "ch-2", displayName: "Random", description: "Fun", membershipType: "standard" },
+        ],
+        "@odata.nextLink":
+          "https://graph.microsoft.com/v1.0/teams/team-paged/channels?$select=id,displayName,description,membershipType&$skip=2",
+      })
+      .mockResolvedValueOnce({
+        value: [
+          { id: "ch-3", displayName: "Private", description: null, membershipType: "private" },
+        ],
+      });
+
+    const result = await listChannelsMSTeams({
+      cfg: {} as OpenClawConfig,
+      teamId: "team-paged",
+    });
+
+    expect(result.channels).toHaveLength(3);
+    expect(result.channels.map((ch) => ch.id)).toEqual(["ch-1", "ch-2", "ch-3"]);
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(3);
+
+    // Second call should use the relative path stripped from the nextLink
+    const secondCallPath = mockState.fetchGraphJson.mock.calls[1]?.[0]?.path;
+    expect(secondCallPath).toBe(
+      "/teams/team-paged/channels?$select=id,displayName,description,membershipType&$skip=1",
+    );
+  });
+
+  it("stops after 10 pages to avoid runaway pagination", async () => {
+    for (let i = 0; i < 11; i++) {
+      mockState.fetchGraphJson.mockResolvedValueOnce({
+        value: [
+          {
+            id: `ch-${i}`,
+            displayName: `Channel ${i}`,
+            description: null,
+            membershipType: "standard",
+          },
+        ],
+        "@odata.nextLink": `https://graph.microsoft.com/v1.0/teams/team-huge/channels?$skip=${i + 1}`,
+      });
+    }
+
+    const result = await listChannelsMSTeams({
+      cfg: {} as OpenClawConfig,
+      teamId: "team-huge",
+    });
+
+    // Should stop at 10 pages even though more nextLinks are available
+    expect(result.channels).toHaveLength(10);
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(10);
+  });
 });
 
 describe("getChannelInfoMSTeams", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+    mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
+    mockState.fetchGraphJson.mockReset();
   });
 
   it("returns channel with all fields", async () => {
