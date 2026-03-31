@@ -60,6 +60,7 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  isCronTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
@@ -67,7 +68,7 @@ function resolveToolErrorWarningPolicy(params: {
   const isCronTimedOutExecToolError =
     (normalizedToolName === "exec" || normalizedToolName === "bash") &&
     params.lastToolError.timedOut === true &&
-    isCronSessionKey(params.sessionKey);
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey));
   const includeDetails =
     isVerboseToolDetailEnabled(params.verboseLevel) || isCronTimedOutExecToolError;
   if (params.suppressToolErrorWarnings) {
@@ -102,6 +103,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
   config?: OpenClawConfig;
+  isCronTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   model?: string;
@@ -297,6 +299,7 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      isCronTrigger: params.isCronTrigger,
       sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
