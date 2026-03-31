@@ -9,7 +9,6 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -241,7 +240,6 @@ export class DiscordVoiceManager {
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom: string[];
-  private readonly allowDangerousNameMatching: boolean;
   private readonly speakerContextCache = new Map<
     string,
     {
@@ -249,7 +247,6 @@ export class DiscordVoiceManager {
       label: string;
       name?: string;
       tag?: string;
-      memberRoleIds: string[];
       senderIsOwner: boolean;
       expiresAt: number;
     }
@@ -269,7 +266,6 @@ export class DiscordVoiceManager {
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
     this.ownerAllowFrom =
       params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
-    this.allowDangerousNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   }
 
   setBotUserId(id?: string) {
@@ -621,6 +617,7 @@ export class DiscordVoiceManager {
       }
     }
     const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
+    const speakerIdentity = await this.resolveSpeakerIdentity(entry.guildId, userId);
     const access = await authorizeDiscordVoiceIngress({
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
@@ -630,11 +627,11 @@ export class DiscordVoiceManager {
       channelName: entry.channelName,
       channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
       channelLabel: formatMention({ channelId: entry.channelId }),
-      memberRoleIds: speaker.memberRoleIds,
+      memberRoleIds: speakerIdentity.memberRoleIds,
       sender: {
-        id: speaker.id,
-        name: speaker.name,
-        tag: speaker.tag,
+        id: speakerIdentity.id,
+        name: speakerIdentity.name,
+        tag: speakerIdentity.tag,
       },
     });
     if (!access.ok) {
@@ -803,7 +800,7 @@ export class DiscordVoiceManager {
         name: params.name,
         tag: params.tag,
       },
-      allowNameMatching: this.allowDangerousNameMatching,
+      allowNameMatching: false,
     }).ownerAllowed;
   }
 
@@ -820,7 +817,6 @@ export class DiscordVoiceManager {
         label: string;
         name?: string;
         tag?: string;
-        memberRoleIds: string[];
         senderIsOwner: boolean;
       }
     | undefined {
@@ -838,7 +834,6 @@ export class DiscordVoiceManager {
       label: cached.label,
       name: cached.name,
       tag: cached.tag,
-      memberRoleIds: cached.memberRoleIds,
       senderIsOwner: cached.senderIsOwner,
     };
   }
@@ -851,7 +846,6 @@ export class DiscordVoiceManager {
       label: string;
       name?: string;
       tag?: string;
-      memberRoleIds: string[];
       senderIsOwner: boolean;
     },
   ): void {
@@ -861,7 +855,6 @@ export class DiscordVoiceManager {
       label: context.label,
       name: context.name,
       tag: context.tag,
-      memberRoleIds: context.memberRoleIds,
       senderIsOwner: context.senderIsOwner,
       expiresAt: Date.now() + SPEAKER_CONTEXT_CACHE_TTL_MS,
     });
@@ -875,7 +868,6 @@ export class DiscordVoiceManager {
     label: string;
     name?: string;
     tag?: string;
-    memberRoleIds: string[];
     senderIsOwner: boolean;
   }> {
     const cached = this.getCachedSpeakerContext(guildId, userId);
@@ -888,7 +880,6 @@ export class DiscordVoiceManager {
       label: identity.label,
       name: identity.name,
       tag: identity.tag,
-      memberRoleIds: identity.memberRoleIds,
       senderIsOwner: this.resolveSpeakerIsOwner({
         id: identity.id,
         name: identity.name,

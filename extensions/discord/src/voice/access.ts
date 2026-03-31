@@ -1,9 +1,6 @@
 import type { Guild } from "@buape/carbon";
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
-import {
-  isDangerousNameMatchingEnabled,
-  resolveOpenProviderRuntimeGroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -67,7 +64,16 @@ export async function authorizeDiscordVoiceIngress(params: {
 
   const channelAllowlistConfigured =
     Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-  const channelAllowed = channelConfig?.allowed !== false;
+  if (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) {
+    return {
+      ok: false,
+      message: `${params.channelLabel ?? "This channel"} is not allowlisted for voice commands.`,
+    };
+  }
+
+  const channelAllowed = channelConfig
+    ? channelConfig.allowed !== false
+    : !channelAllowlistConfigured;
   if (
     !isDiscordGroupAllowedByPolicy({
       groupPolicy,
@@ -88,13 +94,13 @@ export async function authorizeDiscordVoiceIngress(params: {
     guildInfo,
     memberRoleIds: params.memberRoleIds,
     sender: params.sender,
-    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    allowNameMatching: false,
   });
 
   const { ownerAllowList, ownerAllowed } = resolveDiscordOwnerAccess({
     allowFrom: params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
     sender: params.sender,
-    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    allowNameMatching: false,
   });
 
   const useAccessGroups = params.useAccessGroups ?? params.cfg.commands?.useAccessGroups !== false;

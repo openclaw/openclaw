@@ -160,10 +160,11 @@ describe("DiscordVoiceManager", () => {
       typeof managerModule.DiscordVoiceManager
     >[0]["discordConfig"] = {},
     clientOverride?: ReturnType<typeof createClient>,
+    cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
   ) =>
     new managerModule.DiscordVoiceManager({
       client: (clientOverride ?? createClient()) as never,
-      cfg: {},
+      cfg: cfgOverride,
       discordConfig,
       accountId: "default",
       runtime: createRuntime(),
@@ -327,7 +328,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "1234",
       },
     });
-    const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
     await processVoiceSegment(manager, "u-owner");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
@@ -347,7 +348,9 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client, {
+      commands: { useAccessGroups: false },
+    });
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
@@ -373,7 +376,7 @@ describe("DiscordVoiceManager", () => {
     await runSegment();
     await runSegment();
 
-    expect(client.fetchMember).toHaveBeenCalledTimes(1);
+    expect(client.fetchMember).toHaveBeenCalledTimes(3);
   });
 
   it("persists full speaker context in cache writes", async () => {
@@ -395,7 +398,7 @@ describe("DiscordVoiceManager", () => {
           g1: {
             channels: {
               "1001": {
-                roles: ["role-voice"],
+                roles: ["role:role-voice"],
               },
             },
           },
@@ -415,7 +418,6 @@ describe("DiscordVoiceManager", () => {
             label: string;
             name?: string;
             tag?: string;
-            memberRoleIds?: string[];
             senderIsOwner: boolean;
             expiresAt: number;
           }
@@ -428,9 +430,74 @@ describe("DiscordVoiceManager", () => {
       expect.objectContaining({
         id: "u-role",
         label: "Role Speaker",
-        memberRoleIds: ["role-voice"],
       }),
     );
+  });
+
+  it("re-fetches member roles for repeated voice auth checks", async () => {
+    const client = createClient();
+    client.fetchMember
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: ["role-voice"],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: ["role-voice"],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: [],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValue({
+        nickname: "Role Speaker",
+        roles: [],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                roles: ["role:role-voice"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-role");
+    await processVoiceSegment(manager, "u-role");
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(client.fetchMember).toHaveBeenCalledTimes(3);
   });
 
   it("fetches guild metadata before allowlist checks when the session lacks a guild name", async () => {

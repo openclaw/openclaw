@@ -122,7 +122,7 @@ describe("authorizeDiscordVoiceIngress", () => {
     expect(access).toEqual({ ok: true });
   });
 
-  it("does not block commands when channel id is unavailable", async () => {
+  it("blocks commands when channel id is unavailable for an allowlisted channel", async () => {
     const access = await authorizeDiscordVoiceIngress({
       cfg: baseCfg,
       discordConfig: {
@@ -148,6 +148,41 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toEqual({ ok: true });
+    expect(access).toEqual({
+      ok: false,
+      message: "This channel is not allowlisted for voice commands.",
+    });
+  });
+
+  it("ignores dangerous name matching for voice ingress", async () => {
+    const access = await authorizeDiscordVoiceIngress({
+      cfg: baseCfg,
+      discordConfig: {
+        dangerouslyAllowNameMatching: true,
+        guilds: {
+          g1: {
+            channels: {
+              c1: {
+                users: ["owner"],
+              },
+            },
+          },
+        },
+      } as DiscordAccountConfig,
+      groupPolicy: "allowlist",
+      guildId: "g1",
+      channelId: "c1",
+      channelSlug: "",
+      memberRoleIds: [],
+      sender: {
+        id: "u-guest",
+        name: "owner",
+      },
+    });
+
+    expect(access).toEqual({
+      ok: false,
+      message: "You are not authorized to use this command.",
+    });
   });
 });
