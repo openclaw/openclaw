@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runDoctorContributionWithTimeout } from "./doctor-contribution-timeout.js";
+import {
+  resolveDoctorContributionTimeoutMs,
+  runDoctorContributionWithTimeout,
+} from "./doctor-contribution-timeout.js";
 
 const noteMock = vi.fn();
 
@@ -42,6 +45,13 @@ describe("runDoctorContributionWithTimeout", () => {
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("Test contribution timed out"),
       "Doctor timeout",
+    );
+  });
+
+  it("keeps gateway-services above the generic gateway timeout budget", () => {
+    expect(resolveDoctorContributionTimeoutMs("doctor:gateway-health")).toBe(15_000);
+    expect(resolveDoctorContributionTimeoutMs("doctor:gateway-services")).toBeGreaterThan(
+      15_000,
     );
   });
 

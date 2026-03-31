@@ -28,7 +28,9 @@ async function ensureTrayExeExists() {
 }
 
 async function withFixtureCli(run) {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tray-smoke-"));
+  // Include a cmd metacharacter so the fixture path exercises the tray's
+  // command quoting logic even on otherwise-simple temp roots.
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tray-smoke-&-"));
   const scriptPath = path.join(tempDir, "fake-openclaw.mjs");
   const cmdPath = path.join(tempDir, "openclaw-fixture.cmd");
   const callsPath = path.join(tempDir, "calls.log");

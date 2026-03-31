@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace OpenClaw.WindowsTray;
 
@@ -105,6 +106,7 @@ internal sealed record CliInvocation(
 internal static class GatewayCli
 {
     private static readonly TimeSpan CliTimeout = TimeSpan.FromSeconds(45);
+    private static readonly Regex CmdMetacharacterPattern = new("[ \\t\\\"&|<>^()%!]", RegexOptions.Compiled);
 
     private const string OpenClawDocsUrl = "https://docs.openclaw.ai/platforms/windows";
     private const string OpenClawTroubleshootingUrl =
@@ -484,7 +486,18 @@ internal static class GatewayCli
 
     private static string QuoteShellToken(string token)
     {
-        return token.Any(char.IsWhiteSpace) ? $"\"{token}\"" : token;
+        if (token.IndexOfAny(new[] { '\r', '\n' }) >= 0)
+        {
+            throw new InvalidOperationException("Command argument cannot contain CR or LF.");
+        }
+
+        if (string.IsNullOrEmpty(token))
+        {
+            return "\"\"";
+        }
+
+        var escaped = token.Replace("\"", "\\\"").Replace("%", "%%").Replace("!", "^!");
+        return CmdMetacharacterPattern.IsMatch(token) ? $"\"{escaped}\"" : escaped;
     }
 
     private static string? ResolveCommandFromPath(string candidate)

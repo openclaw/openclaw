@@ -21,8 +21,12 @@ export function resolveDoctorContributionTimeoutMs(id: string): number {
   switch (id) {
     case "doctor:gateway-health":
     case "doctor:gateway-daemon":
-    case "doctor:gateway-services":
       return 15_000;
+    case "doctor:gateway-services":
+      // Gateway services can fan out into several sequential WSL probes on
+      // healthy-but-slow Windows hosts, so give the bounded diagnostics path
+      // enough room to finish without misclassifying it as a doctor timeout.
+      return 25_000;
     case "doctor:shell-completion":
     case "doctor:browser":
       return 8_000;
