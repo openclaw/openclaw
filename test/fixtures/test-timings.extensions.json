@@ -8,7 +8,7 @@
       "testCount": 19
     },
     "extensions/matrix/src/plugin-entry.runtime.test.ts": {
-      "durationMs": 62700,
+      "durationMs": 6500,
       "testCount": 1
     },
     "extensions/matrix/src/matrix/monitor/index.test.ts": {
