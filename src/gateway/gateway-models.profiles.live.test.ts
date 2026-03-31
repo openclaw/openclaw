@@ -1818,7 +1818,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-5") as Model<Api> | null;
+    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;
     const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
 
     if (!anthropic || !zai) {
@@ -1882,7 +1882,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await withGatewayLiveProbeTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
-          model: "anthropic/claude-opus-4-5",
+          model: "anthropic/claude-opus-4-6",
         }),
         "zai-fallback: sessions-patch-anthropic",
       );
@@ -1897,7 +1897,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-tool`,
-        modelKey: "anthropic/claude-opus-4-5",
+        modelKey: "anthropic/claude-opus-4-6",
         message:
           `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
           `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
@@ -1906,7 +1906,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       });
       assertNoReasoningTags({
         text: toolText,
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         phase: "zai-fallback-tool",
         label: "zai-fallback",
       });
