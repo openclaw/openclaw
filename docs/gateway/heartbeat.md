@@ -227,7 +227,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
   - `last`: deliver to the last used external channel.
-  - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
+  - explicit channel: any configured channel or plugin id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
   - `none` (default): run the heartbeat but **do not deliver** externally.
 - `directPolicy`: controls direct/DM delivery behavior:
   - `allow` (default): allow direct/DM heartbeat delivery.
@@ -397,3 +397,11 @@ Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce c
 - Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).
 - Keep `HEARTBEAT.md` small.
 - Use `target: "none"` if you only want internal state updates.
+
+## Related
+
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — when to use each
+- [Background Tasks](/automation/tasks) — how detached work is tracked
+- [Timezone](/concepts/timezone) — how timezone affects heartbeat scheduling
+- [Troubleshooting](/automation/troubleshooting) — debugging automation issues

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
@@ -14,11 +14,7 @@ let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSe
 let shouldVerifyRequesterSpawnedSessionVisibility: typeof import("./sessions-resolution.js").shouldVerifyRequesterSpawnedSessionVisibility;
 let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shouldResolveSessionIdInput;
 
-async function loadFreshSessionsResolutionModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../../gateway/call.js", () => ({
-    callGateway: (opts: unknown) => callGatewayMock(opts),
-  }));
+beforeAll(async () => {
   ({
     isResolvedSessionVisibleToRequester,
     looksLikeSessionId,
@@ -30,11 +26,10 @@ async function loadFreshSessionsResolutionModuleForTest() {
     shouldVerifyRequesterSpawnedSessionVisibility,
     shouldResolveSessionIdInput,
   } = await import("./sessions-resolution.js"));
-}
+});
 
-beforeEach(async () => {
+beforeEach(() => {
   callGatewayMock.mockReset();
-  await loadFreshSessionsResolutionModuleForTest();
 });
 
 describe("resolveMainSessionAlias", () => {

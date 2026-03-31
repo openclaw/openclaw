@@ -1,6 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
+import { callGatewayCli } from "./rpc.js";
 
 /**
  * Regression test for #12098:
@@ -18,9 +19,11 @@ import { parseTimeoutMs } from "../parse-timeout.js";
  * least approvalTimeoutMs + 10_000.
  */
 
-const callGatewaySpy = vi.fn<
-  (opts: Record<string, unknown>) => Promise<{ decision: "allow-once" }>
->(async () => ({ decision: "allow-once" }));
+const { callGatewaySpy } = vi.hoisted(() => ({
+  callGatewaySpy: vi.fn<(opts: Record<string, unknown>) => Promise<{ decision: "allow-once" }>>(
+    async () => ({ decision: "allow-once" }),
+  ),
+}));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewaySpy,
@@ -32,12 +35,7 @@ vi.mock("../progress.js", () => ({
 }));
 
 describe("exec approval transport timeout (#12098)", () => {
-  let callGatewayCli: typeof import("./rpc.js").callGatewayCli;
   const approvalTransportFloorMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000;
-
-  beforeAll(async () => {
-    ({ callGatewayCli } = await import("./rpc.js"));
-  });
 
   beforeEach(() => {
     callGatewaySpy.mockClear();

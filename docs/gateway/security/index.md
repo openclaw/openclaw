@@ -802,7 +802,10 @@ still require token/password auth.
 Important boundary note:
 
 - Gateway HTTP bearer auth is effectively all-or-nothing operator access.
-- Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`, or `/api/channels/*` as full-access operator secrets for that gateway.
+- Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, or `/api/channels/*` as full-access operator secrets for that gateway.
+- On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
+- Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth or `gateway.auth.mode="none"` on a private ingress.
+- `/tools/invoke` is stricter: shared-secret bearer auth is rejected there, and the endpoint only runs when the HTTP request carries a trusted operator identity plus declared scopes.
 - Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.
 
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.

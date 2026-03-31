@@ -928,7 +928,7 @@ const sessionBindingContractEntries: Record<
       adapterAvailable: true,
       bindSupported: true,
       unbindSupported: true,
-      placements: ["current"],
+      placements: ["current", "child"],
     },
     getCapabilities: () => {
       void createChannelConversationBindingManager({
