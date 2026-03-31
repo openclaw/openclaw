@@ -912,7 +912,7 @@ Common RPCs:
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
 `config.get` if a config already exists.
-Tip: these config write RPCs preflight active SecretRef resolution and reject writes when an effectively active ref is unresolved.
+Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
 
 ## Models
 

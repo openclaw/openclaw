@@ -384,7 +384,7 @@ Secret activation runs on:
 - Config reload hot-apply path
 - Config reload restart-check path
 - Manual reload via `secrets.reload`
-- Gateway config write RPC preflight (`config.set` / `config.apply` / `config.patch`) for active-surface SecretRef resolvability before persisting edits
+- Gateway config write RPC preflight (`config.set` / `config.apply` / `config.patch`) for active-surface SecretRef resolvability within the submitted config payload before persisting edits
 
 Activation contract:
 
