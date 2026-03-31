@@ -42,7 +42,7 @@ enum GatewayDiscoveryTrustSupport {
                 alert.informativeText = """
                 "\(params.gatewayName)" resolves to \(params.host):\(params.port) over local network discovery.
 
-                OpenClaw will pin this SHA-256 TLS fingerprint for direct connections:
+                Verify this SHA-256 TLS fingerprint on the gateway host before trusting it. OpenClaw will pin it for future direct connections:
                 \(params.fingerprint)
                 """
                 alert.addButton(withTitle: "Trust Gateway")
