@@ -8,6 +8,9 @@
     "@sinclair/typebox": "0.34.49",
     "https-proxy-agent": "^8.0.0"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.3.31"
   },

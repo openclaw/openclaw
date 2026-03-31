@@ -11,6 +11,9 @@
     "matrix-js-sdk": "41.3.0-rc.0",
     "music-metadata": "^11.12.3"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.3.31"
   },

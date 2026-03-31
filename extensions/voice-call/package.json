@@ -8,6 +8,9 @@
     "commander": "^14.0.3",
     "ws": "^8.20.0"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.3.31"
   },
