@@ -55,8 +55,9 @@ describe("extractPdfContent standard font wiring", () => {
       disableWorker: true,
     });
     expect(typeof params.standardFontDataUrl).toBe("string");
-    expect(params.standardFontDataUrl).toContain("standard_fonts");
-    expect(params.standardFontDataUrl.endsWith("standard_fonts/")).toBe(true);
+    const normalizedStandardFontDataUrl = params.standardFontDataUrl.replace(/\\/g, "/");
+    expect(normalizedStandardFontDataUrl).toContain("standard_fonts");
+    expect(normalizedStandardFontDataUrl.endsWith("standard_fonts/")).toBe(true);
     expect(existsSync(params.standardFontDataUrl)).toBe(true);
     expect(createCanvasMock).toHaveBeenCalledTimes(1);
   });
