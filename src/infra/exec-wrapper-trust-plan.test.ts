@@ -4,6 +4,19 @@ import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 describe("resolveExecWrapperTrustPlan", () => {
   test.each([
     {
+      name: "unwraps transparent caffeinate wrappers before shell policy checks",
+      enabled: process.platform !== "win32",
+      argv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-lc", "echo hi"],
+      expected: {
+        argv: ["sh", "-lc", "echo hi"],
+        policyArgv: ["sh", "-lc", "echo hi"],
+        wrapperChain: ["caffeinate"],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: "echo hi",
+      },
+    },
+    {
       name: "unwraps dispatch wrappers and shell multiplexers into one trust plan",
       enabled: process.platform !== "win32",
       argv: ["/usr/bin/time", "-p", "busybox", "sh", "-lc", "echo hi"],
@@ -24,6 +37,19 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["sh", "-lc", "echo hi"],
         policyArgv: ["sh", "-lc", "echo hi"],
         wrapperChain: ["script"],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: "echo hi",
+      },
+    },
+    {
+      name: "unwraps sandbox-exec wrappers before evaluating nested shell payloads",
+      enabled: process.platform !== "win32",
+      argv: ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-lc", "echo hi"],
+      expected: {
+        argv: ["sh", "-lc", "echo hi"],
+        policyArgv: ["sh", "-lc", "echo hi"],
+        wrapperChain: ["sandbox-exec"],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",

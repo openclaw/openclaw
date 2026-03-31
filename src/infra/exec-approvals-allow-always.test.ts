@@ -568,6 +568,23 @@ $0 \\"$1\\"" touch {marker}`);
     });
   });
 
+  it("prevents allow-always bypass for caffeinate wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", () => {
     if (process.platform === "win32") {
       return;
@@ -580,6 +597,24 @@ $0 \\"$1\\"" touch {marker}`);
       dir,
       firstCommand: "/usr/bin/nice /bin/zsh -lc 'echo warmup-ok'",
       secondCommand: "/usr/bin/nice /bin/zsh -lc 'id > marker'",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
+  it("prevents allow-always bypass for sandbox-exec wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand:
+        "/usr/bin/sandbox-exec -p '(deny default) (allow process*)' /bin/zsh -lc 'echo warmup-ok'",
+      secondCommand: "/usr/bin/sandbox-exec -p '(allow default)' /bin/zsh -lc 'id > marker'",
       env,
       persistedPattern: echo,
     });
