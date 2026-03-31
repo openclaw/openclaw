@@ -191,6 +191,17 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  /**
+   * Deferred session management action scheduled by sessions_manage tool.
+   * Executes after the current run ends (avoids deadlock on self-session).
+   * Persisted so it survives gateway restarts.
+   */
+  pendingAction?: {
+    type: "compact" | "reset";
+    instructions?: string;
+    reason?: string;
+    scheduledAt: number;
+  };
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

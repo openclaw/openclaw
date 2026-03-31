@@ -25,6 +25,8 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "sessions_spawn",
   // Cross-session injection — message injection across sessions
   "sessions_send",
+  // Session lifecycle management — compact/reset can destroy context
+  "sessions_manage",
   // Persistent automation control plane — can create/update/remove scheduled runs
   "cron",
   // Gateway control plane — prevents gateway reconfiguration via HTTP

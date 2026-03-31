@@ -16,6 +16,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import { logVerbose } from "../globals.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
@@ -26,6 +27,7 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { recoverPendingActions } from "./server-pending-actions.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
@@ -214,6 +216,20 @@ export async function startGatewaySidecars(params: {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
   }
+
+  // Recover deferred sessions_manage actions that survived the restart.
+  // Delayed slightly to let the gateway fully stabilize first.
+  // Capture boot time now (not inside setTimeout) so markers scheduled during
+  // the 2s delay are correctly identified as belonging to this lifecycle.
+  const gatewayBootMs = Date.now();
+  setTimeout(() => {
+    void recoverPendingActions({
+      log: { info: (msg) => logVerbose(msg), warn: (msg) => params.log.warn(msg) },
+      gatewayBootMs,
+    }).catch((err) => {
+      params.log.warn(`pending-actions recovery failed: ${String(err)}`);
+    });
+  }, 2000);
 
   return { pluginServices };
 }

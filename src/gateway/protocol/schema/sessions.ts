@@ -141,6 +141,8 @@ export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+    /** When true, defer the reset until the active run ends (avoids deadlock on self-session). */
+    deferred: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -159,6 +161,17 @@ export const SessionsCompactParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     maxLines: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactSemanticParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    /** Optional instructions to guide the compaction (e.g. "Focus on decisions and open questions"). */
+    instructions: Type.Optional(Type.String()),
+    /** When true, defer the compaction until the active run ends (avoids deadlock on self-session). */
+    deferred: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
