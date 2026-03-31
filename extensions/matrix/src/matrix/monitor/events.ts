@@ -34,8 +34,13 @@ export function registerMatrixMonitorEvents(params: {
   cfg: CoreConfig;
   client: MatrixClient;
   auth: MatrixAuth;
+  allowFrom: string[];
+  dmEnabled: boolean;
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  readStoreAllowFrom: () => Promise<string[]>;
   directTracker?: {
     invalidateRoom: (roomId: string) => void;
+    rememberInvite?: (roomId: string, remoteUserId: string) => void;
   };
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
@@ -48,6 +53,10 @@ export function registerMatrixMonitorEvents(params: {
     cfg,
     client,
     auth,
+    allowFrom,
+    dmEnabled,
+    dmPolicy,
+    readStoreAllowFrom,
     directTracker,
     logVerboseMessage,
     warnedEncryptedRooms,
@@ -58,6 +67,10 @@ export function registerMatrixMonitorEvents(params: {
   } = params;
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
+    allowFrom,
+    dmEnabled,
+    dmPolicy,
+    readStoreAllowFrom,
     logVerboseMessage,
   });
 
@@ -114,6 +127,12 @@ export function registerMatrixMonitorEvents(params: {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
+    const invitee = typeof event?.state_key === "string" ? event.state_key.trim() : "";
+    const senderIsInvitee =
+      typeof event?.sender === "string" && invitee && event.sender.trim() === invitee;
+    if (typeof event?.sender === "string" && event.sender.trim() && !senderIsInvitee) {
+      directTracker?.rememberInvite?.(roomId, event.sender);
+    }
     const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
     logVerboseMessage(
       `matrix: invite room=${roomId} sender=${sender} direct=${String(isDirect)} id=${eventId}`,

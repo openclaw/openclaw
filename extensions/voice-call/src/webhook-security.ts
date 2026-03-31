@@ -534,6 +534,8 @@ export function verifyTelnyxWebhook(
   try {
     const signedPayload = `${timestamp}|${ctx.rawBody}`;
     const signatureBuffer = decodeBase64OrBase64Url(signature);
+    // Canonicalize equivalent Base64/Base64URL encodings before replay hashing.
+    const canonicalSignature = signatureBuffer.toString("base64");
     const key = importEd25519PublicKey(publicKey);
 
     const isValid = crypto.verify(null, Buffer.from(signedPayload), key, signatureBuffer);
@@ -548,7 +550,7 @@ export function verifyTelnyxWebhook(
       return { ok: false, reason: "Timestamp too old" };
     }
 
-    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${signature}\n${ctx.rawBody}`)}`;
+    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${canonicalSignature}\n${ctx.rawBody}`)}`;
     const isReplay = markReplay(telnyxReplayCache, replayKey);
     return { ok: true, isReplay, verifiedRequestKey: replayKey };
   } catch (err) {
@@ -726,6 +728,20 @@ function getBaseUrlNoQuery(url: string): string {
 
 function createPlivoV2ReplayKey(url: string, nonce: string): string {
   return `plivo:v2:${sha256Hex(`${getBaseUrlNoQuery(url)}\n${nonce}`)}`;
+}
+
+function createPlivoV3ReplayKey(params: {
+  method: "GET" | "POST";
+  url: string;
+  postParams: PlivoParamMap;
+  nonce: string;
+}): string {
+  const baseUrl = constructPlivoV3BaseUrl({
+    method: params.method,
+    url: params.url,
+    postParams: params.postParams,
+  });
+  return `plivo:v3:${sha256Hex(`${baseUrl}\n${params.nonce}`)}`;
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {
@@ -951,7 +967,12 @@ export function verifyPlivoWebhook(
         reason: "Invalid Plivo V3 signature",
       };
     }
-    const replayKey = `plivo:v3:${sha256Hex(`${verificationUrl}\n${nonceV3}`)}`;
+    const replayKey = createPlivoV3ReplayKey({
+      method,
+      url: verificationUrl,
+      postParams,
+      nonce: nonceV3,
+    });
     const isReplay = markReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v3", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }

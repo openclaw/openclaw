@@ -1,9 +1,10 @@
+import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+} from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -25,15 +26,9 @@ describe("openrouter plugin", () => {
       registerOpenRouterPlugin();
 
     expect(providers).toHaveLength(1);
-    expect(
-      providers.map(
-        (provider) =>
-          // oxlint-disable-next-line typescript/no-explicit-any
-          (provider as any).id,
-      ),
-    ).toEqual(["openrouter"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders).toHaveLength(0);
+    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(imageProviders).toHaveLength(0);
   });
 });
@@ -43,15 +38,10 @@ describeLive("openrouter plugin live", () => {
     const { providers } = registerOpenRouterPlugin();
     const provider = requireRegisteredProvider(providers, "openrouter");
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const resolved = (provider as any).resolveDynamicModel?.({
+    const resolved = provider.resolveDynamicModel?.({
       provider: "openrouter",
       modelId: LIVE_MODEL_ID,
-      modelRegistry: {
-        find() {
-          return null;
-        },
-      },
+      modelRegistry: new ModelRegistry(AuthStorage.inMemory()),
     });
     if (!resolved) {
       throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);

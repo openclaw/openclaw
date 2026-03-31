@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
 const { detectChangedScope, listChangedPaths } =
   (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
@@ -166,7 +167,7 @@ describe("detectChangedScope", () => {
       runSkillsPython: false,
       runChangedSmoke: true,
     });
-    expect(detectChangedScope(["extensions/matrix/package.json"])).toEqual({
+    expect(detectChangedScope([bundledPluginFile("matrix", "package.json")])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,

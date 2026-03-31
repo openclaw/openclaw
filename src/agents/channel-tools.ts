@@ -128,6 +128,49 @@ export function resolveChannelMessageToolHints(params: {
     .filter(Boolean);
 }
 
+export function resolveChannelMessageToolCapabilities(params: {
+  cfg?: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+}): string[] {
+  const channelId = normalizeAnyChannelId(params.channel);
+  if (!channelId) {
+    return [];
+  }
+  const resolve = getChannelPlugin(channelId)?.agentPrompt?.messageToolCapabilities;
+  if (!resolve) {
+    return [];
+  }
+  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  return (resolve({ cfg, accountId: params.accountId }) ?? [])
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function resolveChannelReactionGuidance(params: {
+  cfg?: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+}): { level: "minimal" | "extensive"; channel: string } | undefined {
+  const channelId = normalizeAnyChannelId(params.channel);
+  if (!channelId) {
+    return undefined;
+  }
+  const resolve = getChannelPlugin(channelId)?.agentPrompt?.reactionGuidance;
+  if (!resolve) {
+    return undefined;
+  }
+  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const resolved = resolve({ cfg, accountId: params.accountId });
+  if (!resolved?.level) {
+    return undefined;
+  }
+  return {
+    level: resolved.level,
+    channel: resolved.channelLabel?.trim() || channelId,
+  };
+}
+
 export const __testing = {
   resetLoggedListActionErrors() {
     messageActionTesting.resetLoggedMessageActionErrors();

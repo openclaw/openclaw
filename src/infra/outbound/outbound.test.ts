@@ -31,65 +31,62 @@ describe("DirectoryCache", () => {
     expect(cache.get("a", cfg)).toBeUndefined();
   });
 
-  it("evicts least-recent entries when capacity is exceeded", () => {
-    const cases = [
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: undefined, b: "value-b", c: "value-c" },
-      },
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "a", "value-a2"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: "value-a2", b: undefined, c: "value-c" },
-      },
-    ];
-
-    for (const testCase of cases) {
-      const cache = new DirectoryCache<string>(60_000, 2);
-      for (const action of testCase.actions) {
-        cache.set(action[1], action[2], cfg);
-      }
-      expect(cache.get("a", cfg)).toBe(testCase.expected.a);
-      expect(cache.get("b", cfg)).toBe(testCase.expected.b);
-      expect(cache.get("c", cfg)).toBe(testCase.expected.c);
+  it.each([
+    {
+      actions: [
+        ["set", "a", "value-a"],
+        ["set", "b", "value-b"],
+        ["set", "c", "value-c"],
+      ] as const,
+      expected: { a: undefined, b: "value-b", c: "value-c" },
+    },
+    {
+      actions: [
+        ["set", "a", "value-a"],
+        ["set", "b", "value-b"],
+        ["set", "a", "value-a2"],
+        ["set", "c", "value-c"],
+      ] as const,
+      expected: { a: "value-a2", b: undefined, c: "value-c" },
+    },
+  ])("evicts least-recent entries when capacity is exceeded for %j", ({ actions, expected }) => {
+    const cache = new DirectoryCache<string>(60_000, 2);
+    for (const [, key, value] of actions) {
+      cache.set(key, value, cfg);
     }
+    expect(cache.get("a", cfg)).toBe(expected.a);
+    expect(cache.get("b", cfg)).toBe(expected.b);
+    expect(cache.get("c", cfg)).toBe(expected.c);
   });
 });
 
 describe("buildOutboundResultEnvelope", () => {
-  it("formats envelope variants", () => {
-    const whatsappDelivery: OutboundDeliveryJson = {
-      channel: "whatsapp",
-      via: "gateway",
-      to: "+1",
-      messageId: "m1",
-      mediaUrl: null,
-    };
-    const telegramDelivery: OutboundDeliveryJson = {
-      channel: "telegram",
-      via: "direct",
-      to: "123",
-      messageId: "m2",
-      mediaUrl: null,
-      chatId: "c1",
-    };
-    const discordDelivery: OutboundDeliveryJson = {
-      channel: "discord",
-      via: "gateway",
-      to: "channel:C1",
-      messageId: "m3",
-      mediaUrl: null,
-      channelId: "C1",
-    };
-    const cases = typedCases<{
+  const whatsappDelivery: OutboundDeliveryJson = {
+    channel: "whatsapp",
+    via: "gateway",
+    to: "+1",
+    messageId: "m1",
+    mediaUrl: null,
+  };
+  const telegramDelivery: OutboundDeliveryJson = {
+    channel: "telegram",
+    via: "direct",
+    to: "123",
+    messageId: "m2",
+    mediaUrl: null,
+    chatId: "c1",
+  };
+  const discordDelivery: OutboundDeliveryJson = {
+    channel: "discord",
+    via: "gateway",
+    to: "channel:C1",
+    messageId: "m3",
+    mediaUrl: null,
+    channelId: "C1",
+  };
+
+  it.each(
+    typedCases<{
       name: string;
       input: Parameters<typeof buildOutboundResultEnvelope>[0];
       expected: unknown;
@@ -124,10 +121,9 @@ describe("buildOutboundResultEnvelope", () => {
         input: { delivery: discordDelivery, flattenDelivery: false },
         expected: { delivery: discordDelivery },
       },
-    ]);
-    for (const testCase of cases) {
-      expect(buildOutboundResultEnvelope(testCase.input), testCase.name).toEqual(testCase.expected);
-    }
+    ]),
+  )("$name", ({ input, expected }) => {
+    expect(buildOutboundResultEnvelope(input)).toEqual(expected);
   });
 });
 

@@ -142,7 +142,7 @@ export type DiscordVoiceConfig = {
 export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
-  /** Discord user IDs to receive approval prompts. Required if enabled. */
+  /** Discord user IDs to receive approval prompts. Optional: falls back to owner IDs inferred from allowFrom/defaultTo when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -152,7 +152,7 @@ export type DiscordExecApprovalConfig = {
   cleanupAfterResolve?: boolean;
   /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
    *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by configured approvers; other users receive an ephemeral denial. */
+   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
   target?: "dm" | "channel" | "both";
 };
 
@@ -377,3 +377,9 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    discord?: DiscordConfig;
+  }
+}

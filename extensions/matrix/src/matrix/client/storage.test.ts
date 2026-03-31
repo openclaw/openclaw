@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
-import { installMatrixTestRuntime } from "../../test-runtime.js";
 
 const createBackupArchiveMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({
@@ -28,7 +27,9 @@ vi.mock("../../../../../src/infra/backup-create.js", async (importOriginal) => {
 });
 
 let maybeMigrateLegacyStorage: typeof import("./storage.js").maybeMigrateLegacyStorage;
+let resolveMatrixStateFilePath: typeof import("./storage.js").resolveMatrixStateFilePath;
 let resolveMatrixStoragePaths: typeof import("./storage.js").resolveMatrixStoragePaths;
+let installMatrixTestRuntime: typeof import("../../test-runtime.js").installMatrixTestRuntime;
 
 describe("matrix client storage paths", () => {
   const tempDirs: string[] = [];
@@ -38,8 +39,11 @@ describe("matrix client storage paths", () => {
     accessToken: "secret-token",
   };
 
-  beforeAll(async () => {
-    ({ maybeMigrateLegacyStorage, resolveMatrixStoragePaths } = await import("./storage.js"));
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ installMatrixTestRuntime } = await import("../../test-runtime.js"));
+    ({ maybeMigrateLegacyStorage, resolveMatrixStateFilePath, resolveMatrixStoragePaths } =
+      await import("./storage.js"));
   });
 
   afterEach(() => {
@@ -110,6 +114,26 @@ describe("matrix client storage paths", () => {
       env: {},
     });
   }
+
+  it("resolves state file paths inside the selected storage root", () => {
+    setupStateDir();
+    const filePath = resolveMatrixStateFilePath({
+      auth: {
+        ...defaultStorageAuth,
+        accountId: "ops",
+        deviceId: "DEVICE1",
+      },
+      filename: "thread-bindings.json",
+      env: {},
+    });
+
+    expect(filePath).toBe(
+      path.join(
+        resolveDefaultStoragePaths({ accountId: "ops", deviceId: "DEVICE1" }).rootDir,
+        "thread-bindings.json",
+      ),
+    );
+  });
 
   function writeLegacyMatrixStorage(
     stateDir: string,

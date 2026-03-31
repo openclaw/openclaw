@@ -47,6 +47,10 @@ type LaneState = {
   generation: number;
 };
 
+function isExpectedNonErrorLaneFailure(err: unknown): boolean {
+  return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+}
+
 /**
  * Keep queue runtime state on globalThis so every bundled entry/chunk shares
  * the same lanes, counters, and draining flag in production builds.
@@ -141,9 +145,13 @@ function drainLane(lane: string) {
           } catch (err) {
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane) {
+            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+              );
+            } else if (!isProbeLane) {
+              diag.debug(
+                `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
               );
             }
             if (completedCurrentGeneration) {
@@ -244,6 +252,18 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
+}
+
+/**
+ * Test-only hard reset that discards all queue state, including preserved
+ * queued work from previous generations. Use this when a suite needs an
+ * isolated baseline across shared-worker runs.
+ */
+export function resetCommandQueueStateForTest(): void {
+  const queueState = getQueueState();
+  queueState.gatewayDraining = false;
+  queueState.lanes.clear();
+  queueState.nextTaskId = 1;
 }
 
 /**

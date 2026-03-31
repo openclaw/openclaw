@@ -1,4 +1,6 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bundledSources from "../../../plugins/bundled-sources.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { collectDoctorPreviewWarnings } from "./preview-warnings.js";
@@ -8,6 +10,7 @@ function manifest(id: string): PluginManifestRecord {
     id,
     channels: [],
     providers: [],
+    cliBackends: [],
     skills: [],
     hooks: [],
     origin: "bundled",
@@ -92,6 +95,44 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).toContain("plugins.entries.acpx");
     expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
     expect(warnings[0]).not.toContain("Auto-removal is paused");
+  });
+
+  it("includes bundled plugin load path migration warnings", () => {
+    const packageRoot = path.resolve("app-node-modules", "openclaw");
+    const legacyPath = path.join(packageRoot, "extensions", "feishu");
+    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [manifest("feishu")],
+      diagnostics: [],
+    });
+    vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
+      new Map([
+        [
+          "feishu",
+          {
+            pluginId: "feishu",
+            localPath: bundledPath,
+            npmSpec: "@openclaw/feishu",
+          },
+        ],
+      ]),
+    );
+
+    const warnings = collectDoctorPreviewWarnings({
+      cfg: {
+        plugins: {
+          load: {
+            paths: [legacyPath],
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(`plugins.load.paths: legacy bundled plugin path "${legacyPath}"`),
+    ]);
+    expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", () => {

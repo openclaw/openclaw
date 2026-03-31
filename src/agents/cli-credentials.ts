@@ -2,16 +2,15 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
 
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
-const QWEN_CLI_CREDENTIALS_RELATIVE_PATH = ".qwen/oauth_creds.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
@@ -26,13 +25,11 @@ type CachedValue<T> = {
 
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
 let codexCliCache: CachedValue<CodexCliCredential> | null = null;
-let qwenCliCache: CachedValue<QwenCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 
 export function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
-  qwenCliCache = null;
   minimaxCliCache = null;
 }
 
@@ -58,14 +55,6 @@ export type CodexCliCredential = {
   refresh: string;
   expires: number;
   accountId?: string;
-};
-
-export type QwenCliCredential = {
-  type: "oauth";
-  provider: "qwen-portal";
-  access: string;
-  refresh: string;
-  expires: number;
 };
 
 export type MiniMaxCliCredential = {
@@ -137,11 +126,6 @@ function resolveCodexHomePath() {
   } catch {
     return home;
   }
-}
-
-function resolveQwenCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
-  return path.join(baseDir, QWEN_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
@@ -279,11 +263,6 @@ function readCodexKeychainCredentials(options?: {
   } catch {
     return null;
   }
-}
-
-function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
-  const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
-  return readPortalCliOauthCredentials(credPath, "qwen-portal");
 }
 
 function readPortalCliOauthCredentials<TProvider extends string>(
@@ -580,23 +559,6 @@ export function readCodexCliCredentialsCached(options?: {
       codexCliCache = next;
     },
     readSourceFingerprint: () => readFileMtimeMs(authPath),
-  });
-}
-
-export function readQwenCliCredentialsCached(options?: {
-  ttlMs?: number;
-  homeDir?: string;
-}): QwenCliCredential | null {
-  const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
-  return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
-    cache: qwenCliCache,
-    cacheKey: credPath,
-    read: () => readQwenCliCredentials({ homeDir: options?.homeDir }),
-    setCache: (next) => {
-      qwenCliCache = next;
-    },
-    readSourceFingerprint: () => readFileMtimeMs(credPath),
   });
 }
 

@@ -51,6 +51,8 @@ export type DiscordComponentButtonSpec = {
   style?: DiscordComponentButtonStyle;
   url?: string;
   callbackData?: string;
+  /** Internal use only: bypass dynamic component ids with a fixed custom id. */
+  internalCustomId?: string;
   emoji?: {
     name: string;
     id?: string;
@@ -719,16 +721,27 @@ function createButtonComponent(params: {
     return { component: new DynamicLinkButton() };
   }
   const componentId = params.componentId ?? createShortId("btn_");
-  const customId = buildDiscordComponentCustomId({
-    componentId,
-    modalId: params.modalId,
-  });
+  const internalCustomId =
+    typeof params.spec.internalCustomId === "string" && params.spec.internalCustomId.trim()
+      ? params.spec.internalCustomId.trim()
+      : undefined;
+  const customId =
+    internalCustomId ??
+    buildDiscordComponentCustomId({
+      componentId,
+      modalId: params.modalId,
+    });
   class DynamicButton extends Button {
     label = params.spec.label;
     customId = customId;
     style = style;
     emoji = params.spec.emoji;
     disabled = params.spec.disabled ?? false;
+  }
+  if (internalCustomId) {
+    return {
+      component: new DynamicButton(),
+    };
   }
   return {
     component: new DynamicButton(),

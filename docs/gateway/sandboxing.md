@@ -50,8 +50,8 @@ Not sandboxed:
 
 `agents.defaults.sandbox.scope` controls **how many containers** are created:
 
-- `"session"` (default): one container per session.
-- `"agent"`: one container per agent.
+- `"agent"` (default): one container per agent.
+- `"session"`: one container per session.
 - `"shared"`: one container shared by all sandboxed sessions.
 
 ## Backend
@@ -402,7 +402,7 @@ Docker installs and the containerized gateway live here:
 For Docker gateway deployments, `scripts/docker/setup.sh` can bootstrap sandbox config.
 Set `OPENCLAW_SANDBOX=1` (or `true`/`yes`/`on`) to enable that path. You can
 override socket location with `OPENCLAW_DOCKER_SOCKET`. Full setup and env
-reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway).
+reference: [Docker](/install/docker#agent-sandbox).
 
 ## setupCommand (one-time container setup)
 

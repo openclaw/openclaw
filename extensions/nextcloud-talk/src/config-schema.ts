@@ -1,5 +1,3 @@
-import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
-import { z } from "zod";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -9,7 +7,9 @@ import {
   ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
   requireOpenAllowFrom,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "openclaw/plugin-sdk/zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 export const NextcloudTalkRoomSchema = z
@@ -43,6 +43,8 @@ export const NextcloudTalkAccountSchemaBase = z
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
+    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Nextcloud on LAN/VPN. */
+    allowPrivateNetwork: z.boolean().optional(),
     ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();

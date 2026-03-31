@@ -17,6 +17,10 @@ over WebSocket. It keeps ACP sessions mapped to Gateway session keys.
 runtime. It focuses on session routing, prompt delivery, and basic streaming
 updates.
 
+If you want an external MCP client to talk directly to OpenClaw channel
+conversations instead of hosting an ACP harness session, use
+[`openclaw mcp serve`](/cli/mcp) instead.
+
 ## Compatibility Matrix
 
 | ACP area                                                              | Status      | Notes                                                                                                                                                                                                                                            |
@@ -142,6 +146,10 @@ the key or label.
 Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
+
+If you want ACPX-backed sessions to see OpenClaw plugin tools, enable the
+gateway-side ACPX plugin bridge instead of trying to pass per-session
+`mcpServers`. See [ACP Agents](/tools/acp-agents#plugin-tools-mcp-bridge).
 
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 

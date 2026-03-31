@@ -23,11 +23,34 @@ type ToolMessageHandle = {
   messageId: string;
 };
 
+function normalizeDeliveryChannel(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function shouldTreatDeliveredTextAsVisible(params: {
+  channel: string | undefined;
+  kind: ReplyDispatchKind;
+  text: string | undefined;
+}): boolean {
+  if (!params.text?.trim()) {
+    return false;
+  }
+  if (params.kind === "final") {
+    return true;
+  }
+  return normalizeDeliveryChannel(params.channel) === "telegram";
+}
+
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
   blockCount: number;
   deliveredFinalReply: boolean;
+  deliveredVisibleText: boolean;
+  failedVisibleTextDelivery: boolean;
+  queuedDirectVisibleTextDeliveries: number;
+  settledDirectVisibleText: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
@@ -41,7 +64,10 @@ export type AcpDispatchDeliveryCoordinator = {
   ) => Promise<boolean>;
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
+  settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
+  hasDeliveredVisibleText: () => boolean;
+  hasFailedVisibleTextDelivery: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -53,6 +79,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  suppressUserDelivery?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -63,12 +90,34 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     accumulatedBlockText: "",
     blockCount: 0,
     deliveredFinalReply: false,
+    deliveredVisibleText: false,
+    failedVisibleTextDelivery: false,
+    queuedDirectVisibleTextDeliveries: 0,
+    settledDirectVisibleText: false,
     routedCounts: {
       tool: 0,
       block: 0,
       final: 0,
     },
     toolMessageByCallId: new Map(),
+  };
+  const directChannel = normalizeDeliveryChannel(params.ctx.Provider ?? params.ctx.Surface);
+  const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
+
+  const settleDirectVisibleText = async () => {
+    if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
+      return;
+    }
+    state.settledDirectVisibleText = true;
+    await params.dispatcher.waitForIdle();
+    const failedCounts = params.dispatcher.getFailedCounts();
+    const failedVisibleCount = failedCounts.block + failedCounts.final;
+    if (failedVisibleCount > 0) {
+      state.failedVisibleTextDelivery = true;
+    }
+    if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
+      state.deliveredVisibleText = true;
+    }
   };
 
   const startReplyLifecycleOnce = async () => {
@@ -136,6 +185,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
+    if (params.suppressUserDelivery) {
+      return false;
+    }
+
     const ttsPayload = meta?.skipTts
       ? payload
       : await maybeApplyTtsToPayload({
@@ -156,6 +209,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
       }
 
+      const tracksVisibleText = shouldTreatDeliveredTextAsVisible({
+        channel: routedChannel,
+        kind,
+        text: ttsPayload.text,
+      });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -166,6 +224,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         cfg: params.cfg,
       });
       if (!result.ok) {
+        if (tracksVisibleText) {
+          state.failedVisibleTextDelivery = true;
+        }
         logVerbose(
           `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
         );
@@ -183,10 +244,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "final") {
         state.deliveredFinalReply = true;
       }
+      if (tracksVisibleText) {
+        state.deliveredVisibleText = true;
+      }
       state.routedCounts[kind] += 1;
       return true;
     }
 
+    const tracksVisibleText = shouldTreatDeliveredTextAsVisible({
+      channel: directChannel,
+      kind,
+      text: ttsPayload.text,
+    });
     const delivered =
       kind === "tool"
         ? params.dispatcher.sendToolResult(ttsPayload)
@@ -196,6 +265,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
     }
+    if (delivered && tracksVisibleText) {
+      state.queuedDirectVisibleTextDeliveries += 1;
+      state.settledDirectVisibleText = false;
+    } else if (!delivered && tracksVisibleText) {
+      state.failedVisibleTextDelivery = true;
+    }
     return delivered;
   };
 
@@ -204,7 +279,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     deliver,
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,
+    settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
+    hasDeliveredVisibleText: () => state.deliveredVisibleText,
+    hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

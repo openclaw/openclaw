@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
@@ -8,6 +9,7 @@ import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -31,12 +33,16 @@ export async function messageCommand(
     channel: scope.channel,
     accountId: scope.accountId,
   });
-  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadedRaw,
     commandName: "message",
     targetIds: scopedTargets.targetIds,
     ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
   });
+  const cfg = applyPluginAutoEnable({
+    config: resolvedConfig,
+    env: process.env,
+  }).config;
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
   }
@@ -58,6 +64,7 @@ export async function messageCommand(
       action,
       params: opts,
       deps: outboundDeps,
+      agentId: resolveDefaultAgentId(cfg),
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,

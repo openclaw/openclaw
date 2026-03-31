@@ -285,7 +285,9 @@ export async function createCanvasHostHandler(
       debounce = null;
       broadcastReload();
     }, reloadDebounceMs);
-    debounce.unref?.();
+    if (!testMode) {
+      debounce.unref?.();
+    }
   };
 
   let watcherClosed = false;

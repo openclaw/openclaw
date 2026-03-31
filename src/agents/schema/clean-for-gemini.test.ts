@@ -52,4 +52,48 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties?.bad?.properties).toEqual({});
     expect(cleaned.properties?.good?.type).toBe("string");
   });
+
+  it("strips empty required arrays", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+      },
+      required: [],
+    }) as Record<string, unknown>;
+
+    expect(cleaned).not.toHaveProperty("required");
+    expect(cleaned.type).toBe("object");
+  });
+
+  it("preserves non-empty required arrays", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+      },
+      required: ["name"],
+    }) as Record<string, unknown>;
+
+    expect(cleaned.required).toEqual(["name"]);
+  });
+
+  it("strips empty required arrays in nested schemas", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        nested: {
+          type: "object",
+          properties: {
+            optional: { type: "string" },
+          },
+          required: [],
+        },
+      },
+      required: ["nested"],
+    }) as { properties?: { nested?: Record<string, unknown> }; required?: string[] };
+
+    expect(cleaned.required).toEqual(["nested"]);
+    expect(cleaned.properties?.nested).not.toHaveProperty("required");
+  });
 });

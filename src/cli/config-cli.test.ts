@@ -23,6 +23,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
     mockWriteConfigFile(cfg, options),
+  replaceConfigFile: (params: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: { unsetPaths?: string[][] };
+  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -51,8 +55,10 @@ function buildSnapshot(params: {
     exists: true,
     raw: JSON.stringify(params.resolved),
     parsed: params.resolved,
+    sourceConfig: params.resolved,
     resolved: params.resolved,
     valid: true,
+    runtimeConfig: params.config,
     config: params.config,
     issues: [],
     warnings: [],
@@ -89,8 +95,10 @@ function makeInvalidSnapshot(params: {
     exists: true,
     raw: "{}",
     parsed: {},
+    sourceConfig: {},
     resolved: {},
     valid: false,
+    runtimeConfig: {},
     config: {},
     issues: params.issues,
     warnings: [],
@@ -225,24 +233,6 @@ describe("config cli", () => {
       expect(written).not.toHaveProperty("sessions.persistence");
       expect(written.gateway?.port).toBe(18789);
       expect(written.gateway?.auth).toEqual({ mode: "token" });
-    });
-
-    it("auto-seeds a valid Ollama provider when setting only models.providers.ollama.apiKey", async () => {
-      const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
-      };
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "set", "models.providers.ollama.apiKey", '"ollama-local"']);
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
-      expect(written.models?.providers?.ollama).toEqual({
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
-        models: [],
-        apiKey: "ollama-local", // pragma: allowlist secret
-      });
     });
 
     it("drops gateway.auth.password when switching mode to token", async () => {
@@ -434,8 +424,10 @@ describe("config cli", () => {
         raw: null,
         parsed: {},
         resolved: {},
+        sourceConfig: {},
         valid: true,
         config: {},
+        runtimeConfig: {},
         issues: [],
         warnings: [],
         legacyIssues: [],

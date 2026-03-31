@@ -1,4 +1,4 @@
-import { normalizeModelCompat } from "../agents/model-compat.js";
+import { normalizeModelCompat } from "./provider-model-compat.js";
 import type { ProviderResolveDynamicModelContext, ProviderRuntimeModel } from "./types.js";
 
 export function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {

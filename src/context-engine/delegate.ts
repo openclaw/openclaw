@@ -19,11 +19,13 @@ export async function delegateCompactionToRuntime(
   // Import through a dedicated runtime boundary so the lazy edge remains effective.
   const { compactEmbeddedPiSessionDirect } =
     await import("../agents/pi-embedded-runner/compact.runtime.js");
+  type RuntimeCompactionParams = Parameters<typeof compactEmbeddedPiSessionDirect>[0];
 
   // runtimeContext carries the full CompactEmbeddedPiSessionParams fields set
   // by runtime callers. We spread them and override the fields that come from
   // the public ContextEngine compact() signature directly.
-  const runtimeContext: ContextEngineRuntimeContext = params.runtimeContext ?? {};
+  const runtimeContext = (params.runtimeContext ?? {}) as ContextEngineRuntimeContext &
+    Partial<RuntimeCompactionParams>;
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -32,7 +34,6 @@ export async function delegateCompactionToRuntime(
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bridge runtimeContext matches CompactEmbeddedPiSessionParams
   const result = await compactEmbeddedPiSessionDirect({
     ...runtimeContext,
     sessionId: params.sessionId,
@@ -41,8 +42,9 @@ export async function delegateCompactionToRuntime(
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
     customInstructions: params.customInstructions,
-    workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
-  } as Parameters<typeof compactEmbeddedPiSessionDirect>[0]);
+    workspaceDir:
+      typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
+  });
 
   return {
     ok: result.ok,

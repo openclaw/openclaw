@@ -1,6 +1,5 @@
-import { inspectMatrixDirectRooms } from "../direct-management.js";
-import { isStrictDirectRoom } from "../direct-room.js";
 import type { MatrixClient } from "../sdk.js";
+import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import {
@@ -30,6 +29,24 @@ type MatrixVerificationSummaryLike = {
     emoji?: Array<[string, string]>;
   };
 };
+
+type MatrixDirectRoomDeps = {
+  inspectMatrixDirectRooms: typeof import("../direct-management.js").inspectMatrixDirectRooms;
+  isStrictDirectRoom: typeof import("../direct-room.js").isStrictDirectRoom;
+};
+
+let matrixDirectRoomDepsPromise: Promise<MatrixDirectRoomDeps> | undefined;
+
+async function loadMatrixDirectRoomDeps(): Promise<MatrixDirectRoomDeps> {
+  matrixDirectRoomDepsPromise ??= Promise.all([
+    import("../direct-management.js"),
+    import("../direct-room.js"),
+  ]).then(([directManagementModule, directRoomModule]) => ({
+    inspectMatrixDirectRooms: directManagementModule.inspectMatrixDirectRooms,
+    isStrictDirectRoom: directRoomModule.isStrictDirectRoom,
+  }));
+  return await matrixDirectRoomDepsPromise;
+}
 
 function trimMaybeString(input: unknown): string | null {
   if (typeof input !== "string") {
@@ -218,13 +235,26 @@ async function resolveVerificationSummaryForSignal(
   // Only fall back by user inside the active DM with that user. Otherwise a
   // spoofed verification event in an unrelated room can leak the current SAS
   // prompt into that room.
-  if (
+  const { inspectMatrixDirectRooms, isStrictDirectRoom } = await loadMatrixDirectRoomDeps();
+  const inspection = await inspectMatrixDirectRooms({
+    client,
+    remoteUserId: params.senderId,
+  }).catch(() => null);
+  const activeRoomId = trimMaybeString(inspection?.activeRoomId);
+  if (activeRoomId) {
+    if (activeRoomId !== params.roomId) {
+      return null;
+    }
+  } else if (
     !(await isStrictDirectRoom({
       client,
       roomId: params.roomId,
       remoteUserId: params.senderId,
     }))
   ) {
+    // If we cannot determine a canonical active DM, preserve the older
+    // strict-room fallback so transient m.direct or joined-room read failures
+    // do not suppress SAS notices for the current DM.
     return null;
   }
 
@@ -309,8 +339,51 @@ async function sendVerificationNotice(params: {
   }
 }
 
+async function isVerificationNoticeAuthorized(params: {
+  senderId: string;
+  allowFrom: string[];
+  dmEnabled: boolean;
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  readStoreAllowFrom: () => Promise<string[]>;
+  logVerboseMessage: (message: string) => void;
+}): Promise<boolean> {
+  // Verification notices are DM-only. If DM ingress is disabled, there is no
+  // policy-compatible path for posting these notices back into the room.
+  if (!params.dmEnabled || params.dmPolicy === "disabled") {
+    params.logVerboseMessage(
+      `matrix: blocked verification sender ${params.senderId} (dmPolicy=${params.dmPolicy}, dmEnabled=${String(params.dmEnabled)})`,
+    );
+    return false;
+  }
+  if (params.dmPolicy === "open") {
+    return true;
+  }
+  const storeAllowFrom = await params.readStoreAllowFrom();
+  const accessState = resolveMatrixMonitorAccessState({
+    allowFrom: params.allowFrom,
+    storeAllowFrom,
+    // Verification flows only exist in strict DMs, so room/group allowlists do
+    // not participate in the authorization decision here.
+    groupAllowFrom: [],
+    roomUsers: [],
+    senderId: params.senderId,
+    isRoom: false,
+  });
+  if (accessState.directAllowMatch.allowed) {
+    return true;
+  }
+  params.logVerboseMessage(
+    `matrix: blocked verification sender ${params.senderId} (dmPolicy=${params.dmPolicy})`,
+  );
+  return false;
+}
+
 export function createMatrixVerificationEventRouter(params: {
   client: MatrixClient;
+  allowFrom: string[];
+  dmEnabled: boolean;
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  readStoreAllowFrom: () => Promise<string[]>;
   logVerboseMessage: (message: string) => void;
 }) {
   const routerStartedAtMs = Date.now();
@@ -319,6 +392,15 @@ export function createMatrixVerificationEventRouter(params: {
   const routedVerificationStageNotices = new Set<string>();
   const verificationFlowRooms = new Map<string, string>();
   const verificationUserRooms = new Map<string, string>();
+
+  async function resolveActiveDirectRoomId(remoteUserId: string): Promise<string | null> {
+    const { inspectMatrixDirectRooms } = await loadMatrixDirectRoomDeps();
+    const inspection = await inspectMatrixDirectRooms({
+      client: params.client,
+      remoteUserId,
+    }).catch(() => null);
+    return trimMaybeString(inspection?.activeRoomId);
+  }
 
   function shouldEmitVerificationEventNotice(event: MatrixRawEvent): boolean {
     const eventTs =
@@ -377,9 +459,18 @@ export function createMatrixVerificationEventRouter(params: {
       return null;
     }
     const recentRoomId = trimMaybeString(verificationUserRooms.get(remoteUserId));
+    const activeRoomId = await resolveActiveDirectRoomId(remoteUserId);
+    if (recentRoomId && activeRoomId && recentRoomId === activeRoomId) {
+      return recentRoomId;
+    }
+    if (activeRoomId) {
+      return activeRoomId;
+    }
     if (
       recentRoomId &&
-      (await isStrictDirectRoom({
+      (await (
+        await loadMatrixDirectRoomDeps()
+      ).isStrictDirectRoom({
         client: params.client,
         roomId: recentRoomId,
         remoteUserId,
@@ -387,11 +478,7 @@ export function createMatrixVerificationEventRouter(params: {
     ) {
       return recentRoomId;
     }
-    const inspection = await inspectMatrixDirectRooms({
-      client: params.client,
-      remoteUserId,
-    }).catch(() => null);
-    return trimMaybeString(inspection?.activeRoomId);
+    return null;
   }
 
   async function routeVerificationSummary(summary: MatrixVerificationSummaryLike): Promise<void> {
@@ -400,7 +487,9 @@ export function createMatrixVerificationEventRouter(params: {
       return;
     }
     if (
-      !(await isStrictDirectRoom({
+      !(await (
+        await loadMatrixDirectRoomDeps()
+      ).isStrictDirectRoom({
         client: params.client,
         roomId,
         remoteUserId: summary.otherUserId,
@@ -409,6 +498,18 @@ export function createMatrixVerificationEventRouter(params: {
       params.logVerboseMessage(
         `matrix: ignoring verification summary outside strict DM room=${roomId} sender=${summary.otherUserId}`,
       );
+      return;
+    }
+    if (
+      !(await isVerificationNoticeAuthorized({
+        senderId: summary.otherUserId,
+        allowFrom: params.allowFrom,
+        dmEnabled: params.dmEnabled,
+        dmPolicy: params.dmPolicy,
+        readStoreAllowFrom: params.readStoreAllowFrom,
+        logVerboseMessage: params.logVerboseMessage,
+      }))
+    ) {
       return;
     }
     const sasNotice = formatVerificationSasNotice(summary);
@@ -448,7 +549,9 @@ export function createMatrixVerificationEventRouter(params: {
       const flowId = signal.flowId;
       const sourceEventId = trimMaybeString(event?.event_id);
       const sourceFingerprint = sourceEventId ?? `${senderId}:${event.type}:${flowId ?? "none"}`;
-      const shouldRouteInRoom = await isStrictDirectRoom({
+      const shouldRouteInRoom = await (
+        await loadMatrixDirectRoomDeps()
+      ).isStrictDirectRoom({
         client: params.client,
         roomId,
         remoteUserId: senderId,
@@ -457,6 +560,18 @@ export function createMatrixVerificationEventRouter(params: {
         params.logVerboseMessage(
           `matrix: ignoring verification event outside strict DM room=${roomId} sender=${senderId}`,
         );
+        return;
+      }
+      if (
+        !(await isVerificationNoticeAuthorized({
+          senderId,
+          allowFrom: params.allowFrom,
+          dmEnabled: params.dmEnabled,
+          dmPolicy: params.dmPolicy,
+          readStoreAllowFrom: params.readStoreAllowFrom,
+          logVerboseMessage: params.logVerboseMessage,
+        }))
+      ) {
         return;
       }
       rememberVerificationUserRoom(senderId, roomId);

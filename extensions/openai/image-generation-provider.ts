@@ -1,6 +1,6 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
-import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "openclaw/plugin-sdk/provider-models";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";

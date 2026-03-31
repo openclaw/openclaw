@@ -35,5 +35,18 @@ export {
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
+type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
-export { monitorWebChannel } from "./channel.runtime.js";
+let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
+
+function loadChannelRuntime() {
+  channelRuntimePromise ??= import("./channel.runtime.js");
+  return channelRuntimePromise;
+}
+
+export async function monitorWebChannel(
+  ...args: Parameters<MonitorWebChannel>
+): ReturnType<MonitorWebChannel> {
+  const { monitorWebChannel } = await loadChannelRuntime();
+  return await monitorWebChannel(...args);
+}
