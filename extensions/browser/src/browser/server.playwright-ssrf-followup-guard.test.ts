@@ -4,6 +4,7 @@ import { getFreePort } from "./test-port.js";
 
 let testPort = 0;
 let currentTabUrl = "http://127.0.0.1:8080/private";
+let currentLivePageUrl = currentTabUrl;
 let prevGatewayPort: string | undefined;
 let prevGatewayToken: string | undefined;
 let prevGatewayPassword: string | undefined;
@@ -11,9 +12,11 @@ let prevGatewayPassword: string | undefined;
 const pwMocks = vi.hoisted(() => ({
   batchViaPlaywright: vi.fn(async () => ({ results: [] })),
   closePageViaPlaywright: vi.fn(async () => {}),
+  cookiesClearViaPlaywright: vi.fn(async () => {}),
   cookiesGetViaPlaywright: vi.fn(async () => ({
     cookies: [{ name: "session", value: "abc123" }],
   })),
+  cookiesSetViaPlaywright: vi.fn(async () => {}),
   downloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
@@ -30,6 +33,9 @@ const pwMocks = vi.hoisted(() => ({
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok", refs: {} })),
   snapshotAriaViaPlaywright: vi.fn(async () => ({ nodes: [] })),
   storageGetViaPlaywright: vi.fn(async () => ({ values: { token: "value" } })),
+  getPageForTargetId: vi.fn(async () => ({
+    url: () => currentLivePageUrl,
+  })),
   traceStartViaPlaywright: vi.fn(async () => {}),
   waitForDownloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
@@ -101,6 +107,7 @@ describe("browser control Playwright follow-up SSRF guard", () => {
   beforeEach(async () => {
     testPort = await getFreePort();
     currentTabUrl = "http://127.0.0.1:8080/private";
+    currentLivePageUrl = currentTabUrl;
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
     prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -109,8 +116,10 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     pwMocks.closePageViaPlaywright.mockClear();
+    pwMocks.cookiesClearViaPlaywright.mockClear();
     pwMocks.batchViaPlaywright.mockClear();
     pwMocks.cookiesGetViaPlaywright.mockClear();
+    pwMocks.cookiesSetViaPlaywright.mockClear();
     pwMocks.downloadViaPlaywright.mockClear();
     pwMocks.evaluateViaPlaywright.mockClear();
     pwMocks.getNetworkRequestsViaPlaywright.mockClear();
@@ -118,6 +127,7 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     pwMocks.snapshotAiViaPlaywright.mockClear();
     pwMocks.snapshotAriaViaPlaywright.mockClear();
     pwMocks.storageGetViaPlaywright.mockClear();
+    pwMocks.getPageForTargetId.mockClear();
     pwMocks.traceStartViaPlaywright.mockClear();
     pwMocks.waitForDownloadViaPlaywright.mockClear();
     routeCtxMocks.profileCtx.ensureTabAvailable.mockClear();
@@ -169,6 +179,22 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     };
     expect(cookiesRes.error).toContain("Blocked");
 
+    const cookiesSetRes = (await realFetch(`${base}/cookies/set`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cookie: { name: "session", value: "abc123", url: "https://example.com" },
+      }),
+    }).then((r) => r.json())) as { error?: string };
+    expect(cookiesSetRes.error).toContain("Blocked");
+
+    const cookiesClearRes = (await realFetch(`${base}/cookies/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).then((r) => r.json())) as { error?: string };
+    expect(cookiesClearRes.error).toContain("Blocked");
+
     const storageRes = (await realFetch(`${base}/storage/local?key=token`).then((r) =>
       r.json(),
     )) as { error?: string };
@@ -210,9 +236,11 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     }).then((r) => r.json())) as { error?: string };
     expect(downloadRes.error).toContain("Blocked");
 
-    expect(pwMocks.closePageViaPlaywright).toHaveBeenCalledTimes(10);
+    expect(pwMocks.closePageViaPlaywright).toHaveBeenCalledTimes(12);
     expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    expect(pwMocks.cookiesClearViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.cookiesGetViaPlaywright).not.toHaveBeenCalled();
+    expect(pwMocks.cookiesSetViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.getNetworkRequestsViaPlaywright).not.toHaveBeenCalled();
@@ -225,6 +253,7 @@ describe("browser control Playwright follow-up SSRF guard", () => {
 
   it("still allows privileged follow-up actions on public Playwright targets", async () => {
     currentTabUrl = "https://example.com";
+    currentLivePageUrl = currentTabUrl;
     await startBrowserControlServerFromConfig();
     const realFetch = getBrowserTestFetch();
     const base = `http://127.0.0.1:${testPort}`;
@@ -246,6 +275,20 @@ describe("browser control Playwright follow-up SSRF guard", () => {
       cookies?: Array<{ name: string }>;
     };
 
+    const cookiesSetRes = (await realFetch(`${base}/cookies/set`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cookie: { name: "session", value: "abc123", url: "https://example.com" },
+      }),
+    }).then((r) => r.json())) as { ok?: boolean };
+
+    const cookiesClearRes = (await realFetch(`${base}/cookies/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).then((r) => r.json())) as { ok?: boolean };
+
     const snapshotAiRes = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
       ok?: boolean;
       format?: string;
@@ -261,14 +304,35 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     expect(batchRes.results).toEqual([]);
     expect(cookiesRes.ok).toBe(true);
     expect(cookiesRes.cookies?.[0]?.name).toBe("session");
+    expect(cookiesSetRes.ok).toBe(true);
+    expect(cookiesClearRes.ok).toBe(true);
     expect(requestsRes.ok).toBe(true);
     expect(snapshotAiRes.ok).toBe(true);
     expect(snapshotAiRes.format).toBe("ai");
     expect(pwMocks.closePageViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.batchViaPlaywright).toHaveBeenCalledTimes(1);
+    expect(pwMocks.cookiesClearViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.cookiesGetViaPlaywright).toHaveBeenCalledTimes(1);
+    expect(pwMocks.cookiesSetViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.getNetworkRequestsViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the live Playwright page URL for follow-up guards", async () => {
+    currentTabUrl = "https://example.com/public";
+    currentLivePageUrl = "http://127.0.0.1:8080/private";
+    await startBrowserControlServerFromConfig();
+    const realFetch = getBrowserTestFetch();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const cookiesRes = (await realFetch(`${base}/cookies`).then((r) => r.json())) as {
+      error?: string;
+    };
+
+    expect(cookiesRes.error).toContain("Blocked");
+    expect(pwMocks.getPageForTargetId).toHaveBeenCalledTimes(1);
+    expect(pwMocks.closePageViaPlaywright).toHaveBeenCalledTimes(1);
+    expect(pwMocks.cookiesGetViaPlaywright).not.toHaveBeenCalled();
   });
 });

@@ -314,6 +314,41 @@ describe("browser navigation guard", () => {
     expect(routeAbort).not.toHaveBeenCalled();
   });
 
+  it("ignores requests without isNavigationRequest in the request-time guard", async () => {
+    let handler: TestRouteHandler<BrowserNavigationInterceptRequestLike> | undefined;
+    const routeContinue = vi.fn(async () => {});
+    const routeAbort = vi.fn(async () => {});
+    const page: BrowserNavigationRouteInstallerLike = {
+      route: vi.fn(
+        async (
+          _matcher: string,
+          nextHandler: TestRouteHandler<BrowserNavigationInterceptRequestLike>,
+        ) => {
+          handler = nextHandler;
+        },
+      ),
+      unroute: vi.fn(async () => {}),
+    };
+
+    const result = await withRequestTimeBrowserNavigationGuard({
+      page,
+      navigate: async () => {
+        await handler?.(
+          { abort: routeAbort, continue: routeContinue },
+          {
+            url: () => "http://127.0.0.1:18080/internal-asset",
+            frame: () => ({ parentFrame: () => null }),
+          },
+        );
+        return "done";
+      },
+    });
+
+    expect(result).toBe("done");
+    expect(routeContinue).toHaveBeenCalledTimes(1);
+    expect(routeAbort).not.toHaveBeenCalled();
+  });
+
   it("ignores child-frame navigation requests in the request-time guard", async () => {
     let handler: TestRouteHandler<TestChildFrameRequest> | undefined;
     const routeContinue = vi.fn(async () => {});

@@ -154,11 +154,13 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     await expect(
       mod.navigateViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
-        url: "https://missing.example.test",
+        url: "https://example.com/missing",
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toBeInstanceOf(Error);
 
+    expect(getPwToolsCoreSessionMocks().getPageForTargetId).toHaveBeenCalledTimes(1);
+    expect(goto).toHaveBeenCalledTimes(1);
     expect(close).not.toHaveBeenCalled();
   });
 
@@ -180,7 +182,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       mod.navigateViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "tab-1",
-        url: "https://missing.example.test",
+        url: "https://example.com/missing",
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toBeInstanceOf(Error);
@@ -189,6 +191,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledTimes(
       1,
     );
+    expect(goto).toHaveBeenCalledTimes(2);
     expect(close).not.toHaveBeenCalled();
   });
 });

@@ -111,6 +111,13 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "cookies set",
       run: async ({ cdpUrl, tab, pw }) => {
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         await pw.cookiesSetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
@@ -147,6 +154,13 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "cookies clear",
       run: async ({ cdpUrl, tab, pw }) => {
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         await pw.cookiesClearViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,

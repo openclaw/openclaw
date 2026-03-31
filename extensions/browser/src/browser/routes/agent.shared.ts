@@ -94,8 +94,23 @@ export async function assertPlaywrightTabTargetAllowed(params: {
   url: string;
 }): Promise<void> {
   try {
+    let guardUrl = params.url;
+    try {
+      // Prefer the live Playwright page URL when available so follow-up guards do
+      // not rely solely on route-dispatch-time tab metadata.
+      const page = await params.pw.getPageForTargetId({
+        cdpUrl: params.cdpUrl,
+        targetId: params.targetId,
+      });
+      const liveUrl = page.url();
+      if (typeof liveUrl === "string" && liveUrl.trim()) {
+        guardUrl = liveUrl;
+      }
+    } catch {
+      // Fall back to the already-resolved tab metadata if a fresh page lookup fails.
+    }
     await assertBrowserNavigationResultAllowed({
-      url: params.url,
+      url: guardUrl,
       ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy),
     });
   } catch (err) {
