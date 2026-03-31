@@ -1160,7 +1160,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (drainTimedOut) {
       runtime.log?.(
         warn(
-          "discord: deferring managed-identity cleanup by ${DISCORD_MANAGED_IDENTITY_DEFER_CLEANUP_MS}ms to let in-flight inbound jobs finish",
+          `discord: deferring managed-identity cleanup by ${DISCORD_MANAGED_IDENTITY_DEFER_CLEANUP_MS}ms to let in-flight inbound jobs finish`,
         ),
       );
       await new Promise((resolve) =>
