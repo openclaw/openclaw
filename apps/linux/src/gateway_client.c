@@ -377,3 +377,7 @@ void gateway_client_shutdown(void) {
 gboolean gateway_client_is_connected(void) {
     return gateway_ws_get_state() == GATEWAY_WS_CONNECTED;
 }
+
+GatewayConfig* gateway_client_get_config(void) {
+    return current_config;
+}

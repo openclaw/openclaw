@@ -22,4 +22,7 @@ void gateway_client_refresh(void);
 void gateway_client_shutdown(void);
 gboolean gateway_client_is_connected(void);
 
+#include "gateway_config.h"
+GatewayConfig* gateway_client_get_config(void);
+
 #endif /* OPENCLAW_LINUX_GATEWAY_CLIENT_H */

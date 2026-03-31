@@ -17,6 +17,10 @@
 #include <string.h>
 #include "state.h"
 #include "log.h"
+#include "app_window.h"
+#include "gateway_client.h"
+#include "gateway_config.h"
+#include "display_model.h"
 
 static GSubprocess *helper_process = NULL;
 static GOutputStream *helper_stdin = NULL;
@@ -67,7 +71,19 @@ static void handle_helper_action(const gchar *action) {
         gateway_client_refresh();
     } else if (g_strcmp0(action, "DIAGNOSTICS") == 0) {
         gateway_client_refresh();
-        diagnostics_show_window();
+        app_window_navigate_to(SECTION_DIAGNOSTICS);
+    } else if (g_strcmp0(action, "OPEN_MAIN") == 0) {
+        app_window_show();
+    } else if (g_strcmp0(action, "OPEN_DASHBOARD") == 0) {
+        GatewayConfig *cfg = gateway_client_get_config();
+        if (cfg) {
+            g_autofree gchar *url = gateway_config_dashboard_url(cfg);
+            if (url) {
+                g_app_info_launch_default_for_uri(url, NULL, NULL);
+            }
+        }
+    } else if (g_strcmp0(action, "OPEN_SETTINGS") == 0) {
+        app_window_navigate_to(SECTION_GENERAL);
     } else if (g_strcmp0(action, "QUIT") == 0) {
         GApplication *app = g_application_get_default();
         if (app) g_application_quit(app);
@@ -288,5 +304,31 @@ void tray_update_from_state(AppState state) {
     send_to_helper(cmd_start);
     send_to_helper(cmd_stop);
     send_to_helper(cmd_restart);
+
+    /* Send runtime mode label */
+    RuntimeMode rm = state_get_runtime_mode();
+    TrayDisplayModel tdm;
+    HealthState *health = state_get_health();
+    tray_display_model_build(state, rm, health, &tdm);
+    if (tdm.runtime_label) {
+        g_autofree gchar *cmd_runtime = g_strdup_printf("RUNTIME:%s\n", tdm.runtime_label);
+        send_to_helper(cmd_runtime);
+    }
+
+    /* Send dashboard URL availability */
+    GatewayConfig *cfg = gateway_client_get_config();
+    if (cfg) {
+        g_autofree gchar *url = gateway_config_dashboard_url(cfg);
+        if (url) {
+            g_autofree gchar *cmd_url = g_strdup_printf("DASHBOARD_URL:%s\n", url);
+            send_to_helper(cmd_url);
+        }
+    }
+
+    /* Send Open Dashboard sensitivity */
+    g_autofree gchar *cmd_dash = g_strdup_printf("SENSITIVE:OPEN_DASHBOARD:%d\n",
+        tdm.open_dashboard_sensitive ? 1 : 0);
+    send_to_helper(cmd_dash);
+
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state exit");
 }

@@ -35,7 +35,7 @@ static gchar* format_age(gint64 timestamp_us) {
     return g_strdup_printf("%ld hours ago", diff_sec / 3600);
 }
 
-static gchar* build_diagnostics_text(void) {
+gchar* build_diagnostics_text(void) {
     AppState current = state_get_current();
     SystemdState *sys = state_get_systemd();
     HealthState *health = state_get_health();

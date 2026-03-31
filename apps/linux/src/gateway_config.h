@@ -51,6 +51,7 @@ typedef struct {
     gchar *password;       /* resolved auth password (config + env override) */
     gboolean token_is_secret_ref;
     gboolean password_is_secret_ref;
+    gchar *control_ui_base_path; /* gateway.controlUi.basePath (NULL => "/") */
     gchar *config_path;    /* resolved config file path */
     gboolean valid;        /* whether config was loaded successfully */
     GatewayConfigError error_code; /* stable error discriminator */
@@ -63,5 +64,6 @@ gboolean gateway_config_is_local(const GatewayConfig *config);
 gchar* gateway_config_http_url(const GatewayConfig *config);
 gchar* gateway_config_ws_url(const GatewayConfig *config);
 gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *b);
+gchar* gateway_config_dashboard_url(const GatewayConfig *config);
 
 #endif /* OPENCLAW_LINUX_GATEWAY_CONFIG_H */

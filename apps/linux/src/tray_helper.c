@@ -17,21 +17,37 @@
 #include <gio/gio.h>
 
 static AppIndicator *indicator = NULL;
+
+/* Status context (disabled labels) */
 static GtkWidget *status_item = NULL;
+static GtkWidget *runtime_item = NULL;
+
+/* Navigation actions */
+static GtkWidget *open_main_item = NULL;
+static GtkWidget *open_dashboard_item = NULL;
+
+/* Expected service actions */
 static GtkWidget *start_item = NULL;
 static GtkWidget *stop_item = NULL;
 static GtkWidget *restart_item = NULL;
+
+/* App navigation */
+static GtkWidget *diagnostics_item = NULL;
+static GtkWidget *settings_item = NULL;
 
 static void send_action(const char *action) {
     g_print("ACTION:%s\n", action);
     fflush(stdout);
 }
 
+static void on_open_main(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_MAIN"); }
+static void on_open_dashboard(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_DASHBOARD"); }
 static void on_start_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("START"); }
 static void on_stop_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("STOP"); }
 static void on_restart_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("RESTART"); }
 static void on_refresh_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("REFRESH"); }
 static void on_diagnostics_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("DIAGNOSTICS"); }
+static void on_settings_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_SETTINGS"); }
 static void on_quit_clicked(GtkMenuItem *item, gpointer data) { 
     (void)item; (void)data;
     send_action("QUIT"); 
@@ -54,9 +70,12 @@ static gboolean handle_stdin(GIOChannel *source, GIOCondition condition, gpointe
         if (g_str_has_prefix(line, "STATE:")) {
             const char *state_str = line + 6;
             if (status_item) {
-                gchar *label = g_strdup_printf("Status: %s", state_str);
-                gtk_menu_item_set_label(GTK_MENU_ITEM(status_item), label);
-                g_free(label);
+                gtk_menu_item_set_label(GTK_MENU_ITEM(status_item), state_str);
+            }
+        } else if (g_str_has_prefix(line, "RUNTIME:")) {
+            const char *runtime_str = line + 8;
+            if (runtime_item) {
+                gtk_menu_item_set_label(GTK_MENU_ITEM(runtime_item), runtime_str);
             }
         } else if (g_str_has_prefix(line, "SENSITIVE:")) {
             gchar **parts = g_strsplit(line, ":", 3);
@@ -70,6 +89,8 @@ static gboolean handle_stdin(GIOChannel *source, GIOCondition condition, gpointe
                     gtk_widget_set_sensitive(stop_item, is_sensitive);
                 } else if (g_strcmp0(action, "RESTART") == 0 && restart_item) {
                     gtk_widget_set_sensitive(restart_item, is_sensitive);
+                } else if (g_strcmp0(action, "OPEN_DASHBOARD") == 0 && open_dashboard_item) {
+                    gtk_widget_set_sensitive(open_dashboard_item, is_sensitive);
                 }
             }
             g_strfreev(parts);
@@ -90,7 +111,7 @@ int main(int argc, char **argv) {
     gtk_init(&argc, &argv);
 
     indicator = app_indicator_new("openclaw-companion",
-                                  "openclaw-icon", // fallback/placeholder
+                                  "openclaw-icon",
                                   APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
     
     app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
@@ -98,12 +119,30 @@ int main(int argc, char **argv) {
 
     GtkWidget *menu = gtk_menu_new();
 
-    status_item = gtk_menu_item_new_with_label("Status: Unknown");
-    gtk_widget_set_sensitive(status_item, FALSE); 
+    /* ── Status context (disabled) ── */
+    status_item = gtk_menu_item_new_with_label("Unknown");
+    gtk_widget_set_sensitive(status_item, FALSE);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), status_item);
-    
+
+    runtime_item = gtk_menu_item_new_with_label("No Runtime Detected");
+    gtk_widget_set_sensitive(runtime_item, FALSE);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), runtime_item);
+
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
+    /* ── Navigation actions ── */
+    open_main_item = gtk_menu_item_new_with_label("Open OpenClaw");
+    g_signal_connect(open_main_item, "activate", G_CALLBACK(on_open_main), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), open_main_item);
+
+    open_dashboard_item = gtk_menu_item_new_with_label("Open Dashboard");
+    g_signal_connect(open_dashboard_item, "activate", G_CALLBACK(on_open_dashboard), NULL);
+    gtk_widget_set_sensitive(open_dashboard_item, FALSE);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), open_dashboard_item);
+
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+
+    /* ── Expected service actions ── */
     start_item = gtk_menu_item_new_with_label("Start Gateway");
     g_signal_connect(start_item, "activate", G_CALLBACK(on_start_clicked), NULL);
     gtk_widget_set_sensitive(start_item, FALSE);
@@ -125,18 +164,27 @@ int main(int argc, char **argv) {
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
-    GtkWidget *diag_item = gtk_menu_item_new_with_label("Diagnostics / Settings");
-    g_signal_connect(diag_item, "activate", G_CALLBACK(on_diagnostics_clicked), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), diag_item);
+    /* ── App navigation ── */
+    diagnostics_item = gtk_menu_item_new_with_label("Diagnostics");
+    g_signal_connect(diagnostics_item, "activate", G_CALLBACK(on_diagnostics_clicked), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), diagnostics_item);
+
+    settings_item = gtk_menu_item_new_with_label("Settings");
+    g_signal_connect(settings_item, "activate", G_CALLBACK(on_settings_clicked), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), settings_item);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
+    /* ── Quit ── */
     GtkWidget *quit_item = gtk_menu_item_new_with_label("Quit");
     g_signal_connect(quit_item, "activate", G_CALLBACK(on_quit_clicked), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), quit_item);
 
     gtk_widget_show_all(menu);
     app_indicator_set_menu(indicator, GTK_MENU(menu));
+
+    /* Middle-click → Open OpenClaw (KDE/XFCE) */
+    app_indicator_set_secondary_activate_target(indicator, open_main_item);
 
     GIOChannel *stdin_ch = g_io_channel_unix_new(fileno(stdin));
     g_io_add_watch(stdin_ch, G_IO_IN | G_IO_HUP | G_IO_ERR, handle_stdin, NULL);
