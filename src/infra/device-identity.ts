@@ -44,7 +44,7 @@ function atomicWriteFileSync(
 ): void {
   const tmpPath = `${filePath}.tmp.${process.pid}`;
   try {
-    fs.writeFileSync(tmpPath, content, { mode: options.mode ?? 0o644 });
+    fs.writeFileSync(tmpPath, content, { mode: options.mode ?? 0o600 });
     fs.renameSync(tmpPath, filePath);
   } catch (err) {
     try {
