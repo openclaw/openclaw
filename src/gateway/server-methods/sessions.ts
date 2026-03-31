@@ -696,12 +696,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
+    const loweredRequestedKey = requestedKey?.toLowerCase();
     const key = requestedKey
-      ? toAgentStoreSessionKey({
-          agentId,
-          requestKey: requestedKey,
-          mainKey: cfg.session?.mainKey,
-        })
+      ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
+        ? loweredRequestedKey
+        : toAgentStoreSessionKey({
+            agentId,
+            requestKey: requestedKey,
+            mainKey: cfg.session?.mainKey,
+          })
       : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
