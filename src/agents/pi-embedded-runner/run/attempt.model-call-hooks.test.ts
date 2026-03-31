@@ -47,4 +47,26 @@ describe("buildBeforeModelCallEvent", () => {
     expect(event.requestMessages).toBe(requestMessages);
     expect(event.systemPrompt).toBeUndefined();
   });
+
+  it("omits optional fields when they are not provided", () => {
+    const event = buildBeforeModelCallEvent({
+      runId: "run-3",
+      sessionId: "session-3",
+      provider: "openai",
+      model: "gpt-5.4",
+      callId: "run-3-1",
+      requestMessages: [],
+    });
+
+    expect(event).toEqual({
+      runId: "run-3",
+      sessionId: "session-3",
+      provider: "openai",
+      model: "gpt-5.4",
+      callId: "run-3-1",
+      requestMessages: [],
+    });
+    expect(Object.keys(event)).not.toContain("api");
+    expect(Object.keys(event)).not.toContain("systemPrompt");
+  });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple, type Api, type Model } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -95,7 +95,7 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
-import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -260,11 +260,47 @@ export function buildBeforeModelCallEvent(params: {
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.model,
-    api: params.api,
     callId: params.callId,
-    systemPrompt: params.systemPrompt,
     requestMessages: params.requestMessages,
+    ...(params.api != null ? { api: params.api } : {}),
+    ...(params.systemPrompt != null ? { systemPrompt: params.systemPrompt } : {}),
   };
+}
+
+function resolveBeforeModelCallRequestMessages(params: {
+  context: unknown;
+  transcriptPolicy: TranscriptPolicy;
+  model: Model<Api>;
+}): unknown[] {
+  const messages = (params.context as { messages?: unknown[] } | null | undefined)?.messages;
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  let normalized = messages;
+
+  if (params.transcriptPolicy.dropThinkingBlocks) {
+    normalized = dropThinkingBlocks(normalized as unknown as AgentMessage[]) as unknown[];
+  }
+
+  if (params.transcriptPolicy.sanitizeToolCallIds && params.transcriptPolicy.toolCallIdMode) {
+    normalized = sanitizeToolCallIdsForCloudCodeAssist(
+      normalized as AgentMessage[],
+      params.transcriptPolicy.toolCallIdMode,
+    ) as unknown[];
+  }
+
+  if (
+    params.model.api === "openai-responses" ||
+    params.model.api === "azure-openai-responses" ||
+    params.model.api === "openai-codex-responses"
+  ) {
+    normalized = downgradeOpenAIFunctionCallReasoningPairs(
+      normalized as AgentMessage[],
+    ) as unknown[];
+  }
+
+  return normalized;
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -1117,7 +1153,11 @@ export async function runEmbeddedAttempt(
             trigger: params.trigger,
             channelId: params.messageChannel ?? params.messageProvider ?? undefined,
           };
-          const requestMessages = (context as unknown as { messages?: unknown[] }).messages ?? [];
+          const requestMessages = resolveBeforeModelCallRequestMessages({
+            context,
+            transcriptPolicy,
+            model: params.model,
+          });
           if (hookRunner?.hasHooks("before_model_call")) {
             hookRunner
               .runBeforeModelCall(
