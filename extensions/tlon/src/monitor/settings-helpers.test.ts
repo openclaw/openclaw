@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { TlonResolvedAccount } from "../types.js";
-import { applyTlonSettingsOverrides } from "./settings-helpers.js";
+import {
+  applyTlonSettingsOverrides,
+  buildTlonSettingsMigrations,
+  shouldMigrateTlonSetting,
+} from "./settings-helpers.js";
 
 const baseAccount: TlonResolvedAccount = {
   accountId: "default",
@@ -21,6 +25,58 @@ const baseAccount: TlonResolvedAccount = {
   defaultAuthorizedShips: ["~nec"],
   ownerShip: "~marzod",
 };
+
+describe("shouldMigrateTlonSetting", () => {
+  it("does not rehydrate explicit empty-array revocations during startup migration", () => {
+    const migrations = buildTlonSettingsMigrations(baseAccount, {
+      dmAllowlist: [],
+      groupInviteAllowlist: [],
+      defaultAuthorizedShips: [],
+    });
+
+    expect(
+      Object.fromEntries(
+        migrations
+          .filter((migration) =>
+            ["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"].includes(
+              migration.key,
+            ),
+          )
+          .map((migration) => [
+            migration.key,
+            shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
+          ]),
+      ),
+    ).toEqual({
+      dmAllowlist: false,
+      groupInviteAllowlist: false,
+      defaultAuthorizedShips: false,
+    });
+  });
+
+  it("still seeds file-config allowlists on first run when settings are missing", () => {
+    const migrations = buildTlonSettingsMigrations(baseAccount, {});
+
+    expect(
+      Object.fromEntries(
+        migrations
+          .filter((migration) =>
+            ["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"].includes(
+              migration.key,
+            ),
+          )
+          .map((migration) => [
+            migration.key,
+            shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
+          ]),
+      ),
+    ).toEqual({
+      dmAllowlist: true,
+      groupInviteAllowlist: true,
+      defaultAuthorizedShips: true,
+    });
+  });
+});
 
 describe("applyTlonSettingsOverrides", () => {
   it("treats explicit empty settings allowlists as authoritative deny-all", () => {
