@@ -18,6 +18,7 @@ type DirectRoomTrackerOptions = {
 };
 
 const DM_CACHE_TTL_MS = 30_000;
+const RECENT_INVITE_TTL_MS = 30_000;
 const MAX_TRACKED_DM_ROOMS = 1024;
 const MAX_TRACKED_DM_MEMBER_FLAGS = 2048;
 
@@ -110,7 +111,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     if (!cached) {
       return false;
     }
-    if (Date.now() - cached.ts >= DM_CACHE_TTL_MS) {
+    if (Date.now() - cached.ts >= RECENT_INVITE_TTL_MS) {
       recentInviteCandidates.delete(roomId);
       return false;
     }

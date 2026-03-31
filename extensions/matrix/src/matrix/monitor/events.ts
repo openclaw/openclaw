@@ -127,7 +127,10 @@ export function registerMatrixMonitorEvents(params: {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
-    if (typeof event?.sender === "string" && event.sender.trim()) {
+    const invitee = typeof event?.state_key === "string" ? event.state_key.trim() : "";
+    const senderIsInvitee =
+      typeof event?.sender === "string" && invitee && event.sender.trim() === invitee;
+    if (typeof event?.sender === "string" && event.sender.trim() && !senderIsInvitee) {
       directTracker?.rememberInvite?.(roomId, event.sender);
     }
     const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
