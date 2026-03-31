@@ -72,7 +72,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled: p.enabled,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
-      pruneOptions: context.cronRunLogPrune,
     });
     respond(true, page, undefined);
   },

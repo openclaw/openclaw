@@ -323,7 +323,7 @@ describe("cron run log", () => {
       // Write many lines to exceed DEFAULT_CRON_RUN_LOG_MAX_BYTES without going
       // through appendCronRunLog (simulating failed async prune)
       const lines: string[] = [];
-      for (let i = 0; i < 5000; i++) {
+      for (let i = 0; i < 8000; i++) {
         lines.push(
           JSON.stringify({
             ts: 1000 + i,
@@ -541,7 +541,7 @@ describe("cron run log", () => {
         summary: "concurrent-append",
       };
 
-      const [, page] = await Promise.all([
+      await Promise.all([
         appendCronRunLog(logPath, appendEntry),
         readCronRunLogEntriesPage(logPath, {
           limit: 200,
@@ -557,9 +557,7 @@ describe("cron run log", () => {
         offset: 0,
         sortDir: "desc",
       });
-      const hasConcurrentAppend = finalPage.entries.some(
-        (e) => e.summary === "concurrent-append",
-      );
+      const hasConcurrentAppend = finalPage.entries.some((e) => e.summary === "concurrent-append");
       expect(hasConcurrentAppend).toBe(true);
     });
   });
@@ -614,9 +612,7 @@ describe("cron run log", () => {
         offset: 0,
         sortDir: "desc",
       });
-      const hasPostFailure = page.entries.some(
-        (e) => e.summary === "post-failure-append",
-      );
+      const hasPostFailure = page.entries.some((e) => e.summary === "post-failure-append");
       expect(hasPostFailure).toBe(true);
     });
   });
@@ -654,5 +650,4 @@ describe("cron run log", () => {
       expect(pendingAfter).toBeLessThanOrEqual(pendingBefore);
     });
   });
-
 });
