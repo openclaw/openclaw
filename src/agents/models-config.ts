@@ -86,6 +86,40 @@ async function writeModelsFileAtomic(targetPath: string, contents: string): Prom
   await fs.rename(tempPath, targetPath);
 }
 
+async function inheritModelsJsonFromMainAgent(params: {
+  agentDir: string;
+  targetPath: string;
+}): Promise<boolean> {
+  const targetDir = path.resolve(params.agentDir);
+  const mainAgentDir = path.resolve(resolveOpenClawAgentDir());
+  if (targetDir === mainAgentDir) {
+    return false;
+  }
+
+  try {
+    await fs.access(params.targetPath);
+    // Keep existing per-agent models.json untouched.
+    return false;
+  } catch {
+    // Missing target is expected for newly created agents.
+  }
+
+  const sourcePath = path.join(mainAgentDir, "models.json");
+  let sourceRaw = "";
+  try {
+    sourceRaw = await fs.readFile(sourcePath, "utf8");
+  } catch {
+    return false;
+  }
+  if (!sourceRaw.trim()) {
+    return false;
+  }
+
+  await fs.mkdir(params.agentDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(params.targetPath, sourceRaw, { mode: 0o600 });
+  return true;
+}
+
 function resolveModelsConfigInput(config?: OpenClawConfig): {
   config: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
@@ -169,7 +203,8 @@ export async function ensureOpenClawModelsJson(
     });
 
     if (plan.action === "skip") {
-      return { fingerprint, result: { agentDir, wrote: false } };
+      const inherited = await inheritModelsJsonFromMainAgent({ agentDir, targetPath });
+      return { fingerprint, result: { agentDir, wrote: inherited } };
     }
 
     if (plan.action === "noop") {

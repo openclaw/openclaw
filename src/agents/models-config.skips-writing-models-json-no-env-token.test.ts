@@ -172,6 +172,72 @@ describe("models-config", () => {
     });
   });
 
+  it("inherits models.json from main agent for new secondary agents when plan skips", async () => {
+    await withTempHome(async (home) => {
+      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {
+        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
+
+        const mainModels = {
+          providers: {
+            botzhipin: {
+              baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              apiKey: "BOTZHIPIN_API_KEY",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "deep",
+                  name: "Deep",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        };
+
+        const mainAgentDir = resolveOpenClawAgentDir();
+        await fs.mkdir(mainAgentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(mainAgentDir, "models.json"),
+          `${JSON.stringify(mainModels, null, 2)}\n`,
+          "utf8",
+        );
+
+        const secondaryAgentDir = path.join(home, ".openclaw", "agents", "email-expert", "agent");
+
+        vi.resetModules();
+        const planOpenClawModelsJson = vi.fn(async () => ({ action: "skip" as const }));
+        vi.doMock("./models-config.plan.js", () => ({
+          planOpenClawModelsJson,
+        }));
+
+        try {
+          const { ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
+            await import("./models-config.js");
+          resetModelsJsonReadyCacheForTest();
+
+          const result = await ensureOpenClawModelsJson(
+            { models: { providers: {} } },
+            secondaryAgentDir,
+          );
+          expect(result.wrote).toBe(true);
+          expect(planOpenClawModelsJson).toHaveBeenCalled();
+
+          const copied = JSON.parse(
+            await fs.readFile(path.join(secondaryAgentDir, "models.json"), "utf8"),
+          ) as unknown;
+          expect(copied).toEqual(mainModels);
+        } finally {
+          vi.doUnmock("./models-config.plan.js");
+          vi.resetModules();
+        }
+      });
+    });
+  });
+
   it("writes models.json for configured providers", async () => {
     await withTempHome(async () => {
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
