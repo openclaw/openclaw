@@ -341,7 +341,7 @@ describe("test planner", () => {
     const explanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+        fileFilters: ["src/infra/outbound/channel-resolution.test.ts"],
       },
       {
         env: {
@@ -358,7 +358,7 @@ describe("test planner", () => {
     const relativeExplanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+        fileFilters: ["src/infra/outbound/channel-resolution.test.ts"],
       },
       {
         env: {
@@ -369,9 +369,7 @@ describe("test planner", () => {
     const absoluteExplanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: [
-          path.join(process.cwd(), "src/infra/outbound/targets.channel-resolution.test.ts"),
-        ],
+        fileFilters: [path.join(process.cwd(), "src/infra/outbound/channel-resolution.test.ts")],
       },
       {
         env: {
