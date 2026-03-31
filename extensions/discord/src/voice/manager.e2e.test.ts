@@ -117,6 +117,10 @@ function createClient() {
       guild: { id: "g1", name: "Guild One" },
       type: ChannelType.GuildVoice,
     })),
+    fetchGuild: vi.fn(async (guildId: string) => ({
+      id: guildId,
+      name: "Guild One",
+    })),
     getPlugin: vi.fn(() => ({
       getGatewayAdapterCreator: vi.fn(() => vi.fn()),
     })),
@@ -206,8 +210,8 @@ describe("DiscordVoiceManager", () => {
     await (manager as unknown as ProcessSegmentInvoker).processSegment({
       entry: {
         guildId: "g1",
-        channelId: "c1",
-        route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
+        channelId: "1001",
+        route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
       },
       wavPath: "/tmp/test.wav",
       userId,
@@ -370,5 +374,39 @@ describe("DiscordVoiceManager", () => {
     await runSegment();
 
     expect(client.fetchMember).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches guild metadata before allowlist checks when the session lacks a guild name", async () => {
+    const client = createClient();
+    client.fetchGuild.mockResolvedValue({ id: "g1", name: "Guild One" });
+    client.fetchMember.mockResolvedValue({
+      nickname: "Owner Nick",
+      user: {
+        id: "u-owner",
+        username: "owner",
+        globalName: "Owner",
+        discriminator: "1234",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          "guild-one": {
+            channels: {
+              "*": {
+                users: ["discord:u-owner"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-owner");
+
+    expect(client.fetchGuild).toHaveBeenCalledWith("g1");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 });

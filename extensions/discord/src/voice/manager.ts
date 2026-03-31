@@ -611,6 +611,12 @@ export class DiscordVoiceManager {
       `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
     );
     const speakerIdentity = await this.resolveSpeakerIdentity(entry.guildId, userId);
+    if (!entry.guildName) {
+      const guild = await this.params.client.fetchGuild(entry.guildId).catch(() => null);
+      if (guild && typeof guild.name === "string" && guild.name.trim()) {
+        entry.guildName = guild.name;
+      }
+    }
     const access = await authorizeDiscordVoiceIngress({
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
