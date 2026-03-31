@@ -501,6 +501,7 @@ function WorkspacePageInner() {
   // Track which workspace we loaded tabs for, so we reload if the workspace switches
   // and don't save until we've loaded first.
   const tabLoadedForWorkspace = useRef<string | null>(null);
+  const tabStateRef = useRef<TabState>({ tabs: [HOME_TAB], activeTabId: HOME_TAB_ID });
 
   // Load tabs from localStorage once workspace name is known
   useEffect(() => {
@@ -551,6 +552,10 @@ function WorkspacePageInner() {
     () => tabState.tabs.filter((tab) => tab.id !== HOME_TAB_ID && (tab.type === "chat" || tab.type === "gateway-chat")),
     [tabState.tabs],
   );
+
+  useEffect(() => {
+    tabStateRef.current = tabState;
+  }, [tabState]);
 
   const openBlankChatTab = useCallback(() => {
     const tab = createBlankChatTab();
@@ -1306,13 +1311,13 @@ function WorkspacePageInner() {
     }
     if (tab.path) {
       const node = resolveNode(tree, tab.path);
+      setActivePath(tab.path);
       if (node) {
+        setContent({ kind: "loading" });
         void loadContent(node);
       } else if (tab.path === "~cron") {
-        setActivePath("~cron");
         setContent({ kind: "cron-dashboard" });
       } else if (tab.path.startsWith("~cron/")) {
-        setActivePath(tab.path);
         const jobId = tab.path.slice("~cron/".length);
         const job = cronJobs.find((j) => j.id === jobId);
         if (job) setContent({ kind: "cron-job", jobId, job });
@@ -1323,6 +1328,7 @@ function WorkspacePageInner() {
           path: tab.path,
           type: tab.type === "object" ? "object" : inferNodeTypeFromFileName(fileName),
         };
+        setContent({ kind: "loading" });
         void loadContent(syntheticNode);
       }
     }
@@ -1330,6 +1336,7 @@ function WorkspacePageInner() {
 
   // Tab handler callbacks (defined after loadContent is available)
   const handleTabActivate = useCallback((tabId: string) => {
+    const requestedTab = tabStateRef.current.tabs.find((entry) => entry.id === tabId);
     if (tabId === HOME_TAB_ID) {
       setTabState((prev) => {
         let next = activateTab(prev, tabId);
@@ -1349,15 +1356,8 @@ function WorkspacePageInner() {
       applyActivatedTab(undefined);
       return;
     }
-    let tab: Tab | undefined;
-    setTabState((prev) => {
-      const next = activateTab(prev, tabId);
-      tab = next.tabs.find((t) => t.id === tabId);
-      return next;
-    });
-    requestAnimationFrame(() => {
-      applyActivatedTab(tab);
-    });
+    setTabState((prev) => activateTab(prev, tabId));
+    applyActivatedTab(requestedTab);
   }, [applyActivatedTab]);
 
   const handleTabClose = useCallback((tabId: string) => {
