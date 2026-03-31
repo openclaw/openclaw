@@ -142,7 +142,7 @@ describe("legacy migrate tts provider shape", () => {
     expect(mainTts?.edge).toBeUndefined();
   });
 
-  it("moves plugins.entries.<id>.config.tts.<provider> keys into providers", () => {
+  it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
     const res = migrateLegacyConfig({
       plugins: {
         entries: {
