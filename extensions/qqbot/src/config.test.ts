@@ -41,8 +41,30 @@ describe("qqbot config", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts defaultAccount in the manifest schema", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
+    ) as { configSchema: Record<string, unknown> };
+
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "qqbot.manifest.default-account",
+      value: {
+        defaultAccount: "bot2",
+        accounts: {
+          bot2: {
+            appId: "654321",
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts SecretRef-backed credentials in the runtime schema", () => {
     const parsed = QQBotConfigSchema.safeParse({
+      defaultAccount: "bot2",
       appId: "123456",
       clientSecret: {
         source: "env",

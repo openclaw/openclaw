@@ -63,5 +63,6 @@ export const QQBotConfigSchema = QQBotAccountSchema.extend({
   tts: QQBotTtsSchema,
   stt: QQBotSttSchema,
   accounts: z.object({}).catchall(QQBotAccountSchema).optional(),
+  defaultAccount: z.string().optional(),
 });
 export const qqbotChannelConfigSchema = buildChannelConfigSchema(QQBotConfigSchema);

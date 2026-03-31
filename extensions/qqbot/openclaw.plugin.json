@@ -131,7 +131,8 @@
         "additionalProperties": {
           "$ref": "#/$defs/account"
         }
-      }
+      },
+      "defaultAccount": { "type": "string" }
     }
   }
 }
