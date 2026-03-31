@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -32,6 +34,7 @@ function createMockChild(params?: {
   closeSignal?: NodeJS.Signals | null;
   exitCode?: number | null;
   exitCodeAfterClose?: number | null;
+  exitCodeAfterCloseDelayMs?: number;
   signal?: NodeJS.Signals | null;
 }): MockChild {
   const child = new EventEmitter() as MockChild;
@@ -49,9 +52,9 @@ function createMockChild(params?: {
   queueMicrotask(() => {
     child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
     if (params?.exitCodeAfterClose !== undefined) {
-      setImmediate(() => {
+      setTimeout(() => {
         child.exitCode = params.exitCodeAfterClose ?? null;
-      });
+      }, params.exitCodeAfterCloseDelayMs ?? 0);
     }
   });
   return child;
@@ -123,15 +126,113 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
-  it("waits one tick when Windows close reports null before exitCode settles", async () => {
+  it("spawns node + npm-cli.js for npm argv to avoid direct .cmd execution", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const child = createMockChild({ closeCode: null, exitCode: null, exitCodeAfterClose: 0 });
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    const child = createMockChild({ closeCode: 0, exitCode: 0 });
 
     spawnMock.mockImplementation(() => child);
 
     try {
       const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
       expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected npm shim spawn");
+      }
+      expect(captured[0]).toBe(process.execPath);
+      expect(captured[1][0]).toBe(
+        path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+      );
+      expect(captured[1][1]).toBe("--version");
+      expect(captured[2].windowsVerbatimArguments).toBeUndefined();
+      expect(captured[2].stdio).toEqual(["inherit", "pipe", "pipe"]);
+    } finally {
+      existsSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("falls back to npm.cmd when npm-cli.js is unavailable", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected npm.cmd fallback spawn");
+      }
+      expect(captured[0]).toBe(expectedComSpec);
+      expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured[1][3]).toContain("npm.cmd --version");
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
+      expect(captured[2].stdio).toEqual(["inherit", "pipe", "pipe"]);
+    } finally {
+      existsSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("waits for Windows exitCode settlement after close reports null", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+      exitCodeAfterClose: 0,
+      exitCodeAfterCloseDelayMs: 50,
+    });
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("treats shimmed Windows commands without a reported exit code as success when they close cleanly", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+    });
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      expect(result.signal).toBeNull();
+      expect(result.termination).toBe("exit");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("treats shimmed Windows commands without a reported exit code as success even when child.killed is true", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({
+      closeCode: null,
+      exitCode: null,
+    });
+    child.killed = true;
+
+    spawnMock.mockImplementation(() => child);
+
+    try {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      expect(result.signal).toBeNull();
+      expect(result.termination).toBe("exit");
     } finally {
       platformSpy.mockRestore();
     }

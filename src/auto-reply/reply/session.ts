@@ -3,9 +3,11 @@ import path from "node:path";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
@@ -338,7 +340,14 @@ export async function initSessionState(params: {
     }
   }
 
-  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  // Canonicalize so the written key matches what all read paths produce.
+  // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
+  // agent may differ, causing key mismatch and orphaned sessions (#29683).
+  sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId,
+    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
+  });
   const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
     sessionCfg,
     sessionKey,
@@ -631,6 +640,14 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
       reason: "reset",
+    });
+    await disposeSessionMcpRuntime(previousSessionEntry.sessionId).catch((error) => {
+      log.warn(
+        `failed to dispose bundle MCP runtime for session ${previousSessionEntry.sessionId}`,
+        {
+          error: String(error),
+        },
+      );
     });
   }
 

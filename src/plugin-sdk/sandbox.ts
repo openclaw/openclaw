@@ -37,6 +37,7 @@ export {
   resolveWritableRenameTargets,
   resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,
+  sanitizeEnvVars,
   shellEscape,
   uploadDirectoryToSshTarget,
 } from "../agents/sandbox.js";

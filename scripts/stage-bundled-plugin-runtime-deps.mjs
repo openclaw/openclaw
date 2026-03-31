@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -20,6 +21,25 @@ function removePathIfExists(targetPath) {
 
 function makeTempDir(parentDir, prefix) {
   return fs.mkdtempSync(path.join(parentDir, prefix));
+}
+
+function sanitizeTempPrefixSegment(value) {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/-+/g, "-");
+  return normalized.length > 0 ? normalized : "plugin";
+}
+
+function replaceDir(targetPath, sourcePath) {
+  removePathIfExists(targetPath);
+  try {
+    fs.renameSync(sourcePath, targetPath);
+    return;
+  } catch (error) {
+    if (error?.code !== "EXDEV") {
+      throw error;
+    }
+  }
+  fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
+  removePathIfExists(sourcePath);
 }
 
 function listBundledPluginRuntimeDirs(repoRoot) {
@@ -220,7 +240,10 @@ function installPluginRuntimeDeps(params) {
   const { fingerprint, packageJson, pluginDir, pluginId } = params;
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
-  const tempInstallDir = makeTempDir(pluginDir, ".runtime-deps-");
+  const tempInstallDir = makeTempDir(
+    os.tmpdir(),
+    `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}-`,
+  );
   const npmRunner = resolveNpmRunner({
     npmArgs: [
       "install",
@@ -255,8 +278,7 @@ function installPluginRuntimeDeps(params) {
       );
     }
 
-    removePathIfExists(nodeModulesDir);
-    fs.renameSync(stagedNodeModulesDir, nodeModulesDir);
+    replaceDir(nodeModulesDir, stagedNodeModulesDir);
     writeJson(stampPath, {
       fingerprint,
       generatedAt: new Date().toISOString(),
@@ -266,10 +288,28 @@ function installPluginRuntimeDeps(params) {
   }
 }
 
+function installPluginRuntimeDepsWithRetries(params) {
+  const { attempts = 3 } = params;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      params.install({ ...params.installParams, attempt });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) {
+        break;
+      }
+    }
+  }
+  throw lastError;
+}
+
 export function stageBundledPluginRuntimeDeps(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const installPluginRuntimeDepsImpl =
     params.installPluginRuntimeDepsImpl ?? installPluginRuntimeDeps;
+  const installAttempts = params.installAttempts ?? 3;
   for (const pluginDir of listBundledPluginRuntimeDirs(repoRoot)) {
     const pluginId = path.basename(pluginDir);
     const packageJson = sanitizeBundledManifestForRuntimeInstall(pluginDir);
@@ -285,11 +325,15 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
     if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
       continue;
     }
-    installPluginRuntimeDepsImpl({
-      fingerprint,
-      packageJson,
-      pluginDir,
-      pluginId,
+    installPluginRuntimeDepsWithRetries({
+      attempts: installAttempts,
+      install: installPluginRuntimeDepsImpl,
+      installParams: {
+        fingerprint,
+        packageJson,
+        pluginDir,
+        pluginId,
+      },
     });
   }
 }

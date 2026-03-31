@@ -7,10 +7,10 @@ import {
   downloadClawHubSkillArchive,
   parseClawHubPluginSpec,
   resolveClawHubAuthToken,
-  searchClawHubSkills,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
+  searchClawHubSkills,
 } from "./clawhub.js";
 
 describe("clawhub helpers", () => {
@@ -166,42 +166,51 @@ describe("clawhub helpers", () => {
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
   });
-
-  it("downloads scoped package archives without creating nested temp paths", async () => {
-    const archiveBytes = Uint8Array.from([1, 2, 3, 4]);
-    const result = await downloadClawHubPackageArchive({
+  it("downloads scoped package archives to flat sanitized temp paths and cleans them up", async () => {
+    const archive = await downloadClawHubPackageArchive({
       name: "@mkv21/elevenlabs-stt",
+      version: "0.2.2",
       fetchImpl: async () =>
-        new Response(archiveBytes, {
+        new Response(new Uint8Array([1, 2, 3]), {
           status: 200,
           headers: { "content-type": "application/zip" },
         }),
     });
 
     try {
-      expect(path.basename(result.archivePath)).toBe("@mkv21__elevenlabs-stt.zip");
-      await expect(fs.readFile(result.archivePath)).resolves.toEqual(Buffer.from(archiveBytes));
+      const relativeArchivePath = path.relative(os.tmpdir(), archive.archivePath).split(path.sep);
+      expect(relativeArchivePath).toHaveLength(2);
+      expect(relativeArchivePath[0]?.startsWith("openclaw-clawhub-package-")).toBe(true);
+      expect(relativeArchivePath[1]).toBe("elevenlabs-stt.zip");
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     } finally {
-      await fs.rm(path.dirname(result.archivePath), { recursive: true, force: true });
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expect(fs.stat(archiveDir)).rejects.toThrow();
     }
   });
 
-  it("downloads slash-containing skill archives without creating nested temp paths", async () => {
-    const archiveBytes = Uint8Array.from([5, 6, 7, 8]);
-    const result = await downloadClawHubSkillArchive({
+  it("downloads slash-containing skill archives to flat sanitized temp paths and cleans them up", async () => {
+    const archive = await downloadClawHubSkillArchive({
       slug: "mkv21/elevenlabs-stt",
+      version: "1.0.0",
       fetchImpl: async () =>
-        new Response(archiveBytes, {
+        new Response(new Uint8Array([4, 5, 6]), {
           status: 200,
           headers: { "content-type": "application/zip" },
         }),
     });
 
     try {
-      expect(path.basename(result.archivePath)).toBe("mkv21__elevenlabs-stt.zip");
-      await expect(fs.readFile(result.archivePath)).resolves.toEqual(Buffer.from(archiveBytes));
+      const relativeArchivePath = path.relative(os.tmpdir(), archive.archivePath).split(path.sep);
+      expect(relativeArchivePath).toHaveLength(2);
+      expect(relativeArchivePath[0]?.startsWith("openclaw-clawhub-skill-")).toBe(true);
+      expect(relativeArchivePath[1]).toBe("elevenlabs-stt.zip");
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([4, 5, 6]));
     } finally {
-      await fs.rm(path.dirname(result.archivePath), { recursive: true, force: true });
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expect(fs.stat(archiveDir)).rejects.toThrow();
     }
   });
 });

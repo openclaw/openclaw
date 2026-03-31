@@ -15,6 +15,17 @@ import {
 } from "../test-parallel-utils.mjs";
 import { countExplicitEntryFilters, getExplicitEntryFilters } from "./vitest-args.mjs";
 
+const countUnitEntryFilters = (unit) => {
+  const explicitFilterCount = countExplicitEntryFilters(unit.args);
+  if (explicitFilterCount !== null) {
+    return explicitFilterCount;
+  }
+  if (Array.isArray(unit.includeFiles) && unit.includeFiles.length > 0) {
+    return unit.includeFiles.length;
+  }
+  return null;
+};
+
 export function resolvePnpmCommandInvocation(options = {}) {
   const npmExecPath = typeof options.npmExecPath === "string" ? options.npmExecPath.trim() : "";
   if (npmExecPath && path.isAbsolute(npmExecPath)) {
@@ -166,8 +177,29 @@ export function createExecutionArtifacts(env = process.env) {
   return { ensureTempArtifactDir, writeTempJsonArtifact, cleanupTempArtifacts };
 }
 
+export function createTempArtifactWriteStream(filePath) {
+  const fd = fs.openSync(filePath, "w");
+  return fs.createWriteStream(filePath, {
+    fd,
+    autoClose: true,
+  });
+}
+
 const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
   nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
+
+const ensureNodeOptionFilePathFlag = (nodeOptions, flag, filePath) => {
+  const normalized = nodeOptions.trim();
+  const emptyAssignmentPattern = new RegExp(`(^|\\s)${flag}=(?=\\s|$)`, "u");
+  if (emptyAssignmentPattern.test(normalized)) {
+    return normalized.replace(emptyAssignmentPattern, `$1${flag}=${filePath}`);
+  }
+  const bareFlagPattern = new RegExp(`(^|\\s)${flag}(?=\\s|$)`, "u");
+  if (bareFlagPattern.test(normalized)) {
+    return normalized.replace(bareFlagPattern, `$1${flag}=${filePath}`);
+  }
+  return ensureNodeOptionFlag(normalized, `${flag}=`, `${flag}=${filePath}`);
+};
 
 const isNodeLikeProcess = (command) => /(?:^|\/)node(?:$|\.exe$)/iu.test(command);
 
@@ -232,7 +264,7 @@ export function formatPlanOutput(plan) {
     `runtime=${plan.runtimeCapabilities.runtimeProfileName} mode=${plan.runtimeCapabilities.mode} intent=${plan.runtimeCapabilities.intentProfile} memoryBand=${plan.runtimeCapabilities.memoryBand} loadBand=${plan.runtimeCapabilities.loadBand} failurePolicy=${plan.failurePolicy} vitestMaxWorkers=${String(plan.executionBudget.vitestMaxWorkers ?? "default")} topLevelParallel=${plan.topLevelParallelEnabled ? String(plan.topLevelParallelLimit) : "off"}`,
     ...plan.selectedUnits.map(
       (unit) =>
-        `${unit.id} filters=${String(countExplicitEntryFilters(unit.args) ?? "all")} maxWorkers=${String(
+        `${unit.id} filters=${String(countUnitEntryFilters(unit) ?? "all")} maxWorkers=${String(
           unit.maxWorkers ?? "default",
         )} surface=${unit.surface} isolate=${unit.isolate ? "yes" : "no"} pool=${unit.pool}`,
     ),
@@ -311,6 +343,7 @@ const partitionUnitsBySurface = (units, surface) => {
 export async function executePlan(plan, options = {}) {
   const env = options.env ?? process.env;
   const artifacts = options.artifacts ?? createExecutionArtifacts(env);
+  const spawnImpl = options.spawn ?? spawn;
   const pnpmInvocation = resolvePnpmCommandInvocation({
     npmExecPath: env.npm_execpath,
     nodeExecPath: process.execPath,
@@ -407,7 +440,7 @@ export async function executePlan(plan, options = {}) {
         .filter(Boolean)
         .join("-");
       const laneLogPath = path.join(artifacts.ensureTempArtifactDir(), `${artifactStem}.log`);
-      const laneLogStream = fs.createWriteStream(laneLogPath, { flags: "w" });
+      const laneLogStream = createTempArtifactWriteStream(laneLogPath);
       laneLogStream.write(`[test-parallel] entry=${unit.id}\n`);
       laneLogStream.write(`[test-parallel] cwd=${process.cwd()}\n`);
       laneLogStream.write(
@@ -429,6 +462,15 @@ export async function executePlan(plan, options = {}) {
         maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
           ? `${nextNodeOptions} --max-old-space-size=${maxOldSpaceSizeMb}`.trim()
           : nextNodeOptions;
+      const localStorageFilePath = path.join(
+        artifacts.ensureTempArtifactDir(),
+        `${artifactStem}.localstorage.json`,
+      );
+      resolvedNodeOptions = ensureNodeOptionFilePathFlag(
+        resolvedNodeOptions,
+        "--localstorage-file",
+        localStorageFilePath,
+      );
       if (heapSnapshotEnabled && heapSnapshotDir) {
         try {
           fs.mkdirSync(heapSnapshotDir, { recursive: true });
@@ -699,7 +741,7 @@ export async function executePlan(plan, options = {}) {
           childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = vitestFsModuleCachePath;
           laneLogStream.write(`[test-parallel] fsModuleCachePath=${vitestFsModuleCachePath}\n`);
         }
-        child = spawn(pnpmInvocation.command, spawnArgs, {
+        child = spawnImpl(pnpmInvocation.command, spawnArgs, {
           stdio: ["inherit", "pipe", "pipe"],
           env: childEnv,
           shell: false,
@@ -780,7 +822,7 @@ export async function executePlan(plan, options = {}) {
       results.push(await runOnce(unit, extraArgs));
       return results;
     }
-    const explicitFilterCount = countExplicitEntryFilters(unit.args);
+    const explicitFilterCount = countUnitEntryFilters(unit);
     const topLevelAssignedShard = plan.topLevelSingleShardAssignments.get(unit);
     if (topLevelAssignedShard !== undefined) {
       if (plan.shardIndexOverride !== null && plan.shardIndexOverride !== topLevelAssignedShard) {

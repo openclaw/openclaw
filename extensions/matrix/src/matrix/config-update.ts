@@ -1,6 +1,7 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeAccountId, normalizeSecretInputString } from "../runtime-api.js";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/setup";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig } from "./account-config.js";
 
@@ -9,6 +10,7 @@ export type MatrixAccountPatch = {
   enabled?: boolean;
   homeserver?: string | null;
   allowPrivateNetwork?: boolean | null;
+  proxy?: string | null;
   userId?: string | null;
   accessToken?: MatrixConfig["accessToken"] | null;
   password?: MatrixConfig["password"] | null;
@@ -170,6 +172,7 @@ export function updateMatrixAccountConfig(
   }
 
   applyNullableStringField(nextAccount, "homeserver", patch.homeserver);
+  applyNullableStringField(nextAccount, "proxy", patch.proxy);
   applyNullableStringField(nextAccount, "userId", patch.userId);
   applyNullableSecretInputField(
     nextAccount,

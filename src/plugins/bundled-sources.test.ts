@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledPluginRootAt } from "../../test/helpers/bundled-plugin-paths.js";
 import {
   findBundledPluginSource,
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "./bundled-sources.js";
+
+const APP_ROOT = "/app";
+
+function appBundledPluginRoot(pluginId: string): string {
+  return bundledPluginRootAt(APP_ROOT, pluginId);
+}
 
 const discoverOpenClawPluginsMock = vi.fn();
 const loadPluginManifestMock = vi.fn();
@@ -56,17 +63,17 @@ function setBundledManifestIdsByRoot(manifestIds: Record<string, string>) {
 function setBundledLookupFixture() {
   setBundledDiscoveryCandidates([
     createBundledCandidate({
-      rootDir: "/app/extensions/feishu",
+      rootDir: appBundledPluginRoot("feishu"),
       packageName: "@openclaw/feishu",
     }),
     createBundledCandidate({
-      rootDir: "/app/extensions/diffs",
+      rootDir: appBundledPluginRoot("diffs"),
       packageName: "@openclaw/diffs",
     }),
   ]);
   setBundledManifestIdsByRoot({
-    "/app/extensions/feishu": "feishu",
-    "/app/extensions/diffs": "diffs",
+    [appBundledPluginRoot("feishu")]: "feishu",
+    [appBundledPluginRoot("diffs")]: "diffs",
   });
 }
 
@@ -127,21 +134,21 @@ describe("bundled plugin sources", () => {
         packageName: "@openclaw/feishu",
       }),
       createBundledCandidate({
-        rootDir: "/app/extensions/feishu",
+        rootDir: appBundledPluginRoot("feishu"),
         packageName: "@openclaw/feishu",
       }),
       createBundledCandidate({
-        rootDir: "/app/extensions/feishu-dup",
+        rootDir: appBundledPluginRoot("feishu-dup"),
         packageName: "@openclaw/feishu",
       }),
       createBundledCandidate({
-        rootDir: "/app/extensions/msteams",
+        rootDir: appBundledPluginRoot("msteams"),
         packageName: "@openclaw/msteams",
       }),
     ]);
     setBundledManifestIdsByRoot({
-      "/app/extensions/feishu": "feishu",
-      "/app/extensions/msteams": "msteams",
+      [appBundledPluginRoot("feishu")]: "feishu",
+      [appBundledPluginRoot("msteams")]: "msteams",
     });
 
     const map = resolveBundledPluginSources({});
@@ -150,7 +157,7 @@ describe("bundled plugin sources", () => {
     expect(map.get("feishu")).toEqual(
       createResolvedBundledSource({
         pluginId: "feishu",
-        localPath: "/app/extensions/feishu",
+        localPath: appBundledPluginRoot("feishu"),
       }),
     );
   });
@@ -159,7 +166,7 @@ describe("bundled plugin sources", () => {
     [
       "finds bundled source by npm spec",
       { kind: "npmSpec", value: "@openclaw/feishu" } as const,
-      { pluginId: "feishu", localPath: "/app/extensions/feishu" },
+      { pluginId: "feishu", localPath: appBundledPluginRoot("feishu") },
     ],
     [
       "returns undefined for missing npm spec",
@@ -169,7 +176,7 @@ describe("bundled plugin sources", () => {
     [
       "finds bundled source by plugin id",
       { kind: "pluginId", value: "diffs" } as const,
-      { pluginId: "diffs", localPath: "/app/extensions/diffs" },
+      { pluginId: "diffs", localPath: appBundledPluginRoot("diffs") },
     ],
     [
       "returns undefined for missing plugin id",
@@ -211,7 +218,7 @@ describe("bundled plugin sources", () => {
         "feishu",
         createResolvedBundledSource({
           pluginId: "feishu",
-          localPath: "/app/extensions/feishu",
+          localPath: appBundledPluginRoot("feishu"),
         }),
       ],
     ]);
@@ -224,7 +231,7 @@ describe("bundled plugin sources", () => {
     ).toEqual(
       createResolvedBundledSource({
         pluginId: "feishu",
-        localPath: "/app/extensions/feishu",
+        localPath: appBundledPluginRoot("feishu"),
       }),
     );
     expect(

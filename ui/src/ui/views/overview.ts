@@ -14,6 +14,7 @@ import type {
   SessionsUsageResult,
   SkillStatusReport,
 } from "../types.ts";
+import { renderConnectCommand } from "./connect-command.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
@@ -316,9 +317,12 @@ export function renderOverview(props: OverviewProps) {
               <div class="login-gate__help" style="margin-top: 16px;">
                 <div class="login-gate__help-title">${t("overview.connection.title")}</div>
                 <ol class="login-gate__steps">
-                  <li>${t("overview.connection.step1")}<code>openclaw gateway run</code></li>
                   <li>
-                    ${t("overview.connection.step2")}<code>openclaw dashboard --no-open</code>
+                    ${t("overview.connection.step1")}
+                    ${renderConnectCommand("openclaw gateway run")}
+                  </li>
+                  <li>
+                    ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
                   </li>
                   <li>${t("overview.connection.step3")}</li>
                   <li>

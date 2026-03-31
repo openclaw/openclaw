@@ -6,7 +6,7 @@ const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
 const resolveControlCommandGate = vi.hoisted(() => vi.fn());
 const resolveEffectiveAllowFromLists = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("./runtime-api.js", () => ({
   evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
   resolveAllowlistMatchSimple,

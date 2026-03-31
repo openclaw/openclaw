@@ -75,7 +75,7 @@ export async function setupWizardCommand(
 
   if (normalizedOpts.reset) {
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig = snapshot.valid ? snapshot.config : {};
+    const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const workspaceDefault =
       normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
     const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";

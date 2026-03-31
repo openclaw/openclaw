@@ -777,7 +777,7 @@ describe("resolveUninstallDirectoryTarget", () => {
       installRecord: {
         source: "npm",
         spec: "my-plugin@1.0.0",
-        installPath: "/tmp/not-openclaw-extensions/my-plugin",
+        installPath: "/tmp/not-openclaw-plugin-install/my-plugin",
       },
       extensionsDir,
     });

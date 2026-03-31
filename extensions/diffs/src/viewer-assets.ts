@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 export const VIEWER_ASSET_PREFIX = "/plugins/diffs/assets/";
 export const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
 export const VIEWER_RUNTIME_PATH = `${VIEWER_ASSET_PREFIX}viewer-runtime.js`;
+const VIEWER_RUNTIME_RELATIVE_IMPORT_PATH = "./viewer-runtime.js";
 
 const VIEWER_RUNTIME_FILE_URL = new URL("../assets/viewer-runtime.js", import.meta.url);
 
@@ -56,7 +57,7 @@ async function loadViewerAssets(): Promise<RuntimeAssetCache> {
   runtimeAssetCache = {
     mtimeMs: runtimeStat.mtimeMs,
     runtimeBody,
-    loaderBody: `import "${VIEWER_RUNTIME_PATH}?v=${hash}";\n`,
+    loaderBody: `import "${VIEWER_RUNTIME_RELATIVE_IMPORT_PATH}?v=${hash}";\n`,
   };
   return runtimeAssetCache;
 }
