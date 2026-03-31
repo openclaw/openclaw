@@ -1,11 +1,11 @@
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { defaultRuntime } from "../runtime.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
-} from "openclaw/plugin-sdk/tasks";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { defaultRuntime } from "../runtime.js";
-import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+} from "../tasks/task-executor.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   captureSubagentCompletionReply,

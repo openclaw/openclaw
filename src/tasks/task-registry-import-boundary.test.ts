@@ -6,11 +6,12 @@ const TASK_ROOT = path.resolve(import.meta.dirname);
 const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
 const ALLOWED_IMPORTERS = new Set([
-  "src/flow-runtime.ts",
-  "src/operations-runtime.ts",
-  "src/runtime-core.ts",
-  "src/task-executor.ts",
-  "src/task-registry.maintenance.ts",
+  "agents/tools/session-status-tool.ts",
+  "auto-reply/reply/commands-acp/runtime-options.ts",
+  "auto-reply/reply/commands-subagents/action-info.ts",
+  "commands/tasks.ts",
+  "tasks/task-executor.ts",
+  "tasks/task-registry.maintenance.ts",
 ]);
 
 async function listSourceFiles(root: string): Promise<string[]> {

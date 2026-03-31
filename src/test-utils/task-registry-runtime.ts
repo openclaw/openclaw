@@ -1,15 +1,9 @@
 import {
-  configureFlowRegistryRuntime,
-  type FlowRegistryStore,
-  type FlowRegistryStoreSnapshot,
-} from "openclaw/plugin-sdk/tasks";
-import type { FlowRecord } from "openclaw/plugin-sdk/tasks";
-import {
   configureTaskRegistryRuntime,
   type TaskRegistryStore,
   type TaskRegistryStoreSnapshot,
-} from "openclaw/plugin-sdk/tasks";
-import type { TaskDeliveryState, TaskRecord } from "openclaw/plugin-sdk/tasks";
+} from "../tasks/task-registry.store.js";
+import type { TaskDeliveryState, TaskRecord } from "../tasks/task-registry.types.js";
 
 function cloneTask(task: TaskRecord): TaskRecord {
   return { ...task };
@@ -22,23 +16,12 @@ function cloneDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   };
 }
 
-function cloneFlow(flow: FlowRecord): FlowRecord {
-  return {
-    ...flow,
-    ...(flow.requesterOrigin ? { requesterOrigin: { ...flow.requesterOrigin } } : {}),
-  };
-}
-
-export function installInMemoryTaskAndFlowRegistryRuntime(): {
+export function installInMemoryTaskRegistryRuntime(): {
   taskStore: TaskRegistryStore;
-  flowStore: FlowRegistryStore;
 } {
   let taskSnapshot: TaskRegistryStoreSnapshot = {
     tasks: new Map<string, TaskRecord>(),
     deliveryStates: new Map<string, TaskDeliveryState>(),
-  };
-  let flowSnapshot: FlowRegistryStoreSnapshot = {
-    flows: new Map<string, FlowRecord>(),
   };
 
   const taskStore: TaskRegistryStore = {
@@ -80,28 +63,6 @@ export function installInMemoryTaskAndFlowRegistryRuntime(): {
     },
   };
 
-  const flowStore: FlowRegistryStore = {
-    loadSnapshot: () => ({
-      flows: new Map(
-        [...flowSnapshot.flows.entries()].map(([flowId, flow]) => [flowId, cloneFlow(flow)]),
-      ),
-    }),
-    saveSnapshot: (snapshot) => {
-      flowSnapshot = {
-        flows: new Map(
-          [...snapshot.flows.entries()].map(([flowId, flow]) => [flowId, cloneFlow(flow)]),
-        ),
-      };
-    },
-    upsertFlow: (flow) => {
-      flowSnapshot.flows.set(flow.flowId, cloneFlow(flow));
-    },
-    deleteFlow: (flowId) => {
-      flowSnapshot.flows.delete(flowId);
-    },
-  };
-
   configureTaskRegistryRuntime({ store: taskStore });
-  configureFlowRegistryRuntime({ store: flowStore });
-  return { taskStore, flowStore };
+  return { taskStore };
 }
