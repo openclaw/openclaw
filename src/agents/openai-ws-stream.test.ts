@@ -369,6 +369,58 @@ describe("convertTools", () => {
     });
   });
 
+  it("adds missing top-level type for raw object-ish MCP schemas", () => {
+    const tools = [
+      {
+        name: "query",
+        description: "Run a query",
+        parameters: { properties: { q: { type: "string" } }, required: ["q"] },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: { q: { type: "string" } },
+      required: ["q"],
+    });
+  });
+
+  it("flattens raw top-level anyOf MCP schemas into one object schema", () => {
+    const tools = [
+      {
+        name: "dispatch",
+        description: "Dispatch an action",
+        parameters: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { action: { const: "ping" } },
+              required: ["action"],
+            },
+            {
+              type: "object",
+              properties: {
+                action: { const: "echo" },
+                text: { type: "string" },
+              },
+              required: ["action", "text"],
+            },
+          ],
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["ping", "echo"] },
+        text: { type: "string" },
+      },
+      required: ["action"],
+      additionalProperties: true,
+    });
+  });
+
   it("preserves existing properties on type:object schemas", () => {
     const tools = [
       {
