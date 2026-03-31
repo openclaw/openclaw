@@ -305,9 +305,11 @@ describe("promoteMatrixDirectRoomCandidate", () => {
 
   it("serializes concurrent m.direct writes so distinct mappings are not lost", async () => {
     let directContent: Record<string, string[]> = {};
-    let releaseFirstWrite: (() => void) | null = null;
+    let releaseFirstWrite!: () => void;
     const firstWriteStarted = new Promise<void>((resolve) => {
-      releaseFirstWrite = resolve;
+      releaseFirstWrite = () => {
+        resolve();
+      };
     });
     let writeCount = 0;
     const setAccountData = vi.fn(async (_eventType: string, content: Record<string, string[]>) => {
@@ -337,7 +339,7 @@ describe("promoteMatrixDirectRoomCandidate", () => {
       roomId: "!bob:example.org",
     });
 
-    releaseFirstWrite?.();
+    releaseFirstWrite();
     await expect(Promise.all([firstWrite, secondWrite])).resolves.toEqual([true, true]);
 
     expect(directContent).toEqual({
