@@ -6,6 +6,10 @@ import { extractSections } from "../../auto-reply/reply/post-compaction-context.
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  ANALYSIS_SCRATCHPAD_INSTRUCTIONS,
+  stripAnalysisBlock,
+} from "../compaction-analysis-strip.js";
+import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
@@ -22,6 +26,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { microCompactMessages } from "../micro-compact.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -680,10 +685,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
-      const structuredInstructions = buildCompactionStructureInstructions(
+      const baseStructuredInstructions = buildCompactionStructureInstructions(
         customInstructions,
         summarizationInstructions,
       );
+      // Append analysis-scratchpad instructions so the model reasons
+      // chronologically before producing the final summary. The analysis
+      // block is stripped from the result before it enters context.
+      const structuredInstructions = `${baseStructuredInstructions}${ANALYSIS_SCRATCHPAD_INSTRUCTIONS}`;
 
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
 
@@ -755,6 +764,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
+      // microCompact pre-pass: clear old bulky tool results before LLM
+      // summarization. Zero LLM cost — just string replacement.
+      messagesToSummarize = microCompactMessages(messagesToSummarize);
+
       const {
         summarizableMessages: summaryTargetMessages,
         preservedMessages: preservedRecentMessages,
@@ -802,39 +815,43 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           historySummary =
             messagesToSummarize.length > 0
-              ? await compactionSafeguardDeps.summarizeInStages({
-                  messages: messagesToSummarize,
-                  model,
-                  apiKey: apiKey ?? "",
-                  headers,
-                  signal,
-                  reserveTokens,
-                  maxChunkTokens,
-                  contextWindow: contextWindowTokens,
-                  customInstructions: currentInstructions,
-                  summarizationInstructions,
-                  previousSummary: effectivePreviousSummary,
-                })
+              ? stripAnalysisBlock(
+                  await compactionSafeguardDeps.summarizeInStages({
+                    messages: messagesToSummarize,
+                    model,
+                    apiKey: apiKey ?? "",
+                    headers,
+                    signal,
+                    reserveTokens,
+                    maxChunkTokens,
+                    contextWindow: contextWindowTokens,
+                    customInstructions: currentInstructions,
+                    summarizationInstructions,
+                    previousSummary: effectivePreviousSummary,
+                  }),
+                )
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
-              messages: turnPrefixMessages,
-              model,
-              apiKey: apiKey ?? "",
-              headers,
-              signal,
-              reserveTokens,
-              maxChunkTokens,
-              contextWindow: contextWindowTokens,
-              customInstructions: composeSplitTurnInstructions(
-                TURN_PREFIX_INSTRUCTIONS,
-                currentInstructions,
-              ),
-              summarizationInstructions,
-              previousSummary: undefined,
-            });
+            const prefixSummary = stripAnalysisBlock(
+              await compactionSafeguardDeps.summarizeInStages({
+                messages: turnPrefixMessages,
+                model,
+                apiKey: apiKey ?? "",
+                headers,
+                signal,
+                reserveTokens,
+                maxChunkTokens,
+                contextWindow: contextWindowTokens,
+                customInstructions: composeSplitTurnInstructions(
+                  TURN_PREFIX_INSTRUCTIONS,
+                  currentInstructions,
+                ),
+                summarizationInstructions,
+                previousSummary: undefined,
+              }),
+            );
             splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSection}`
@@ -908,7 +925,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
       );
       const workspaceContext = await readWorkspaceContextForSummary();
-      const fullReservedSuffix = appendSummarySection(reservedSuffix, workspaceContext);
+      // Post-compact transcript reference so the model can self-serve if it
+      // needs details lost in summarization.
+      const sessionDir = ctx.sessionManager.getSessionDir?.();
+      const sessionId = ctx.sessionManager.getSessionId?.();
+      const transcriptRef =
+        sessionDir && sessionId
+          ? `\n\n---\n_Full session transcript: \`${sessionDir}/${sessionId}.jsonl\`_`
+          : "";
+      const fullReservedSuffix = appendSummarySection(
+        appendSummarySection(reservedSuffix, workspaceContext),
+        transcriptRef,
+      );
       // Ensure leading separator so suffix does not merge with body (e.g. when body
       // ends without newline from buildStructuredFallbackSummary: "...## Exact identifiers## Tool Failures").
       const normalizedSuffix =
@@ -963,6 +991,8 @@ export const __testing = {
   readWorkspaceContextForSummary,
   hasMeaningfulConversationContent,
   isRealConversationMessage,
+  microCompactMessages,
+  stripAnalysisBlock,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
