@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
+  collectExtensionVersionErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
@@ -11,6 +15,10 @@ import {
   resolveNpmCommandInvocation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
@@ -304,5 +312,49 @@ describe("collectReleasePackageMetadataErrors", () => {
         peerDependencies: { "node-llama-cpp": "3.18.1" },
       }),
     ).toContain('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+  });
+});
+
+describe("collectExtensionVersionErrors", () => {
+  it("detects extension version mismatches", () => {
+    // Skip if extensions directory doesn't exist (sparse checkout)
+    if (!existsSync("extensions")) {
+      return;
+    }
+
+    // This test uses the real filesystem of the OpenClaw project
+    // With a version that doesn't exist, all extensions should be flagged
+    const errors = collectExtensionVersionErrors("9999.99.99");
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors[0]).toContain("extension(s) have version mismatch");
+    expect(errors[0]).toContain("pnpm plugins:sync");
+  });
+
+  it("returns no errors when all extensions match the root version", () => {
+    // Create a temporary directory with mock extensions
+    const tempDir = join(tmpdir(), `ext-test-${Date.now()}`);
+    const extensionsDir = join(tempDir, "extensions");
+
+    mkdirSync(extensionsDir, { recursive: true });
+
+    // Create mock extensions with matching versions
+    const mockVersion = "2026.3.24";
+    for (const name of ["extension-a", "extension-b"]) {
+      const extDir = join(extensionsDir, name);
+      mkdirSync(extDir, { recursive: true });
+      writeFileSync(join(extDir, "package.json"), JSON.stringify({ version: mockVersion }));
+    }
+
+    // Mock process.cwd() to return our temp directory
+    vi.spyOn(process, "cwd").mockReturnValue(tempDir);
+
+    try {
+      const errors = collectExtensionVersionErrors(mockVersion);
+      expect(errors).toHaveLength(0);
+    } finally {
+      // Cleanup
+      vi.spyOn(process, "cwd").mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

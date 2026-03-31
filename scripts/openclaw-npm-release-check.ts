@@ -1,8 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
@@ -145,6 +145,66 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
   }
   if (pkg.peerDependenciesMeta?.["node-llama-cpp"]?.optional !== true) {
     errors.push('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+  }
+
+  return errors;
+}
+
+/**
+ * Validates that all bundled extensions have versions matching the root package.
+ * Prevents release when extension versions are out of sync with the core package.
+ */
+export function collectExtensionVersionErrors(rootVersion: string): string[] {
+  const errors: string[] = [];
+  const extensionsDir = join(process.cwd(), "extensions");
+
+  if (!existsSync(extensionsDir)) {
+    return errors;
+  }
+
+  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+    entry.isDirectory(),
+  );
+
+  const mismatchedExtensions: Array<{ name: string; version: string }> = [];
+  const missingVersionExtensions: string[] = [];
+  const parseErrorExtensions: string[] = [];
+
+  for (const dir of dirs) {
+    const packagePath = join(extensionsDir, dir.name, "package.json");
+    if (!existsSync(packagePath)) {
+      continue;
+    }
+
+    try {
+      const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
+      if (!pkg.version) {
+        missingVersionExtensions.push(dir.name);
+      } else if (pkg.version !== rootVersion) {
+        mismatchedExtensions.push({ name: dir.name, version: pkg.version });
+      }
+    } catch {
+      parseErrorExtensions.push(dir.name);
+    }
+  }
+
+  if (mismatchedExtensions.length > 0) {
+    const details = mismatchedExtensions.map((e) => `${e.name}: ${e.version}`).join(", ");
+    errors.push(
+      `${mismatchedExtensions.length} extension(s) have version mismatch with core package ${rootVersion}: ${details}. Run: pnpm plugins:sync`,
+    );
+  }
+
+  if (missingVersionExtensions.length > 0) {
+    errors.push(
+      `${missingVersionExtensions.length} extension(s) are missing a version field in package.json: ${missingVersionExtensions.join(", ")}. Every extension must have a version matching the core package.`,
+    );
+  }
+
+  if (parseErrorExtensions.length > 0) {
+    errors.push(
+      `${parseErrorExtensions.length} extension(s) have invalid or unreadable package.json: ${parseErrorExtensions.join(", ")}. Fix or remove these manifests before release.`,
+    );
   }
 
   return errors;
@@ -401,8 +461,9 @@ function main(): number {
     releaseMainRef: process.env.RELEASE_MAIN_REF,
     now,
   });
+  const extensionVersionErrors = collectExtensionVersionErrors(pkg.version ?? "");
   const tarballErrors = collectPackedTarballErrors();
-  const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
+  const errors = [...metadataErrors, ...tagErrors, ...extensionVersionErrors, ...tarballErrors];
 
   if (errors.length > 0) {
     for (const error of errors) {
