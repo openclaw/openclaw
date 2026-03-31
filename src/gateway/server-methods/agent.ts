@@ -620,15 +620,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
-        // Track the sender connection so broadcasts always include it,
-        // even for clients that never call sessions.subscribe (e.g. iOS).
-        const senderConnId = typeof client?.connId === "string" ? client.connId : undefined;
-        if (senderConnId) {
-          context.setChatSenderConnId(idem, senderConnId);
-        }
         if (requestedBestEffortDeliver === undefined) {
           bestEffortDeliver = true;
         }
+      }
+      // Track the sender connection for all sessions (not just main/global)
+      // so that scoped chat fanout always includes the requester.
+      const senderConnId = typeof client?.connId === "string" ? client.connId : undefined;
+      if (senderConnId) {
+        context.setChatSenderConnId(idem, senderConnId);
       }
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
