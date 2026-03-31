@@ -1,5 +1,10 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import {
+  listConfiguredAccountIds,
+  resolveNormalizedAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { CoreConfig, MatrixAccountConfig, MatrixConfig } from "../types.js";
 
 export function resolveMatrixBaseConfig(cfg: CoreConfig): MatrixConfig {
@@ -15,34 +20,21 @@ function resolveMatrixAccountsMap(cfg: CoreConfig): Readonly<Record<string, Matr
 }
 
 export function listNormalizedMatrixAccountIds(cfg: CoreConfig): string[] {
-  return [
-    ...new Set(
-      Object.keys(resolveMatrixAccountsMap(cfg))
-        .filter(Boolean)
-        .map((accountId) => normalizeAccountId(accountId)),
-    ),
-  ];
+  return listConfiguredAccountIds({
+    accounts: resolveMatrixAccountsMap(cfg),
+    normalizeAccountId,
+  });
 }
 
 export function findMatrixAccountConfig(
   cfg: CoreConfig,
   accountId: string,
 ): MatrixAccountConfig | undefined {
-  const accounts = resolveMatrixAccountsMap(cfg);
-  if (accounts[accountId] && typeof accounts[accountId] === "object") {
-    return accounts[accountId];
-  }
-  const normalized = normalizeAccountId(accountId);
-  for (const key of Object.keys(accounts)) {
-    if (normalizeAccountId(key) === normalized) {
-      const candidate = accounts[key];
-      if (candidate && typeof candidate === "object") {
-        return candidate;
-      }
-      return undefined;
-    }
-  }
-  return undefined;
+  return resolveNormalizedAccountEntry(
+    resolveMatrixAccountsMap(cfg),
+    accountId,
+    normalizeAccountId,
+  );
 }
 
 export function hasExplicitMatrixAccountConfig(cfg: CoreConfig, accountId: string): boolean {
@@ -59,8 +51,8 @@ export function hasExplicitMatrixAccountConfig(cfg: CoreConfig, accountId: strin
     typeof matrix.name === "string" ||
     typeof matrix.homeserver === "string" ||
     typeof matrix.userId === "string" ||
-    typeof matrix.accessToken === "string" ||
-    typeof matrix.password === "string" ||
+    hasConfiguredSecretInput(matrix.accessToken) ||
+    hasConfiguredSecretInput(matrix.password) ||
     typeof matrix.deviceId === "string" ||
     typeof matrix.deviceName === "string" ||
     typeof matrix.avatarUrl === "string"

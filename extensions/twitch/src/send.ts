@@ -7,10 +7,9 @@
 
 import type { OpenClawConfig } from "../runtime-api.js";
 import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
-import { resolveTwitchToken } from "./token.js";
+import { DEFAULT_ACCOUNT_ID, resolveTwitchAccountContext } from "./config.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
-import { generateMessageId, isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
+import { generateMessageId, normalizeTwitchChannel } from "./utils/twitch.js";
 
 /**
  * Result from sending a message to Twitch.
@@ -56,18 +55,16 @@ export async function sendMessageTwitchInternal(
   stripMarkdown: boolean = true,
   logger: Console = console,
 ): Promise<SendMessageResult> {
-  const account = getAccountConfig(cfg, accountId);
+  const { account, configured, availableAccountIds } = resolveTwitchAccountContext(cfg, accountId);
   if (!account) {
-    const availableIds = Object.keys(cfg.channels?.twitch?.accounts ?? {});
     return {
       ok: false,
       messageId: generateMessageId(),
-      error: `Account not found: ${accountId}. Available accounts: ${availableIds.join(", ") || "none"}`,
+      error: `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
     };
   }
 
-  const tokenResolution = resolveTwitchToken(cfg, { accountId });
-  if (!isAccountConfigured(account, tokenResolution.token)) {
+  if (!configured) {
     return {
       ok: false,
       messageId: generateMessageId(),

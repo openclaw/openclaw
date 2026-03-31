@@ -63,6 +63,8 @@ describe("matrix thread context", () => {
       }),
     ).resolves.toEqual({
       threadStarterBody: "Matrix thread root $root from Alice:\nRoot topic",
+      senderLabel: "Alice",
+      summary: "Root topic",
     });
 
     await resolveThreadContext({
@@ -113,9 +115,33 @@ describe("matrix thread context", () => {
       }),
     ).resolves.toEqual({
       threadStarterBody: "Matrix thread root $root from Alice:\nRecovered topic",
+      senderLabel: "Alice",
+      summary: "Recovered topic",
     });
 
     expect(getEvent).toHaveBeenCalledTimes(2);
     expect(getMemberDisplayName).toHaveBeenCalledTimes(1);
+  });
+
+  it("summarizes poll start thread roots from poll content", () => {
+    expect(
+      summarizeMatrixThreadStarterEvent({
+        event_id: "$root",
+        sender: "@alice:example.org",
+        type: "m.poll.start",
+        origin_server_ts: Date.now(),
+        content: {
+          "m.poll.start": {
+            question: { "m.text": "Lunch?" },
+            kind: "m.poll.disclosed",
+            max_selections: 1,
+            answers: [
+              { id: "a1", "m.text": "Pizza" },
+              { id: "a2", "m.text": "Sushi" },
+            ],
+          },
+        },
+      } as MatrixRawEvent),
+    ).toBe("[Poll]\nLunch?\n\n1. Pizza\n2. Sushi");
   });
 });

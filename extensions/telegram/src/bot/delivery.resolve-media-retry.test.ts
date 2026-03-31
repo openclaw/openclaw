@@ -1,6 +1,6 @@
 import type { Message } from "@grammyjs/types";
-import { GrammyError } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -33,8 +33,6 @@ vi.mock("../sticker-cache.js", () => ({
   getAllCachedStickers: () => [],
   describeStickerImage: async () => null,
 }));
-
-import { resolveMedia } from "./delivery.js";
 
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
@@ -157,7 +155,7 @@ async function expectTransientGetFileRetrySuccess() {
       url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
       ssrfPolicy: {
         allowRfc2544BenchmarkRange: true,
-        allowedHostnames: ["api.telegram.org"],
+        hostnameAllowlist: ["api.telegram.org"],
       },
     }),
   );
@@ -224,11 +222,8 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it("does not retry 'file is too big' GrammyError instances and returns null", async () => {
-    const fileTooBigError = new GrammyError(
-      "Call to 'getFile' failed!",
-      { ok: false, error_code: 400, description: "Bad Request: file is too big" },
-      "getFile",
-      {},
+    const fileTooBigError = new Error(
+      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
@@ -360,6 +355,38 @@ describe("resolveMedia getFile retry", () => {
       }),
     );
   });
+
+  it("uses local absolute file paths directly for media downloads", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/var/lib/telegram-bot-api/file.pdf",
+        placeholder: "<media:document>",
+      }),
+    );
+  });
+
+  it("uses local absolute file paths directly for sticker downloads", async () => {
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/sticker.webp" });
+
+    const result = await resolveMedia(makeCtx("sticker", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/var/lib/telegram-bot-api/sticker.webp",
+        placeholder: "<media:sticker>",
+      }),
+    );
+  });
 });
 
 describe("resolveMedia original filename preservation", () => {
@@ -478,6 +505,31 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "documents/file_42.pdf",
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it("allows a configured custom apiRoot host while keeping the hostname allowlist", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const ctx = makeCtx("document", getFile);
+    const result = await resolveMedia(
+      ctx,
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://192.168.1.50:8081/custom-bot-api/",
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: {
+          hostnameAllowlist: ["api.telegram.org", "192.168.1.50"],
+          allowedHostnames: ["192.168.1.50"],
+          allowRfc2544BenchmarkRange: true,
+        },
+      }),
     );
     expect(result).not.toBeNull();
   });

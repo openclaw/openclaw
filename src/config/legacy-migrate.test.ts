@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
-import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
 
 describe("legacy migrate audio transcription", () => {
-  it("moves routing.transcribeAudio into tools.media.audio.models", () => {
+  it("does not rewrite removed routing.transcribeAudio migrations", () => {
     const res = migrateLegacyConfig({
       routing: {
         transcribeAudio: {
@@ -13,12 +12,11 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.media.audio.models.");
-    expect(res.config?.tools?.media?.audio).toEqual(WHISPER_BASE_AUDIO_MODEL);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 
-  it("keeps existing tools media model and drops legacy routing value", () => {
+  it("does not rewrite removed routing.transcribeAudio migrations when new config exists", () => {
     const res = migrateLegacyConfig({
       routing: {
         transcribeAudio: {
@@ -34,11 +32,8 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain(
-      "Removed routing.transcribeAudio (tools.media.audio.models already set).",
-    );
-    expect(res.config?.tools?.media?.audio?.models).toEqual([{ command: "existing", type: "cli" }]);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 
   it("drops invalid audio.transcription payloads", () => {
@@ -57,7 +52,7 @@ describe("legacy migrate audio transcription", () => {
 });
 
 describe("legacy migrate mention routing", () => {
-  it("moves routing.groupChat.requireMention into channel group defaults", () => {
+  it("does not rewrite removed routing.groupChat.requireMention migrations", () => {
     const res = migrateLegacyConfig({
       routing: {
         groupChat: {
@@ -66,18 +61,11 @@ describe("legacy migrate mention routing", () => {
       },
     });
 
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
-    );
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
-    );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
-    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(true);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 
-  it("moves channels.telegram.requireMention into groups.*.requireMention", () => {
+  it("does not rewrite removed channels.telegram.requireMention migrations", () => {
     const res = migrateLegacyConfig({
       channels: {
         telegram: {
@@ -86,13 +74,215 @@ describe("legacy migrate mention routing", () => {
       },
     });
 
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+  });
+
+  it("moves channels.telegram.groupMentionsOnly into groups.*.requireMention", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+        },
+      },
+    });
+
     expect(res.changes).toContain(
-      'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
+      'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
+
+  it('keeps explicit channels.telegram.groups."*".requireMention when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
     );
     expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
     expect(
-      (res.config?.channels?.telegram as { requireMention?: unknown } | undefined)?.requireMention,
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
     ).toBeUndefined();
+  });
+
+  it("does not overwrite invalid channels.telegram.groups when migrating groupMentionsOnly", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: [],
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+
+  it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": false,
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+});
+
+describe("legacy migrate tts provider shape", () => {
+  it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: "voice-1",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
+    );
+    expect(res.config?.messages?.tts).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          apiKey: "test-key",
+          voiceId: "voice-1",
+        },
+      },
+    });
+  });
+
+  it("moves channels.discord.accounts.<id>.voice.tts.edge into providers.microsoft", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            main: {
+              voice: {
+                tts: {
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
+    );
+    const mainTts = (
+      res.config?.channels?.discord?.accounts as
+        | Record<string, { voice?: { tts?: Record<string, unknown> } }>
+        | undefined
+    )?.main?.voice?.tts;
+    expect(mainTts?.providers).toEqual({
+      microsoft: {
+        voice: "en-US-JennyNeural",
+      },
+    });
+    expect(mainTts?.edge).toBeUndefined();
+  });
+
+  it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              tts: {
+                provider: "openai",
+                openai: {
+                  model: "gpt-4o-mini-tts",
+                  voice: "alloy",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved plugins.entries.voice-call.config.tts.openai → plugins.entries.voice-call.config.tts.providers.openai.",
+    );
+    const voiceCallTts = (
+      res.config?.plugins?.entries as
+        | Record<string, { config?: { tts?: Record<string, unknown> } }>
+        | undefined
+    )?.["voice-call"]?.config?.tts;
+    expect(voiceCallTts).toEqual({
+      provider: "openai",
+      providers: {
+        openai: {
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
+      },
+    });
+  });
+
+  it("does not migrate legacy tts provider keys for unknown plugin ids", () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        entries: {
+          "third-party-plugin": {
+            config: {
+              tts: {
+                provider: "openai",
+                openai: {
+                  model: "custom-tts",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 });
 
@@ -185,12 +375,14 @@ describe("legacy migrate heartbeat config", () => {
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
 
-  it("preserves agent.heartbeat precedence over top-level heartbeat legacy key", () => {
+  it("preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key", () => {
     const res = migrateLegacyConfig({
-      agent: {
-        heartbeat: {
-          every: "1h",
-          target: "telegram",
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "1h",
+            target: "telegram",
+          },
         },
       },
       heartbeat: {
@@ -206,7 +398,6 @@ describe("legacy migrate heartbeat config", () => {
       model: "anthropic/claude-3-5-haiku-20241022",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
-    expect((res.config as { agent?: unknown } | null)?.agent).toBeUndefined();
   });
 
   it("drops blocked prototype keys when migrating top-level heartbeat", () => {

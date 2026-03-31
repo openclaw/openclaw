@@ -1,10 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { withTrustedWebToolsEndpoint } from "openclaw/plugin-sdk/provider-web-search";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
+  postTrustedWebToolsJson,
   readCache,
-  readResponseText,
   resolveCacheTtlMs,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -26,7 +25,6 @@ const EXTRACT_CACHE = new Map<
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
 const DEFAULT_SEARCH_COUNT = 5;
-const DEFAULT_ERROR_MAX_BYTES = 64_000;
 
 export type TavilySearchParams = {
   cfg?: OpenClawConfig;
@@ -65,41 +63,6 @@ function resolveEndpoint(baseUrl: string, pathname: string): string {
   } catch {
     return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
   }
-}
-
-async function postTavilyJson(params: {
-  baseUrl: string;
-  pathname: string;
-  apiKey: string;
-  body: Record<string, unknown>;
-  timeoutSeconds: number;
-  errorLabel: string;
-}): Promise<Record<string, unknown>> {
-  const endpoint = resolveEndpoint(params.baseUrl, params.pathname);
-  return await withTrustedWebToolsEndpoint(
-    {
-      url: endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      init: {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(params.body),
-      },
-    },
-    async ({ response }) => {
-      if (!response.ok) {
-        const detail = await readResponseText(response, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
-        throw new Error(
-          `${params.errorLabel} API error (${response.status}): ${detail.text || response.statusText}`,
-        );
-      }
-      return (await response.json()) as Record<string, unknown>;
-    },
-  );
 }
 
 export async function runTavilySearch(
@@ -149,14 +112,17 @@ export async function runTavilySearch(
   if (params.excludeDomains?.length) body.exclude_domains = params.excludeDomains;
 
   const start = Date.now();
-  const payload = await postTavilyJson({
-    baseUrl,
-    pathname: "/search",
-    apiKey,
-    body,
-    timeoutSeconds,
-    errorLabel: "Tavily Search",
-  });
+  const payload = await postTrustedWebToolsJson(
+    {
+      url: resolveEndpoint(baseUrl, "/search"),
+      timeoutSeconds,
+      apiKey,
+      body,
+      errorLabel: "Tavily Search",
+      extraHeaders: { "X-Client-Source": "openclaw" },
+    },
+    async (response) => (await response.json()) as Record<string, unknown>,
+  );
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   const results = rawResults.map((r: Record<string, unknown>) => ({
@@ -228,14 +194,17 @@ export async function runTavilyExtract(
   if (params.includeImages) body.include_images = true;
 
   const start = Date.now();
-  const payload = await postTavilyJson({
-    baseUrl,
-    pathname: "/extract",
-    apiKey,
-    body,
-    timeoutSeconds,
-    errorLabel: "Tavily Extract",
-  });
+  const payload = await postTrustedWebToolsJson(
+    {
+      url: resolveEndpoint(baseUrl, "/extract"),
+      timeoutSeconds,
+      apiKey,
+      body,
+      errorLabel: "Tavily Extract",
+      extraHeaders: { "X-Client-Source": "openclaw" },
+    },
+    async (response) => (await response.json()) as Record<string, unknown>,
+  );
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   const results = rawResults.map((r: Record<string, unknown>) => ({
@@ -282,5 +251,5 @@ export async function runTavilyExtract(
 }
 
 export const __testing = {
-  postTavilyJson,
+  resolveEndpoint,
 };

@@ -1,25 +1,23 @@
 import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
+  buildMentionRegexes,
+  formatLocationText,
+  logInboundDrop,
+  matchesMentionWithExplicit,
+  resolveMentionGatingWithBypass,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { buildMentionRegexes, matchesMentionWithExplicit } from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { NormalizedAllowFrom } from "./bot-access.js";
@@ -58,16 +56,8 @@ async function resolveStickerVisionSupport(params: {
   agentId?: string;
 }): Promise<boolean> {
   try {
-    const catalog = await loadModelCatalog({ config: params.cfg });
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    if (!entry) {
-      return false;
-    }
-    return modelSupportsVision(entry);
+    const { resolveStickerVisionSupportRuntime } = await import("./sticker-vision.runtime.js");
+    return await resolveStickerVisionSupportRuntime(params);
   } catch {
     return false;
   }
@@ -167,6 +157,8 @@ export async function resolveTelegramInboundBody(params: {
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
+  const senderAllowedForAudioPreflight =
+    !useAccessGroups || !allowForCommands.hasEntries || senderAllowedForCommands;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
@@ -175,7 +167,8 @@ export async function resolveTelegramInboundBody(params: {
     hasAudio &&
     !hasUserText &&
     mentionRegexes.length > 0 &&
-    !disableAudioPreflight;
+    !disableAudioPreflight &&
+    senderAllowedForAudioPreflight;
 
   if (needsPreflightTranscription) {
     try {

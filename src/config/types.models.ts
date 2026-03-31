@@ -10,6 +10,7 @@ export const MODEL_APIS = [
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
+  "azure-openai-responses",
 ] as const;
 
 export type ModelApi = (typeof MODEL_APIS)[number];
@@ -29,14 +30,16 @@ type SupportedOpenAICompatFields = Pick<
 
 type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
+  | "openrouter"
   | "qwen-chat-template";
 
 export type ModelCompatConfig = SupportedOpenAICompatFields & {
   thinkingFormat?: SupportedThinkingFormat;
   supportsTools?: boolean;
-  toolSchemaProfile?: "xai";
+  toolSchemaProfile?: string;
+  unsupportedToolSchemaKeywords?: string[];
   nativeWebSearchTool?: boolean;
-  toolCallArgumentsEncoding?: "html-entities";
+  toolCallArgumentsEncoding?: string;
   requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
 };

@@ -1,5 +1,5 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "../api.js";
 
 const { setRuntime: setSynologyRuntime, getRuntime: getSynologyRuntime } =
   createPluginRuntimeStore<PluginRuntime>(

@@ -1,9 +1,16 @@
-import { resolveMentionGating } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMentionGating } from "openclaw/plugin-sdk/channel-inbound";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
+import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { parseActivationCommand } from "openclaw/plugin-sdk/reply-runtime";
-import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  getPrimaryIdentityId,
+  getReplyContext,
+  getSelfIdentity,
+  getSenderIdentity,
+  identitiesOverlap,
+} from "../../identity.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
@@ -36,11 +43,11 @@ type ApplyGroupGatingParams = {
 };
 
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
-  const sender = normalizeE164(msg.senderE164 ?? "");
+  const sender = normalizeE164(getSenderIdentity(msg).e164 ?? "");
   if (!sender) {
     return false;
   }
-  const owners = resolveOwnerList(baseMentionConfig, msg.selfE164 ?? undefined);
+  const owners = resolveOwnerList(baseMentionConfig, getSelfIdentity(msg).e164 ?? undefined);
   return owners.includes(sender);
 }
 
@@ -50,10 +57,14 @@ function recordPendingGroupHistoryEntry(params: {
   groupHistoryKey: string;
   groupHistoryLimit: number;
 }) {
+  const senderIdentity = getSenderIdentity(params.msg);
   const sender =
-    params.msg.senderName && params.msg.senderE164
-      ? `${params.msg.senderName} (${params.msg.senderE164})`
-      : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+    senderIdentity.name && senderIdentity.e164
+      ? `${senderIdentity.name} (${senderIdentity.e164})`
+      : (senderIdentity.name ??
+        senderIdentity.e164 ??
+        getPrimaryIdentityId(senderIdentity) ??
+        "Unknown");
   recordPendingHistoryEntryIfEnabled({
     historyMap: params.groupHistories,
     historyKey: params.groupHistoryKey,
@@ -63,7 +74,7 @@ function recordPendingGroupHistoryEntry(params: {
       body: params.msg.body,
       timestamp: params.msg.timestamp,
       id: params.msg.id,
-      senderJid: params.msg.senderJid,
+      senderJid: senderIdentity.jid ?? params.msg.senderJid,
     },
   });
 }
@@ -80,6 +91,8 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
 }
 
 export function applyGroupGating(params: ApplyGroupGatingParams) {
+  const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg, params.authDir);
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
@@ -89,15 +102,15 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   noteGroupMember(
     params.groupMemberNames,
     params.groupHistoryKey,
-    params.msg.senderE164,
-    params.msg.senderName,
+    sender.e164 ?? undefined,
+    sender.name ?? undefined,
   );
 
   const mentionConfig = buildMentionConfig(params.cfg, params.agentId);
   const commandBody = stripMentionsForCommand(
     params.msg.body,
     mentionConfig.mentionRegexes,
-    params.msg.selfE164,
+    self.e164,
   );
   const activationCommand = parseActivationCommand(commandBody);
   const owner = isOwnerSender(params.baseMentionConfig, params.msg);
@@ -127,16 +140,11 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
-  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
-  const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
-  const replySenderE164 = params.msg.replyToSenderE164
-    ? normalizeE164(params.msg.replyToSenderE164)
-    : null;
-  const implicitMention = Boolean(
-    (selfJid && replySenderJid && selfJid === replySenderJid) ||
-    (selfE164 && replySenderE164 && selfE164 === replySenderE164),
-  );
+  const replyContext = getReplyContext(params.msg, params.authDir);
+  // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
+  // WhatsApp may report the quoted message sender as either a phone JID
+  // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
+  const implicitMention = identitiesOverlap(self, replyContext?.sender);
   const mentionGate = resolveMentionGating({
     requireMention,
     canDetectMention: true,

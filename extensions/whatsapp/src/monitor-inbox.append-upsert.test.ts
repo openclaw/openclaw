@@ -1,39 +1,14 @@
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
-import { monitorWebInbox } from "./inbound.js";
 import {
-  DEFAULT_ACCOUNT_ID,
-  getAuthDir,
-  getSock,
   installWebMonitorInboxUnitTestHooks,
+  settleInboundWork,
+  startInboxMonitor,
+  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 
 describe("append upsert handling (#20952)", () => {
   installWebMonitorInboxUnitTestHooks();
-  type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
-
-  async function settleInboundWork() {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-
-  async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
-    await vi.waitFor(
-      () => {
-        expect(onMessage).toHaveBeenCalledTimes(count);
-      },
-      { timeout: 2_000, interval: 5 },
-    );
-  }
-
-  async function startInboxMonitor(onMessage: InboxOnMessage) {
-    const listener = await monitorWebInbox({
-      verbose: false,
-      onMessage,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-    });
-    return { listener, sock: getSock() };
-  }
 
   it("processes recent append messages (within 60s of connect)", async () => {
     const onMessage = vi.fn(async () => {});

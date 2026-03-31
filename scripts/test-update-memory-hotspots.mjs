@@ -1,66 +1,65 @@
 import fs from "node:fs";
 import path from "node:path";
+import { intFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mjs";
 import { parseMemoryTraceSummaryLines } from "./test-parallel-memory.mjs";
+import { normalizeTrackedRepoPath, tryReadJsonFile, writeJsonFile } from "./test-report-utils.mjs";
 import { unitMemoryHotspotManifestPath } from "./test-runner-manifest.mjs";
+import { matchesHotspotSummaryLane } from "./test-update-memory-hotspots-utils.mjs";
+
+if (process.argv.slice(2).includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/test-update-memory-hotspots.mjs [options]",
+      "",
+      "Generate or refresh the unit memory-hotspot manifest from test-parallel memory logs.",
+      "",
+      "Options:",
+      "  --config <path>            Vitest config label stored in the output manifest",
+      "  --out <path>               Output manifest path (default: test/fixtures/test-memory-hotspots.unit.json)",
+      "  --lane <name>              Primary lane name to match (default: unit-fast)",
+      "  --lane-prefix <prefix>     Additional lane prefixes to include (repeatable)",
+      "  --log <path>               Memory trace log to ingest (repeatable, required)",
+      "  --min-delta-kb <kb>        Minimum RSS delta to retain (default: 262144)",
+      "  --limit <count>            Max hotspot entries to retain (default: 64)",
+      "  --help                     Show this help text",
+      "",
+      "Examples:",
+      "  node scripts/test-update-memory-hotspots.mjs --log /tmp/unit-fast.log",
+      "  node scripts/test-update-memory-hotspots.mjs --log a.log --log b.log --lane-prefix unit-fast-batch-",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
 
 function parseArgs(argv) {
-  const args = {
-    config: "vitest.unit.config.ts",
-    out: unitMemoryHotspotManifestPath,
-    lane: "unit-fast",
-    logs: [],
-    minDeltaKb: 256 * 1024,
-    limit: 64,
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--config") {
-      args.config = argv[i + 1] ?? args.config;
-      i += 1;
-      continue;
-    }
-    if (arg === "--out") {
-      args.out = argv[i + 1] ?? args.out;
-      i += 1;
-      continue;
-    }
-    if (arg === "--lane") {
-      args.lane = argv[i + 1] ?? args.lane;
-      i += 1;
-      continue;
-    }
-    if (arg === "--log") {
-      const logPath = argv[i + 1];
-      if (typeof logPath === "string" && logPath.length > 0) {
-        args.logs.push(logPath);
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--min-delta-kb") {
-      const parsed = Number.parseInt(argv[i + 1] ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        args.minDeltaKb = parsed;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--limit") {
-      const parsed = Number.parseInt(argv[i + 1] ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        args.limit = parsed;
-      }
-      i += 1;
-      continue;
-    }
-  }
-  return args;
+  return parseFlagArgs(
+    argv,
+    {
+      config: "vitest.unit.config.ts",
+      out: unitMemoryHotspotManifestPath,
+      lane: "unit-fast",
+      lanePrefixes: [],
+      logs: [],
+      minDeltaKb: 256 * 1024,
+      limit: 64,
+    },
+    [
+      stringFlag("--config", "config"),
+      stringFlag("--out", "out"),
+      stringFlag("--lane", "lane"),
+      stringListFlag("--lane-prefix", "lanePrefixes"),
+      stringListFlag("--log", "logs"),
+      intFlag("--min-delta-kb", "minDeltaKb", { min: 1 }),
+      intFlag("--limit", "limit", { min: 1 }),
+    ],
+  );
 }
 
 function mergeHotspotEntry(aggregated, file, value) {
   if (!(Number.isFinite(value?.deltaKb) && value.deltaKb > 0)) {
     return;
   }
+  const normalizedFile = normalizeTrackedRepoPath(file);
   const normalizeSourceLabel = (source) => {
     const separator = source.lastIndexOf(":");
     if (separator === -1) {
@@ -75,9 +74,9 @@ function mergeHotspotEntry(aggregated, file, value) {
         .filter((source) => typeof source === "string" && source.length > 0)
         .map(normalizeSourceLabel)
     : [];
-  const previous = aggregated.get(file);
+  const previous = aggregated.get(normalizedFile);
   if (!previous) {
-    aggregated.set(file, {
+    aggregated.set(normalizedFile, {
       deltaKb: Math.round(value.deltaKb),
       sources: [...new Set(nextSources)],
     });
@@ -99,18 +98,16 @@ if (opts.logs.length === 0) {
 }
 
 const aggregated = new Map();
-try {
-  const existing = JSON.parse(fs.readFileSync(opts.out, "utf8"));
+const existing = tryReadJsonFile(opts.out, null);
+if (existing) {
   for (const [file, value] of Object.entries(existing.files ?? {})) {
     mergeHotspotEntry(aggregated, file, value);
   }
-} catch {
-  // Start from scratch when the output file does not exist yet.
 }
 for (const logPath of opts.logs) {
   const text = fs.readFileSync(logPath, "utf8");
-  const summaries = parseMemoryTraceSummaryLines(text).filter(
-    (summary) => summary.lane === opts.lane,
+  const summaries = parseMemoryTraceSummaryLines(text).filter((summary) =>
+    matchesHotspotSummaryLane(summary.lane, opts.lane, opts.lanePrefixes),
   );
   for (const summary of summaries) {
     for (const record of summary.top) {
@@ -142,11 +139,14 @@ const output = {
   config: opts.config,
   generatedAt: new Date().toISOString(),
   defaultMinDeltaKb: opts.minDeltaKb,
-  lane: opts.lane,
+  lane:
+    opts.lanePrefixes.length === 0
+      ? opts.lane
+      : [opts.lane, ...opts.lanePrefixes.map((prefix) => String(prefix).concat("*"))].join(", "),
   files,
 };
 
-fs.writeFileSync(opts.out, `${JSON.stringify(output, null, 2)}\n`);
+writeJsonFile(opts.out, output);
 console.log(
   `[test-update-memory-hotspots] wrote ${String(Object.keys(files).length)} hotspots to ${opts.out}`,
 );

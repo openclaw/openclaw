@@ -37,9 +37,13 @@ private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
   setupCode: String,
-  manualHost: String,
-  manualPort: String,
-  manualTls: Boolean,
+  savedManualHost: String,
+  savedManualPort: String,
+  savedManualTls: Boolean,
+  manualHostInput: String,
+  manualPortInput: String,
+  manualTlsInput: Boolean,
+  fallbackBootstrapToken: String,
   fallbackToken: String,
   fallbackPassword: String,
 ): GatewayConnectConfig? {
@@ -69,13 +73,23 @@ internal fun resolveGatewayConnectConfig(
     )
   }
 
-  val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls) ?: return null
+  val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput) ?: return null
   val parsed = parseGatewayEndpoint(manualUrl) ?: return null
+  val savedManualEndpoint =
+    composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
+      ?.let(::parseGatewayEndpoint)
+  val preserveBootstrapToken =
+    savedManualEndpoint != null &&
+      savedManualEndpoint.host == parsed.host &&
+      savedManualEndpoint.port == parsed.port &&
+      savedManualEndpoint.tls == parsed.tls &&
+      fallbackToken.isBlank() &&
+      fallbackPassword.isBlank()
   return GatewayConnectConfig(
     host = parsed.host,
     port = parsed.port,
     tls = parsed.tls,
-    bootstrapToken = "",
+    bootstrapToken = if (preserveBootstrapToken) fallbackBootstrapToken.trim() else "",
     token = fallbackToken.trim(),
     password = fallbackPassword.trim(),
   )
@@ -97,8 +111,25 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "wss", "https" -> true
       else -> true
     }
-  val port = uri.port.takeIf { it in 1..65535 } ?: if (tls) 443 else 18789
-  val displayUrl = "${if (tls) "https" else "http"}://$host:$port"
+  val defaultPort =
+    when (scheme) {
+      "wss", "https" -> 443
+      "ws", "http" -> 18789
+      else -> 443
+    }
+  val displayPort =
+    when (scheme) {
+      "wss", "https" -> 443
+      "ws", "http" -> 80
+      else -> 443
+    }
+  val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
+  val displayUrl =
+    if (port == displayPort && defaultPort == displayPort) {
+      "${if (tls) "https" else "http"}://$host"
+    } else {
+      "${if (tls) "https" else "http"}://$host:$port"
+    }
 
   return GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl)
 }

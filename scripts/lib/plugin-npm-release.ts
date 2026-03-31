@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
+import { parseReleaseVersion, resolveNpmPublishPlan } from "../openclaw-npm-release-check.ts";
 
 export type PluginPackageJson = {
   name?: string;
@@ -170,7 +170,7 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -224,7 +224,7 @@ export function collectPublishablePluginPackages(
     const parsedVersion = parseReleaseVersion(version);
     if (parsedVersion === null) {
       validationErrors.push(
-        `${dir.name}: package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${version}".`,
+        `${dir.name}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
       );
       continue;
     }
@@ -235,7 +235,7 @@ export function collectPublishablePluginPackages(
       packageName: packageJson.name!.trim(),
       version,
       channel: parsedVersion.channel,
-      publishTag: parsedVersion.channel === "beta" ? "beta" : "latest",
+      publishTag: resolveNpmPublishPlan(version).publishTag,
       installNpmSpec: packageJson.openclaw?.install?.npmSpec?.trim() || undefined,
     });
   }

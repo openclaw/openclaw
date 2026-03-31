@@ -14,10 +14,12 @@ export type ChannelId = ChatChannelId | (string & {});
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
+/** Agent tool registered by a channel plugin. */
 export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
   ownerOnly?: boolean;
 };
 
+/** Lazy agent-tool factory used when tool availability depends on config. */
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
 
 /**
@@ -57,6 +59,7 @@ export type ChannelMessageToolDiscovery = {
   schema?: ChannelMessageToolSchemaContribution | ChannelMessageToolSchemaContribution[] | null;
 };
 
+/** Shared setup input bag used by CLI, onboarding, and setup adapters. */
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
@@ -80,6 +83,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   allowPrivateNetwork?: boolean;
+  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -115,6 +119,7 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: () => boolean;
 };
 
+/** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {
   id: ChannelId;
   label: string;
@@ -123,19 +128,21 @@ export type ChannelMeta = {
   docsLabel?: string;
   blurb: string;
   order?: number;
-  aliases?: string[];
+  aliases?: readonly string[];
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
+  selectionExtras?: readonly string[];
   detailLabel?: string;
   systemImage?: string;
+  markdownCapable?: boolean;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
-  preferOver?: string[];
+  preferOver?: readonly string[];
 };
 
+/** Snapshot row returned by channel status and lifecycle surfaces. */
 export type ChannelAccountSnapshot = {
   accountId: string;
   name?: string;
@@ -159,6 +166,7 @@ export type ChannelAccountSnapshot = {
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
   lastError?: string | null;
+  healthState?: string;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
@@ -220,6 +228,7 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
+/** Static capability flags advertised by a channel plugin. */
 export type ChannelCapabilities = {
   chatTypes: Array<ChatType | "thread">;
   polls?: boolean;
@@ -326,7 +335,7 @@ export type ChannelThreadingAdapter = {
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
-   * Kept for compatibility with older extensions/docks.
+   * Kept for compatibility with older plugin surfaces.
    */
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {
@@ -384,6 +393,7 @@ export type ChannelThreadingToolContext = {
   skipCrossContextDecoration?: boolean;
 };
 
+/** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
   resolveSessionTarget?: (params: {
@@ -454,6 +464,14 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
+  messageToolCapabilities?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[] | undefined;
+  reactionGuidance?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
@@ -470,6 +488,7 @@ export type ChannelDirectoryEntry = {
 
 export type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
+/** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
   channel: ChannelId;
   action: ChannelMessageActionName;
@@ -503,6 +522,7 @@ export type ChannelToolSend = {
   threadId?: string | null;
 };
 
+/** Channel-owned action surface for the shared `message` tool. */
 export type ChannelMessageActionAdapter = {
   /**
    * Unified discovery surface for the shared `message` tool.
@@ -533,6 +553,7 @@ export type ChannelPollResult = {
   pollId?: string;
 };
 
+/** Shared poll input after core has normalized the common poll model. */
 export type ChannelPollContext = {
   cfg: OpenClawConfig;
   to: string;
@@ -541,6 +562,7 @@ export type ChannelPollContext = {
   threadId?: string | null;
   silent?: boolean;
   isAnonymous?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

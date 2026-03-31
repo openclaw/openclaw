@@ -1,3 +1,4 @@
+import { findLatestTaskForSessionKey } from "openclaw/plugin-sdk/tasks";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import {
   parseRuntimeTimeoutSecondsInput,
@@ -122,6 +123,7 @@ export async function handleAcpStatusAction(
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "Could not read ACP session status.",
     onSuccess: (status) => {
+      const linkedTask = findLatestTaskForSessionKey(status.sessionKey);
       const sessionIdentifierLines = resolveAcpSessionIdentifierLinesFromIdentity({
         backend: status.backend,
         identity: status.identity,
@@ -135,6 +137,21 @@ export async function handleAcpStatusAction(
         ...sessionIdentifierLines,
         `sessionMode: ${status.mode}`,
         `state: ${status.state}`,
+        ...(linkedTask
+          ? [
+              `taskId: ${linkedTask.taskId}`,
+              `taskStatus: ${linkedTask.status}`,
+              `delivery: ${linkedTask.deliveryStatus}`,
+              ...(linkedTask.progressSummary
+                ? [`taskProgress: ${linkedTask.progressSummary}`]
+                : []),
+              ...(linkedTask.terminalSummary ? [`taskSummary: ${linkedTask.terminalSummary}`] : []),
+              ...(linkedTask.error ? [`taskError: ${linkedTask.error}`] : []),
+              ...(typeof linkedTask.lastEventAt === "number"
+                ? [`taskUpdatedAt: ${new Date(linkedTask.lastEventAt).toISOString()}`]
+                : []),
+            ]
+          : []),
         `runtimeOptions: ${formatRuntimeOptionsText(status.runtimeOptions)}`,
         `capabilities: ${formatAcpCapabilitiesText(status.capabilities.controls)}`,
         `lastActivityAt: ${new Date(status.lastActivityAt).toISOString()}`,

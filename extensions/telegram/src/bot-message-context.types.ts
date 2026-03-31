@@ -6,7 +6,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 
 export type TelegramMediaRef = {
@@ -16,8 +16,11 @@ export type TelegramMediaRef = {
 };
 
 export type TelegramMessageContextOptions = {
+  commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  receivedAtMs?: number;
+  ingressBuffer?: "inbound-debounce" | "text-fragment";
 };
 
 export type TelegramLogger = {

@@ -5,7 +5,6 @@
  * Consolidates duplicated formatUtcTimestamp / formatZonedTimestamp / resolveExplicitTimezone
  * that previously lived in envelope.ts and session-updates.ts.
  */
-
 /**
  * Validate an IANA timezone string. Returns the string if valid, undefined otherwise.
  */

@@ -3,6 +3,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  diffInventoryEntries,
+  normalizeRepoPath,
+  runBaselineInventoryCheck,
+} from "./lib/guard-inventory-utils.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,6 +53,7 @@ const providerIds = new Set([
 const allowedGenericFiles = new Set([
   "src/agents/tools/web-search.ts",
   "src/commands/onboard-search.ts",
+  "src/plugins/bundled-web-search-registry.ts",
   "src/secrets/runtime-web-tools.ts",
   "src/web-search/runtime.ts",
 ]);
@@ -60,9 +66,7 @@ const ignoredFiles = new Set([
   "src/secrets/runtime-web-tools.test.ts",
 ]);
 
-function normalizeRelativePath(filePath) {
-  return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
+let webSearchProviderInventoryPromise;
 
 async function walkFiles(rootDir) {
   const out = [];
@@ -185,32 +189,37 @@ function scanGenericCoreImports(lines, relativeFile, inventory) {
 }
 
 export async function collectWebSearchProviderBoundaryInventory() {
-  const inventory = [];
-  const files = (
-    await Promise.all(scanRoots.map(async (root) => await walkFiles(path.join(repoRoot, root))))
-  )
-    .flat()
-    .toSorted((left, right) =>
-      normalizeRelativePath(left).localeCompare(normalizeRelativePath(right)),
-    );
+  if (!webSearchProviderInventoryPromise) {
+    webSearchProviderInventoryPromise = (async () => {
+      const inventory = [];
+      const files = (
+        await Promise.all(scanRoots.map(async (root) => await walkFiles(path.join(repoRoot, root))))
+      )
+        .flat()
+        .toSorted((left, right) =>
+          normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+        );
 
-  for (const filePath of files) {
-    const relativeFile = normalizeRelativePath(filePath);
-    if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
-      continue;
-    }
-    const content = await fs.readFile(filePath, "utf8");
-    const lines = content.split(/\r?\n/);
+      for (const filePath of files) {
+        const relativeFile = normalizeRepoPath(repoRoot, filePath);
+        if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
+          continue;
+        }
+        const content = await fs.readFile(filePath, "utf8");
+        const lines = content.split(/\r?\n/);
 
-    if (relativeFile === "src/plugins/web-search-providers.ts") {
-      scanWebSearchProviderRegistry(lines, relativeFile, inventory);
-      continue;
-    }
+        if (relativeFile === "src/plugins/web-search-providers.ts") {
+          scanWebSearchProviderRegistry(lines, relativeFile, inventory);
+          continue;
+        }
 
-    scanGenericCoreImports(lines, relativeFile, inventory);
+        scanGenericCoreImports(lines, relativeFile, inventory);
+      }
+
+      return inventory.toSorted(compareInventoryEntries);
+    })();
   }
-
-  return inventory.toSorted(compareInventoryEntries);
+  return await webSearchProviderInventoryPromise;
 }
 
 export async function readExpectedInventory() {
@@ -225,14 +234,7 @@ export async function readExpectedInventory() {
 }
 
 export function diffInventory(expected, actual) {
-  const expectedKeys = new Set(expected.map((entry) => JSON.stringify(entry)));
-  const actualKeys = new Set(actual.map((entry) => JSON.stringify(entry)));
-  const missing = expected.filter((entry) => !actualKeys.has(JSON.stringify(entry)));
-  const unexpected = actual.filter((entry) => !expectedKeys.has(JSON.stringify(entry)));
-  return {
-    missing: missing.toSorted(compareInventoryEntries),
-    unexpected: unexpected.toSorted(compareInventoryEntries),
-  };
+  return diffInventoryEntries(expected, actual, compareInventoryEntries);
 }
 
 function formatInventoryHuman(inventory) {
@@ -255,41 +257,24 @@ function formatEntry(entry) {
   return `${entry.provider} ${entry.file}:${entry.line} ${entry.reason}`;
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const json = argv.includes("--json");
-  const actual = await collectWebSearchProviderBoundaryInventory();
-  const expected = await readExpectedInventory();
-  const { missing, unexpected } = diffInventory(expected, actual);
-  const matchesBaseline = missing.length === 0 && unexpected.length === 0;
+export async function runWebSearchProviderBoundaryCheck(argv = process.argv.slice(2), io) {
+  return await runBaselineInventoryCheck({
+    argv,
+    io,
+    collectActual: collectWebSearchProviderBoundaryInventory,
+    readExpected: readExpectedInventory,
+    diffInventory,
+    formatInventoryHuman,
+    formatEntry,
+  });
+}
 
-  if (json) {
-    process.stdout.write(`${JSON.stringify(actual, null, 2)}\n`);
-  } else {
-    console.log(formatInventoryHuman(actual));
-    console.log(
-      matchesBaseline
-        ? `Baseline matches (${actual.length} entries).`
-        : `Baseline mismatch (${unexpected.length} unexpected, ${missing.length} missing).`,
-    );
-    if (!matchesBaseline) {
-      if (unexpected.length > 0) {
-        console.error("Unexpected entries:");
-        for (const entry of unexpected) {
-          console.error(`- ${formatEntry(entry)}`);
-        }
-      }
-      if (missing.length > 0) {
-        console.error("Missing baseline entries:");
-        for (const entry of missing) {
-          console.error(`- ${formatEntry(entry)}`);
-        }
-      }
-    }
+export async function main(argv = process.argv.slice(2), io) {
+  const exitCode = await runWebSearchProviderBoundaryCheck(argv, io);
+  if (!io && exitCode !== 0) {
+    process.exit(exitCode);
   }
-
-  if (!matchesBaseline) {
-    process.exit(1);
-  }
+  return exitCode;
 }
 
 runAsScript(import.meta.url, main);

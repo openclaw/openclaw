@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { resolveOllamaApiBase } from "./models-config.providers.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -61,7 +61,7 @@ describe("Ollama provider", () => {
   }
 
   async function resolveProvidersWithOllamaKey(agentDir: string) {
-    return await withOllamaApiKey(async () => await resolveImplicitProvidersForTest({ agentDir }));
+    return withOllamaApiKey(() => resolveImplicitProvidersForTest({ agentDir }));
   }
 
   const createTagModel = (name: string) => ({ name, modified_at: "", size: 1, digest: "" });

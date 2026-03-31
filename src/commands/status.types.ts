@@ -1,3 +1,5 @@
+import type { TaskAuditSummary } from "openclaw/plugin-sdk/tasks";
+import type { TaskRegistrySummary } from "openclaw/plugin-sdk/tasks";
 import type { ChannelId } from "../channels/plugins/types.js";
 
 export type SessionStatus = {
@@ -48,6 +50,8 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  tasks: TaskRegistrySummary;
+  taskAudit: TaskAuditSummary;
   sessions: {
     paths: string[];
     count: number;
