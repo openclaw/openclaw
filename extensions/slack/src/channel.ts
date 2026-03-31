@@ -38,7 +38,7 @@ import {
 } from "./accounts.js";
 import type { SlackActionContext } from "./action-runtime.js";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
-import { slackApprovalAuth } from "./approval-auth.js";
+import { slackNativeApprovalAdapter } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
 import { resolveSlackChannelType } from "./channel-type.js";
 import {
@@ -282,7 +282,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       }),
       resolveNames: resolveSlackAllowlistNames,
     },
-    auth: slackApprovalAuth,
+    auth: slackNativeApprovalAdapter.auth,
+    approvals: {
+      delivery: slackNativeApprovalAdapter.delivery,
+      native: slackNativeApprovalAdapter.native,
+    },
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
       resolveToolPolicy: resolveSlackGroupToolPolicy,

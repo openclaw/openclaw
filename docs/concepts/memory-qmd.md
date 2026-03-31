@@ -25,7 +25,7 @@ binary, and can index content beyond your workspace memory files.
 
 ### Prerequisites
 
-- Install QMD: `bun install -g https://github.com/tobi/qmd`
+- Install QMD: `bun install -g @tobilu/qmd`
 - SQLite build that allows extensions (`brew install sqlite` on macOS).
 - QMD must be on the gateway's `PATH`.
 - macOS and Linux work out of the box. Windows is best supported via WSL2.
@@ -149,6 +149,12 @@ Set to `120000` for slower hardware.
 
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
 allows DM sessions.
+
+**Workspace-visible temp repos causing `ENAMETOOLONG` or broken indexing?**
+QMD traversal currently follows the underlying QMD scanner behavior rather than
+OpenClaw's builtin symlink rules. Keep temporary monorepo checkouts under
+hidden directories like `.tmp/` or outside indexed QMD roots until QMD exposes
+cycle-safe traversal or explicit exclusion controls.
 
 ## Configuration
 

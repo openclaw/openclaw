@@ -23,7 +23,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { listTasksForSessionKey } from "../../tasks/task-registry.js";
+import { listTasksForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { resolveAgentConfig, resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
@@ -119,8 +119,14 @@ function resolveStoreScopedRequesterKey(params: {
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
-function formatSessionTaskLine(sessionKey: string): string | undefined {
-  const tasks = listTasksForSessionKey(sessionKey);
+function formatSessionTaskLine(params: {
+  relatedSessionKey: string;
+  callerOwnerKey: string;
+}): string | undefined {
+  const tasks = listTasksForRelatedSessionKeyForOwner({
+    relatedSessionKey: params.relatedSessionKey,
+    callerOwnerKey: params.callerOwnerKey,
+  });
   if (tasks.length === 0) {
     return undefined;
   }
@@ -233,7 +239,7 @@ export function createSessionStatusTool(opts?: {
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? effectiveRequesterKey,
       );
-      const visibilityRequesterKey = effectiveRequesterKey.trim();
+      const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
       const usesLegacyMainAlias = alias === mainKey;
       const isLegacyMainVisibilityKey = (sessionKey: string) => {
         const trimmed = sessionKey.trim();
@@ -282,7 +288,8 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
-      let resolvedTargetViaSessionId = false;
+      const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+      let resolvedViaSessionId = false;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
@@ -357,7 +364,7 @@ export function createSessionStatusTool(opts?: {
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
           ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
-          resolvedTargetViaSessionId = true;
+          resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -395,13 +402,15 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      if (resolvedTargetViaSessionId || (opts?.sandboxed === true && !isExplicitAgentKey)) {
-        const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(resolved.key, agentId),
-        );
-        if (!access.allowed) {
-          throw new Error(access.error);
-        }
+      // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
+      const visibilityTargetKey =
+        !resolvedViaSessionId &&
+        (requestedKeyInput === "current" || resolved.key === requestedKeyInput)
+          ? visibilityRequesterKey
+          : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
+      const access = visibilityGuard.check(visibilityTargetKey);
+      if (!access.allowed) {
+        throw new Error(access.error);
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
@@ -565,7 +574,10 @@ export function createSessionStatusTool(opts?: {
         },
         includeTranscriptUsage: true,
       });
-      const taskLine = formatSessionTaskLine(resolved.key);
+      const taskLine = formatSessionTaskLine({
+        relatedSessionKey: resolved.key,
+        callerOwnerKey: visibilityRequesterKey,
+      });
       const fullStatusText = taskLine ? `${statusText}\n${taskLine}` : statusText;
 
       return {

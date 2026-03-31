@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../secrets/runtime-web-tools.types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -138,8 +138,7 @@ async function prepareAndActivate(params: { config: OpenClawConfig; env?: NodeJS
 describe("openclaw tools runtime web metadata wiring", () => {
   const priorFetch = global.fetch;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     secretsRuntime = await import("../secrets/runtime.js");
     ({ createWebFetchTool, createWebSearchTool } = await import("./tools/web-tools.js"));
   });

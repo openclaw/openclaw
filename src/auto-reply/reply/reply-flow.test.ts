@@ -1916,7 +1916,6 @@ describe("createReplyDispatcher", () => {
 
   it("delays block replies after the first when humanDelay is natural", async () => {
     vi.useFakeTimers();
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
       deliver,
@@ -1931,14 +1930,12 @@ describe("createReplyDispatcher", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(799);
+    await vi.advanceTimersByTimeAsync(2499);
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
     await dispatcher.waitForIdle();
     expect(deliver).toHaveBeenCalledTimes(2);
-
-    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 

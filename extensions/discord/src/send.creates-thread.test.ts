@@ -42,7 +42,6 @@ function createCompatRateLimitError(
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     addRoleDiscord,
     banMemberDiscord,

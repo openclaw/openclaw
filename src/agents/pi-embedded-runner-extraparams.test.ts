@@ -364,6 +364,7 @@ describe("applyExtraParamsToAgent", () => {
     applyModelId: string;
     model:
       | Model<"openai-responses">
+      | Model<"azure-openai-responses">
       | Model<"openai-codex-responses">
       | Model<"openai-completions">
       | Model<"anthropic-messages">;
@@ -418,7 +419,11 @@ describe("applyExtraParamsToAgent", () => {
   function runParallelToolCallsPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
-    model: Model<"openai-completions"> | Model<"openai-responses"> | Model<"anthropic-messages">;
+    model:
+      | Model<"openai-completions">
+      | Model<"openai-responses">
+      | Model<"azure-openai-responses">
+      | Model<"anthropic-messages">;
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
@@ -651,6 +656,34 @@ describe("applyExtraParamsToAgent", () => {
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
       } as unknown as Model<"openai-responses">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("injects parallel_tool_calls for azure-openai-responses payloads when configured", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "azure-openai-responses/gpt-5": {
+                params: {
+                  parallelToolCalls: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as unknown as Model<"azure-openai-responses">,
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
@@ -1441,6 +1474,98 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
+  it("injects native Codex web_search for api-compatible Responses models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "gateway",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "live",
+                allowedDomains: ["example.com"],
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.4",
+      } as Model<"openai-codex-responses">,
+      payload: { tools: [{ type: "function", name: "read" }] },
+    });
+
+    expect(payload.tools).toEqual([
+      { type: "function", name: "read" },
+      {
+        type: "web_search",
+        external_web_access: true,
+        filters: { allowed_domains: ["example.com"] },
+      },
+    ]);
+  });
+
+  it("does not inject duplicate native Codex web_search tools", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "gateway",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.4",
+      } as Model<"openai-codex-responses">,
+      payload: { tools: [{ type: "web_search" }] },
+    });
+
+    expect(payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("keeps payload unchanged when Codex native search is inactive", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "cached",
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "read" }] },
+    });
+
+    expect(payload.tools).toEqual([{ type: "function", name: "read" }]);
+  });
+
   it("lets runtime options override OpenAI default transport", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -1884,6 +2009,42 @@ describe("applyExtraParamsToAgent", () => {
       } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
+  });
+
+  it("strips disabled OpenAI reasoning payloads instead of sending effort:none", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5-mini",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        reasoning: { effort: "none" },
+      },
+    });
+    expect(payload).not.toHaveProperty("reasoning");
+  });
+
+  it("strips disabled Azure OpenAI Responses reasoning payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5-mini",
+        baseUrl: "https://myresource.openai.azure.com/openai/v1",
+      } as unknown as Model<"azure-openai-responses">,
+      payload: {
+        store: false,
+        reasoning: { effort: "none" },
+      },
+    });
+    expect(payload).not.toHaveProperty("reasoning");
   });
 
   it("injects configured OpenAI service_tier into Responses payloads", () => {
@@ -2664,11 +2825,11 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
       model: {
-        api: "openai-responses",
+        api: "azure-openai-responses",
         provider: "azure-openai-responses",
         id: "gpt-5.4",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as unknown as Model<"openai-responses">,
+      } as unknown as Model<"azure-openai-responses">,
     });
     expect(payload).not.toHaveProperty("service_tier");
   });
@@ -2829,7 +2990,7 @@ describe("applyExtraParamsToAgent", () => {
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-4o",
       model: {
-        api: "openai-responses",
+        api: "azure-openai-responses",
         provider: "azure-openai-responses",
         id: "gpt-4o",
         name: "gpt-4o",
@@ -2840,7 +3001,7 @@ describe("applyExtraParamsToAgent", () => {
         contextWindow: 128_000,
         maxTokens: 16_384,
         compat: { supportsStore: false },
-      } as unknown as Model<"openai-responses">,
+      } as unknown as Model<"azure-openai-responses">,
     });
     expect(payload).not.toHaveProperty("store");
   });
@@ -2917,11 +3078,11 @@ describe("applyExtraParamsToAgent", () => {
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-4o",
       model: {
-        api: "openai-responses",
+        api: "azure-openai-responses",
         provider: "azure-openai-responses",
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as unknown as Model<"openai-responses">,
+      } as unknown as Model<"azure-openai-responses">,
     });
     expect(payload).not.toHaveProperty("context_management");
   });
@@ -2945,11 +3106,11 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
       model: {
-        api: "openai-responses",
+        api: "azure-openai-responses",
         provider: "azure-openai-responses",
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as unknown as Model<"openai-responses">,
+      } as unknown as Model<"azure-openai-responses">,
     });
     expect(payload.context_management).toEqual([
       {
@@ -3081,16 +3242,16 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.prompt_cache_retention).toBe("24h");
   });
 
-  it("keeps prompt cache fields for direct Azure OpenAI openai-responses endpoints", () => {
+  it("keeps prompt cache fields for direct Azure OpenAI azure-openai-responses endpoints", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-4o",
       model: {
-        api: "openai-responses",
+        api: "azure-openai-responses",
         provider: "azure-openai-responses",
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as unknown as Model<"openai-responses">,
+      } as unknown as Model<"azure-openai-responses">,
       payload: {
         store: false,
         prompt_cache_key: "session-azure",

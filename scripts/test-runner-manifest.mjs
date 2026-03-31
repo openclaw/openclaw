@@ -1,6 +1,7 @@
 import { normalizeTrackedRepoPath, tryReadJsonFile } from "./test-report-utils.mjs";
 
 export const behaviorManifestPath = "test/fixtures/test-parallel.behavior.json";
+export const cliStartupBenchManifestPath = "test/fixtures/cli-startup-bench.json";
 export const unitTimingManifestPath = "test/fixtures/test-timings.unit.json";
 export const channelTimingManifestPath = "test/fixtures/test-timings.channels.json";
 export const extensionTimingManifestPath = "test/fixtures/test-timings.extensions.json";

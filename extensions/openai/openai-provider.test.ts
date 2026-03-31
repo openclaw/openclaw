@@ -30,7 +30,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5.2",
         templateName: "GPT-5.2",
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+        cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
       };
@@ -39,7 +39,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5.2-pro",
         templateName: "GPT-5.2 Pro",
-        cost: { input: 15, output: 60, cacheRead: 0, cacheWrite: 0 },
+        cost: { input: 21, output: 168, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
       };
@@ -48,7 +48,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5-mini",
         templateName: "GPT-5 mini",
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+        cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
       };
@@ -57,9 +57,9 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5-nano",
         templateName: "GPT-5 nano",
-        cost: { input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 64_000,
+        cost: { input: 0.05, output: 0.4, cacheRead: 0.005, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 128_000,
       };
     default:
       throw new Error(`Unsupported live OpenAI model: ${modelId}`);
@@ -139,8 +139,8 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.4-nano",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      contextWindow: 200_000,
-      maxTokens: 64_000,
+      contextWindow: 400_000,
+      maxTokens: 128_000,
     });
   });
 
@@ -168,16 +168,26 @@ describe("buildOpenAIProvider", () => {
       ],
     } as never);
 
-    expect(entries).toContainEqual({
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      name: "gpt-5.4-mini",
-    });
-    expect(entries).toContainEqual({
-      provider: "openai",
-      id: "gpt-5.4-nano",
-      name: "gpt-5.4-nano",
-    });
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        name: "gpt-5.4-nano",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+      }),
+    );
   });
 
   it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {

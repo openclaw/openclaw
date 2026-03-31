@@ -466,6 +466,41 @@ describe("Discord native plugin command dispatch", () => {
     );
   });
 
+  it("rejects group DM slash commands outside dm.groupChannels before dispatch", async () => {
+    const cfg = {
+      commands: {
+        allowFrom: {
+          discord: ["user:owner"],
+        },
+      },
+      channels: {
+        discord: {
+          dm: {
+            enabled: true,
+            policy: "open",
+            groupEnabled: true,
+            groupChannels: ["allowed-group"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.GroupDM,
+      channelId: "blocked-group",
+    });
+    const dispatchSpy = createDispatchSpy();
+    const command = await createStatusCommand(cfg);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "This group DM is not allowed.",
+      }),
+    );
+  });
+
   it("executes matched plugin commands directly without invoking the agent dispatcher", async () => {
     const cfg = createConfig();
     const commandSpec: NativeCommandSpec = {

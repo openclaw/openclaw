@@ -5,14 +5,7 @@ import { describe, expect, it } from "vitest";
 const TASK_ROOT = path.resolve(import.meta.dirname);
 const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
-const ALLOWED_IMPORTERS = new Set([
-  "agents/tools/session-status-tool.ts",
-  "auto-reply/reply/commands-acp/runtime-options.ts",
-  "auto-reply/reply/commands-subagents/action-info.ts",
-  "commands/tasks.ts",
-  "tasks/task-executor.ts",
-  "tasks/task-registry.maintenance.ts",
-]);
+const ALLOWED_IMPORTERS = new Set(["tasks/runtime-internal.ts", "tasks/task-owner-access.ts"]);
 
 async function listSourceFiles(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
@@ -32,7 +25,7 @@ async function listSourceFiles(root: string): Promise<string[]> {
 }
 
 describe("task registry import boundary", () => {
-  it("keeps direct task-registry imports on the approved read-model seam", async () => {
+  it("keeps direct task-registry imports behind the approved task access seams", async () => {
     const importers: string[] = [];
     for (const file of await listSourceFiles(SRC_ROOT)) {
       const relative = path.relative(SRC_ROOT, file).replaceAll(path.sep, "/");

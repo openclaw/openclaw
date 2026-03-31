@@ -138,7 +138,8 @@ function tryCreateCronTaskRun(params: {
     createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
-      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
       runId,
@@ -170,6 +171,7 @@ function tryFinishCronTaskRun(
     if (result.status === "ok" || result.status === "skipped") {
       completeTaskRunByRunId({
         runId: result.taskRunId,
+        runtime: "cron",
         endedAt: result.endedAt,
         lastEventAt: result.endedAt,
         terminalSummary: result.summary ?? undefined,
@@ -178,6 +180,7 @@ function tryFinishCronTaskRun(
     }
     failTaskRunByRunId({
       runId: result.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(result.error) === timeoutErrorMessage() ? "timed_out" : "failed",
       endedAt: result.endedAt,

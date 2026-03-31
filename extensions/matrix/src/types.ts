@@ -10,6 +10,8 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
+  threadReplies?: "off" | "inbound" | "always";
 };
 
 export type MatrixRoomConfig = {
@@ -123,6 +125,12 @@ export type MatrixConfig = {
   startupVerificationCooldownHours?: number;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /**
+   * Number of recent room messages shown to the agent as context when it is mentioned
+   * in a group chat (0 = disabled). Applies to room messages that did not directly
+   * trigger a reply. Default: 0 (disabled).
+   */
+  historyLimit?: number;
   /** Auto-join invites (always|allowlist|off). Default: off. */
   autoJoin?: "always" | "allowlist" | "off";
   /** Allowlist for auto-join invites (room IDs, aliases). */
