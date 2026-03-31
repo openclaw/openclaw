@@ -179,24 +179,24 @@ export function analyzeAllowlistByToolType(
   const pluginIds = new Set(groups.byPlugin.keys());
   const pluginTools = new Set(groups.all);
   const unknownAllowlist: string[] = [];
-  let hasCoreEntry = false;
+  let hasOnlyPluginEntries = true;
   for (const entry of normalized) {
     if (entry === "*") {
-      hasCoreEntry = true;
+      hasOnlyPluginEntries = false;
       continue;
     }
     const isPluginEntry =
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
-    if (isCoreEntry) {
-      hasCoreEntry = true;
+    if (!isPluginEntry) {
+      hasOnlyPluginEntries = false;
     }
     if (!isCoreEntry && !isPluginEntry) {
       unknownAllowlist.push(entry);
     }
   }
-  const pluginOnlyAllowlist = !hasCoreEntry;
+  const pluginOnlyAllowlist = hasOnlyPluginEntries;
   return {
     policy,
     unknownAllowlist: Array.from(new Set(unknownAllowlist)),

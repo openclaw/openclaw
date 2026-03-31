@@ -109,6 +109,7 @@ describe("tool-policy-pipeline", () => {
     expect(warnings[0]).toContain(
       "shipped core tools but unavailable in the current runtime/provider/model/config",
     );
+    expect(warnings[0]).not.toContain("Allowlist contains only plugin entries");
     expect(warnings[0]).not.toContain("unless the plugin is enabled");
   });
 

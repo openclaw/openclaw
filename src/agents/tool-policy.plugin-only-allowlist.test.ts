@@ -50,7 +50,7 @@ describe("analyzeAllowlistByToolType", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
     const policy = analyzeAllowlistByToolType({ allow: ["lobster"] }, emptyPlugins, coreTools);
     expect(policy.policy?.allow).toEqual(["lobster"]);
-    expect(policy.pluginOnlyAllowlist).toBe(true);
+    expect(policy.pluginOnlyAllowlist).toBe(false);
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });
 
@@ -63,6 +63,12 @@ describe("analyzeAllowlistByToolType", () => {
     );
     expect(policy.policy?.allow).toEqual(["read", "lobster"]);
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
+  });
+
+  it("does not mark unavailable core entries as plugin-only", () => {
+    const policy = analyzeAllowlistByToolType({ allow: ["apply_patch"] }, pluginGroups, coreTools);
+    expect(policy.pluginOnlyAllowlist).toBe(false);
+    expect(policy.unknownAllowlist).toEqual(["apply_patch"]);
   });
 
   it("ignores empty plugin ids when building groups", () => {
