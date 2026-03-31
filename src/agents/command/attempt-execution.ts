@@ -129,7 +129,17 @@ export function resolveFallbackRetryPrompt(params: {
   if (!params.sessionHasHistory) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  // Always preserve the original body on fallback retries. The previous logic
+  // replaced the body with a generic "Continue where you left off..." prompt,
+  // assuming the model could reconstruct context from transcript history. This
+  // breaks inter-agent messages (sessions_send) whose content IS the task —
+  // the fallback model gets a vague recovery prompt instead of the actual work
+  // item. It also fails when the first attempt dies before the SessionManager
+  // flushes the user turn, leaving the original message absent from history.
+  // Preserving the original body is safe: the fallback model may see a
+  // duplicate in transcript history, but that is strictly preferable to losing
+  // the message content entirely.
+  return params.body;
 }
 
 export function prependInternalEventContext(
