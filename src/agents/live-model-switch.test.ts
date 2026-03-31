@@ -90,13 +90,13 @@ describe("live model switch", () => {
     });
   });
 
-  it("prefers persisted runtime model fields ahead of session overrides", async () => {
+  it("prefers session overrides over persisted runtime model fields", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-6",
-        modelProvider: "anthropic",
-        model: "claude-sonnet-4-6",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelProvider: "google",
+        model: "gemini-3-flash-preview",
       },
     });
 
@@ -107,15 +107,61 @@ describe("live model switch", () => {
         cfg: { session: { store: "/tmp/custom-store.json" } },
         sessionKey: "main",
         agentId: "reply",
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.4",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
       }),
-    ).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
+    ).toEqual(expect.objectContaining({ provider: "openai", model: "gpt-5.4" }));
+  });
+
+  it("resolves runtime model/provider when no overrides are set (cron scenario)", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      "agent:main:cron:abc": {
+        modelProvider: "google",
+        model: "gemini-3-flash-preview",
+      },
     });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/store.json" } },
+        sessionKey: "agent:main:cron:abc",
+        agentId: "main",
+        defaultProvider: "google",
+        defaultModel: "gemini-3-flash-preview",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      }),
+    );
+  });
+
+  it("does not mix provider from runtime tier with model from override tier", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        modelProvider: "google",
+        model: "gemini-3-flash-preview",
+        modelOverride: "gpt-5.4",
+        // providerOverride intentionally absent
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    const result = resolveLiveSessionModelSelection({
+      cfg: { session: { store: "/tmp/store.json" } },
+      sessionKey: "main",
+      agentId: "reply",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+    });
+
+    // model comes from override tier, so provider should NOT come from runtime tier
+    expect(result).toEqual(expect.objectContaining({ model: "gpt-5.4" }));
+    expect(result!.provider).not.toBe("google");
   });
 
   it("queues a live switch only when an active run was aborted", async () => {
