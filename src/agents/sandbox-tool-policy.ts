@@ -10,10 +10,11 @@ function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
   if (!Array.isArray(extra) || extra.length === 0) {
     return base;
   }
-  // If the user is using alsoAllow without an allowlist, treat it as additive on top of
-  // an implicit allow-all policy.
-  if (!Array.isArray(base) || base.length === 0) {
-    return Array.from(new Set(["*", ...extra]));
+  if (!Array.isArray(base)) {
+    return Array.from(new Set(extra));
+  }
+  if (base.length === 0) {
+    return base;
   }
   return Array.from(new Set([...base, ...extra]));
 }

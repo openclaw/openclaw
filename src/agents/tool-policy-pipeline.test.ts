@@ -36,7 +36,7 @@ describe("tool-policy-pipeline", () => {
     resetToolPolicyWarningCacheForTest();
   });
 
-  test("strips allowlists that would otherwise disable core tools", () => {
+  test("preserves plugin-only allowlists instead of silently stripping them", () => {
     const tools = [{ name: "exec" }, { name: "plugin_tool" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({
       // oxlint-disable-next-line typescript/no-explicit-any
@@ -53,7 +53,7 @@ describe("tool-policy-pipeline", () => {
       ],
     });
     const names = filtered.map((t) => (t as unknown as DummyTool).name).toSorted();
-    expect(names).toEqual(["exec", "plugin_tool"]);
+    expect(names).toEqual(["plugin_tool"]);
   });
 
   test("warns about unknown allowlist entries", () => {
