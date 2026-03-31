@@ -1,42 +1,35 @@
 ---
 name: bodhi-model-switch
-description: Switch the active AI model between Claude and local Ollama.
+description: Switch the active AI model. Supports Anthropic and all OpenRouter models.
 triggers:
   - /claude
-  - /ollama
 user-invocable: true
 disable-model-invocation: false
 ---
 
 # bodhi-model-switch
 
-Switches the gateway model by editing `~/.openclaw/openclaw.json`. The gateway hot-reloads the change within ~3 seconds — no restart needed.
+Switches the gateway model by editing `~/.openclaw/openclaw.json`. The gateway hot-reloads within ~3 seconds — no restart needed.
 
 ## On `/claude`
+
+Switch to Anthropic Claude Sonnet (direct API, vision enabled).
 
 ```bash
 python3 -c "
 import json, os, pathlib
 cfg = pathlib.Path(os.path.expanduser('~/.openclaw/openclaw.json'))
 d = json.loads(cfg.read_text())
-d['agents']['defaults']['model'] = 'anthropic/claude-sonnet-4-6'
+d['agents']['defaults']['model'] = {'primary': 'anthropic/claude-sonnet-4-6', 'fallbacks': ['openrouter/kimi/kimi-2.5:free']}
 d['agents']['defaults']['thinkingDefault'] = 'low'
-cfg.write_text(json.dumps(d, indent=2))
+tmp = cfg.with_suffix('.tmp')
+tmp.write_text(json.dumps(d, indent=2))
+tmp.replace(cfg)
 print('switched')
 "
 ```
 
-Reply: `Switched to Claude (Sonnet). Vision and extended thinking enabled.`
-
-## On `/ollama`
-
-Reply without running any command:
-
-```
-Ollama gateway mode is not available on this hardware.
-Local Ollama handles enrichment automatically — no switch needed.
-For lowest-cost chat: /model haiku
-```
+Reply: `Model → anthropic/claude-sonnet-4-6 🟢`
 
 ## Rules
 
