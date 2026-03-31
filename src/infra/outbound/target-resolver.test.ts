@@ -6,6 +6,7 @@ type TargetResolverModule = typeof import("./target-resolver.js");
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
 let resolveMessagingTarget: TargetResolverModule["resolveMessagingTarget"];
 let formatTargetDisplay: TargetResolverModule["formatTargetDisplay"];
+let lookupDirectoryDisplay: TargetResolverModule["lookupDirectoryDisplay"];
 
 const mocks = vi.hoisted(() => ({
   listPeers: vi.fn(),
@@ -44,6 +45,7 @@ beforeEach(async () => {
   }));
   ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
     await import("./target-resolver.js"));
+  ({ lookupDirectoryDisplay } = await import("./target-resolver.js"));
 });
 
 describe("resolveMessagingTarget (directory fallback)", () => {
@@ -259,6 +261,37 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       expect(result.target.source).toBe("directory");
       expect(result.target.to).toBe("123456789");
     }
+  });
+
+  it("bootstraps the requested channel for lookupDirectoryDisplay when the active registry is non-empty but missing it", async () => {
+    const plugin = {
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    };
+
+    mocks.getActivePluginRegistry.mockReturnValue({
+      channels: [{ plugin: { id: "discord" } }],
+    } as unknown as ReturnType<typeof mocks.getActivePluginRegistry>);
+
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined).mockReturnValue(plugin);
+
+    const entry: ChannelDirectoryEntry = { kind: "group", id: "123456789", name: "support" };
+    mocks.listGroups.mockResolvedValue([entry]);
+    mocks.listPeers.mockResolvedValue([]);
+
+    const display = await lookupDirectoryDisplay({
+      cfg,
+      channel: "telegram",
+      targetId: "123456789",
+    });
+
+    expect(display).toBe("support");
+    expect(mocks.listGroups).toHaveBeenCalledTimes(1);
+    expect(mocks.getChannelPlugin).toHaveBeenCalled();
   });
 
   it("defers target display formatting to the plugin when available", () => {

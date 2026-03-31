@@ -69,7 +69,12 @@ async function maybeResolvePluginTarget(
   if (!raw) {
     return undefined;
   }
-  const plugin = getChannelPlugin(params.channel);
+  // Use the same plugin resolution source as resolveMessagingTarget.
+  // This ensures we run through the outbound bootstrap path (when needed)
+  // before consulting plugin-provided target resolver hooks.
+  const plugin =
+    resolveOutboundChannelPlugin({ channel: params.channel, cfg: params.cfg }) ??
+    getChannelPlugin(params.channel);
   const resolver = plugin?.messaging?.targetResolver;
   if (!resolver?.resolveTarget) {
     return undefined;
@@ -185,7 +190,8 @@ export function formatTargetDisplay(params: {
 }
 
 function detectTargetKind(
-  channel: ChannelId,
+  _channel: ChannelId,
+  plugin: ReturnType<typeof getChannelPlugin> | undefined,
   raw: string,
   preferred?: TargetResolveKind,
 ): TargetResolveKind {
@@ -196,7 +202,7 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
-  const inferredChatType = getChannelPlugin(channel)?.messaging?.inferTargetChatType?.({ to: raw });
+  const inferredChatType = plugin?.messaging?.inferTargetChatType?.({ to: raw });
   if (inferredChatType === "direct") {
     return "user";
   }
@@ -403,7 +409,7 @@ export async function resolveMessagingTarget(params: {
     getChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
-  const kind = detectTargetKind(params.channel, raw, params.preferredKind);
+  const kind = detectTargetKind(params.channel, plugin, raw, params.preferredKind);
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
   const looksLikeTargetId = (): boolean => {
     const trimmed = raw.trim();
