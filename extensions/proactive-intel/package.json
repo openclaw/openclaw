@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/proactive-intel",
+  "version": "2026.3.31",
+  "description": "Proactive contextual intelligence — learns user patterns and anticipates needs",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "release": {
+      "publishToNpm": true
+    }
+  }
+}

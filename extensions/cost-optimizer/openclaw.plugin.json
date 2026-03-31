@@ -1,0 +1,40 @@
+{
+  "id": "cost-optimizer",
+  "name": "Cost Optimizer",
+  "description": "Predictive cost tracking, budget management, and smart model routing.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dailyBudget": {
+        "type": "number",
+        "description": "Maximum daily spend in USD (0 = unlimited)"
+      },
+      "weeklyBudget": {
+        "type": "number",
+        "description": "Maximum weekly spend in USD (0 = unlimited)"
+      },
+      "monthlyBudget": {
+        "type": "number",
+        "description": "Maximum monthly spend in USD (0 = unlimited)"
+      },
+      "alertThresholds": {
+        "type": "array",
+        "items": { "type": "number" },
+        "description": "Budget percentage thresholds for alerts (default: [50, 80, 100])"
+      },
+      "hardCap": {
+        "type": "boolean",
+        "description": "If true, block requests when budget is exceeded. If false, warn only."
+      },
+      "trackByAgent": {
+        "type": "boolean",
+        "description": "Track costs per agent separately (default: true)"
+      },
+      "trackByModel": {
+        "type": "boolean",
+        "description": "Track costs per model separately (default: true)"
+      }
+    }
+  }
+}

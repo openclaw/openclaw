@@ -1,0 +1,32 @@
+{
+  "id": "proactive-intel",
+  "name": "Proactive Intelligence",
+  "description": "Learns user interaction patterns and proactively surfaces relevant context, suggestions, and anticipatory actions.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "patternLearning": {
+        "type": "boolean",
+        "description": "Enable automatic interaction pattern learning (default: true)"
+      },
+      "minInteractionsForPattern": {
+        "type": "number",
+        "description": "Minimum interaction count before suggesting patterns (default: 5)"
+      },
+      "maxPatterns": {
+        "type": "number",
+        "description": "Maximum number of patterns to track (default: 100)"
+      },
+      "insightDelivery": {
+        "type": "string",
+        "enum": ["heartbeat", "on-demand", "disabled"],
+        "description": "When to deliver proactive insights (default: on-demand)"
+      },
+      "contextEnrichment": {
+        "type": "boolean",
+        "description": "Enrich agent context with predicted user needs (default: true)"
+      }
+    }
+  }
+}

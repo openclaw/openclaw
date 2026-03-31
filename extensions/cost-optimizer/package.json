@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/cost-optimizer",
+  "version": "2026.3.31",
+  "description": "Predictive cost tracking, budget management, and smart model routing for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "release": {
+      "publishToNpm": true
+    }
+  }
+}
