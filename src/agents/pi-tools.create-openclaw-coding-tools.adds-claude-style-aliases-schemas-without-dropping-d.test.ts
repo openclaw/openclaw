@@ -98,6 +98,35 @@ describe("createOpenClawCodingTools", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("caps docx read output to the adaptive byte budget", async () => {
+    const constrainedTools = createOpenClawCodingTools({ modelContextWindowTokens: 1 });
+    const readTool = constrainedTools.find((tool) => tool.name === "read");
+    expect(readTool).toBeDefined();
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-docx-cap-"));
+    try {
+      const docxPath = path.join(tmpDir, "sample.docx");
+      const repeatedText = "DOCX-LINE-12345 ".repeat(4_000);
+      const buffer = await makeDocx(
+        `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${repeatedText}</w:t></w:r></w:p></w:body></w:document>`,
+      );
+      await fs.writeFile(docxPath, buffer);
+
+      const result = await readTool?.execute("tool-docx-cap", {
+        path: docxPath,
+      });
+
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n") ?? "";
+      expect(Buffer.byteLength(combinedText, "utf-8")).toBeLessThanOrEqual(50 * 1024);
+      expect(combinedText).toContain("[Read output capped at 50KB for this call.]");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
   it("filters tools by sandbox policy", () => {
     const sandboxDir = path.join(os.tmpdir(), "openclaw-sandbox");
     const sandbox = createPiToolsSandboxContext({

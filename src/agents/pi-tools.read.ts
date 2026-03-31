@@ -10,7 +10,7 @@ import {
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
 import { trySafeFileURLToPath } from "../infra/local-file-access.js";
-import { extractDocxText } from "../media/docx-extract.js";
+import { DEFAULT_DOCX_XML_MAX_BYTES, extractDocxText } from "../media/docx-extract.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -47,6 +47,7 @@ const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 8;
+const MAX_READ_DOCX_XML_BYTES = 2 * 1024 * 1024;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
@@ -90,6 +91,44 @@ function formatBytes(bytes: number): string {
     return `${Math.round(bytes / 1024)}KB`;
   }
   return `${bytes}B`;
+}
+
+function truncateTextToUtf8Bytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf-8") <= maxBytes) {
+    return text;
+  }
+
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(text.slice(0, mid), "utf-8") <= maxBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return text.slice(0, low);
+}
+
+function capReadTextToMaxBytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf-8") <= maxBytes) {
+    return text;
+  }
+
+  const notice = `\n\n[Read output capped at ${formatBytes(maxBytes)} for this call.]`;
+  const noticeBytes = Buffer.byteLength(notice, "utf-8");
+  if (noticeBytes >= maxBytes) {
+    return truncateTextToUtf8Bytes(notice, maxBytes);
+  }
+
+  const availableTextBytes = maxBytes - noticeBytes;
+  const truncatedText = truncateTextToUtf8Bytes(text, availableTextBytes).trimEnd();
+  return `${truncatedText}${notice}`;
+}
+
+function resolveReadDocxXmlMaxBytes(maxBytes: number): number {
+  return clamp(maxBytes * 4, DEFAULT_DOCX_XML_MAX_BYTES, MAX_READ_DOCX_XML_BYTES);
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
@@ -356,6 +395,7 @@ async function normalizeReadImageResult(
 async function normalizeReadDocumentResult(params: {
   result: AgentToolResult<unknown>;
   filePath: string;
+  maxBytes: number;
   readBufferForToolPath?: OpenClawReadToolOptions["readBufferForToolPath"];
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
@@ -377,7 +417,13 @@ async function normalizeReadDocumentResult(params: {
     return params.result;
   }
 
-  const text = await extractDocxText({ buffer });
+  const text = capReadTextToMaxBytes(
+    await extractDocxText({
+      buffer,
+      maxXmlBytes: resolveReadDocxXmlMaxBytes(params.maxBytes),
+    }),
+    params.maxBytes,
+  );
   if (!text.trim()) {
     return params.result;
   }
@@ -694,6 +740,7 @@ export function createOpenClawReadTool(
       const normalizedDocumentResult = await normalizeReadDocumentResult({
         result: strippedDetailsResult,
         filePath,
+        maxBytes: resolveAdaptiveReadMaxBytes(options),
         readBufferForToolPath: options?.readBufferForToolPath,
         signal,
       });

@@ -36,4 +36,26 @@ describe("extractDocxText", () => {
 
     await expect(extractDocxText({ buffer })).resolves.toBe("Price is’good");
   });
+
+  it("preserves literal angle-bracket text encoded inside runs", async () => {
+    const buffer = await makeDocx(
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>&lt;div&gt;Hello&lt;/div&gt;</w:t></w:r></w:p></w:body></w:document>',
+    );
+
+    await expect(extractDocxText({ buffer })).resolves.toBe("<div>Hello</div>");
+  });
+
+  it("returns an empty string for malformed docx payloads", async () => {
+    await expect(extractDocxText({ buffer: Buffer.from("not-a-zip") })).resolves.toBe("");
+  });
+
+  it("returns an empty string when document.xml exceeds the configured byte budget", async () => {
+    const documentXml =
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>' +
+      "A".repeat(128) +
+      "</w:t></w:r></w:p></w:body></w:document>";
+    const buffer = await makeDocx(documentXml);
+
+    await expect(extractDocxText({ buffer, maxXmlBytes: 32 })).resolves.toBe("");
+  });
 });

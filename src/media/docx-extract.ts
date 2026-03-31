@@ -1,5 +1,8 @@
 import JSZip from "jszip";
 
+const DOCX_TEXT_PLACEHOLDER_PREFIX = "__openclaw_docx_text_";
+export const DEFAULT_DOCX_XML_MAX_BYTES = 256 * 1024;
+
 function decodeXmlEntities(value: string): string {
   return value
     .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) =>
@@ -37,20 +40,46 @@ function extractDocxTextFromXml(xml: string): string {
     .replace(/<\/w:tr>/g, "\n")
     .replace(/<\/w:tc>/g, "\t");
 
-  const text = withStructuralBreaks
-    .replace(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g, (_match, textContent: string) =>
-      decodeXmlEntities(textContent),
-    )
-    .replace(/<[^>]+>/g, "");
+  const textNodes: string[] = [];
+  const withTextPlaceholders = withStructuralBreaks.replace(
+    /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g,
+    (_match, textContent: string) => {
+      const index = textNodes.push(textContent) - 1;
+      return `${DOCX_TEXT_PLACEHOLDER_PREFIX}${index}__`;
+    },
+  );
+
+  const text = withTextPlaceholders
+    .replace(/<[^>]+>/g, "")
+    .replace(new RegExp(`${DOCX_TEXT_PLACEHOLDER_PREFIX}(\\d+)__`, "g"), (_match, index) =>
+      decodeXmlEntities(textNodes[Number(index)] ?? ""),
+    );
 
   return normalizeDocxWhitespace(text);
 }
 
-export async function extractDocxText(params: { buffer: Buffer }): Promise<string> {
-  const zip = await JSZip.loadAsync(params.buffer);
-  const documentXml = await zip.file("word/document.xml")?.async("string");
-  if (!documentXml) {
+export async function extractDocxText(params: {
+  buffer: Buffer;
+  maxXmlBytes?: number;
+}): Promise<string> {
+  try {
+    const zip = await JSZip.loadAsync(params.buffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    if (!documentXmlFile) {
+      return "";
+    }
+    const documentXmlBytes = await documentXmlFile.async("uint8array");
+    if (
+      typeof params.maxXmlBytes === "number" &&
+      Number.isFinite(params.maxXmlBytes) &&
+      params.maxXmlBytes > 0 &&
+      documentXmlBytes.byteLength > params.maxXmlBytes
+    ) {
+      return "";
+    }
+    const documentXml = new TextDecoder().decode(documentXmlBytes);
+    return extractDocxTextFromXml(documentXml);
+  } catch {
     return "";
   }
-  return extractDocxTextFromXml(documentXml);
 }

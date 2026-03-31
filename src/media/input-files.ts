@@ -2,7 +2,7 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
-import { extractDocxText } from "./docx-extract.js";
+import { DEFAULT_DOCX_XML_MAX_BYTES, extractDocxText } from "./docx-extract.js";
 import { convertHeicToJpeg } from "./image-ops.js";
 import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
@@ -113,6 +113,7 @@ export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
+const MAX_INPUT_DOCX_XML_BYTES = 2 * 1024 * 1024;
 const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";
 const HEIC_INPUT_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
 
@@ -229,6 +230,10 @@ function clampText(text: string, maxChars: number): string {
     return text;
   }
   return text.slice(0, maxChars);
+}
+
+function resolveInputDocxXmlMaxBytes(maxBytes: number): number {
+  return Math.max(DEFAULT_DOCX_XML_MAX_BYTES, Math.min(maxBytes * 4, MAX_INPUT_DOCX_XML_BYTES));
 }
 
 async function normalizeInputImage(params: {
@@ -393,7 +398,13 @@ export async function extractFileContentFromSource(params: {
   }
 
   if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-    const text = clampText(await extractDocxText({ buffer }), limits.maxChars);
+    const text = clampText(
+      await extractDocxText({
+        buffer,
+        maxXmlBytes: resolveInputDocxXmlMaxBytes(limits.maxBytes),
+      }),
+      limits.maxChars,
+    );
     return { filename, text };
   }
 
