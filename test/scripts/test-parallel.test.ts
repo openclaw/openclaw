@@ -125,10 +125,9 @@ function getTargetedChannelPlanLines(output: string): string[] {
     .map((line) => line.trim())
     .filter(
       (line) =>
-        line.startsWith("channels-batch-") ||
-        (line.includes("surface=channels") &&
-          line.includes("isolate=yes") &&
-          /^channels-.*-isolated\b/u.test(line)),
+        line.startsWith("channels-") &&
+        line.includes("filters=") &&
+        line.includes("surface=channels"),
     );
 }
 
