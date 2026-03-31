@@ -18,6 +18,12 @@ vi.mock("./http-common.js", () => ({
 vi.mock("./http-utils.js", () => ({
   getBearerToken: vi.fn(),
   getHeader: vi.fn(),
+  resolveHttpBrowserOriginPolicy: vi.fn(() => ({
+    requestHost: "gateway.example.com",
+    origin: "https://evil.example",
+    allowedOrigins: ["https://control.example.com"],
+    allowHostHeaderOriginFallback: false,
+  })),
 }));
 
 vi.mock("../logger.js", () => ({
@@ -30,7 +36,8 @@ vi.mock("./token-expiry-state.js", () => ({
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { sendGatewayAuthFailure } = await import("./http-common.js");
-const { getBearerToken, getHeader } = await import("./http-utils.js");
+const { getBearerToken, getHeader, resolveHttpBrowserOriginPolicy } =
+  await import("./http-utils.js");
 const { logWarn } = await import("../logger.js");
 const { consumeGatewayTokenExpiryWarning } = await import("./token-expiry-state.js");
 
@@ -108,6 +115,26 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
 
     expect(ok).toBe(true);
     expect(vi.mocked(logWarn)).not.toHaveBeenCalled();
+  });
+
+  it("forwards browser-origin policy into HTTP auth", async () => {
+    const params = makeAuthorizeParams();
+    vi.mocked(getBearerToken).mockReturnValue(undefined);
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "trusted-proxy" });
+
+    await authorizeGatewayBearerRequestOrReply(params);
+
+    expect(vi.mocked(resolveHttpBrowserOriginPolicy)).toHaveBeenCalledWith(params.req);
+    expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://evil.example",
+          allowedOrigins: ["https://control.example.com"],
+          allowHostHeaderOriginFallback: false,
+        },
+      }),
+    );
   });
 });
 

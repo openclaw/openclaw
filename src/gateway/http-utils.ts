@@ -43,6 +43,19 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   return token || undefined;
 }
 
+export function resolveHttpBrowserOriginPolicy(
+  req: IncomingMessage,
+  cfg = loadConfig(),
+): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
+  return {
+    requestHost: getHeader(req, "host"),
+    origin: getHeader(req, "origin"),
+    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
+    allowHostHeaderOriginFallback:
+      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  };
+}
+
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
@@ -79,6 +92,7 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   rateLimiter?: AuthRateLimiter;
 }): Promise<AuthorizedGatewayHttpRequest | null> {
   const token = getBearerToken(params.req);
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -86,6 +100,7 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
     rateLimiter: params.rateLimiter,
+    browserOriginPolicy,
   });
   if (!authResult.ok) {
     sendGatewayAuthFailure(params.res, authResult);
