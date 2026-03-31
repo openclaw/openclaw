@@ -375,11 +375,12 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        startA2AFlow(undefined, runId);
         return jsonResult({
           runId,
-          status: "timeout",
-          error: result.error,
+          status: "accepted",
           sessionKey: displayKey,
+          delivery,
         });
       }
       if (result.status === "error") {

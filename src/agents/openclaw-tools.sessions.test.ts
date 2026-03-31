@@ -795,6 +795,114 @@ describe("sessions tools", () => {
     expect(sendCallCount).toBe(0);
   });
 
+  it("sessions_send keeps delayed announce delivery alive after a wait timeout", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "discord:group:req";
+    const targetKey = "discord:group:target";
+    let initialWaitCount = 0;
+    let targetLatestReply: string | undefined;
+    let announceDeliveredMessage: string | undefined;
+
+    openClawToolsTesting.setDepsForTest({
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+      config: {
+        ...TEST_CONFIG,
+        session: {
+          ...TEST_CONFIG.session,
+          agentToAgent: { maxPingPongTurns: 0 },
+        },
+      },
+    });
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+        params?: {
+          runId?: string;
+          sessionKey?: string;
+          message?: string;
+          extraSystemPrompt?: string;
+          to?: string;
+        };
+      };
+      calls.push(request);
+      if (request.method === "agent") {
+        if (request.params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          return { runId: "announce-run", status: "accepted", acceptedAt: 2002 };
+        }
+        return { runId: "run-1", status: "accepted", acceptedAt: 2001 };
+      }
+      if (request.method === "agent.wait") {
+        if (request.params?.runId === "run-1") {
+          initialWaitCount += 1;
+          if (initialWaitCount === 1) {
+            return { runId: "run-1", status: "timeout", error: "still running" };
+          }
+          targetLatestReply = "late reply";
+          return { runId: "run-1", status: "ok" };
+        }
+        if (request.params?.runId === "announce-run") {
+          targetLatestReply = "announce-ready";
+          return { runId: "announce-run", status: "ok" };
+        }
+        return { runId: request.params?.runId ?? "unknown", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        if (request.params?.sessionKey === targetKey) {
+          return {
+            messages: targetLatestReply
+              ? [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: targetLatestReply }],
+                    timestamp: 20,
+                  },
+                ]
+              : [],
+          };
+        }
+        return { messages: [] };
+      }
+      if (request.method === "send") {
+        announceDeliveredMessage = request.params?.message;
+        return { messageId: "m-announce" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-timeout", {
+      sessionKey: targetKey,
+      message: "delayed reply",
+      timeoutSeconds: 1,
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      delivery: { status: "pending", mode: "announce" },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(announceDeliveredMessage).toBe("announce-ready");
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    expect(initialWaitCount).toBe(2);
+    expect(
+      calls.filter((call) => call.method === "agent.wait" && call.params?.runId === "run-1"),
+    ).toHaveLength(2);
+  });
+
   it("sessions_send resolves sessionId inputs", async () => {
     const sessionId = "sess-send";
     const targetKey = "agent:main:discord:channel:123";
