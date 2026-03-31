@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/auth: reject mismatched browser `Origin` headers on trusted-proxy HTTP operator requests while keeping origin-less headless proxy clients working. Thanks @AntAISecurityLab and @vincentkoc.
 - Plugins/startup: block workspace `.env` from overriding `OPENCLAW_BUNDLED_PLUGINS_DIR`, so bundled plugin trust roots only come from inherited runtime env or package resolution instead of repo-local dotenv files. Thanks @nexrin and @vincentkoc.
 - Image generation/build: write stable runtime alias files into `dist/` and route provider-auth runtime lookups through those aliases so image-generation providers keep resolving auth/runtime modules after rebuilds instead of crashing on missing hashed chunk files.
 - Config/runtime: pin the first successful config load in memory for the running process and refresh that snapshot on successful writes/reloads, so hot paths stop reparsing `openclaw.json` between watcher-driven swaps.
