@@ -276,3 +276,10 @@ Example:
 ```
 
 Remote access setup details: [Remote access](/gateway/remote).
+
+## Related
+
+- [Dashboard](/web/dashboard) — gateway dashboard
+- [WebChat](/web/webchat) — browser-based chat interface
+- [TUI](/web/tui) — terminal user interface
+- [Health Checks](/gateway/health) — gateway health monitoring
