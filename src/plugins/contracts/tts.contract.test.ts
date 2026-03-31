@@ -813,6 +813,45 @@ describe("tts", () => {
         reasonCode: "success",
       });
     });
+
+    it("does not double-prefix textToSpeech failure messages", async () => {
+      const failingProvider: SpeechProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        autoSelectOrder: 10,
+        resolveConfig: () => ({}),
+        isConfigured: () => true,
+        synthesize: async () => {
+          throw new Error("provider failed");
+        },
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.speechProviders = [
+        { pluginId: "openai", provider: failingProvider, source: "test" },
+      ];
+      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+      setActivePluginRegistry(registry, cacheKey);
+
+      const result = await tts.textToSpeech({
+        text: "hello",
+        cfg: {
+          messages: {
+            tts: {
+              provider: "openai",
+            },
+          },
+        },
+        disableFallback: true,
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("expected synthesis failure");
+      }
+      expect(result.error).toBe("TTS conversion failed: openai: provider failed");
+      expect(result.error).not.toContain("TTS conversion failed: TTS conversion failed:");
+      expect(result.error.match(/TTS conversion failed:/g)).toHaveLength(1);
+    });
   });
 
   describe("resolveTtsConfig – openai.baseUrl", () => {
