@@ -76,6 +76,32 @@ describe("slack native approval adapter", () => {
     });
   });
 
+  it("keeps origin delivery when session and turn source thread ids differ only by Slack timestamp precision", async () => {
+    const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceTo: "channel:C123",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "1712345678.123456",
+          sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "channel:C123",
+      threadId: "1712345678.123456",
+    });
+  });
+
   it("resolves approver dm targets", async () => {
     const targets = await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
       cfg: buildConfig(),

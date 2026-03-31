@@ -58,6 +58,15 @@ function normalizeComparableTarget(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function normalizeSlackThreadMatchKey(threadId?: string): string {
+  const trimmed = threadId?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const leadingEpoch = trimmed.match(/^\d+/)?.[0];
+  return leadingEpoch ?? trimmed;
+}
+
 function resolveRequestSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequest;
@@ -143,7 +152,7 @@ function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean 
     normalizeAccountId(a.accountId) === normalizeAccountId(b.accountId);
   return (
     normalizeComparableTarget(a.to) === normalizeComparableTarget(b.to) &&
-    (a.threadId ?? "") === (b.threadId ?? "") &&
+    normalizeSlackThreadMatchKey(a.threadId) === normalizeSlackThreadMatchKey(b.threadId) &&
     accountMatches
   );
 }

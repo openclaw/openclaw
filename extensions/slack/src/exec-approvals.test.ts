@@ -109,7 +109,7 @@ describe("slack exec approvals", () => {
     expect(isSlackExecApprovalAuthorizedSender({ cfg, senderId: "U123TARGET" })).toBe(true);
   });
 
-  it("suppresses local prompts only when slack native exec approvals are enabled", () => {
+  it("keeps the local Slack approval prompt path active", () => {
     const payload = {
       channelData: {
         execApproval: {
@@ -124,7 +124,7 @@ describe("slack exec approvals", () => {
         cfg: buildConfig({ enabled: true, approvers: ["U123"] }),
         payload,
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       shouldSuppressLocalSlackExecApprovalPrompt({
