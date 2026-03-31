@@ -8,6 +8,7 @@ import type {
   OpenAIResponsesAssistantPhase,
   ResponseObject,
 } from "./openai-ws-connection.js";
+import { normalizeToolParameterSchema } from "./pi-tools.schema.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
@@ -277,18 +278,11 @@ export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] 
     return [];
   }
   return tools.map((tool) => {
-    const params = (tool.parameters ?? {}) as Record<string, unknown>;
-    // Ensure `type: "object"` schemas include `properties` — the OpenAI Responses
-    // API rejects bare `{ type: "object" }` from MCP tools with no parameters.
-    const normalizedParams =
-      params.type === "object" && !("properties" in params)
-        ? { ...params, properties: {} }
-        : params;
     return {
       type: "function" as const,
       name: tool.name,
       description: typeof tool.description === "string" ? tool.description : undefined,
-      parameters: normalizedParams,
+      parameters: normalizeToolParameterSchema(tool.parameters ?? {}) as Record<string, unknown>,
     };
   });
 }
