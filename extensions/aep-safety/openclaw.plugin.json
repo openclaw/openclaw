@@ -1,0 +1,20 @@
+{
+  "id": "aep-safety",
+  "skills": ["../../skills/aep-safety"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "proxyUrl": {
+        "type": "string",
+        "description": "AEP proxy URL (default: http://localhost:8899)",
+        "default": "http://localhost:8899"
+      },
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable AEP safety enforcement",
+        "default": true
+      }
+    }
+  }
+}

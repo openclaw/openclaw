@@ -1,0 +1,7 @@
+{
+  "name": "@safeclaw/aep-safety",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AEP Safety dashboard extension for OpenClaw/SafeClaw",
+  "main": "index.ts"
+}
