@@ -22277,6 +22277,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.historyLimit",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.homeserver",
       "kind": "channel",
       "type": "string",

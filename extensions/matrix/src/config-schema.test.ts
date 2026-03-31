@@ -18,4 +18,16 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts dm threadReplies overrides", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      dm: {
+        policy: "pairing",
+        threadReplies: "off",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
 });
