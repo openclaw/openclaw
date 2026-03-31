@@ -111,6 +111,19 @@ function getPlanLines(output: string, prefix: string): string[] {
     .filter((line) => line.startsWith(prefix));
 }
 
+function getTargetedChannelPlanLines(output: string): string[] {
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.startsWith("channels-batch-") ||
+        (line.includes("surface=channels") &&
+          line.includes("isolate=yes") &&
+          /^channels-.*-isolated\b/u.test(line)),
+    );
+}
+
 function parseNumericPlanField(line: string, key: string): number {
   const match = line.match(new RegExp(`\\b${key}=(\\d+)\\b`));
   if (!match) {
@@ -349,13 +362,17 @@ describe("scripts/test-parallel lane planning", () => {
     const channelBatchFilterCounts = channelBatchLines.map((line) =>
       parseNumericPlanField(line, "filters"),
     );
+    const targetedChannelPlanLines = getTargetedChannelPlanLines(output);
 
     expect(channelBatchLines.length).toBeGreaterThanOrEqual(4);
     expect(channelBatchLines.every((line) => line.includes("maxWorkers=5"))).toBe(true);
     expect(Math.max(...channelBatchFilterCounts)).toBeLessThan(30);
-    expect(channelBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
-      sharedTargetedChannelProxyFiles.length,
-    );
+    expect(
+      targetedChannelPlanLines.reduce(
+        (sum, line) => sum + parseNumericPlanField(line, "filters"),
+        0,
+      ),
+    ).toBe(targetedChannelProxyFiles.length);
   });
 
   it("uses targeted unit batching on high-memory local hosts", () => {
