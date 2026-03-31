@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenBodhi Email Template</title>
+    <style>
+        /* Reset styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.65;
+            color: #ece5d8;
+            background-color: #0e0e11;
+        }
+
+        /* Container */
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #0e0e11;
+        }
+
+        /* Header */
+        .header {
+            background-color: #0e0e11;
+            padding: 32px;
+            text-align: center;
+            border-bottom: 1px solid rgba(212, 148, 26, 0.2);
+        }
+
+        .logo {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 16px;
+        }
+
+        /* Content */
+        .content {
+            padding: 32px;
+            background-color: #0e0e11;
+        }
+
+        h1 {
+            font-family: Literata, Georgia, serif;
+            font-size: 28px;
+            font-weight: 700;
+            color: #ece5d8;
+            margin-bottom: 8px;
+            letter-spacing: -1px;
+            line-height: 1.2;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            color: #b0aea5;
+            margin-bottom: 24px;
+            font-weight: 400;
+        }
+
+        p {
+            font-size: 16px;
+            color: #ece5d8;
+            margin-bottom: 16px;
+            line-height: 1.7;
+        }
+
+        p.muted {
+            color: #b0aea5;
+            font-size: 14px;
+        }
+
+        /* CTA Button */
+        .button-container {
+            margin: 32px 0;
+            text-align: center;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background-color: #d4941a;
+            color: #0e0e11;
+            padding: 14px 36px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 16px;
+            letter-spacing: 0.5px;
+        }
+
+        .cta-button:hover {
+            opacity: 0.9;
+        }
+
+        /* Divider */
+        .divider {
+            border: none;
+            border-top: 1px solid rgba(212, 148, 26, 0.3);
+            margin: 32px 0;
+        }
+
+        /* Footer */
+        .footer {
+            background-color: #151518;
+            padding: 24px 32px;
+            text-align: center;
+            border-top: 1px solid rgba(212, 148, 26, 0.2);
+        }
+
+        .footer-text {
+            font-size: 12px;
+            color: #7a7572;
+            margin-bottom: 8px;
+        }
+
+        .footer-link {
+            color: #d4941a;
+            text-decoration: none;
+        }
+
+        .footer-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Accent elements */
+        .accent {
+            color: #d4941a;
+        }
+
+        .accent-box {
+            background-color: #151518;
+            border-left: 4px solid #d4941a;
+            padding: 16px;
+            margin: 24px 0;
+            border-radius: 4px;
+        }
+
+        .accent-box p {
+            margin-bottom: 0;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .content, .header, .footer {
+                padding: 24px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+
+            p {
+                font-size: 14px;
+            }
+
+            .cta-button {
+                padding: 12px 28px;
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <!-- Header with logo -->
+        <div class="header">
+            <svg class="logo" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="100" cy="100" r="95" fill="none" stroke="#d4941a" stroke-width="3" opacity="0.6"/>
+                <circle cx="100" cy="100" r="90" fill="#0e0e11" stroke="#d4941a" stroke-width="2"/>
+                <circle cx="100" cy="100" r="88" fill="none" stroke="#d4941a" stroke-width="1" opacity="0.4"/>
+                <circle cx="100" cy="100" r="12" fill="#d4941a"/>
+                <circle cx="100" cy="100" r="14" fill="none" stroke="#d4941a" stroke-width="1" opacity="0.3"/>
+                <circle cx="75" cy="55" r="8" fill="#d4941a" opacity="0.8"/>
+                <circle cx="70" cy="45" r="5" fill="#d4941a" opacity="0.6"/>
+                <circle cx="80" cy="40" r="6" fill="#d4941a" opacity="0.7"/>
+                <circle cx="125" cy="55" r="8" fill="#d4941a" opacity="0.8"/>
+                <circle cx="130" cy="45" r="5" fill="#d4941a" opacity="0.6"/>
+                <circle cx="120" cy="40" r="6" fill="#d4941a" opacity="0.7"/>
+                <circle cx="100" cy="30" r="7" fill="#ece5d8" opacity="0.9"/>
+            </svg>
+        </div>
+
+        <!-- Main content -->
+        <div class="content">
+            <h1>Subject Line Goes Here</h1>
+            <p class="subtitle">A brief subheading that sets context</p>
+
+            <p>Opening paragraph that establishes emotional truth before logic. This is where you acknowledge the person's experience or need.</p>
+
+            <p>Second paragraph that provides clear, specific information. Use short sentences for facts. Medium sentences to ease thinking. Only longer sentences for complex logic.</p>
+
+            <div class="accent-box">
+                <p>Key insight or important detail highlighted here. This could be a statistic, quote, or critical point.</p>
+            </div>
+
+            <p>Paragraph that builds on the previous points, moving from what is true to what's possible.</p>
+
+            <div class="button-container">
+                <a href="#" class="cta-button">Learn More</a>
+            </div>
+
+            <p>Closing paragraph that reinforces the core message and creates clarity about next steps.</p>
+
+            <hr class="divider">
+
+            <p class="muted">Questions? <a href="mailto:hello@openbodhi.io" class="footer-link">Contact us</a> or join the <a href="#" class="footer-link">conversations</a>.</p>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p class="footer-text">© 2026 OpenBodhi. All rights reserved.</p>
+            <p class="footer-text">
+                <a href="#" class="footer-link">Privacy</a> •
+                <a href="#" class="footer-link">Terms</a> •
+                <a href="#" class="footer-link">GitHub</a>
+            </p>
+            <p class="footer-text" style="margin-top: 12px; color: #5a8a75;">
+                Thinking organized through density.
+            </p>
+        </div>
+    </div>
+</body>
+</html>

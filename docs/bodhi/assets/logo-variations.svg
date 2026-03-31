@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600">
+  <defs>
+    <!-- Define the reusable circle and symbol for consistency -->
+    <g id="bodhi-icon">
+      <!-- Outer breathing ring (amber) -->
+      <circle cx="100" cy="100" r="95" fill="none" stroke="#d4941a" stroke-width="3" opacity="0.6"/>
+      <!-- Main circle background (deep) -->
+      <circle cx="100" cy="100" r="90" fill="#0e0e11" stroke="#d4941a" stroke-width="2"/>
+      <!-- Inner glow circle -->
+      <circle cx="100" cy="100" r="88" fill="none" stroke="#d4941a" stroke-width="1" opacity="0.4"/>
+
+      <!-- Central Bodhi seed (golden) -->
+      <circle cx="100" cy="100" r="12" fill="#d4941a"/>
+      <!-- Seed glow -->
+      <circle cx="100" cy="100" r="14" fill="none" stroke="#d4941a" stroke-width="1" opacity="0.3"/>
+
+      <!-- Ascending branches (representing thought emergence) -->
+      <!-- Left branch cluster -->
+      <circle cx="75" cy="55" r="8" fill="#d4941a" opacity="0.8"/>
+      <circle cx="70" cy="45" r="5" fill="#d4941a" opacity="0.6"/>
+      <circle cx="80" cy="40" r="6" fill="#d4941a" opacity="0.7"/>
+      <!-- Right branch cluster -->
+      <circle cx="125" cy="55" r="8" fill="#d4941a" opacity="0.8"/>
+      <circle cx="130" cy="45" r="5" fill="#d4941a" opacity="0.6"/>
+      <circle cx="120" cy="40" r="6" fill="#d4941a" opacity="0.7"/>
+      <!-- Top synthesis -->
+      <circle cx="100" cy="30" r="7" fill="#ece5d8" opacity="0.9"/>
+
+      <!-- Bridge connections (sage/green) -->
+      <path d="M 85 65 Q 75 60 70 50" stroke="#5a8a75" stroke-width="1.5" fill="none" opacity="0.5"/>
+      <path d="M 115 65 Q 125 60 130 50" stroke="#5a8a75" stroke-width="1.5" fill="none" opacity="0.5"/>
+      <path d="M 100 88 L 100 55" stroke="#5a8a75" stroke-width="1.5" fill="none" opacity="0.4"/>
+    </g>
+
+    <style>
+      .logo-text-full { font-family: 'Literata', Georgia, serif; font-size: 48px; font-weight: 700; fill: #ece5d8; letter-spacing: -1px; }
+      .logo-text-sub { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 16px; font-weight: 400; fill: #b0aea5; letter-spacing: 0.5px; }
+      .logo-divider { stroke: #d4941a; stroke-width: 1; opacity: 0.3; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="600" fill="#0e0e11"/>
+  <rect x="0" y="0" width="600" height="600" fill="#0e0e11"/>
+  <rect x="600" y="0" width="600" height="600" fill="#151518"/>
+
+  <!-- ===== LEFT COLUMN: PRIMARY MARKS ===== -->
+
+  <!-- 1. FULL LOGO (horizontal lockup) -->
+  <g id="full-logo">
+    <!-- Icon -->
+    <use href="#bodhi-icon" x="0" y="0" width="200" height="200"/>
+    <!-- Text -->
+    <text x="220" y="125" class="logo-text-full">OpenBodhi</text>
+    <!-- Subtext -->
+    <text x="220" y="155" class="logo-text-sub">a thinking partner</text>
+  </g>
+
+  <!-- 2. ICON ONLY (circle mark) -->
+  <g id="icon-only">
+    <use href="#bodhi-icon" x="100" y="300" width="200" height="200"/>
+    <!-- Label -->
+    <text x="100" y="540" class="logo-text-sub" text-anchor="middle">Icon Mark</text>
+  </g>
+
+  <!-- ===== RIGHT COLUMN: VARIATIONS ===== -->
+
+  <!-- 3. STACKED LOCKUP (vertical) -->
+  <g id="stacked-lockup" transform="translate(650, 50)">
+    <circle cx="80" cy="50" r="60" fill="#0e0e11" stroke="#d4941a" stroke-width="2"/>
+    <circle cx="80" cy="50" r="55" fill="none" stroke="#d4941a" stroke-width="1" opacity="0.3"/>
+    <circle cx="80" cy="50" r="10" fill="#d4941a"/>
+    <!-- Simplified branches for small size -->
+    <circle cx="65" cy="25" r="5" fill="#d4941a" opacity="0.7"/>
+    <circle cx="95" cy="25" r="5" fill="#d4941a" opacity="0.7"/>
+    <circle cx="80" cy="15" r="4" fill="#ece5d8"/>
+    <!-- Brand text below -->
+    <text x="80" y="150" class="logo-text-full" text-anchor="middle">OpenBodhi</text>
+    <text x="80" y="175" class="logo-text-sub" text-anchor="middle">consciousness organized</text>
+  </g>
+
+  <!-- 4. TEXT-ONLY LOCKUP -->
+  <g id="text-lockup" transform="translate(650, 300)">
+    <text x="0" y="50" class="logo-text-full">OpenBodhi</text>
+    <line x1="0" y1="60" x2="280" y2="60" class="logo-divider"/>
+    <text x="0" y="95" class="logo-text-sub">thinking organized through emergence</text>
+  </g>
+
+  <!-- 5. HORIZONTAL SYMBOL (abbreviated) -->
+  <g id="horizontal-symbol" transform="translate(650, 450)">
+    <!-- Simplified horizontal arrangement -->
+    <circle cx="40" cy="50" r="35" fill="#0e0e11" stroke="#d4941a" stroke-width="1.5"/>
+    <circle cx="40" cy="50" r="8" fill="#d4941a"/>
+    <circle cx="20" cy="30" r="3" fill="#d4941a" opacity="0.6"/>
+    <circle cx="60" cy="30" r="3" fill="#d4941a" opacity="0.6"/>
+    <circle cx="40" cy="15" r="2" fill="#ece5d8"/>
+    <!-- Label -->
+    <text x="110" y="60" class="logo-text-sub">Symbol mark (small)</text>
+  </g>
+
+  <!-- SIZE GUIDES (right edge) -->
+  <g transform="translate(1050, 50)" opacity="0.5">
+    <text class="logo-text-sub" font-size="12" fill="#7a7572">SIZE SCALES:</text>
+    <text class="logo-text-sub" font-size="11" fill="#7a7572" y="20">• Favicon: 16×16px</text>
+    <text class="logo-text-sub" font-size="11" fill="#7a7572" y="40">• Social: 200×200px</text>
+    <text class="logo-text-sub" font-size="11" fill="#7a7572" y="60">• Logo: 400×400px+</text>
+    <text class="logo-text-sub" font-size="11" fill="#7a7572" y="80">• Banner: 1200×630px</text>
+    <text class="logo-text-sub" font-size="11" fill="#7a7572" y="100">• Print: 2400×1260px+</text>
+  </g>
+
+  <!-- COLOR REFERENCE (bottom) -->
+  <g transform="translate(0, 560)">
+    <rect x="0" y="0" width="30" height="30" fill="#d4941a"/>
+    <text class="logo-text-sub" x="40" y="20">#d4941a Amber (energy)</text>
+
+    <rect x="300" y="0" width="30" height="30" fill="#5a8a75"/>
+    <text class="logo-text-sub" x="340" y="20">#5a8a75 Sage (grounded)</text>
+
+    <rect x="600" y="0" width="30" height="30" fill="#ece5d8"/>
+    <text class="logo-text-sub" x="640" y="20">#ece5d8 Warm white (clarity)</text>
+
+    <rect x="900" y="0" width="30" height="30" fill="#0e0e11" stroke="#7a7572" stroke-width="1"/>
+    <text class="logo-text-sub" x="940" y="20">#0e0e11 Deep dark (background)</text>
+  </g>
+</svg>
