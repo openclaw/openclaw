@@ -413,7 +413,6 @@ type DispatchWrapperSpec = {
 };
 
 const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
-  { name: "caffeinate", unwrap: unwrapCaffeinateInvocation, transparentUsage: true },
   {
     name: "arch",
     unwrap: (argv, platform) =>

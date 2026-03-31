@@ -133,16 +133,6 @@ describe("unwrapEnvInvocation", () => {
 describe("unwrapKnownDispatchWrapperInvocation", () => {
   test.each([
     {
-      argv:
-        process.platform === "darwin"
-          ? ["arch", "-arm64", "bash", "-lc", "echo hi"]
-          : ["caffeinate", "-d", "-w", "42", "bash", "-lc", "echo hi"],
-      expected:
-        process.platform === "darwin"
-          ? { kind: "unwrapped", wrapper: "arch", argv: ["bash", "-lc", "echo hi"] }
-          : { kind: "unwrapped", wrapper: "caffeinate", argv: ["bash", "-lc", "echo hi"] },
-    },
-    {
       argv: ["caffeinate", "-d", "-w", "42", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "caffeinate", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -258,14 +248,6 @@ describe("resolveDispatchWrapperTrustPlan", () => {
 
   test.each([
     {
-      argv:
-        process.platform === "darwin"
-          ? ["arch", "-arm64", "bash", "-lc", "echo hi"]
-          : ["caffeinate", "-d", "-t", "60", "bash", "-lc", "echo hi"],
-      wrapper: process.platform === "darwin" ? "arch" : "caffeinate",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-    },
-    {
       argv: ["caffeinate", "-d", "-t", "60", "bash", "-lc", "echo hi"],
       wrapper: "caffeinate",
       effectiveArgv: ["bash", "-lc", "echo hi"],
@@ -307,6 +289,11 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     },
     ...(process.platform === "darwin"
       ? [
+          {
+            argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
+            wrapper: "arch",
+            effectiveArgv: ["bash", "-lc", "echo hi"],
+          },
           {
             argv: ["xcrun", "bash", "-lc", "echo hi"],
             wrapper: "xcrun",
