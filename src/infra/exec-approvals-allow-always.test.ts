@@ -28,6 +28,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     dir: string;
     env: Record<string, string | undefined>;
     safeBins: ReturnType<typeof resolveSafeBins>;
+    strictInlineEval?: boolean;
   }) {
     const analysis = evaluateShellAllowlist({
       command: params.command,
@@ -44,6 +45,7 @@ describe("resolveAllowAlwaysPatterns", () => {
         cwd: params.dir,
         env: params.env,
         platform: process.platform,
+        strictInlineEval: params.strictInlineEval,
       }),
     };
   }
@@ -120,6 +122,30 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   }
 
+  function expectShellScriptFallbackRejected(command: string) {
+    const { dir, scriptsDir, script, env, safeBins } = createShellScriptFixture();
+    const rcFile = path.join(scriptsDir, "evilrc");
+    fs.writeFileSync(rcFile, "echo blocked\n");
+
+    const { persisted } = resolvePersistedPatterns({
+      command,
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command,
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+  }
+
   function expectPositionalArgvCarrierRejected(command: string) {
     const dir = makeTempDir();
     const touch = makeExecutable(dir, "touch");
@@ -185,6 +211,54 @@ describe("resolveAllowAlwaysPatterns", () => {
       ],
     });
     expect(patterns).toEqual([]);
+  });
+
+  it("persists benign awk interpreters when strict inline-eval is enabled", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const awk = makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: "awk -F, -f script.awk data.csv",
+      dir,
+      env,
+      safeBins,
+      strictInlineEval: true,
+    });
+    expect(persisted).toEqual([awk]);
+
+    const second = evaluateShellAllowlist({
+      command: "awk -F, -f script.awk data.csv",
+      allowlist: persisted.map((pattern) => ({ pattern })),
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(true);
+  });
+
+  it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "awk");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
+      dir,
+      env,
+      safeBins,
+      strictInlineEval: true,
+    });
+    expect(persisted).toEqual([]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
@@ -281,6 +355,32 @@ describe("resolveAllowAlwaysPatterns", () => {
       env,
       safeBins,
     });
+  });
+
+  it("rejects shell rc and init-file options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
+  });
+
+  it("rejects shell rc and init-file equals options as persisted or allowlisted script paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile=scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file=scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file=scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      expectShellScriptFallbackRejected(command);
+    }
   });
 
   it("rejects shell-wrapper positional argv carriers", () => {
