@@ -11,8 +11,8 @@ export const DINFERENCE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 200_000,
     maxTokens: 128_000,
     cost: {
-      input: 0,
-      output: 0,
+      input: 0.75,
+      output: 2.4,
       cacheRead: 0,
       cacheWrite: 0,
     },
@@ -25,8 +25,8 @@ export const DINFERENCE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 200_000,
     maxTokens: 128_000,
     cost: {
-      input: 0,
-      output: 0,
+      input: 0.45,
+      output: 1.65,
       cacheRead: 0,
       cacheWrite: 0,
     },
@@ -39,8 +39,8 @@ export const DINFERENCE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 131_000,
     maxTokens: 32_000,
     cost: {
-      input: 0,
-      output: 0,
+      input: 0.0675,
+      output: 0.27,
       cacheRead: 0,
       cacheWrite: 0,
     },
