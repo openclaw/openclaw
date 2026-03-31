@@ -86,4 +86,32 @@ describe("createDraftStreamLoop", () => {
     expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(2);
     expect(sendOrEditStreamMessage.mock.calls[1]?.[0]).toBe("second");
   });
+
+  it("drains rescheduled buffered text immediately", async () => {
+    let resolveFirstSend: ((value: boolean | "reschedule") => void) | undefined;
+    const sendOrEditStreamMessage = vi.fn((text: string) => {
+      if (text === "first") {
+        return new Promise<boolean | "reschedule">((resolve) => {
+          resolveFirstSend = resolve;
+        });
+      }
+      return Promise.resolve(true);
+    });
+    const loop = createDraftStreamLoop({
+      throttleMs: 1000,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("first");
+    expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(1);
+
+    loop.update("second");
+    const drainPromise = loop.drain();
+    resolveFirstSend?.("reschedule");
+    await drainPromise;
+
+    expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(2);
+    expect(sendOrEditStreamMessage.mock.calls[1]?.[0]).toBe("second");
+  });
 });

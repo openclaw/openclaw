@@ -283,6 +283,46 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("drains buffered final text immediately after draft fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      let rejectDraftSend: ((reason?: unknown) => void) | undefined;
+      const api = createMockDraftApi();
+      api.sendMessageDraft.mockImplementationOnce(
+        () =>
+          new Promise<true>((_resolve, reject) => {
+            rejectDraftSend = reject;
+          }),
+      );
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        thread: { id: 42, scope: "dm" },
+      });
+
+      stream.update("Hello");
+      await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
+
+      stream.update("Hello again");
+      const stopPromise = stream.stop();
+      rejectDraftSend?.(
+        new Error(
+          "Call to 'sendMessageDraft' failed! (400: Bad Request: method sendMessageDraft can be used only in private chats)",
+        ),
+      );
+
+      await stopPromise;
+
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+      expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries DM message preview send without thread when thread is not found", async () => {
     const api = createMockDraftApi();
     api.sendMessage

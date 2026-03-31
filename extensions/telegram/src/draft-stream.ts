@@ -391,8 +391,8 @@ export function createTelegramDraftStream(params: {
   };
   const stop = async (): Promise<void> => {
     streamState.final = true;
-    await loop.flush();
-    await loop.flush();
+    await loop.drain();
+    await loop.drain();
   };
   const stopForClear = async (): Promise<void> => {
     streamState.stopped = true;
