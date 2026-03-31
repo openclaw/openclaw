@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkBrowserOrigin } from "./origin-check.js";
+import { checkBrowserOrigin, checkBrowserRequestHost } from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
   it.each([
@@ -90,5 +90,74 @@ describe("checkBrowserOrigin", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
+  });
+});
+
+describe("checkBrowserRequestHost", () => {
+  it.each([
+    {
+      name: "accepts explicit allowlist host matches",
+      input: {
+        requestHost: "control.example.com",
+        allowedOrigins: ["https://control.example.com"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "does not treat implicit default ports as equivalent allowlist matches",
+      input: {
+        requestHost: "control.example.com:443",
+        allowedOrigins: ["https://control.example.com"],
+      },
+      expected: { ok: false as const, reason: "host not allowed" },
+    },
+    {
+      name: "accepts loopback hosts without an allowlist",
+      input: {
+        requestHost: "127.0.0.1:18789",
+      },
+      expected: { ok: true as const, matchedBy: "local-loopback" as const },
+    },
+    {
+      name: "rejects non-loopback hosts when no allowlist is configured",
+      input: {
+        requestHost: "gateway.example.com:18789",
+      },
+      expected: { ok: false as const, reason: "host not allowed" },
+    },
+    {
+      name: "accepts any host when host-header fallback is explicitly enabled",
+      input: {
+        requestHost: "gateway.internal:18789",
+        allowHostHeaderOriginFallback: true,
+      },
+      expected: { ok: true as const, matchedBy: "host-header-fallback" as const },
+    },
+    {
+      name: "rejects disallowed non-loopback hosts",
+      input: {
+        requestHost: "evil.example",
+        allowedOrigins: ["https://control.example.com"],
+      },
+      expected: { ok: false as const, reason: "host not allowed" },
+    },
+    {
+      name: "rejects missing host headers",
+      input: {
+        requestHost: "",
+        allowedOrigins: ["https://control.example.com"],
+      },
+      expected: { ok: false as const, reason: "host missing or invalid" },
+    },
+    {
+      name: "rejects undefined host headers",
+      input: {
+        requestHost: undefined,
+        allowedOrigins: ["https://control.example.com"],
+      },
+      expected: { ok: false as const, reason: "host missing or invalid" },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(checkBrowserRequestHost(input)).toEqual(expected);
   });
 });

@@ -32,6 +32,7 @@ import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
+  isControlUiHttpSurfaceRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
 import { handleOpenAiEmbeddingsHttpRequest } from "./embeddings-http.js";
@@ -60,6 +61,7 @@ import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { checkBrowserRequestHost } from "./origin-check.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   authorizeCanvasRequest,
@@ -807,10 +809,25 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      const requestHost = Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host;
       const mattermostSlashCallbackPaths = resolveMattermostSlashCallbackPaths(configSnapshot);
       const pluginPathContext = handlePluginRequest
         ? resolvePluginRoutePathContext(requestPath)
         : null;
+      if (controlUiEnabled && isControlUiHttpSurfaceRequest(req, { basePath: controlUiBasePath })) {
+        const controlUiHostCheck = checkBrowserRequestHost({
+          requestHost,
+          allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
+          allowHostHeaderOriginFallback:
+            configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+        });
+        if (!controlUiHostCheck.ok) {
+          res.statusCode = 403;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Forbidden");
+          return;
+        }
+      }
       const requestStages: GatewayHttpRequestStage[] = [
         {
           name: "hooks",

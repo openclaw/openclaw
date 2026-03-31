@@ -1,6 +1,6 @@
-import { isLoopbackHost, normalizeHostHeader } from "./net.js";
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
-type OriginCheckResult =
+type BrowserRequestCheckResult =
   | {
       ok: true;
       matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
@@ -26,13 +26,63 @@ function parseOrigin(
   }
 }
 
+function parseAllowedOriginHosts(allowedOrigins?: string[]): Set<string> {
+  const hosts = new Set<string>();
+  for (const value of allowedOrigins ?? []) {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed === "*") {
+      hosts.add("*");
+      continue;
+    }
+    const parsed = parseOrigin(trimmed);
+    if (!parsed) {
+      continue;
+    }
+    // URL.host omits default ports, so an allowlist entry like
+    // https://control.example.com will not match Host: control.example.com:443.
+    // Keep this aligned with the existing origin-based matching behavior.
+    hosts.add(parsed.host);
+  }
+  return hosts;
+}
+
+export function checkBrowserRequestHost(params: {
+  requestHost?: string;
+  allowedOrigins?: string[];
+  allowHostHeaderOriginFallback?: boolean;
+}): BrowserRequestCheckResult {
+  const requestHost = normalizeHostHeader(params.requestHost);
+  if (!requestHost) {
+    return { ok: false, reason: "host missing or invalid" };
+  }
+
+  const allowlistHosts = parseAllowedOriginHosts(params.allowedOrigins);
+  if (allowlistHosts.has("*") || allowlistHosts.has(requestHost)) {
+    return { ok: true, matchedBy: "allowlist" };
+  }
+
+  if (params.allowHostHeaderOriginFallback === true) {
+    return { ok: true, matchedBy: "host-header-fallback" };
+  }
+
+  const hostname = resolveHostName(requestHost);
+  if (hostname && isLoopbackHost(hostname)) {
+    return { ok: true, matchedBy: "local-loopback" };
+  }
+
+  return { ok: false, reason: "host not allowed" };
+}
+
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
-}): OriginCheckResult {
+}): BrowserRequestCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
     return { ok: false, reason: "origin missing or invalid" };

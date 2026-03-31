@@ -220,6 +220,38 @@ export function handleControlUiAvatarRequest(
   }
 }
 
+export function isControlUiHttpSurfaceRequest(
+  req: Pick<IncomingMessage, "method" | "url">,
+  opts?: Pick<ControlUiRequestOptions, "basePath">,
+): boolean {
+  const urlRaw = req.url;
+  if (!urlRaw) {
+    return false;
+  }
+  if (!isReadHttpMethod(req.method)) {
+    return false;
+  }
+
+  const url = new URL(urlRaw, "http://localhost");
+  const basePath = normalizeControlUiBasePath(opts?.basePath);
+  const pathname = url.pathname;
+  const avatarPrefix = basePath
+    ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
+    : `${CONTROL_UI_AVATAR_PREFIX}/`;
+  if (pathname.startsWith(avatarPrefix)) {
+    return true;
+  }
+
+  return (
+    classifyControlUiRequest({
+      basePath,
+      pathname,
+      search: url.search,
+      method: req.method,
+    }).kind !== "not-control-ui"
+  );
+}
+
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));

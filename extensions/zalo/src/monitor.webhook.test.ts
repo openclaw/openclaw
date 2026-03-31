@@ -238,6 +238,65 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
+  it("does not share replay dedupe state across authenticated accounts", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    const unregisterA = registerTarget({
+      path: "/hook-account-a",
+      secret: "secret-a",
+      statusSink: sinkA,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "account-a",
+      },
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-account-b",
+      secret: "secret-b",
+      statusSink: sinkB,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "account-b",
+      },
+    });
+    const payload = createTextUpdate({
+      messageId: "shared-msg-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const responseA = await fetch(`${baseUrl}/hook-account-a`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-a",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const responseB = await fetch(`${baseUrl}/hook-account-b`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-b",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(responseA.status).toBe(200);
+        expect(responseB.status).toBe(200);
+        expect(sinkA).toHaveBeenCalledTimes(1);
+        expect(sinkB).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
   it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
     const {
       core,
