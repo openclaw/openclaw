@@ -1,13 +1,18 @@
 import { Command } from "commander";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerOnboardCommand } from "./register.onboard.js";
 
-const setupWizardCommandMock = vi.fn();
+const mocks = vi.hoisted(() => ({
+  setupWizardCommandMock: vi.fn(),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
+}));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const setupWizardCommandMock = mocks.setupWizardCommandMock;
+const runtime = mocks.runtime;
 
 vi.mock("../../commands/auth-choice-options.static.js", () => ({
   formatStaticAuthChoiceChoicesForCli: () => "token|oauth",
@@ -38,34 +43,12 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../../commands/onboard.js", () => ({
-  setupWizardCommand: setupWizardCommandMock,
+  setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
 }));
-
-const mockedModuleIds = [
-  "../../commands/auth-choice-options.static.js",
-  "../../commands/auth-choice-options.js",
-  "../../commands/onboard-core-auth-flags.js",
-  "../../plugins/provider-auth-choices.js",
-  "../../commands/onboard.js",
-  "../../runtime.js",
-];
-
-let registerOnboardCommand: typeof import("./register.onboard.js").registerOnboardCommand;
-
-beforeAll(async () => {
-  ({ registerOnboardCommand } = await import("./register.onboard.js"));
-});
-
-afterAll(() => {
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
-  vi.resetModules();
-});
 
 describe("registerOnboardCommand", () => {
   async function runCli(args: string[]) {

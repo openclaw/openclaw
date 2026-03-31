@@ -1,6 +1,6 @@
 import path from "node:path";
 import { z } from "openclaw/plugin-sdk/zod";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
 
 const hoisted = vi.hoisted(() => {
@@ -273,9 +273,23 @@ vi.mock("./startup-verification.js", () => ({
   ensureMatrixStartupVerification: vi.fn(),
 }));
 
+let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
+
 describe("monitorMatrixProvider", () => {
+  beforeAll(async () => {
+    ({ monitorMatrixProvider } = await import("./index.js"));
+  });
+
+  async function startMonitorAndAbortAfterStartup(): Promise<void> {
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+    });
+    abortController.abort();
+    await monitorPromise;
+  }
   beforeEach(() => {
-    vi.resetModules();
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
@@ -295,12 +309,20 @@ describe("monitorMatrixProvider", () => {
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });
 
-  it("registers Matrix thread bindings before starting the client", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
+  it("returns immediately when the abort signal is already canceled", async () => {
     const abortController = new AbortController();
     abortController.abort();
 
     await monitorMatrixProvider({ abortSignal: abortController.signal });
+
+    expect(hoisted.callOrder).toEqual([]);
+    expect(hoisted.resolveTextChunkLimit).not.toHaveBeenCalled();
+    expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
+    expect(hoisted.setActiveMatrixClient).not.toHaveBeenCalled();
+  });
+
+  it("registers Matrix thread bindings before starting the client", async () => {
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.callOrder).toEqual([
       "prepare-client",
@@ -312,11 +334,7 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("resolves text chunk limit for the effective Matrix account", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
-    const abortController = new AbortController();
-    abortController.abort();
-
-    await monitorMatrixProvider({ abortSignal: abortController.signal });
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.resolveTextChunkLimit).toHaveBeenCalledWith(
       expect.anything(),
@@ -326,7 +344,6 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("cleans up thread bindings and shared clients when startup fails", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
     hoisted.state.startClientError = new Error("start failed");
 
     await expect(monitorMatrixProvider()).rejects.toThrow("start failed");
@@ -340,11 +357,7 @@ describe("monitorMatrixProvider", () => {
 
   it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
     hoisted.client.hasPersistedSyncState.mockReturnValue(true);
-    const { monitorMatrixProvider } = await import("./index.js");
-    const abortController = new AbortController();
-    abortController.abort();
-
-    await monitorMatrixProvider({ abortSignal: abortController.signal });
+    await startMonitorAndAbortAfterStartup();
 
     expect(hoisted.createMatrixRoomMessageHandler).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -354,7 +367,6 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("stops sync, drains decryptions, then waits for in-flight handlers before persisting", async () => {
-    const { monitorMatrixProvider } = await import("./index.js");
     const abortController = new AbortController();
     let resolveHandler: (() => void) | null = null;
 
@@ -428,6 +440,12 @@ describe("monitorMatrixProvider", () => {
 });
 
 describe("matrix plugin registration", () => {
+  let matrixPlugin: typeof import("../../../index.js").default;
+
+  beforeAll(async () => {
+    ({ default: matrixPlugin } = await import("../../../index.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -479,7 +497,6 @@ describe("matrix plugin registration", () => {
   }, 240_000);
 
   it("registers the channel without bootstrapping crypto runtime", async () => {
-    const { default: matrixPlugin } = await import("../../../index.js");
     const runtime = {} as never;
     const registerChannel = vi.fn();
     matrixPlugin.register({

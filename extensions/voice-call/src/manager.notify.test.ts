@@ -15,11 +15,17 @@ class FailFirstPlayTtsProvider extends FakeProvider {
 
 class DelayedPlayTtsProvider extends FakeProvider {
   private releasePlayTts: (() => void) | null = null;
+  private resolvePlayTtsStarted: (() => void) | null = null;
   readonly playTtsStarted = vi.fn();
+  readonly playTtsStartedPromise = new Promise<void>((resolve) => {
+    this.resolvePlayTtsStarted = resolve;
+  });
 
   override async playTts(input: Parameters<FakeProvider["playTts"]>[0]): Promise<void> {
     this.playTtsCalls.push(input);
     this.playTtsStarted();
+    this.resolvePlayTtsStarted?.();
+    this.resolvePlayTtsStarted = null;
     await new Promise<void>((resolve) => {
       this.releasePlayTts = resolve;
     });
@@ -301,9 +307,8 @@ describe("CallManager notify and mapping", () => {
     expect(provider.playTtsCalls).toHaveLength(0);
 
     const first = manager.speakInitialMessage("call-uuid");
-    await vi.waitFor(() => {
-      expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
-    });
+    await provider.playTtsStartedPromise;
+    expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
 
     const second = manager.speakInitialMessage("call-uuid");
     await new Promise((resolve) => setTimeout(resolve, 0));

@@ -645,7 +645,6 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
-    const { RateLimitError } = await import("@buape/carbon");
     const runtime = baseRuntime();
     const request = new Request("https://discord.com/api/v10/applications/commands", {
       method: "PUT",

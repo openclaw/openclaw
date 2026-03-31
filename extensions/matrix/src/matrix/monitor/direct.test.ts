@@ -145,9 +145,10 @@ describe("createDirectRoomTracker", () => {
     expect(client.getRoomStateEvent).not.toHaveBeenCalled();
   });
 
-  it("treats sender is_direct member state as a DM signal", async () => {
+  it("does not treat sender is_direct member state as a DM signal", async () => {
     const client = createMockClient({
       isDm: false,
+      dmCacheAvailable: true,
       stateEvents: {
         "!room:example.org|m.room.member|@alice:example.org": { is_direct: true },
       },
@@ -159,7 +160,7 @@ describe("createDirectRoomTracker", () => {
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("treats self is_direct member state as a DM signal", async () => {
@@ -177,6 +178,24 @@ describe("createDirectRoomTracker", () => {
         senderId: "@alice:example.org",
       }),
     ).resolves.toBe(true);
+  });
+
+  it("treats self is_direct false member state as a non-DM signal", async () => {
+    const client = createMockClient({
+      isDm: false,
+      dmCacheAvailable: false,
+      stateEvents: {
+        "!room:example.org|m.room.member|@bot:example.org": { is_direct: false },
+      },
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
   });
 
   it("does not classify 2-member rooms whose sender is not a joined member when falling back", async () => {
