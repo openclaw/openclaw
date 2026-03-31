@@ -15,12 +15,14 @@ class FakeWebSocket implements MattermostWebSocketLike {
   private messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
   private closeListeners: Array<(code: number, reason: Buffer) => void> = [];
   private errorListeners: Array<(err: unknown) => void> = [];
+  private pongListeners: Array<() => void> = [];
 
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "open" | "message" | "close" | "error", listener: unknown): void {
+  on(event: "pong", listener: () => void): void;
+  on(event: "open" | "message" | "close" | "error" | "pong", listener: unknown): void {
     if (event === "open") {
       this.openListeners.push(listener as () => void);
       return;
@@ -33,7 +35,18 @@ class FakeWebSocket implements MattermostWebSocketLike {
       this.closeListeners.push(listener as (code: number, reason: Buffer) => void);
       return;
     }
+    if (event === "pong") {
+      this.pongListeners.push(listener as () => void);
+      return;
+    }
     this.errorListeners.push(listener as (err: unknown) => void);
+  }
+
+  ping(): void {
+    // Simulate pong reply
+    for (const listener of this.pongListeners) {
+      listener();
+    }
   }
 
   send(data: string): void {
