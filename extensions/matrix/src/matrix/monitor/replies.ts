@@ -3,7 +3,7 @@ import type {
   OpenClawConfig,
   ReplyPayload,
   RuntimeEnv,
-} from "openclaw/plugin-sdk/matrix";
+} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
