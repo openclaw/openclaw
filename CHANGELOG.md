@@ -611,7 +611,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/Matrix: encrypt E2EE image thumbnails with `thumbnail_file` while keeping unencrypted-room previews on `thumbnail_url`, so encrypted Matrix image events keep thumbnail metadata without leaking plaintext previews. (#54711) thanks @frischeDaten.
 - Telegram/forum topics: keep native `/new` and `/reset` routed to the active topic by preserving the topic target on forum-thread command context. (#35963)
 - Status/port diagnostics: treat single-process dual-stack loopback gateway listeners as healthy in `openclaw status --all`, suppressing false "port already in use" conflict warnings. (#53398) Thanks @DanWebb1949.
-- CLI/dotenv: block workspace `.env` files from overriding pinned helper interpreter selectors, so repo-local dotenv files can no longer redirect filesystem-safe helper execution.
 
 ### Breaking
 
