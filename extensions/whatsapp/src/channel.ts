@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
-import { handleWhatsAppAction } from "./action-runtime.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
@@ -37,7 +36,6 @@ import {
   normalizeWhatsAppTarget,
 } from "./runtime-api.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
@@ -71,8 +69,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     outbound: {
       ...createWhatsAppOutboundBase({
         chunker: chunkText,
-        sendMessageWhatsApp,
-        sendPollWhatsApp,
+        sendMessageWhatsApp: (...args) =>
+          getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
+        sendPollWhatsApp: (...args) =>
+          getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
         shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
         resolveTarget: ({ to, allowFrom, mode }) =>
           resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
@@ -190,7 +190,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           const messageId = String(messageIdRaw);
           const emoji = readStringParam(params, "emoji", { allowEmpty: true });
           const remove = typeof params.remove === "boolean" ? params.remove : undefined;
-          return await handleWhatsAppAction(
+          return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
             {
               action: "react",
               chatJid:
