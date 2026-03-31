@@ -11,8 +11,6 @@ import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/ag
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -20,6 +18,8 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { textToSpeech } from "openclaw/plugin-sdk/speech-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
@@ -72,6 +72,23 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   if (!override) {
     return base;
   }
+  const baseProviders = base.providers ?? {};
+  const overrideProviders = override.providers ?? {};
+  const mergedProviders = Object.fromEntries(
+    [...new Set([...Object.keys(baseProviders), ...Object.keys(overrideProviders)])].map(
+      (providerId) => {
+        const baseProvider = baseProviders[providerId] ?? {};
+        const overrideProvider = overrideProviders[providerId] ?? {};
+        return [
+          providerId,
+          {
+            ...baseProvider,
+            ...overrideProvider,
+          },
+        ];
+      },
+    ),
+  );
   return {
     ...base,
     ...override,
@@ -79,22 +96,7 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
       ...base.modelOverrides,
       ...override.modelOverrides,
     },
-    elevenlabs: {
-      ...base.elevenlabs,
-      ...override.elevenlabs,
-      voiceSettings: {
-        ...base.elevenlabs?.voiceSettings,
-        ...override.elevenlabs?.voiceSettings,
-      },
-    },
-    openai: {
-      ...base.openai,
-      ...override.openai,
-    },
-    edge: {
-      ...base.edge,
-      ...override.edge,
-    },
+    ...(Object.keys(mergedProviders).length === 0 ? {} : { providers: mergedProviders }),
   };
 }
 
@@ -645,11 +647,10 @@ export class DiscordVoiceManager {
       cfg: this.params.cfg,
       override: this.params.discordConfig.voice?.tts,
     });
-    const directive = parseTtsDirectives(
-      replyText,
-      ttsConfig.modelOverrides,
-      ttsConfig.openai.baseUrl,
-    );
+    const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {
+      cfg: ttsCfg,
+      providerConfigs: ttsConfig.providerConfigs,
+    });
     const speakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
     if (!speakText) {
       logVoiceVerbose(

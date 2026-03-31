@@ -140,7 +140,7 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
-  test("preserves scopes for trusted-proxy non-control-ui browser sessions", async () => {
+  test("clears scopes for trusted-proxy non-control-ui browser sessions", async () => {
     await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {
       const payload = await connectOk(ws, {
         client: TEST_OPERATOR_CLIENT,
@@ -150,7 +150,8 @@ describe("gateway auth browser hardening", () => {
       expect(payload.type).toBe("hello-ok");
 
       const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(true);
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
     });
   });
 
@@ -211,6 +212,32 @@ describe("gateway auth browser hardening", () => {
         const res = await connectReq(ws, {
           token: "secret",
           client: TEST_OPERATOR_CLIENT,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("rejects browser-origin connects that claim to be tui clients", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: "https://attacker.example" });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            version: "1.0.0",
+            platform: "darwin",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+          device: null,
         });
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("origin not allowed");

@@ -99,6 +99,18 @@ function asProviderBaseUrl(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+const TALK_ADMIN_SCOPE = "operator.admin";
+
+function requiresAdminToSetVoice(
+  channel: string,
+  gatewayClientScopes?: readonly string[],
+): boolean {
+  if (Array.isArray(gatewayClientScopes)) {
+    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
+  }
+  return channel === "webchat";
+}
+
 export default definePluginEntry({
   id: "talk-voice",
   name: "Talk Voice",
@@ -164,6 +176,12 @@ export default definePluginEntry({
         }
 
         if (action === "set") {
+          // Gateway callers can override messageChannel, so scope presence is
+          // the reliable signal for internal admin-only mutations.
+          if (requiresAdminToSetVoice(ctx.channel, ctx.gatewayClientScopes)) {
+            return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
+          }
+
           const query = tokens.slice(1).join(" ").trim();
           if (!query) {
             return { text: `Usage: ${commandLabel} set <voiceId|name>` };

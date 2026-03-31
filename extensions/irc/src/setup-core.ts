@@ -1,9 +1,9 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
+  createSetupInputPresenceValidator,
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicySetter,
   patchScopedAccountConfig,
@@ -102,16 +102,12 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ input }) => {
-    const setupInput = input as IrcSetupInput;
-    if (!setupInput.host?.trim()) {
-      return "IRC requires host.";
-    }
-    if (!setupInput.nick?.trim()) {
-      return "IRC requires nick.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    whenNotUseEnv: [
+      { someOf: ["host"], message: "IRC requires host." },
+      { someOf: ["nick"], message: "IRC requires nick." },
+    ],
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const setupInput = input as IrcSetupInput;
     const namedConfig = applyAccountNameToChannelSection({

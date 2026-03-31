@@ -25,6 +25,8 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
+import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 
@@ -40,6 +42,10 @@ export type MonitorMatrixOpts = {
 const DEFAULT_MEDIA_MAX_MB = 20;
 
 export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promise<void> {
+  // Fast-cancel callers should not pay the full Matrix startup/import cost.
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
   if (isBunRuntime()) {
     throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
@@ -136,20 +142,33 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  const inboundDeduper = await createMatrixInboundEventDeduper({
+    auth,
+    env: process.env,
+  });
+  const inFlightRoomMessages = new Set<Promise<void>>();
+  const waitForInFlightRoomMessages = async () => {
+    while (inFlightRoomMessages.size > 0) {
+      await Promise.allSettled(Array.from(inFlightRoomMessages));
+    }
+  };
   const cleanup = async () => {
     if (cleanedUp) {
       return;
     }
     cleanedUp = true;
     try {
+      client.stopSyncWithoutPersist();
+      await client.drainPendingDecryptions("matrix monitor shutdown");
+      await waitForInFlightRoomMessages();
       threadBindingManager?.stop();
-    } finally {
+      await inboundDeduper.stop();
       await releaseSharedClientInstance(client, "persist");
+    } finally {
       setActiveMatrixClient(null, auth.accountId);
     }
   };
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy: groupPolicyRaw, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
@@ -167,6 +186,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
   const replyToMode = opts.replyToMode ?? accountConfig.replyToMode ?? "off";
   const threadReplies = accountConfig.threadReplies ?? "inbound";
+  const dmThreadReplies = accountConfig.dm?.threadReplies;
   const threadBindingIdleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg,
     channel: "matrix",
@@ -182,19 +202,33 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", account.accountId);
+  const globalGroupChatHistoryLimit = (
+    cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
+  )?.groupChat?.historyLimit;
+  const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
+  const streaming: "partial" | "off" =
+    accountConfig.streaming === true || accountConfig.streaming === "partial" ? "partial" : "off";
   const startupMs = Date.now();
   const startupGraceMs = 0;
   // Cold starts should ignore old room history, but once we have a persisted
   // /sync cursor we want restart backlogs to replay just like other channels.
   const dropPreStartupMessages = !client.hasPersistedSyncState();
-  const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
+  const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+  const directTracker = createDirectRoomTracker(client, {
+    log: logVerboseMessage,
+    canPromoteRecentInvite: async (roomId) =>
+      shouldPromoteRecentInviteRoom({
+        roomId,
+        roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+        rooms: roomsConfig,
+      }),
+  });
   registerMatrixAutoJoin({ client, accountConfig, runtime });
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
 
-  const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
   const handleRoomMessage = createMatrixRoomMessageHandler({
     client,
     core,
@@ -208,22 +242,32 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds,
-    mentionRegexes,
     groupPolicy,
     replyToMode,
     threadReplies,
+    dmThreadReplies,
+    streaming,
     dmEnabled,
     dmPolicy,
     textLimit,
     mediaMaxBytes,
+    historyLimit,
     startupMs,
     startupGraceMs,
     dropPreStartupMessages,
+    inboundDeduper,
     directTracker,
     getRoomInfo,
     getMemberDisplayName,
     needsRoomAliasesForConfig,
   });
+  const trackRoomMessage = (roomId: string, event: Parameters<typeof handleRoomMessage>[1]) => {
+    const task = Promise.resolve(handleRoomMessage(roomId, event)).finally(() => {
+      inFlightRoomMessages.delete(task);
+    });
+    inFlightRoomMessages.add(task);
+    return task;
+  };
 
   try {
     threadBindingManager = await createMatrixThreadBindingManager({
@@ -243,13 +287,24 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       cfg,
       client,
       auth,
+      allowFrom,
+      dmEnabled,
+      dmPolicy,
+      readStoreAllowFrom: async () =>
+        await core.channel.pairing
+          .readAllowFromStore({
+            channel: "matrix",
+            env: process.env,
+            accountId: account.accountId,
+          })
+          .catch(() => []),
       directTracker,
       logVerboseMessage,
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
       logger,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
+      onRoomMessage: trackRoomMessage,
     });
 
     // Register Matrix thread bindings before the client starts syncing so threaded

@@ -330,7 +330,7 @@ OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent prep,
 ## Learn more
 
 - [Plugins](/tools/plugin)
-- [Plugin tool authoring](/plugins/agent-tools)
+- [Plugin tool authoring](/plugins/building-plugins#registering-agent-tools)
 
 ## Case study: community workflows
 
@@ -338,3 +338,9 @@ One public example: a “second brain” CLI + Lobster pipelines that manage thr
 
 - Thread: [https://x.com/plattenschieber/status/2014508656335770033](https://x.com/plattenschieber/status/2014508656335770033)
 - Repo: [https://github.com/bloomedai/brain-cli](https://github.com/bloomedai/brain-cli)
+
+## Related
+
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — scheduling Lobster workflows
+- [Automation Overview](/automation) — all automation mechanisms
+- [Tools Overview](/tools) — all available agent tools

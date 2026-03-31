@@ -44,6 +44,16 @@ describe("resolveEffectiveHomeDir", () => {
       homedir: () => " /fallback ",
       expected: "/fallback",
     },
+    {
+      name: "treats literal undefined env values as unset",
+      env: {
+        OPENCLAW_HOME: "undefined",
+        HOME: "undefined",
+        USERPROFILE: "null",
+      } as NodeJS.ProcessEnv,
+      homedir: () => " /fallback ",
+      expected: "/fallback",
+    },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveEffectiveHomeDir(env, homedir)).toBe(path.resolve(expected));
   });
@@ -72,28 +82,31 @@ describe("resolveEffectiveHomeDir", () => {
 });
 
 describe("resolveRequiredHomeDir", () => {
-  it("returns cwd when no home source is available", () => {
-    expect(
-      resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
+  it.each([
+    {
+      name: "returns cwd when no home source is available",
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => {
         throw new Error("no home");
-      }),
-    ).toBe(process.cwd());
-  });
-
-  it("returns a fully resolved path for OPENCLAW_HOME", () => {
-    const result = resolveRequiredHomeDir(
-      { OPENCLAW_HOME: "/custom/home" } as NodeJS.ProcessEnv,
-      () => "/fallback",
-    );
-    expect(result).toBe(path.resolve("/custom/home"));
-  });
-
-  it("returns cwd when OPENCLAW_HOME is tilde-only and no fallback home exists", () => {
-    expect(
-      resolveRequiredHomeDir({ OPENCLAW_HOME: "~" } as NodeJS.ProcessEnv, () => {
+      },
+      expected: process.cwd(),
+    },
+    {
+      name: "returns a fully resolved path for OPENCLAW_HOME",
+      env: { OPENCLAW_HOME: "/custom/home" } as NodeJS.ProcessEnv,
+      homedir: () => "/fallback",
+      expected: path.resolve("/custom/home"),
+    },
+    {
+      name: "returns cwd when OPENCLAW_HOME is tilde-only and no fallback home exists",
+      env: { OPENCLAW_HOME: "~" } as NodeJS.ProcessEnv,
+      homedir: () => {
         throw new Error("no home");
-      }),
-    ).toBe(process.cwd());
+      },
+      expected: process.cwd(),
+    },
+  ])("$name", ({ env, homedir, expected }) => {
+    expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
   });
 });
 
@@ -147,32 +160,43 @@ describe("expandHomePrefix", () => {
 });
 
 describe("resolveHomeRelativePath", () => {
-  it("returns blank input unchanged", () => {
-    expect(resolveHomeRelativePath("   ")).toBe("");
-  });
-
-  it("resolves trimmed relative and absolute paths", () => {
-    expect(resolveHomeRelativePath(" ./tmp/file.txt ")).toBe(path.resolve("./tmp/file.txt"));
-    expect(resolveHomeRelativePath(" /tmp/file.txt ")).toBe(path.resolve("/tmp/file.txt"));
-  });
-
-  it("expands tilde paths using the resolved home directory", () => {
-    expect(
-      resolveHomeRelativePath("~/docs", {
+  it.each([
+    {
+      name: "returns blank input unchanged",
+      input: "   ",
+      expected: "",
+    },
+    {
+      name: "resolves trimmed relative paths",
+      input: " ./tmp/file.txt ",
+      expected: path.resolve("./tmp/file.txt"),
+    },
+    {
+      name: "resolves trimmed absolute paths",
+      input: " /tmp/file.txt ",
+      expected: path.resolve("/tmp/file.txt"),
+    },
+    {
+      name: "expands tilde paths using the resolved home directory",
+      input: "~/docs",
+      opts: {
         env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
-      }),
-    ).toBe(path.resolve("/srv/openclaw-home/docs"));
-  });
-
-  it("falls back to cwd when tilde paths have no home source", () => {
-    expect(
-      resolveHomeRelativePath("~", {
+      },
+      expected: path.resolve("/srv/openclaw-home/docs"),
+    },
+    {
+      name: "falls back to cwd when tilde paths have no home source",
+      input: "~",
+      opts: {
         env: {} as NodeJS.ProcessEnv,
         homedir: () => {
           throw new Error("no home");
         },
-      }),
-    ).toBe(path.resolve(process.cwd()));
+      },
+      expected: path.resolve(process.cwd()),
+    },
+  ])("$name", ({ input, opts, expected }) => {
+    expect(resolveHomeRelativePath(input, opts)).toBe(expected);
   });
 });
 

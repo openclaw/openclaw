@@ -3,12 +3,97 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { parseExplicitTargetForChannel } from "./target-parsing.js";
 
+function parseTelegramTargetForTest(raw: string): {
+  to: string;
+  threadId?: number;
+  chatType?: "direct" | "group";
+} {
+  const trimmed = raw
+    .trim()
+    .replace(/^telegram:/i, "")
+    .replace(/^tg:/i, "");
+  const prefixedTopic = /^group:([^:]+):topic:(\d+)$/i.exec(trimmed);
+  if (prefixedTopic) {
+    return {
+      to: prefixedTopic[1],
+      threadId: Number.parseInt(prefixedTopic[2], 10),
+      chatType: "group",
+    };
+  }
+  const topic = /^([^:]+):topic:(\d+)$/i.exec(trimmed);
+  if (topic) {
+    return {
+      to: topic[1],
+      threadId: Number.parseInt(topic[2], 10),
+      chatType: topic[1].startsWith("-") ? "group" : "direct",
+    };
+  }
+  return {
+    to: trimmed,
+    chatType: trimmed.startsWith("-") ? "group" : undefined,
+  };
+}
+
+function setMinimalTargetParsingRegistry(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            docsPath: "/channels/telegram",
+            blurb: "test stub",
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({}),
+          },
+          messaging: {
+            parseExplicitTarget: ({ raw }: { raw: string }) => parseTelegramTargetForTest(raw),
+          },
+        },
+        source: "test",
+      },
+      {
+        pluginId: "demo-target",
+        source: "test",
+        plugin: {
+          id: "demo-target",
+          meta: {
+            id: "demo-target",
+            label: "Demo Target",
+            selectionLabel: "Demo Target",
+            docsPath: "/channels/demo-target",
+            blurb: "test stub",
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({}),
+          },
+          messaging: {
+            parseExplicitTarget: ({ raw }: { raw: string }) => ({
+              to: raw.trim().toUpperCase(),
+              chatType: "direct" as const,
+            }),
+          },
+        },
+      },
+    ]),
+  );
+}
+
 describe("parseExplicitTargetForChannel", () => {
   beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
+    setMinimalTargetParsingRegistry();
   });
 
-  it("parses bundled Telegram targets without an active Telegram registry entry", () => {
+  it("parses Telegram targets via the registered channel plugin contract", () => {
     expect(parseExplicitTargetForChannel("telegram", "telegram:group:-100123:topic:77")).toEqual({
       to: "-100123",
       threadId: 77,
@@ -21,37 +106,7 @@ describe("parseExplicitTargetForChannel", () => {
   });
 
   it("parses registered non-bundled channel targets via the active plugin contract", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "msteams",
-          source: "test",
-          plugin: {
-            id: "msteams",
-            meta: {
-              id: "msteams",
-              label: "Microsoft Teams",
-              selectionLabel: "Microsoft Teams",
-              docsPath: "/channels/msteams",
-              blurb: "test stub",
-            },
-            capabilities: { chatTypes: ["direct"] },
-            config: {
-              listAccountIds: () => [],
-              resolveAccount: () => ({}),
-            },
-            messaging: {
-              parseExplicitTarget: ({ raw }: { raw: string }) => ({
-                to: raw.trim().toUpperCase(),
-                chatType: "direct" as const,
-              }),
-            },
-          },
-        },
-      ]),
-    );
-
-    expect(parseExplicitTargetForChannel("msteams", "team-room")).toEqual({
+    expect(parseExplicitTargetForChannel("demo-target", "team-room")).toEqual({
       to: "TEAM-ROOM",
       chatType: "direct",
     });

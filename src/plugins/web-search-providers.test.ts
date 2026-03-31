@@ -1,110 +1,108 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import {
-  resolveBundledPluginWebSearchProviders,
-  resolvePluginWebSearchProviders,
-  resolveRuntimeWebSearchProviders,
-} from "./web-search-providers.js";
+import { describe, expect, it } from "vitest";
+import { resolveBundledPluginWebSearchProviders } from "./web-search-providers.js";
 
-const BUNDLED_WEB_SEARCH_PROVIDERS = [
-  { pluginId: "brave", id: "brave", order: 10 },
-  { pluginId: "google", id: "gemini", order: 20 },
-  { pluginId: "xai", id: "grok", order: 30 },
-  { pluginId: "moonshot", id: "kimi", order: 40 },
-  { pluginId: "perplexity", id: "perplexity", order: 50 },
-  { pluginId: "firecrawl", id: "firecrawl", order: 60 },
+const WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS = 300_000;
+const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_KEYS = [
+  "brave:brave",
+  "duckduckgo:duckduckgo",
+  "exa:exa",
+  "firecrawl:firecrawl",
+  "google:gemini",
+  "xai:grok",
+  "moonshot:kimi",
+  "perplexity:perplexity",
+  "tavily:tavily",
+] as const;
+const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = [
+  "brave",
+  "duckduckgo",
+  "exa",
+  "firecrawl",
+  "google",
+  "xai",
+  "moonshot",
+  "perplexity",
+  "tavily",
+] as const;
+const EXPECTED_BUNDLED_WEB_SEARCH_CREDENTIAL_PATHS = [
+  "plugins.entries.brave.config.webSearch.apiKey",
+  "",
+  "plugins.entries.exa.config.webSearch.apiKey",
+  "plugins.entries.firecrawl.config.webSearch.apiKey",
+  "plugins.entries.google.config.webSearch.apiKey",
+  "plugins.entries.xai.config.webSearch.apiKey",
+  "plugins.entries.moonshot.config.webSearch.apiKey",
+  "plugins.entries.perplexity.config.webSearch.apiKey",
+  "plugins.entries.tavily.config.webSearch.apiKey",
 ] as const;
 
-const { loadOpenClawPluginsMock } = vi.hoisted(() => ({
-  loadOpenClawPluginsMock: vi.fn((params?: { config?: { plugins?: Record<string, unknown> } }) => {
-    const plugins = params?.config?.plugins as
-      | {
-          enabled?: boolean;
-          allow?: string[];
-          entries?: Record<string, { enabled?: boolean }>;
-        }
-      | undefined;
-    if (plugins?.enabled === false) {
-      return { webSearchProviders: [] };
-    }
-    const allow = Array.isArray(plugins?.allow) && plugins.allow.length > 0 ? plugins.allow : null;
-    const entries = plugins?.entries ?? {};
-    const webSearchProviders = BUNDLED_WEB_SEARCH_PROVIDERS.filter((provider) => {
-      if (allow && !allow.includes(provider.pluginId)) {
-        return false;
-      }
-      if (entries[provider.pluginId]?.enabled === false) {
-        return false;
-      }
-      return true;
-    }).map((provider) => ({
-      pluginId: provider.pluginId,
-      pluginName: provider.pluginId,
-      source: "test" as const,
-      provider: {
-        id: provider.id,
-        label: provider.id,
-        hint: `${provider.id} provider`,
-        envVars: [`${provider.id.toUpperCase()}_API_KEY`],
-        placeholder: `${provider.id}-...`,
-        signupUrl: `https://example.com/${provider.id}`,
-        autoDetectOrder: provider.order,
-        credentialPath: `plugins.entries.${provider.pluginId}.config.webSearch.apiKey`,
-        getCredentialValue: () => "configured",
-        setCredentialValue: () => {},
-        applySelectionConfig:
-          provider.id === "firecrawl" ? (config: OpenClawConfig) => config : undefined,
-        resolveRuntimeMetadata:
-          provider.id === "perplexity"
-            ? () => ({
-                perplexityTransport: "search_api" as const,
-              })
-            : undefined,
-        createTool: () => ({
-          description: provider.id,
-          parameters: {},
-          execute: async () => ({}),
-        }),
+function toProviderKeys(
+  providers: ReturnType<typeof resolveBundledPluginWebSearchProviders>,
+): string[] {
+  return providers.map((provider) => `${provider.pluginId}:${provider.id}`);
+}
+
+function expectBundledWebSearchProviders(
+  providers: ReturnType<typeof resolveBundledPluginWebSearchProviders>,
+) {
+  expect(toProviderKeys(providers)).toEqual(EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_KEYS);
+  expect(providers.map((provider) => provider.credentialPath)).toEqual(
+    EXPECTED_BUNDLED_WEB_SEARCH_CREDENTIAL_PATHS,
+  );
+}
+
+function expectResolvedPluginIds(
+  providers: ReturnType<typeof resolveBundledPluginWebSearchProviders>,
+  expectedPluginIds: readonly string[],
+) {
+  expect(providers.map((provider) => provider.pluginId)).toEqual(expectedPluginIds);
+}
+
+function expectResolvedPluginIdsExcluding(
+  providers: ReturnType<typeof resolveBundledPluginWebSearchProviders>,
+  unexpectedPluginIds: readonly string[],
+) {
+  const pluginIds = providers.map((provider) => provider.pluginId);
+  for (const pluginId of unexpectedPluginIds) {
+    expect(pluginIds).not.toContain(pluginId);
+  }
+}
+
+function expectBundledWebSearchResolution(params: {
+  options?: Parameters<typeof resolveBundledPluginWebSearchProviders>[0];
+  expectedProviders?: "full";
+  expectedPluginIds?: readonly string[];
+  excludedPluginIds?: readonly string[];
+}) {
+  const providers = resolveBundledPluginWebSearchProviders(params.options ?? {});
+
+  if (params.expectedProviders === "full") {
+    expectBundledWebSearchProviders(providers);
+  }
+  if (params.expectedPluginIds) {
+    expectResolvedPluginIds(providers, params.expectedPluginIds);
+  }
+  if (params.excludedPluginIds) {
+    expectResolvedPluginIdsExcluding(providers, params.excludedPluginIds);
+  }
+}
+
+describe("resolveBundledPluginWebSearchProviders", () => {
+  it.each([
+    {
+      title: "returns bundled providers in alphabetical order",
+      options: {},
+    },
+    {
+      title: "can resolve bundled providers through the manifest-scoped loader path",
+      options: {
+        bundledAllowlistCompat: true,
       },
-    }));
-    return { webSearchProviders };
-  }),
-}));
+    },
+  ] as const)("$title", { timeout: WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS }, ({ options }) => {
+    const providers = resolveBundledPluginWebSearchProviders(options);
 
-vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: loadOpenClawPluginsMock,
-}));
-
-describe("resolvePluginWebSearchProviders", () => {
-  beforeEach(() => {
-    loadOpenClawPluginsMock.mockClear();
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  it("returns bundled providers in auto-detect order", () => {
-    const providers = resolvePluginWebSearchProviders({});
-
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "brave:brave",
-      "google:gemini",
-      "xai:grok",
-      "moonshot:kimi",
-      "perplexity:perplexity",
-      "firecrawl:firecrawl",
-    ]);
-    expect(providers.map((provider) => provider.credentialPath)).toEqual([
-      "plugins.entries.brave.config.webSearch.apiKey",
-      "plugins.entries.google.config.webSearch.apiKey",
-      "plugins.entries.xai.config.webSearch.apiKey",
-      "plugins.entries.moonshot.config.webSearch.apiKey",
-      "plugins.entries.perplexity.config.webSearch.apiKey",
-      "plugins.entries.firecrawl.config.webSearch.apiKey",
-    ]);
+    expectBundledWebSearchProviders(providers);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
     );
@@ -113,131 +111,76 @@ describe("resolvePluginWebSearchProviders", () => {
     ).toEqual(expect.any(Function));
   });
 
-  it("can augment restrictive allowlists for bundled compatibility", () => {
-    const providers = resolvePluginWebSearchProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
+  it.each([
+    {
+      title: "can augment restrictive allowlists for bundled compatibility",
+      params: {
+        config: {
+          plugins: {
+            allow: ["demo-other-plugin"],
+          },
         },
+        bundledAllowlistCompat: true,
       },
-      bundledAllowlistCompat: true,
-    });
-
-    expect(providers.map((provider) => provider.pluginId)).toEqual([
-      "brave",
-      "google",
-      "xai",
-      "moonshot",
-      "perplexity",
-      "firecrawl",
-    ]);
-  });
-
-  it("does not return bundled providers excluded by a restrictive allowlist without compat", () => {
-    const providers = resolvePluginWebSearchProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-    });
-
-    expect(providers).toEqual([]);
-  });
-
-  it("preserves explicit bundled provider entry state", () => {
-    const providers = resolvePluginWebSearchProviders({
-      config: {
-        plugins: {
-          entries: {
-            perplexity: { enabled: false },
+      expectedPluginIds: EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS,
+    },
+    {
+      title: "does not return bundled providers excluded by a restrictive allowlist without compat",
+      params: {
+        config: {
+          plugins: {
+            allow: ["demo-other-plugin"],
           },
         },
       },
-    });
-
-    expect(providers.map((provider) => provider.pluginId)).not.toContain("perplexity");
-  });
-
-  it("returns no providers when plugins are globally disabled", () => {
-    const providers = resolvePluginWebSearchProviders({
-      config: {
-        plugins: {
-          enabled: false,
+      expectedPluginIds: [],
+    },
+    {
+      title: "returns no providers when plugins are globally disabled",
+      params: {
+        config: {
+          plugins: {
+            enabled: false,
+          },
         },
       },
-    });
-
-    expect(providers).toEqual([]);
-  });
-
-  it("can resolve bundled providers without the plugin loader", () => {
-    const providers = resolveBundledPluginWebSearchProviders({
-      bundledAllowlistCompat: true,
-    });
-
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "brave:brave",
-      "google:gemini",
-      "xai:grok",
-      "moonshot:kimi",
-      "perplexity:perplexity",
-      "firecrawl:firecrawl",
-    ]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("can scope bundled resolution to one plugin id", () => {
-    const providers = resolveBundledPluginWebSearchProviders({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "gemini",
+      expectedPluginIds: [],
+    },
+    {
+      title: "can scope bundled resolution to one plugin id",
+      params: {
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "gemini",
+              },
+            },
+          },
+        },
+        bundledAllowlistCompat: true,
+        onlyPluginIds: ["google"],
+      },
+      expectedPluginIds: ["google"],
+    },
+    {
+      title: "preserves explicit bundled provider entry state",
+      params: {
+        config: {
+          plugins: {
+            entries: {
+              perplexity: { enabled: false },
             },
           },
         },
       },
-      bundledAllowlistCompat: true,
-      onlyPluginIds: ["google"],
+      excludedPluginIds: ["perplexity"],
+    },
+  ])("$title", ({ params, expectedPluginIds, excludedPluginIds }) => {
+    expectBundledWebSearchResolution({
+      options: params,
+      expectedPluginIds,
+      excludedPluginIds,
     });
-
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "google:gemini",
-    ]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("prefers the active plugin registry for runtime resolution", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push({
-      pluginId: "custom-search",
-      pluginName: "Custom Search",
-      provider: {
-        id: "custom",
-        label: "Custom Search",
-        hint: "Custom runtime provider",
-        envVars: ["CUSTOM_SEARCH_API_KEY"],
-        placeholder: "custom-...",
-        signupUrl: "https://example.com/signup",
-        autoDetectOrder: 1,
-        credentialPath: "tools.web.search.custom.apiKey",
-        getCredentialValue: () => "configured",
-        setCredentialValue: () => {},
-        createTool: () => ({
-          description: "custom",
-          parameters: {},
-          execute: async () => ({}),
-        }),
-      },
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-
-    const providers = resolveRuntimeWebSearchProviders({});
-
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "custom-search:custom",
-    ]);
   });
 });

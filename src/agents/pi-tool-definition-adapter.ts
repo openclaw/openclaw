@@ -13,7 +13,7 @@ import {
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, payloadTextResult } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
 
@@ -60,21 +60,6 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
-function stringifyToolPayload(payload: unknown): string {
-  if (typeof payload === "string") {
-    return payload;
-  }
-  try {
-    const encoded = JSON.stringify(payload, null, 2);
-    if (typeof encoded === "string") {
-      return encoded;
-    }
-  } catch {
-    // Fall through to String(payload) for non-serializable values.
-  }
-  return String(payload);
-}
-
 function normalizeToolExecutionResult(params: {
   toolName: string;
   result: unknown;
@@ -88,26 +73,21 @@ function normalizeToolExecutionResult(params: {
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
     const details = "details" in record ? record.details : record;
     const safeDetails = details ?? { status: "ok", tool: toolName };
-    return {
-      content: [
-        {
-          type: "text",
-          text: stringifyToolPayload(safeDetails),
-        },
-      ],
-      details: safeDetails,
-    };
+    return payloadTextResult(safeDetails);
   }
   const safeDetails = result ?? { status: "ok", tool: toolName };
-  return {
-    content: [
-      {
-        type: "text",
-        text: stringifyToolPayload(safeDetails),
-      },
-    ],
-    details: safeDetails,
-  };
+  return payloadTextResult(safeDetails);
+}
+
+function buildToolExecutionErrorResult(params: {
+  toolName: string;
+  message: string;
+}): AgentToolResult<unknown> {
+  return jsonResult({
+    status: "error",
+    tool: params.toolName,
+    error: params.message,
+  });
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
@@ -182,15 +162,46 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
 
-          return jsonResult({
-            status: "error",
-            tool: normalizedName,
-            error: described.message,
+          return buildToolExecutionErrorResult({
+            toolName: normalizedName,
+            message: described.message,
           });
         }
       },
     } satisfies ToolDefinition;
   });
+}
+
+/**
+ * Coerce tool-call params into a plain object.
+ *
+ * Some providers (e.g. Gemini) stream tool-call arguments as incremental
+ * string deltas.  By the time the framework invokes the tool's `execute`
+ * callback the accumulated value may still be a JSON **string** rather than
+ * a parsed object.  `isPlainObject()` returns `false` for strings, which
+ * caused the params to be silently replaced with `{}`.
+ *
+ * This helper tries `JSON.parse` when the value is a string and falls back
+ * to an empty object only when parsing genuinely fails.
+ */
+function coerceParamsRecord(value: unknown): Record<string, unknown> {
+  if (isPlainObject(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (isPlainObject(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // not valid JSON – fall through to empty object
+      }
+    }
+  }
+  return {};
 }
 
 // Convert client tools (OpenResponses hosted tools) to ToolDefinition format
@@ -219,7 +230,7 @@ export function toClientToolDefinitions(
           throw new Error(outcome.reason);
         }
         const adjustedParams = outcome.params;
-        const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
+        const paramsRecord = coerceParamsRecord(adjustedParams);
         // Notify handler that a client tool was called
         if (onClientToolCall) {
           onClientToolCall(func.name, paramsRecord);

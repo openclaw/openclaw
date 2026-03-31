@@ -12,16 +12,7 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
 }));
 
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () =>
-    ({
-      hasHooks: hookRunnerMocks.hasHooks,
-      runSessionStart: hookRunnerMocks.runSessionStart,
-      runSessionEnd: hookRunnerMocks.runSessionEnd,
-    }) as unknown as HookRunner,
-}));
-
-const { initSessionState } = await import("./session.js");
+let initSessionState: typeof import("./session.js").initSessionState;
 
 async function createStorePath(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
@@ -37,7 +28,16 @@ async function writeStore(
 }
 
 describe("session hook context wiring", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../../plugins/hook-runner-global.js", () => ({
+      getGlobalHookRunner: () =>
+        ({
+          hasHooks: hookRunnerMocks.hasHooks,
+          runSessionStart: hookRunnerMocks.runSessionStart,
+          runSessionEnd: hookRunnerMocks.runSessionEnd,
+        }) as unknown as HookRunner,
+    }));
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runSessionStart.mockReset();
     hookRunnerMocks.runSessionEnd.mockReset();
@@ -46,6 +46,7 @@ describe("session hook context wiring", () => {
     hookRunnerMocks.hasHooks.mockImplementation(
       (hookName) => hookName === "session_start" || hookName === "session_end",
     );
+    ({ initSessionState } = await import("./session.js"));
   });
 
   afterEach(() => {
@@ -64,7 +65,7 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
     const [event, context] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
     expect(event).toMatchObject({ sessionKey });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });
@@ -88,8 +89,8 @@ describe("session hook context wiring", () => {
       commandAuthorized: true,
     });
 
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
     const [event, context] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
     expect(event).toMatchObject({ sessionKey });
     expect(context).toMatchObject({ sessionKey, agentId: "main" });

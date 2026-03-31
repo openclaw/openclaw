@@ -1,25 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.js";
-import {
-  createNativeCommandsHarness,
-  deliverReplies,
-  executePluginCommand,
-  getPluginCommandSpecs,
-  matchPluginCommand,
-} from "./bot-native-commands.test-helpers.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type GetPluginCommandSpecsMock = {
+let createNativeCommandsHarness: typeof import("./bot-native-commands.test-helpers.js").createNativeCommandsHarness;
+let deliverReplies: typeof import("./bot-native-commands.test-helpers.js").deliverReplies;
+let executePluginCommand: typeof import("./bot-native-commands.test-helpers.js").executePluginCommand;
+let getPluginCommandSpecs: typeof import("./bot-native-commands.test-helpers.js").getPluginCommandSpecs;
+let matchPluginCommand: typeof import("./bot-native-commands.test-helpers.js").matchPluginCommand;
+
+let getPluginCommandSpecsMock: {
   mockReturnValue: (
     value: ReturnType<typeof import("../../../src/plugins/commands.js").getPluginCommandSpecs>,
   ) => unknown;
 };
-type MatchPluginCommandMock = {
+let matchPluginCommandMock: {
   mockReturnValue: (
     value: ReturnType<typeof import("../../../src/plugins/commands.js").matchPluginCommand>,
   ) => unknown;
 };
-type ExecutePluginCommandMock = {
+let executePluginCommandMock: {
   mockResolvedValue: (
     value: Awaited<
       ReturnType<typeof import("../../../src/plugins/commands.js").executePluginCommand>
@@ -27,11 +26,23 @@ type ExecutePluginCommandMock = {
   ) => unknown;
 };
 
-const getPluginCommandSpecsMock = getPluginCommandSpecs as unknown as GetPluginCommandSpecsMock;
-const matchPluginCommandMock = matchPluginCommand as unknown as MatchPluginCommandMock;
-const executePluginCommandMock = executePluginCommand as unknown as ExecutePluginCommandMock;
-
 describe("registerTelegramNativeCommands (plugin auth)", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      createNativeCommandsHarness,
+      deliverReplies,
+      executePluginCommand,
+      getPluginCommandSpecs,
+      matchPluginCommand,
+    } = await import("./bot-native-commands.test-helpers.js"));
+    getPluginCommandSpecsMock =
+      getPluginCommandSpecs as unknown as typeof getPluginCommandSpecsMock;
+    matchPluginCommandMock = matchPluginCommand as unknown as typeof matchPluginCommandMock;
+    executePluginCommandMock = executePluginCommand as unknown as typeof executePluginCommandMock;
+    vi.clearAllMocks();
+  });
+
   it("does not register plugin commands in menu when native=false but keeps handlers available", () => {
     const specs = Array.from({ length: 101 }, (_, i) => ({
       name: `cmd_${i}`,

@@ -14,14 +14,18 @@ export {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
   isJsonContentType,
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
   readJsonWebhookBodyOrReject,
   readWebhookBodyOrReject,
+  requestBodyErrorToText,
   WEBHOOK_BODY_READ_DEFAULTS,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   type WebhookBodyReadProfile,
   type WebhookInFlightLimiter,
 } from "./webhook-request-guards.js";
 export {
+  registerPluginHttpRoute,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
   resolveSingleWebhookTarget,
@@ -36,3 +40,5 @@ export {
   type WebhookTargetMatchResult,
 } from "./webhook-targets.js";
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
+export { resolveRequestClientIp } from "../gateway/net.js";
+export { normalizePluginHttpPath } from "../plugins/http-path.js";

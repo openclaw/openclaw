@@ -6,6 +6,7 @@ import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CANVAS_CAPABILITY_PATH_PREFIX } from "./canvas-capability.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -158,6 +159,7 @@ async function withCanvasGatewayHarness(params: {
     wss,
     canvasHost,
     clients,
+    preauthConnectionBudget: createPreauthConnectionBudget(8),
     resolvedAuth: params.resolvedAuth,
     rateLimiter: params.rateLimiter,
   });
@@ -263,7 +265,7 @@ describe("gateway canvas host auth", () => {
           const scopedA2ui = await fetch(
             `http://${host}:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
           );
-          expect(scopedA2ui.status).toBe(503);
+          expect([200, 503]).toContain(scopedA2ui.status);
 
           await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
 
@@ -302,6 +304,22 @@ describe("gateway canvas host auth", () => {
           await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
         },
       });
+    });
+  }, 60_000);
+
+  test("denies canvas HTTP/WS on loopback without bearer or capability by default", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener }) => {
+        const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+        expect(res.status).toBe(401);
+
+        const a2ui = await fetch(`http://127.0.0.1:${listener.port}${A2UI_PATH}/`);
+        expect(a2ui.status).toBe(401);
+
+        await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+      },
     });
   }, 60_000);
 

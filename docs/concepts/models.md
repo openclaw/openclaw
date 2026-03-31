@@ -26,7 +26,7 @@ Related:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
-- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer a provider default from compatible auth-backed image-generation plugins.
+- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer a provider default from compatible auth-backed image-generation plugins. If you set a specific provider/model, also configure that provider's auth/API key.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
@@ -223,3 +223,10 @@ Merge mode precedence for matching provider IDs:
 
 Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 This applies whenever OpenClaw regenerates `models.json`, including command-driven paths like `openclaw agent`.
+
+## Related
+
+- [Model Providers](/concepts/model-providers) — provider routing and auth
+- [Model Failover](/concepts/model-failover) — fallback chains
+- [Image Generation](/tools/image-generation) — image model configuration
+- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — model config keys

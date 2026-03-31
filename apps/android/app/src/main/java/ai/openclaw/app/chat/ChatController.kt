@@ -24,6 +24,7 @@ class ChatController(
   private val json: Json,
   private val supportsChatSubscribe: Boolean,
 ) {
+  private var appliedMainSessionKey = "main"
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
 
@@ -73,22 +74,28 @@ class ChatController(
   }
 
   fun load(sessionKey: String) {
-    val key = sessionKey.trim().ifEmpty { "main" }
+    val key = normalizeRequestedSessionKey(sessionKey)
     _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun applyMainSessionKey(mainSessionKey: String) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
-    if (_sessionKey.value == trimmed) return
-    if (_sessionKey.value != "main") return
-    _sessionKey.value = trimmed
-    scope.launch { bootstrap(forceHealth = true) }
+    val nextState =
+      applyMainSessionKey(
+        currentSessionKey = normalizeRequestedSessionKey(_sessionKey.value),
+        appliedMainSessionKey = appliedMainSessionKey,
+        nextMainSessionKey = trimmed,
+      )
+    appliedMainSessionKey = nextState.appliedMainSessionKey
+    if (_sessionKey.value == nextState.currentSessionKey) return
+    _sessionKey.value = nextState.currentSessionKey
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun refresh() {
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun refreshSessions(limit: Int? = null) {
@@ -102,11 +109,20 @@ class ChatController(
   }
 
   fun switchSession(sessionKey: String) {
-    val key = sessionKey.trim()
+    val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
     if (key == _sessionKey.value) return
     _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true) }
+    // Keep the thread switch path lean: history + health are needed immediately,
+    // but the session list is usually unchanged and can refresh on explicit pull-to-refresh.
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = false) }
+  }
+
+  private fun normalizeRequestedSessionKey(sessionKey: String): String {
+    val key = sessionKey.trim()
+    if (key.isEmpty()) return appliedMainSessionKey
+    if (key == "main" && appliedMainSessionKey != "main") return appliedMainSessionKey
+    return key
   }
 
   fun sendMessage(
@@ -249,7 +265,7 @@ class ChatController(
     }
   }
 
-  private suspend fun bootstrap(forceHealth: Boolean) {
+  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean) {
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -271,7 +287,9 @@ class ChatController(
       history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
 
       pollHealthIfNeeded(force = forceHealth)
-      fetchSessions(limit = 50)
+      if (refreshSessions) {
+        fetchSessions(limit = 50)
+      }
     } catch (err: Throwable) {
       _errorText.value = err.message
     }
@@ -526,6 +544,28 @@ class ChatController(
       else -> "off"
     }
   }
+}
+
+internal data class MainSessionState(
+  val currentSessionKey: String,
+  val appliedMainSessionKey: String,
+)
+
+internal fun applyMainSessionKey(
+  currentSessionKey: String,
+  appliedMainSessionKey: String,
+  nextMainSessionKey: String,
+): MainSessionState {
+  if (currentSessionKey == appliedMainSessionKey) {
+    return MainSessionState(
+      currentSessionKey = nextMainSessionKey,
+      appliedMainSessionKey = nextMainSessionKey,
+    )
+  }
+  return MainSessionState(
+    currentSessionKey = currentSessionKey,
+    appliedMainSessionKey = nextMainSessionKey,
+  )
 }
 
 internal fun reconcileMessageIds(previous: List<ChatMessage>, incoming: List<ChatMessage>): List<ChatMessage> {

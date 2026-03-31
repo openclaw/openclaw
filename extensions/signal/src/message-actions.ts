@@ -1,14 +1,12 @@
-import {
-  createActionGate,
-  jsonResult,
-  readStringParam,
-  resolveReactionMessageId,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-runtime";
+import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
+import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
-import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";

@@ -1,5 +1,8 @@
 {
   "id": "brave",
+  "providerAuthEnvVars": {
+    "brave": ["BRAVE_API_KEY"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Brave Search API Key",
@@ -11,6 +14,9 @@
       "label": "Brave Search Mode",
       "help": "Brave Search mode: web or llm-context."
     }
+  },
+  "contracts": {
+    "webSearchProviders": ["brave"]
   },
   "configSchema": {
     "type": "object",

@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeMockCommandResolution,
+  makeMockExecutableResolution,
+  makePathEnv,
+  makeTempDir,
+} from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
   evaluateShellAllowlist,
@@ -175,6 +180,24 @@ describe("exec approvals safe bins", () => {
       expected: true,
     },
     {
+      name: "blocks jq env builtin even when jq is explicitly opted in",
+      argv: ["jq", "env"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq $ENV builtin variable even when jq is explicitly opted in",
+      argv: ["jq", "$ENV"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq $ENV property access even when jq is explicitly opted in",
+      argv: ["jq", "($ENV).OPENAI_API_KEY"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
       name: "blocks safe bins with file args",
       argv: ["jq", ".foo", "secret.json"],
       resolvedPath: "/usr/bin/jq",
@@ -231,27 +254,22 @@ describe("exec approvals safe bins", () => {
     },
   ];
 
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const cwd = testCase.cwd ?? makeTempDir();
-      testCase.setup?.(cwd);
-      const executableName = testCase.executableName ?? "jq";
-      const rawExecutable = testCase.rawExecutable ?? executableName;
-      const ok = isSafeBinUsage({
-        argv: testCase.argv,
-        resolution: {
-          rawExecutable,
-          resolvedPath: testCase.resolvedPath,
-          executableName,
-        },
-        safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
-      });
-      expect(ok).toBe(testCase.expected);
+  it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
+    const cwd = testCase.cwd ?? makeTempDir();
+    testCase.setup?.(cwd);
+    const executableName = testCase.executableName ?? "jq";
+    const rawExecutable = testCase.rawExecutable ?? executableName;
+    const ok = isSafeBinUsage({
+      argv: testCase.argv,
+      resolution: {
+        rawExecutable,
+        resolvedPath: testCase.resolvedPath,
+        executableName,
+      },
+      safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
     });
-  }
+    expect(ok).toBe(testCase.expected);
+  });
 
   it("supports injected trusted safe-bin dirs for tests/callers", () => {
     if (process.platform === "win32") {
@@ -328,7 +346,7 @@ describe("exec approvals safe bins", () => {
 
   it("does not include sort/grep in default safeBins", () => {
     const defaults = resolveSafeBins(undefined);
-    expect(defaults.has("jq")).toBe(true);
+    expect(defaults.has("jq")).toBe(false);
     expect(defaults.has("sort")).toBe(false);
     expect(defaults.has("grep")).toBe(false);
   });
@@ -422,11 +440,13 @@ describe("exec approvals safe bins", () => {
         {
           raw: "jq .foo",
           argv: ["jq", ".foo"],
-          resolution: {
-            rawExecutable: "jq",
-            resolvedPath: "/custom/bin/jq",
-            executableName: "jq",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "jq",
+              resolvedPath: "/custom/bin/jq",
+              executableName: "jq",
+            }),
+          }),
         },
       ],
     };
@@ -470,7 +490,7 @@ describe("exec approvals safe bins", () => {
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(false);
     expect(result.segmentSatisfiedBy).toEqual([null]);
-    expect(result.segments[0]?.resolution?.resolvedPath).toBe(fakeHead);
+    expect(result.segments[0]?.resolution?.execution.resolvedPath).toBe(fakeHead);
   });
 
   it("fails closed for semantic env wrappers in allowlist mode", () => {

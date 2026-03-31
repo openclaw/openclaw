@@ -1,18 +1,20 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import type { PluginRuntime } from "./runtime-api.js";
 import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget, createChatForHandle } from "./send.js";
 import {
   BLUE_BUBBLES_PRIVATE_API_STATUS,
+  createBlueBubblesFetchGuardPassthroughInstaller,
   installBlueBubblesFetchTestHooks,
   mockBlueBubblesPrivateApiStatusOnce,
 } from "./test-harness.js";
-import type { BlueBubblesSendTarget } from "./types.js";
+import { _setFetchGuardForTesting, type BlueBubblesSendTarget } from "./types.js";
 
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
+const setFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
 
 installBlueBubblesFetchTestHooks({
   mockFetch,
@@ -59,6 +61,12 @@ function mockNewChatSendResponse(guid: string) {
           }),
         ),
     });
+}
+
+function installSsrFPolicyCapture(policies: unknown[]) {
+  setFetchGuardPassthrough((policy) => {
+    policies.push(policy);
+  });
 }
 
 describe("send", () => {
@@ -446,6 +454,44 @@ describe("send", () => {
       expect(body.chatGuid).toBe("iMessage;-;+15551234567");
       expect(body.message).toBe("Hello world!");
       expect(body.method).toBeUndefined();
+    });
+
+    it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
+      const policies: unknown[] = [];
+      installSsrFPolicyCapture(policies);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-loopback" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-loopback");
+        expect(policies).toEqual([{ allowPrivateNetwork: true }, { allowPrivateNetwork: true }]);
+      } finally {
+        _setFetchGuardForTesting(null);
+      }
+    });
+
+    it("auto-enables private-network fetches for private IP serverUrl when allowPrivateNetwork is not set", async () => {
+      const policies: unknown[] = [];
+      installSsrFPolicyCapture(policies);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-private-ip" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
+          serverUrl: "http://192.168.1.5:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-private-ip");
+        expect(policies).toEqual([{ allowPrivateNetwork: true }, { allowPrivateNetwork: true }]);
+      } finally {
+        _setFetchGuardForTesting(null);
+      }
     });
 
     it("strips markdown formatting from outbound messages", async () => {

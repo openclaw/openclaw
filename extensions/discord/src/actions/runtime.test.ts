@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import {
@@ -46,6 +46,7 @@ const discordSendMocks = {
   removeOwnReactionsDiscord: vi.fn(async () => ({ removed: ["👍"] })),
   removeReactionDiscord: vi.fn(async () => ({})),
   searchMessagesDiscord: vi.fn(async () => ({})),
+  sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
   sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
@@ -71,6 +72,7 @@ const {
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   searchMessagesDiscord,
+  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendVoiceMessageDiscord,
@@ -362,6 +364,55 @@ describe("handleDiscordMessagingAction", () => {
       expect.objectContaining({
         mediaUrl: "/tmp/image.png",
         mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+  });
+
+  it("ignores empty components objects for regular media sends", async () => {
+    sendMessageDiscord.mockClear();
+    sendDiscordComponentMessage.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: "/tmp/image.png",
+        components: {},
+      },
+      enableAllActions,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+
+    expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+  });
+
+  it("forwards the optional filename into sendMessageDiscord", async () => {
+    sendMessageDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: "/tmp/generated-image",
+        filename: "image.png",
+      },
+      enableAllActions,
+    );
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/generated-image",
+        filename: "image.png",
       }),
     );
   });

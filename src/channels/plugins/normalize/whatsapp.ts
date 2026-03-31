@@ -1,4 +1,4 @@
-import { normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
+import { normalizeWhatsAppTarget } from "../../../plugin-sdk/whatsapp-targets.js";
 import { looksLikeHandleOrPhoneTarget, trimMessagingTarget } from "./shared.js";
 
 export function normalizeWhatsAppMessagingTarget(raw: string): string | undefined {

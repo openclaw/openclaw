@@ -3,15 +3,22 @@ import {
   resolveCommandResolutionFromArgv,
   type CommandResolution,
 } from "./exec-command-resolution.js";
+export { DEFAULT_SAFE_BINS } from "./exec-safe-bin-policy.js";
 
 export {
-  DEFAULT_SAFE_BINS,
   matchAllowlist,
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
+  resolveApprovalAuditCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetResolution,
+  resolvePolicyAllowlistCandidatePath,
+  resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetResolution,
   type CommandResolution,
+  type ExecutableResolution,
   type ExecArgvToken,
 } from "./exec-command-resolution.js";
 
@@ -665,8 +672,9 @@ export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[]
     return null;
   }
   const argv = [...baseArgv];
+  const execution = segment.resolution?.execution;
   const resolvedExecutable =
-    segment.resolution?.resolvedRealPath?.trim() ?? segment.resolution?.resolvedPath?.trim() ?? "";
+    execution?.resolvedRealPath?.trim() ?? execution?.resolvedPath?.trim() ?? "";
   if (resolvedExecutable) {
     argv[0] = resolvedExecutable;
   }
@@ -689,7 +697,7 @@ function renderSafeBinSegmentArgv(segment: ExecCommandSegment): string | null {
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | null)[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | "skillPrelude" | null)[];
   platform?: string | null;
 }): { ok: boolean; command?: string; reason?: string } {
   if (params.segments.length !== params.segmentSatisfiedBy.length) {

@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { channelsResolveCommand } from "./channels/resolve.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getChannelsCommandSecretTargetIds: vi.fn(() => []),
   loadConfig: vi.fn(),
-  writeConfigFile: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
+  applyPluginAutoEnable: vi.fn(),
+  replaceConfigFile: vi.fn(),
   resolveMessageChannelSelection: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -20,7 +23,12 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
-  writeConfigFile: mocks.writeConfigFile,
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  replaceConfigFile: mocks.replaceConfigFile,
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
 vi.mock("../infra/outbound/channel-selection.js", () => ({
@@ -35,8 +43,6 @@ vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
 }));
 
-const { channelsResolveCommand } = await import("./channels/resolve.js");
-
 describe("channelsResolveCommand", () => {
   const runtime = {
     log: vi.fn(),
@@ -47,7 +53,9 @@ describe("channelsResolveCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadConfig.mockReturnValue({ channels: {} });
-    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig: { channels: {} },
       diagnostics: [],
@@ -100,7 +108,10 @@ describe("channelsResolveCommand", () => {
         allowInstall: true,
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(installedCfg);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: installedCfg,
+      baseHash: "config-1",
+    });
     expect(resolveTargets).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: installedCfg,
@@ -109,5 +120,57 @@ describe("channelsResolveCommand", () => {
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("friends -> 120363000000@g.us (Friends)");
+  });
+
+  it("uses the auto-enabled config snapshot for omitted channel resolution", async () => {
+    const autoEnabledConfig = {
+      channels: { whatsapp: {} },
+      plugins: { allow: ["whatsapp"] },
+    };
+    const resolveTargets = vi.fn().mockResolvedValue([
+      {
+        input: "friends",
+        resolved: true,
+        id: "120363000000@g.us",
+        name: "Friends",
+      },
+    ]);
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: { channels: {} },
+      diagnostics: [],
+    });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "whatsapp",
+      configured: ["whatsapp"],
+      source: "single-configured",
+    });
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      resolver: { resolveTargets },
+    });
+
+    await channelsResolveCommand(
+      {
+        entries: ["friends"],
+      },
+      runtime,
+    );
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: { channels: {} },
+      env: process.env,
+    });
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
+      cfg: autoEnabledConfig,
+      channel: null,
+    });
+    expect(resolveTargets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: autoEnabledConfig,
+        inputs: ["friends"],
+        kind: "group",
+      }),
+    );
   });
 });
