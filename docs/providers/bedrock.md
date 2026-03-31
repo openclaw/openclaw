@@ -186,12 +186,16 @@ grounding checks.
 ```json5
 {
   plugins: {
-    "amazon-bedrock": {
-      guardrail: {
-        guardrailIdentifier: "abc123",       // guardrail ID or full ARN
-        guardrailVersion: "1",               // version number or "DRAFT"
-        streamProcessingMode: "sync",        // optional: "sync" or "async"
-        trace: "enabled",                    // optional: "enabled", "disabled", or "enabled_full"
+    entries: {
+      "amazon-bedrock": {
+        config: {
+          guardrail: {
+            guardrailIdentifier: "abc123",       // guardrail ID or full ARN
+            guardrailVersion: "1",               // version number or "DRAFT"
+            streamProcessingMode: "sync",        // optional: "sync" or "async"
+            trace: "enabled",                    // optional: "enabled", "disabled", or "enabled_full"
+          },
+        },
       },
     },
   },
