@@ -27,10 +27,10 @@ export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-function createPluginRouteRuntimeClient(): GatewayRequestOptions["client"] {
-  // Plugin HTTP handlers only need the least-privilege runtime scope.
-  // Gateway route auth controls request admission, not runtime admin elevation.
-  const scopes = [WRITE_SCOPE];
+function createPluginRouteRuntimeClient(
+  requiresGatewayAuth: boolean,
+): GatewayRequestOptions["client"] {
+  const scopes = requiresGatewayAuth ? [WRITE_SCOPE] : [];
   return {
     connect: {
       minProtocol: PROTOCOL_VERSION,
@@ -81,7 +81,7 @@ export function createGatewayPluginRequestHandler(params: {
       log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
       return false;
     }
-    const runtimeClient = createPluginRouteRuntimeClient();
+    const runtimeClient = createPluginRouteRuntimeClient(requiresGatewayAuth);
 
     return await withPluginRuntimeGatewayRequestScope(
       {
