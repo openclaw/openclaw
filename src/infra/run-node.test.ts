@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runNodeMain } from "../../scripts/run-node.mjs";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "../../test/helpers/bundled-plugin-paths.js";
 
 const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
@@ -11,12 +16,12 @@ const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = "dist/.buildstamp";
-const EXTENSION_SRC = "extensions/demo/src/index.ts";
-const EXTENSION_MANIFEST = "extensions/demo/openclaw.plugin.json";
-const EXTENSION_PACKAGE = "extensions/demo/package.json";
-const EXTENSION_README = "extensions/demo/README.md";
-const DIST_EXTENSION_MANIFEST = "dist/extensions/demo/openclaw.plugin.json";
-const DIST_EXTENSION_PACKAGE = "dist/extensions/demo/package.json";
+const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
+const EXTENSION_MANIFEST = bundledPluginFile("demo", "openclaw.plugin.json");
+const EXTENSION_PACKAGE = bundledPluginFile("demo", "package.json");
+const EXTENSION_README = bundledPluginFile("demo", "README.md");
+const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
+const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
 const OLD_TIME = new Date("2026-03-13T10:00:00.000Z");
 const BUILD_TIME = new Date("2026-03-13T12:00:00.000Z");
@@ -386,7 +391,7 @@ describe("run-node script", () => {
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
         gitHead: "abc123\n",
-        gitStatus: " M extensions/demo/README.md\n",
+        gitStatus: ` M ${EXTENSION_README}\n`,
       });
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
@@ -418,7 +423,7 @@ describe("run-node script", () => {
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
         gitHead: "abc123\n",
-        gitStatus: " M extensions/demo/openclaw.plugin.json\n",
+        gitStatus: ` M ${EXTENSION_MANIFEST}\n`,
       });
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
@@ -480,7 +485,7 @@ describe("run-node script", () => {
         ],
       });
 
-      await fs.mkdir(resolvePath(tmp, "extensions/demo"), { recursive: true });
+      await fs.mkdir(resolvePath(tmp, bundledPluginRoot("demo")), { recursive: true });
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
         gitHead: "abc123\n",

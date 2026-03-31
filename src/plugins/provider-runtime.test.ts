@@ -30,6 +30,7 @@ let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime
 let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
 let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
 let applyProviderResolvedModelCompatWithPlugins: typeof import("./provider-runtime.js").applyProviderResolvedModelCompatWithPlugins;
+let applyProviderResolvedTransportWithPlugin: typeof import("./provider-runtime.js").applyProviderResolvedTransportWithPlugin;
 let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js").normalizeProviderTransportWithPlugin;
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
 let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
@@ -213,6 +214,7 @@ describe("provider-runtime", () => {
       buildProviderUnknownModelHintWithPlugin,
       applyProviderNativeStreamingUsageCompatWithPlugin,
       applyProviderResolvedModelCompatWithPlugins,
+      applyProviderResolvedTransportWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
       normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
@@ -907,6 +909,50 @@ describe("provider-runtime", () => {
         supportsStrictMode: true,
         supportsStore: false,
       },
+    });
+  });
+
+  it("applies foreign transport normalization for custom provider hosts", () => {
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const onlyPluginIds = params.onlyPluginIds ?? [];
+      const plugins: ProviderPlugin[] = [
+        {
+          id: "openai",
+          label: "OpenAI",
+          auth: [],
+          normalizeTransport: ({ provider, api, baseUrl }) =>
+            provider === "custom-openai" &&
+            api === "openai-completions" &&
+            baseUrl === "https://api.openai.com/v1"
+              ? { api: "openai-responses", baseUrl }
+              : undefined,
+        },
+      ];
+      return onlyPluginIds.length > 0
+        ? plugins.filter((plugin) => onlyPluginIds.includes(plugin.id))
+        : plugins;
+    });
+
+    expect(
+      applyProviderResolvedTransportWithPlugin({
+        provider: "custom-openai",
+        context: createDemoResolvedModelContext({
+          provider: "custom-openai",
+          modelId: "gpt-5.4",
+          model: {
+            ...MODEL,
+            provider: "custom-openai",
+            id: "gpt-5.4",
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+          },
+        }),
+      }),
+    ).toMatchObject({
+      provider: "custom-openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
     });
   });
 

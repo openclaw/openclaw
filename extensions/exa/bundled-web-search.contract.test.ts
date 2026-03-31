@@ -1,3 +1,3 @@
-import { describeBundledWebSearchFastPathContract } from "../../test/helpers/extensions/bundled-web-search-fast-path-contract.js";
+import { describeBundledWebSearchFastPathContract } from "../../test/helpers/plugins/bundled-web-search-fast-path-contract.js";
 
 describeBundledWebSearchFastPathContract("exa");

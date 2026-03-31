@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { channelsResolveCommand } from "./channels/resolve.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getChannelsCommandSecretTargetIds: vi.fn(() => []),
   loadConfig: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
-  writeConfigFile: vi.fn(),
+  replaceConfigFile: vi.fn(),
   resolveMessageChannelSelection: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -21,7 +23,8 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
-  writeConfigFile: mocks.writeConfigFile,
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -40,8 +43,6 @@ vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
 }));
 
-const { channelsResolveCommand } = await import("./channels/resolve.js");
-
 describe("channelsResolveCommand", () => {
   const runtime = {
     log: vi.fn(),
@@ -52,8 +53,9 @@ describe("channelsResolveCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadConfig.mockReturnValue({ channels: {} });
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
-    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig: { channels: {} },
       diagnostics: [],
@@ -106,7 +108,10 @@ describe("channelsResolveCommand", () => {
         allowInstall: true,
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(installedCfg);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: installedCfg,
+      baseHash: "config-1",
+    });
     expect(resolveTargets).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: installedCfg,

@@ -21,6 +21,7 @@ import {
   planTurnInput,
   releaseWsSession,
 } from "./openai-ws-stream.js";
+import { log } from "./pi-embedded-runner/logger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock OpenAIWebSocketManager
@@ -1586,6 +1587,72 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.max_output_tokens).toBe(0);
   });
 
+  it("forwards text verbosity to response.create text block", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-text-verbosity");
+    const opts = { textVerbosity: "low" };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-text-verbosity", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.text).toEqual({ verbosity: "low" });
+  });
+
+  it("warns and skips invalid text verbosity in the websocket path", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-text-verbosity-invalid");
+      const opts = { textVerbosity: "loud" };
+      const stream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        opts as unknown as Parameters<typeof streamFn>[2],
+      );
+      await new Promise<void>((resolve, reject) => {
+        queueMicrotask(async () => {
+          try {
+            await new Promise((r) => setImmediate(r));
+            MockManager.lastInstance!.simulateEvent({
+              type: "response.completed",
+              response: makeResponseObject("resp-text-verbosity-invalid", "Done"),
+            });
+            for await (const _ of await resolveStream(stream)) {
+              /* consume */
+            }
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+      const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+      expect(sent.type).toBe("response.create");
+      expect(sent).not.toHaveProperty("text");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid OpenAI text verbosity param: loud");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("forwards reasoningEffort/reasoningSummary to response.create reasoning block", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason");
     const opts = { reasoningEffort: "high", reasoningSummary: "auto" };
@@ -1614,6 +1681,45 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
     expect(sent.type).toBe("response.create");
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
+  });
+
+  it("applies onPayload mutations before sending response.create", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-onpayload");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {
+        onPayload: (payload: unknown) => {
+          const request = payload as Record<string, unknown>;
+          request.reasoning = { effort: "none" };
+          request.text = { verbosity: "low" };
+          request.service_tier = "priority";
+          return undefined;
+        },
+      } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-onpayload", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.reasoning).toEqual({ effort: "none" });
+    expect(sent.text).toEqual({ verbosity: "low" });
+    expect(sent.service_tier).toBe("priority");
   });
 
   it("forwards topP and toolChoice to response.create", async () => {

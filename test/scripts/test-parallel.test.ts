@@ -14,6 +14,7 @@ import {
   resolveTestRunExitCode,
 } from "../../scripts/test-parallel-utils.mjs";
 import { loadTestCatalog } from "../../scripts/test-planner/catalog.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 const clearPlannerShardEnv = (env) => {
   const nextEnv = { ...env };
@@ -54,10 +55,10 @@ const sharedTargetedUnitProxyFiles = (() => {
 
 const targetedChannelProxyFiles = [
   ...sharedTargetedChannelProxyFiles,
-  "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
-  "extensions/discord/src/monitor/monitor.agent-components.test.ts",
-  "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-  "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test.ts",
+  bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
+  bundledPluginFile("discord", "src/monitor/monitor.agent-components.test.ts"),
+  bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
+  bundledPluginFile("whatsapp", "src/monitor-inbox.streams-inbound-messages.test.ts"),
 ];
 
 const targetedUnitProxyFiles = [
@@ -276,8 +277,8 @@ describe("scripts/test-parallel lane planning", () => {
     );
 
     expect(output).toContain("mode=local intent=normal memoryBand=mid");
-    expect(output).toContain("unit-fast filters=all maxWorkers=");
-    expect(output).toMatch(/extensions(?:-batch-1)? filters=all maxWorkers=/);
+    expect(output).toMatch(/unit-fast(?:-batch-\d+)? filters=\d+ maxWorkers=/);
+    expect(output).toMatch(/extensions(?:-batch-\d+)? filters=\d+ maxWorkers=/);
   });
 
   it("uses higher shared extension worker counts on high-memory local hosts", () => {
@@ -303,8 +304,8 @@ describe("scripts/test-parallel lane planning", () => {
 
     expect(midSharedBatches.length).toBeGreaterThan(0);
     expect(highSharedBatches.length).toBeGreaterThan(0);
-    expect(midSharedBatches.every((line) => line.includes("filters=all maxWorkers=3"))).toBe(true);
-    expect(highSharedBatches.every((line) => line.includes("filters=all maxWorkers=5"))).toBe(true);
+    expect(midSharedBatches.every((line) => /filters=\d+ maxWorkers=3/.test(line))).toBe(true);
+    expect(highSharedBatches.every((line) => /filters=\d+ maxWorkers=5/.test(line))).toBe(true);
     expect(highSharedBatches.length).toBeLessThanOrEqual(midSharedBatches.length);
   });
 
@@ -319,7 +320,7 @@ describe("scripts/test-parallel lane planning", () => {
     expect(firstChannelIsolated).toBeGreaterThanOrEqual(0);
     expect(firstExtensionBatch).toBeGreaterThan(firstChannelIsolated);
     expect(firstChannelBatch).toBeGreaterThan(firstExtensionBatch);
-    expect(output).toContain("channels-batch-1 filters=all maxWorkers=5");
+    expect(output).toMatch(/channels-batch-1 filters=\d+ maxWorkers=5/);
   });
 
   it("uses coarser unit-fast batching for high-memory local multi-surface runs", () => {
@@ -377,8 +378,13 @@ describe("scripts/test-parallel lane planning", () => {
       parseNumericPlanField(line, "filters"),
     );
 
-    expect(unitBatchLines.length).toBe(2);
-    expect(unitBatchFilterCounts).toEqual([50, 50]);
+    expect(unitBatchLines.length).toBeGreaterThanOrEqual(3);
+    expect(unitBatchLines.every((line) => line.includes("maxWorkers=6"))).toBe(true);
+    expect(Math.max(...unitBatchFilterCounts)).toBeLessThan(40);
+    expect(unitBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
+      sharedTargetedUnitProxyFiles.length,
+    );
+    expect(output).toContain("unit-qr-dashboard.integration-isolated filters=1 maxWorkers=2");
   });
 
   it("explains targeted file ownership and execution policy", () => {

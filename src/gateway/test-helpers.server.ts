@@ -4,11 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  parseConfigJson5,
-} from "../config/config.js";
+import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,
   resolveMainSessionKeyFromConfig,
@@ -172,8 +168,7 @@ async function persistTestSessionConfig(): Promise<void> {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   }
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  resetConfigRuntimeState();
   lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
@@ -286,8 +281,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     "utf-8",
   );
   setTestConfigRoot(tempConfigRoot);
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  resetConfigRuntimeState();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;
@@ -895,8 +889,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   // Gateway suites often mutate testState-backed config/session inputs between
   // RPCs while reusing one server instance; flush caches so the next request
   // observes the updated test fixture state.
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();

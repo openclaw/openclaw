@@ -380,4 +380,101 @@ describe("discoverAuthStorage", () => {
       expect(model?.compat?.maxTokensField).toBe("max_tokens");
     });
   });
+
+  it("normalizes discovered xAI compat flags for OpenRouter x-ai model ids", async () => {
+    await withAgentDir(async (agentDir) => {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openrouter:default": {
+              type: "api_key",
+              provider: "openrouter",
+              key: "sk-or-v1-runtime",
+            },
+          },
+        },
+        agentDir,
+      );
+      await writeModelsJson(agentDir, {
+        providers: {
+          openrouter: {
+            api: "openai-completions",
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: "OPENROUTER_API_KEY",
+            models: [
+              {
+                id: "x-ai/grok-4.1-fast",
+                name: "Grok via OpenRouter",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 256000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      });
+
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+      const model = modelRegistry.find("openrouter", "x-ai/grok-4.1-fast") as {
+        compat?: {
+          toolSchemaProfile?: string;
+          nativeWebSearchTool?: boolean;
+          toolCallArgumentsEncoding?: string;
+        };
+      } | null;
+
+      expect(model?.compat?.toolSchemaProfile).toBe("xai");
+      expect(model?.compat?.nativeWebSearchTool).toBe(true);
+      expect(model?.compat?.toolCallArgumentsEncoding).toBe("html-entities");
+    });
+  });
+
+  it("normalizes discovered custom xAI-compatible providers by host", async () => {
+    await withAgentDir(async (agentDir) => {
+      await writeModelsJson(agentDir, {
+        providers: {
+          "custom-xai": {
+            api: "openai-completions",
+            baseUrl: "https://api.x.ai/v1",
+            apiKey: "XAI_API_KEY",
+            models: [
+              {
+                id: "grok-4.1-fast",
+                name: "Custom Grok",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 256000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      });
+
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+      const model = modelRegistry
+        .getAll()
+        .find((entry) => entry.provider === "custom-xai" && entry.id === "grok-4.1-fast") as
+        | {
+            api?: string;
+            compat?: {
+              toolSchemaProfile?: string;
+              nativeWebSearchTool?: boolean;
+              toolCallArgumentsEncoding?: string;
+            };
+          }
+        | undefined;
+
+      expect(model?.api).toBe("openai-responses");
+      expect(model?.compat?.toolSchemaProfile).toBe("xai");
+      expect(model?.compat?.nativeWebSearchTool).toBe(true);
+      expect(model?.compat?.toolCallArgumentsEncoding).toBe("html-entities");
+    });
+  });
 });

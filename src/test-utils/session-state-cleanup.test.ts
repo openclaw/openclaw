@@ -2,28 +2,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
+import {
+  clearSessionStoreCacheForTest,
+  getSessionStoreLockQueueSizeForTest,
+  resetSessionStoreLockRuntimeForTests,
+  setSessionWriteLockAcquirerForTests,
+  withSessionStoreLockForTest,
+} from "../config/sessions/store.js";
+import { resetFileLockStateForTest } from "../infra/file-lock.js";
+import {
+  cleanupSessionStateForTest,
+  resetSessionStateCleanupRuntimeForTests,
+  setSessionStateCleanupRuntimeForTests,
+} from "./session-state-cleanup.js";
 
 const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async () => ({ release: vi.fn(async () => {}) })),
 );
-
-let getSessionStoreLockQueueSizeForTest: typeof import("../config/sessions/store.js").getSessionStoreLockQueueSizeForTest;
-let withSessionStoreLockForTest: typeof import("../config/sessions/store.js").withSessionStoreLockForTest;
-let cleanupSessionStateForTest: typeof import("./session-state-cleanup.js").cleanupSessionStateForTest;
-
-async function loadFreshCleanupModules() {
-  vi.resetModules();
-  vi.doMock("../agents/session-write-lock.js", async (importOriginal) => {
-    const original = await importOriginal<typeof import("../agents/session-write-lock.js")>();
-    return {
-      ...original,
-      acquireSessionWriteLock: acquireSessionWriteLockMock,
-    };
-  });
-  ({ getSessionStoreLockQueueSizeForTest, withSessionStoreLockForTest } =
-    await import("../config/sessions/store.js"));
-  ({ cleanupSessionStateForTest } = await import("./session-state-cleanup.js"));
-}
+const drainFileLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
+const drainSessionStoreLockQueuesMock = vi.hoisted(() => vi.fn(async () => undefined));
+const drainSessionWriteLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -35,14 +34,37 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function flushMicrotasks(rounds = 3): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("cleanupSessionStateForTest", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    clearSessionStoreCacheForTest();
+    resetFileLockStateForTest();
+    resetSessionWriteLockStateForTest();
     acquireSessionWriteLockMock.mockClear();
-    await loadFreshCleanupModules();
+    drainFileLockStateMock.mockClear();
+    drainSessionStoreLockQueuesMock.mockClear();
+    drainSessionWriteLockStateMock.mockClear();
+    setSessionWriteLockAcquirerForTests(acquireSessionWriteLockMock);
+    setSessionStateCleanupRuntimeForTests({
+      drainFileLockStateForTest: drainFileLockStateMock,
+      drainSessionStoreLockQueuesForTest: drainSessionStoreLockQueuesMock,
+      drainSessionWriteLockStateForTest: drainSessionWriteLockStateMock,
+    });
   });
 
-  afterEach(async () => {
-    await cleanupSessionStateForTest();
+  afterEach(() => {
+    vi.useRealTimers();
+    clearSessionStoreCacheForTest();
+    resetFileLockStateForTest();
+    resetSessionWriteLockStateForTest();
+    resetSessionStoreLockRuntimeForTests();
+    resetSessionStateCleanupRuntimeForTests();
     vi.restoreAllMocks();
   });
 
@@ -51,8 +73,17 @@ describe("cleanupSessionStateForTest", () => {
     const storePath = path.join(fixtureRoot, "openclaw-sessions.json");
     const started = createDeferred<void>();
     const release = createDeferred<void>();
+    const drainRequested = createDeferred<void>();
+    let finishDrain: () => void = () => undefined;
+    drainSessionStoreLockQueuesMock.mockImplementationOnce(async () => {
+      drainRequested.resolve();
+      await new Promise<void>((resolve) => {
+        finishDrain = resolve;
+      });
+    });
+    let running: Promise<void> | undefined;
     try {
-      const running = withSessionStoreLockForTest(storePath, async () => {
+      running = withSessionStoreLockForTest(storePath, async () => {
         started.resolve();
         await release.promise;
       });
@@ -65,16 +96,26 @@ describe("cleanupSessionStateForTest", () => {
         settled = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await drainRequested.promise;
+      await flushMicrotasks();
       expect(settled).toBe(false);
+      expect(drainSessionStoreLockQueuesMock).toHaveBeenCalledTimes(1);
+      expect(drainFileLockStateMock).not.toHaveBeenCalled();
+      expect(drainSessionWriteLockStateMock).not.toHaveBeenCalled();
 
       release.resolve();
       await running;
+      finishDrain();
       await cleanupPromise;
 
       expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
+      expect(drainFileLockStateMock).toHaveBeenCalledTimes(1);
+      expect(drainSessionWriteLockStateMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
+      finishDrain();
+      await running?.catch(() => undefined);
+      await cleanupSessionStateForTest();
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });

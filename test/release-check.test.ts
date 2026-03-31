@@ -4,10 +4,12 @@ import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mj
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
+  collectBundledExtensionRootDependencyMirrorErrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
+import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -108,16 +110,138 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
+describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
+  it("flags a non-array mirror allowlist", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: true,
+                },
+              },
+            },
+          },
+        ],
+        new Map(),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array",
+    ]);
+  });
+
+  it("flags mirror entries missing from extension runtime dependencies", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "matrix-js-sdk": "41.2.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.0.0"]]),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be declared in extension runtime dependencies",
+    ]);
+  });
+
+  it("flags mirror entries missing from root runtime dependencies", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Map(),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be mirrored in root runtime dependencies",
+    ]);
+  });
+
+  it("flags mirror entries whose root version drifts from the extension", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.1.0"]]),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must match root runtime dependency version (extension '18.0.0', root '18.1.0')",
+    ]);
+  });
+
+  it("accepts mirror entries declared by both the extension and root package", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.0.0"]]),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("collectForbiddenPackPaths", () => {
   it("allows bundled plugin runtime deps under dist/extensions but still blocks other node_modules", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
-        "dist/extensions/discord/node_modules/@buape/carbon/index.js",
-        "extensions/tlon/node_modules/.bin/tlon",
+        bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+        bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
-    ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
+    ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/openclaw"]);
   });
 });
 
@@ -137,15 +261,15 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
-        "dist/extensions/matrix/helper-api.js",
-        "dist/extensions/matrix/runtime-api.js",
-        "dist/extensions/matrix/thread-bindings-runtime.js",
-        "dist/extensions/matrix/openclaw.plugin.json",
-        "dist/extensions/matrix/package.json",
-        "dist/extensions/whatsapp/light-runtime-api.js",
-        "dist/extensions/whatsapp/runtime-api.js",
-        "dist/extensions/whatsapp/openclaw.plugin.json",
-        "dist/extensions/whatsapp/package.json",
+        bundledDistPluginFile("matrix", "helper-api.js"),
+        bundledDistPluginFile("matrix", "runtime-api.js"),
+        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
+        bundledDistPluginFile("matrix", "openclaw.plugin.json"),
+        bundledDistPluginFile("matrix", "package.json"),
+        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
+        bundledDistPluginFile("whatsapp", "runtime-api.js"),
+        bundledDistPluginFile("whatsapp", "openclaw.plugin.json"),
+        bundledDistPluginFile("whatsapp", "package.json"),
       ]),
     );
   });
@@ -168,11 +292,11 @@ describe("collectMissingPackPaths", () => {
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
     expect(requiredBundledPluginPackPaths).toEqual(
       expect.arrayContaining([
-        "dist/extensions/matrix/helper-api.js",
-        "dist/extensions/matrix/runtime-api.js",
-        "dist/extensions/matrix/thread-bindings-runtime.js",
-        "dist/extensions/whatsapp/light-runtime-api.js",
-        "dist/extensions/whatsapp/runtime-api.js",
+        bundledDistPluginFile("matrix", "helper-api.js"),
+        bundledDistPluginFile("matrix", "runtime-api.js"),
+        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
+        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
+        bundledDistPluginFile("whatsapp", "runtime-api.js"),
       ]),
     );
   });

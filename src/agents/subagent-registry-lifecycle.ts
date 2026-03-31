@@ -1,6 +1,11 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  completeTaskRunByRunId,
+  failTaskRunByRunId,
+  setDetachedTaskDeliveryStatusByRunId,
+} from "../tasks/task-executor.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   captureSubagentCompletionReply,
@@ -53,6 +58,8 @@ export function createSubagentRegistryLifecycleController(params: {
     workspaceDir?: string;
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
+  captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
+  runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const freezeRunResultAtCompletion = async (entry: SubagentRunRecord): Promise<boolean> => {
@@ -60,7 +67,7 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     try {
-      const captured = await captureSubagentCompletionReply(entry.childSessionKey);
+      const captured = await params.captureSubagentCompletionReply(entry.childSessionKey);
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
       entry.frozenResultText = null;
@@ -151,6 +158,10 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
+    setDetachedTaskDeliveryStatusByRunId({
+      runId: giveUpParams.runId,
+      deliveryStatus: "failed",
+    });
     giveUpParams.entry.wakeOnDescendantSettle = undefined;
     giveUpParams.entry.fallbackFrozenResultText = undefined;
     giveUpParams.entry.fallbackFrozenResultCapturedAt = undefined;
@@ -263,6 +274,10 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
     if (didAnnounce) {
+      setDetachedTaskDeliveryStatusByRunId({
+        runId,
+        deliveryStatus: "delivered",
+      });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -315,6 +330,10 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
+      setDetachedTaskDeliveryStatusByRunId({
+        runId,
+        deliveryStatus: "failed",
+      });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -362,26 +381,27 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
-    void runSubagentAnnounceFlow({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: entry.task,
-      timeoutMs: params.subagentAnnounceTimeoutMs,
-      cleanup: entry.cleanup,
-      roundOneReply: entry.frozenResultText ?? undefined,
-      fallbackReply: entry.fallbackFrozenResultText ?? undefined,
-      waitForCompletion: false,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      label: entry.label,
-      outcome: entry.outcome,
-      spawnMode: entry.spawnMode,
-      expectsCompletionMessage: entry.expectsCompletionMessage,
-      wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
-    })
+    void params
+      .runSubagentAnnounceFlow({
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterOrigin,
+        requesterDisplayKey: entry.requesterDisplayKey,
+        task: entry.task,
+        timeoutMs: params.subagentAnnounceTimeoutMs,
+        cleanup: entry.cleanup,
+        roundOneReply: entry.frozenResultText ?? undefined,
+        fallbackReply: entry.fallbackFrozenResultText ?? undefined,
+        waitForCompletion: false,
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+        label: entry.label,
+        outcome: entry.outcome,
+        spawnMode: entry.spawnMode,
+        expectsCompletionMessage: entry.expectsCompletionMessage,
+        wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+      })
       .then((didAnnounce) => {
         finalizeAnnounceCleanup(didAnnounce);
       })
@@ -442,6 +462,25 @@ export function createSubagentRegistryLifecycleController(params: {
 
     if (mutated) {
       params.persist();
+    }
+    if (completeParams.outcome.status === "ok") {
+      completeTaskRunByRunId({
+        runId: entry.runId,
+        endedAt: entry.endedAt,
+        lastEventAt: entry.endedAt ?? Date.now(),
+        progressSummary: entry.frozenResultText ?? undefined,
+        terminalSummary: null,
+      });
+    } else {
+      failTaskRunByRunId({
+        runId: entry.runId,
+        status: completeParams.outcome.status === "timeout" ? "timed_out" : "failed",
+        endedAt: entry.endedAt,
+        lastEventAt: entry.endedAt ?? Date.now(),
+        error: completeParams.outcome.status === "error" ? completeParams.outcome.error : undefined,
+        progressSummary: entry.frozenResultText ?? undefined,
+        terminalSummary: null,
+      });
     }
 
     try {

@@ -7,14 +7,23 @@ import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
+  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrar,
   ProviderPlugin,
   SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
 
+type CapturedPluginCliRegistration = {
+  register: OpenClawPluginCliRegistrar;
+  commands: string[];
+  descriptors: OpenClawPluginCliCommandDescriptor[];
+};
+
 export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
+  cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   speechProviders: SpeechProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
@@ -23,8 +32,12 @@ export type CapturedPluginRegistration = {
   tools: AnyAgentTool[];
 };
 
-export function createCapturedPluginRegistration(): CapturedPluginRegistration {
+export function createCapturedPluginRegistration(params?: {
+  config?: OpenClawConfig;
+  registrationMode?: OpenClawPluginApi["registrationMode"];
+}): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
+  const cliRegistrars: CapturedPluginCliRegistration[] = [];
   const cliBackends: CliBackendPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
@@ -40,6 +53,7 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
 
   return {
     providers,
+    cliRegistrars,
     cliBackends,
     speechProviders,
     mediaUnderstandingProviders,
@@ -50,12 +64,35 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
       id: "captured-plugin-registration",
       name: "Captured Plugin Registration",
       source: "captured-plugin-registration",
-      registrationMode: "full",
-      config: {} as OpenClawConfig,
+      registrationMode: params?.registrationMode ?? "full",
+      config: params?.config ?? ({} as OpenClawConfig),
       runtime: {} as PluginRuntime,
       logger: noopLogger,
       resolvePath: (input) => input,
       handlers: {
+        registerCli(registrar, opts) {
+          const descriptors = (opts?.descriptors ?? [])
+            .map((descriptor) => ({
+              name: descriptor.name.trim(),
+              description: descriptor.description.trim(),
+              hasSubcommands: descriptor.hasSubcommands,
+            }))
+            .filter((descriptor) => descriptor.name && descriptor.description);
+          const commands = [
+            ...(opts?.commands ?? []),
+            ...descriptors.map((descriptor) => descriptor.name),
+          ]
+            .map((command) => command.trim())
+            .filter(Boolean);
+          if (commands.length === 0) {
+            return;
+          }
+          cliRegistrars.push({
+            register: registrar,
+            commands,
+            descriptors,
+          });
+        },
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
         },

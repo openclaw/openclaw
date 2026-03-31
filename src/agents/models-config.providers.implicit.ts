@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  mergeImplicitAnthropicVertexProvider,
-  resolveImplicitAnthropicVertexProvider,
-} from "../plugin-sdk/anthropic-vertex.js";
-import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolvePluginDiscoveryProviders,
@@ -34,19 +30,8 @@ const PROVIDER_IMPLICIT_MERGERS: Partial<
     (params: { existing: ProviderConfig | undefined; implicit: ProviderConfig }) => ProviderConfig
   >
 > = {
-  "anthropic-vertex": mergeImplicitAnthropicVertexProvider,
   ollama: ({ implicit }) => implicit,
 };
-
-const CORE_IMPLICIT_PROVIDER_RESOLVERS = [
-  {
-    id: "anthropic-vertex",
-    resolve: async (params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
-      resolveImplicitAnthropicVertexProvider({
-        env: params.env,
-      }),
-  },
-] as const;
 
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
@@ -309,31 +294,6 @@ async function runProviderCatalogWithTimeout(
   }
 }
 
-async function mergeCoreImplicitProviders(params: {
-  config?: OpenClawConfig;
-  explicitProviders?: Record<string, ProviderConfig> | null;
-  env: NodeJS.ProcessEnv;
-  providers: Record<string, ProviderConfig>;
-}): Promise<void> {
-  for (const provider of CORE_IMPLICIT_PROVIDER_RESOLVERS) {
-    const implicit = await provider.resolve({ config: params.config, env: params.env });
-    if (!implicit) {
-      continue;
-    }
-    const merge = PROVIDER_IMPLICIT_MERGERS[provider.id];
-    params.providers[provider.id] = (merge ?? mergeImplicitProviderConfig)({
-      providerId: provider.id,
-      existing:
-        params.providers[provider.id] ??
-        resolveConfiguredImplicitProvider({
-          configuredProviders: params.explicitProviders ?? params.config?.models?.providers,
-          providerIds: [provider.id],
-        }),
-      implicit,
-    });
-  }
-}
-
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
@@ -353,13 +313,6 @@ export async function resolveImplicitProviders(
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
     mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, order));
   }
-
-  await mergeCoreImplicitProviders({
-    config: params.config,
-    explicitProviders: params.explicitProviders,
-    env,
-    providers,
-  });
 
   return providers;
 }

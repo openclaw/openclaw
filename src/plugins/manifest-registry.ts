@@ -49,7 +49,7 @@ export type PluginManifestRecord = {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
   cliBackends: string[];
@@ -193,6 +193,10 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
     return true;
   }
   if (normalizedHint === manifestId) {
+    return true;
+  }
+  // Generated idHint for multi-extension plugins takes the form "id/entryBase".
+  if (normalizedHint.startsWith(`${manifestId}/`)) {
     return true;
   }
   return (

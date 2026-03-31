@@ -1,7 +1,7 @@
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
-} from "../plugin-sdk/telegram-runtime.js";
+} from "../channels/read-only-account-inspect.telegram.js";
 
 export const auditChannelTelegramRuntime = {
   isNumericTelegramUserId,

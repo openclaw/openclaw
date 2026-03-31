@@ -104,6 +104,44 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
   return latestActive ?? latestEnded;
 }
 
+export function getSessionDisplaySubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latestInMemoryActive: SubagentRunRecord | null = null;
+  let latestInMemoryEnded: SubagentRunRecord | null = null;
+  for (const entry of subagentRuns.values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (typeof entry.endedAt === "number") {
+      if (!latestInMemoryEnded || entry.createdAt > latestInMemoryEnded.createdAt) {
+        latestInMemoryEnded = entry;
+      }
+      continue;
+    }
+    if (!latestInMemoryActive || entry.createdAt > latestInMemoryActive.createdAt) {
+      latestInMemoryActive = entry;
+    }
+  }
+
+  if (latestInMemoryEnded || latestInMemoryActive) {
+    if (
+      latestInMemoryEnded &&
+      (!latestInMemoryActive || latestInMemoryEnded.createdAt > latestInMemoryActive.createdAt)
+    ) {
+      return latestInMemoryEnded;
+    }
+    return latestInMemoryActive ?? latestInMemoryEnded;
+  }
+
+  return getSubagentRunByChildSessionKey(key);
+}
+
 export function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
 ): SubagentRunRecord | null {

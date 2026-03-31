@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const managerMocks = vi.hoisted(() => ({
@@ -32,10 +31,6 @@ vi.mock("./persistent-bindings.resolve.js", () => ({
   resolveConfiguredAcpBindingSpecBySessionKey:
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey,
 }));
-type BindingTargetsModule = typeof import("../channels/plugins/binding-targets.js");
-let bindingTargets: BindingTargetsModule;
-let bindingTargetsImportScope = 0;
-
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
@@ -43,13 +38,10 @@ const baseCfg = {
   },
 } satisfies OpenClawConfig;
 
+let resetAcpSessionInPlace: typeof import("./persistent-bindings.lifecycle.js").resetAcpSessionInPlace;
+
 beforeEach(async () => {
   vi.resetModules();
-  bindingTargetsImportScope += 1;
-  bindingTargets = await importFreshModule<BindingTargetsModule>(
-    import.meta.url,
-    `../channels/plugins/binding-targets.js?scope=${bindingTargetsImportScope}`,
-  );
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
     metaCleared: false,
@@ -58,9 +50,10 @@ beforeEach(async () => {
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
   resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReset().mockReturnValue(null);
+  ({ resetAcpSessionInPlace } = await import("./persistent-bindings.lifecycle.js"));
 });
 
-describe("resetConfiguredBindingTargetInPlace", () => {
+describe("resetAcpSessionInPlace", () => {
   it("does not resolve configured bindings when ACP metadata already exists", async () => {
     const sessionKey = "agent:claude:acp:binding:demo-binding:default:9373ab192b2317f4";
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
@@ -75,7 +68,7 @@ describe("resetConfiguredBindingTargetInPlace", () => {
       throw new Error("configured binding resolution should be skipped");
     });
 
-    const result = await bindingTargets.resetConfiguredBindingTargetInPlace({
+    const result = await resetAcpSessionInPlace({
       cfg: baseCfg,
       sessionKey,
       reason: "reset",

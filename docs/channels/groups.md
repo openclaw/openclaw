@@ -54,6 +54,8 @@ If you want...
 - Direct chats use the main session (or per-sender if configured).
 - Heartbeats are skipped for group sessions.
 
+<a id="pattern-personal-dms-public-groups-single-agent"></a>
+
 ## Pattern: personal DMs + public groups (single agent)
 
 Yes — this works well if your “personal” traffic is **DMs** and your “public” traffic is **groups**.

@@ -71,6 +71,8 @@ jobs:
           echo "Publishing openclaw@${PACKAGE_VERSION}"
 
       - name: Check
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
 
       - name: Build

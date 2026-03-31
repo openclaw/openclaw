@@ -29,6 +29,7 @@ import {
   parseExecApprovalRequested,
   parseExecApprovalResolved,
   parsePluginApprovalRequested,
+  pruneExecApprovalQueue,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState } from "./controllers/health.ts";
@@ -98,6 +99,11 @@ type SessionDefaultsSnapshot = {
 
 type GatewayHostWithShutdownMessage = GatewayHost & {
   pendingShutdownMessage?: string | null;
+  resumeChatQueueAfterReconnect?: boolean;
+};
+
+type ConnectGatewayOptions = {
+  reason?: "initial" | "seq-gap";
 };
 
 export function resolveControlUiClientVersion(params: {
@@ -179,14 +185,27 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
-export function connectGateway(host: GatewayHost) {
+export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
+  const reconnectReason = options?.reason ?? "initial";
   shutdownHost.pendingShutdownMessage = null;
+  shutdownHost.resumeChatQueueAfterReconnect = false;
   host.lastError = null;
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
-  host.execApprovalQueue = [];
+  if (reconnectReason === "seq-gap") {
+    // A seq gap means the socket stayed on the same gateway; preserve prompts
+    // that only arrived as ephemeral events and clear stale run-scoped indicators.
+    host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
+    clearPendingQueueItemsForRun(
+      host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
+      host.chatRunId ?? undefined,
+    );
+    shutdownHost.resumeChatQueueAfterReconnect = true;
+  } else {
+    host.execApprovalQueue = [];
+  }
   host.execApprovalError = null;
 
   const previousClient = host.client;
@@ -218,6 +237,14 @@ export function connectGateway(host: GatewayHost) {
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      if (shutdownHost.resumeChatQueueAfterReconnect) {
+        // The interrupted run will never emit its terminal event now that the
+        // old client is gone, so resume any deferred commands after hello.
+        shutdownHost.resumeChatQueueAfterReconnect = false;
+        void flushChatQueueForEvent(
+          host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
+        );
+      }
       void subscribeSessions(host as unknown as OpenClawApp);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
@@ -264,8 +291,9 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); reconnecting`;
       host.lastErrorCode = null;
+      connectGateway(host, { reason: "seq-gap" });
     },
   });
   host.client = client;

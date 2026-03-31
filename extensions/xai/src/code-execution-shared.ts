@@ -1,5 +1,5 @@
-import { normalizeXaiModelId } from "openclaw/plugin-sdk/provider-models";
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeXaiModelId } from "../model-id.js";
 import { extractXaiWebSearchContent, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_CODE_EXECUTION_ENDPOINT = "https://api.x.ai/v1/responses";

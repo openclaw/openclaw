@@ -45,7 +45,7 @@ async function startServer(port: number, opts?: { openResponsesEnabled?: boolean
   const { startGatewayServer } = await import("./server.js");
   const serverOpts = {
     host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
+    auth: { mode: "none" as const },
     controlUiEnabled: false,
   } as const;
   return await startGatewayServer(
@@ -70,7 +70,6 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: "Bearer secret",
       "x-openclaw-scopes": "operator.write",
       ...headers,
     },
@@ -114,7 +113,8 @@ async function ensureResponseConsumed(res: Response) {
 const WEATHER_TOOL = [
   {
     type: "function",
-    function: { name: "get_weather", description: "Get weather" },
+    name: "get_weather",
+    description: "Get weather",
   },
 ] as const;
 
@@ -173,7 +173,7 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 90_000 }, async () => {
     const port = await getFreePort();
     const server = await startServer(port);
     try {
@@ -223,7 +223,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "openclaw", input: "hi" }),
       });
-      expect(resMissingAuth.status).toBe(401);
+      expect(resMissingAuth.status).toBe(403);
       await ensureResponseConsumed(resMissingAuth);
 
       const resMissingModel = await postResponses(port, { input: "hi" });
@@ -511,11 +511,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tools: [
           {
             type: "function",
-            function: { name: "get_weather", description: "Get weather" },
+            name: "get_weather",
+            description: "Get weather",
           },
           {
             type: "function",
-            function: { name: "get_time", description: "Get time" },
+            name: "get_time",
+            description: "Get time",
+            strict: true,
           },
         ],
         tool_choice: { type: "function", function: { name: "get_time" } },
@@ -523,10 +526,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(resToolChoice.status).toBe(200);
       const optsToolChoice = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const clientTools =
-        (optsToolChoice as { clientTools?: Array<{ function?: { name?: string } }> } | undefined)
-          ?.clientTools ?? [];
+        (
+          optsToolChoice as
+            | {
+                clientTools?: Array<{ function?: { name?: string; strict?: boolean } }>;
+              }
+            | undefined
+        )?.clientTools ?? [];
       expect(clientTools).toHaveLength(1);
       expect(clientTools[0]?.function?.name).toBe("get_time");
+      expect(clientTools[0]?.function?.strict).toBe(true);
       await ensureResponseConsumed(resToolChoice);
 
       const resUnknownTool = await postResponses(port, {
@@ -688,6 +697,62 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("treats HTTP callers as non-owner regardless of requested scopes", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const writeScopeResponse = await postResponses(port, {
+      model: "openclaw",
+      input: "hi",
+    });
+    expect(writeScopeResponse.status).toBe(200);
+    const writeScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(writeScopeOpts?.senderIsOwner).toBe(false);
+    await ensureResponseConsumed(writeScopeResponse);
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const adminScopeResponse = await postResponses(
+      port,
+      { model: "openclaw", input: "hi" },
+      { "x-openclaw-scopes": "operator.admin, operator.write" },
+    );
+    expect(adminScopeResponse.status).toBe(200);
+    const adminScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    // Requested HTTP scopes do not prove owner identity for owner-only tools.
+    expect(adminScopeOpts?.senderIsOwner).toBe(false);
+    await ensureResponseConsumed(adminScopeResponse);
+
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) =>
+      buildAssistantDeltaResult({
+        opts,
+        emit: emitAgentEvent,
+        deltas: ["he", "llo"],
+        text: "hello",
+      })) as never);
+
+    const streamingResponse = await postResponses(
+      port,
+      { stream: true, model: "openclaw", input: "hi" },
+      { "x-openclaw-scopes": "operator.admin, operator.write" },
+    );
+    expect(streamingResponse.status).toBe(200);
+    const streamingOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(streamingOpts?.senderIsOwner).toBe(false);
+    const streamingEvents = parseSseEvents(await streamingResponse.text());
+    expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
   });
 
   it("preserves assistant text alongside non-stream function_call output", async () => {

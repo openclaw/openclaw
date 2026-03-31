@@ -2,8 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
-import { createPluginSetupWizardStatus } from "../../../test/helpers/extensions/setup-wizard.js";
+import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import "./zalo-js.test-mocks.js";
 import { zalouserSetupPlugin } from "./channel.setup.js";
 

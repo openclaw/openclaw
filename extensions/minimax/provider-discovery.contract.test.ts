@@ -1,3 +1,3 @@
-import { describeMinimaxProviderDiscoveryContract } from "../../test/helpers/extensions/provider-discovery-contract.js";
+import { describeMinimaxProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
 
 describeMinimaxProviderDiscoveryContract();
