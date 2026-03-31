@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildFeishuExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
+import {
+  buildFeishuExecApprovalPendingPayload,
+  shouldSuppressFeishuExecApprovalForwardingFallback,
+} from "./exec-approval-forwarding.js";
 
 function buildConfig(execApprovals?: Record<string, unknown>) {
   return {
@@ -108,5 +111,80 @@ describe("buildFeishuExecApprovalPendingPayload target routing", () => {
     });
     expect(dmResult).not.toBeNull();
     expect(groupResult).toBeNull();
+  });
+});
+
+describe("shouldSuppressFeishuExecApprovalForwardingFallback", () => {
+  it("returns false when client is not enabled", () => {
+    const cfg = buildConfig({ enabled: false, approvers: ["ou_123"], target: "dm" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "chat:oc_group123" },
+        request: buildRequest(),
+      }),
+    ).toBe(false);
+  });
+
+  it("suppresses group target when configured as dm", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "dm" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "chat:oc_group123" },
+        request: buildRequest(),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress DM target when configured as dm", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "dm" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "user:ou_123" },
+        request: buildRequest(),
+      }),
+    ).toBe(false);
+  });
+
+  it("suppresses DM target when configured as channel", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "channel" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "user:ou_123" },
+        request: buildRequest(),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress group target when configured as channel", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "channel" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "chat:oc_group123" },
+        request: buildRequest(),
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress any target when configured as both", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["ou_123"], target: "both" });
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "user:ou_123" },
+        request: buildRequest(),
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressFeishuExecApprovalForwardingFallback({
+        cfg,
+        target: { channel: "feishu", to: "chat:oc_group123" },
+        request: buildRequest(),
+      }),
+    ).toBe(false);
   });
 });

@@ -59,7 +59,6 @@ import {
 } from "./exec-approval-forwarding.js";
 import {
   isFeishuExecApprovalClientEnabled,
-  resolveFeishuExecApprovalTarget,
   shouldSuppressLocalFeishuExecApprovalPrompt,
 } from "./exec-approvals.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
@@ -1096,14 +1095,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             : { kind: "disabled" },
         shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
           shouldSuppressLocalFeishuExecApprovalPrompt({ cfg, accountId, payload }),
-        hasConfiguredDmRoute: ({ cfg }) =>
-          listFeishuAccountIds(cfg).some((accountId) => {
-            if (!isFeishuExecApprovalClientEnabled({ cfg, accountId })) {
-              return false;
-            }
-            const target = resolveFeishuExecApprovalTarget({ cfg, accountId });
-            return target === "dm" || target === "both";
-          }),
+        // Feishu does not have a dedicated exec approval DM client — delivery
+        // relies entirely on the forwarding fallback pipeline. Reporting a DM
+        // route here would cause the framework to tell users "I sent DMs to
+        // approvers" when no dedicated DM was actually sent. Return false until
+        // a Feishu exec approval handler client is implemented.
+        hasConfiguredDmRoute: () => false,
         shouldSuppressForwardingFallback: (params) =>
           shouldSuppressFeishuExecApprovalForwardingFallback(params),
         buildPendingPayload: ({ cfg, request, target, nowMs }) =>

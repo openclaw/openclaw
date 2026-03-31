@@ -5,19 +5,39 @@ import {
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { createExecApprovalCard } from "./card-ux-exec-approval.js";
-import { resolveFeishuExecApprovalTarget } from "./exec-approvals.js";
+import {
+  isFeishuExecApprovalClientEnabled,
+  resolveFeishuExecApprovalTarget,
+} from "./exec-approvals.js";
 
-// Unlike Telegram (which has an independent TelegramExecApprovalHandler gateway
-// client to take over delivery), Feishu currently delivers exec approval cards
-// only via the forwarding fallback pipeline. Suppressing the fallback would
-// remove the only delivery route, causing approval requests to expire silently
-// with "no-approval-route". Always return false until a dedicated Feishu exec
-// approval handler client is implemented.
-export function shouldSuppressFeishuExecApprovalForwardingFallback(_params: {
+// Suppress forwarding to a specific target when the configured exec approval
+// target routing (dm/channel/both) doesn't match the actual target chat type.
+// This prevents both Interactive Cards AND plain-text fallback from leaking
+// into excluded chats. Without a dedicated Feishu exec approval handler client,
+// forwarding fallback is the only delivery path, so we only suppress targets
+// that violate the routing config — never suppress all targets unconditionally.
+export function shouldSuppressFeishuExecApprovalForwardingFallback(params: {
   cfg: OpenClawConfig;
-  target: { channel: string; accountId?: string | null };
+  target: { channel: string; to: string; accountId?: string | null };
   request: ExecApprovalRequest;
 }): boolean {
+  if (!isFeishuExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.target.accountId })) {
+    return false;
+  }
+  const configuredTarget = resolveFeishuExecApprovalTarget({
+    cfg: params.cfg,
+    accountId: params.target.accountId,
+  });
+  if (configuredTarget === "both") {
+    return false;
+  }
+  const isDm = isFeishuDmTarget(params.target.to);
+  if (configuredTarget === "dm" && !isDm) {
+    return true;
+  }
+  if (configuredTarget === "channel" && isDm) {
+    return true;
+  }
   return false;
 }
 
