@@ -3,9 +3,10 @@
 set -euo pipefail
 
 mode="${1:-}"
+publish_target="${2:-}"
 
 if [[ "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/openclaw-npm-publish.sh --publish" >&2
+  echo "usage: bash scripts/openclaw-npm-publish.sh --publish [package.tgz]" >&2
   exit 2
 fi
 
@@ -28,7 +29,11 @@ EOF
 release_channel="${publish_plan[0]}"
 publish_tag="${publish_plan[1]}"
 mirror_dist_tags_csv="${publish_plan[2]:-}"
-publish_cmd=(npm publish --access public --tag "${publish_tag}" --provenance)
+publish_cmd=(npm publish)
+if [[ -n "${publish_target}" ]]; then
+  publish_cmd+=("${publish_target}")
+fi
+publish_cmd+=(--access public --tag "${publish_tag}" --provenance)
 
 echo "Resolved package version: ${package_version}"
 echo "Current beta dist-tag: ${current_beta_version:-<missing>}"
@@ -36,6 +41,9 @@ echo "Resolved release channel: ${release_channel}"
 echo "Resolved publish tag: ${publish_tag}"
 echo "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
 echo "Publish auth: GitHub OIDC trusted publishing"
+if [[ -n "${publish_target}" ]]; then
+  echo "Resolved publish target: ${publish_target}"
+fi
 
 printf 'Publish command:'
 printf ' %q' "${publish_cmd[@]}"
