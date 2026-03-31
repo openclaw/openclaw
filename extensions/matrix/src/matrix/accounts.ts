@@ -184,8 +184,9 @@ export function resolveMatrixAccountConfig(params: {
 }): MatrixConfig {
   const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
+  const base = resolveMatrixBaseConfig(params.cfg);
   const merged = resolveMergedAccountConfig<MatrixConfig>({
-    channelConfig: resolveMatrixBaseConfig(params.cfg),
+    channelConfig: base,
     accounts: params.cfg.channels?.matrix?.accounts as
       | Record<string, Partial<MatrixConfig>>
       | undefined,
@@ -193,7 +194,6 @@ export function resolveMatrixAccountConfig(params: {
     normalizeAccountId,
     nestedObjectKeys: ["dm", "actions"],
   });
-  const base = resolveMatrixBaseConfig(params.cfg);
   const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
   const isMultiAccount = resolveConfiguredMatrixAccountIds(params.cfg, env).length > 1;
   const groups = mergeMatrixRoomEntries(
@@ -212,6 +212,7 @@ export function resolveMatrixAccountConfig(params: {
     }),
     accountConfig?.rooms,
   );
+  // Room maps need custom scoping, so keep the generic merge for all other fields.
   const { groups: _ignoredGroups, rooms: _ignoredRooms, ...rest } = merged;
   return {
     ...rest,
