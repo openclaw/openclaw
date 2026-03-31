@@ -110,6 +110,9 @@ const pwMocks = vi.hoisted(() => ({
   dragViaPlaywright: vi.fn(async () => {}),
   evaluateViaPlaywright: vi.fn(async () => "ok"),
   fillFormViaPlaywright: vi.fn(async () => {}),
+  getPageForTargetId: vi.fn(async () => ({
+    url: () => "https://example.com",
+  })),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
   hoverViaPlaywright: vi.fn(async () => {}),
   scrollIntoViewViaPlaywright: vi.fn(async () => {}),
