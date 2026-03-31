@@ -161,4 +161,34 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
     expect(close).not.toHaveBeenCalled();
   });
+
+  it("does not close the tab when the retry attempt fails without a policy violation", async () => {
+    const goto = vi
+      .fn<(...args: unknown[]) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("page.goto: Frame has been detached"))
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_NAME_NOT_RESOLVED"));
+    const close = vi.fn(async () => {});
+    setPwToolsCoreCurrentPage({
+      close,
+      route: vi.fn(async () => {}),
+      unroute: vi.fn(async () => {}),
+      goto,
+      url: vi.fn(() => "about:blank"),
+    });
+
+    await expect(
+      mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        url: "https://missing.example.test",
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toBeInstanceOf(Error);
+
+    expect(getPwToolsCoreSessionMocks().getPageForTargetId).toHaveBeenCalledTimes(2);
+    expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(close).not.toHaveBeenCalled();
+  });
 });

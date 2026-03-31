@@ -238,7 +238,9 @@ export async function navigateViaPlaywright(opts: {
         navigate,
       });
     } catch (err) {
-      await page.close().catch(() => {});
+      if (isBrowserNavigationPolicyError(err)) {
+        await page.close().catch(() => {});
+      }
       throw err;
     }
   }
