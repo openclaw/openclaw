@@ -116,6 +116,22 @@ function createMatrixThreadCommandParams(commandBody: string, cfg: OpenClawConfi
   return params;
 }
 
+function createMatrixTriggerThreadCommandParams(
+  commandBody: string,
+  cfg: OpenClawConfig = baseCfg,
+) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "matrix",
+    Surface: "matrix",
+    OriginatingChannel: "matrix",
+    OriginatingTo: "room:!room:example.org",
+    AccountId: "default",
+    MessageThreadId: "$root",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 function createMatrixRoomCommandParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: "matrix",
@@ -277,6 +293,22 @@ describe("/focus, /unfocus, /agents", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           conversationId: "!room:example.org",
+        }),
+      }),
+    );
+  });
+
+  it("/focus treats the triggering Matrix always-thread turn as the current thread", async () => {
+    const result = await focusCodexAcp(createMatrixTriggerThreadCommandParams("/focus codex-acp"));
+
+    expect(result?.reply?.text).toContain("bound this thread");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          conversationId: "$root",
+          parentConversationId: "!room:example.org",
         }),
       }),
     );

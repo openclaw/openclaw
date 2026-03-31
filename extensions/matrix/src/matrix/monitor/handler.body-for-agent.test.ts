@@ -51,9 +51,39 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
         ThreadStarterBody: "Matrix thread root $thread-root from Alice:\nRoot topic",
       }),
     );
+    // Thread messages get thread-scoped session keys (thread isolation feature).
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:ops:main",
+        sessionKey: "agent:ops:main:thread:$thread-root",
+      }),
+    );
+  });
+
+  it("starts the thread-scoped session from the triggering message when threadReplies is always", async () => {
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        isDirectMessage: false,
+        threadReplies: "always",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-root",
+        body: "@room start thread",
+        mentions: { room: true },
+      }),
+    );
+
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageThreadId: "$thread-root",
+        ReplyToId: undefined,
+      }),
+    );
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:ops:main:thread:$thread-root",
       }),
     );
   });
