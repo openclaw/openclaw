@@ -1148,6 +1148,57 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
+  it("drops quoted group context from senders outside the group sender allowlist", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_blocked",
+      chatId: "oc-group",
+      senderId: "ou-blocked",
+      senderType: "user",
+      content: "blocked quoted content",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-group-quoted-filter",
+        parent_id: "om_parent_blocked",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ReplyToId: "om_parent_blocked",
+        ReplyToBody: undefined,
+      }),
+    );
+  });
+
   it("dispatches group image message when groupPolicy is open (requireMention defaults to false)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
@@ -2454,6 +2505,82 @@ describe("handleFeishuMessage command authorization", () => {
         ThreadHistoryBody: "assistant reply\n\nfollow-up question",
         ThreadLabel: "Feishu thread in oc-group",
         MessageThreadId: "om_topic_root",
+      }),
+    );
+  });
+
+  it("filters topic bootstrap context to allowlisted group senders", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValue({
+      messageId: "om_topic_root",
+      chatId: "oc-group",
+      senderId: "ou-blocked",
+      senderType: "user",
+      content: "blocked root starter",
+      contentType: "text",
+      threadId: "omt_topic_1",
+    });
+    mockListFeishuThreadMessages.mockResolvedValue([
+      {
+        messageId: "om_blocked_reply",
+        senderId: "ou-blocked",
+        senderType: "user",
+        content: "blocked follow-up",
+        contentType: "text",
+        createTime: 1710000000000,
+      },
+      {
+        messageId: "om_bot_reply",
+        senderId: "app_1",
+        senderType: "app",
+        content: "assistant reply",
+        contentType: "text",
+        createTime: 1710000001000,
+      },
+      {
+        messageId: "om_allowed_reply",
+        senderId: "ou-allowed",
+        senderType: "user",
+        content: "allowed follow-up",
+        contentType: "text",
+        createTime: 1710000002000,
+      },
+    ]);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-allowed" } },
+      message: {
+        message_id: "om_topic_followup_allowlisted",
+        root_id: "om_topic_root",
+        thread_id: "omt_topic_1",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "current turn" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ThreadStarterBody: "assistant reply",
+        ThreadHistoryBody: "assistant reply\n\nallowed follow-up",
       }),
     );
   });
