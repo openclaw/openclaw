@@ -22,7 +22,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
-import { listTasksForSessionKey } from "../../tasks/task-registry.js";
+import { listTasksForAgentId, listTasksForSessionKey } from "../../tasks/task-registry.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
@@ -72,6 +72,17 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
       : latest.error?.trim() || latest.terminalSummary?.trim();
   const parts = [headline, latest.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
+}
+
+function formatAgentTaskCountsLine(agentId: string): string | undefined {
+  const tasks = listTasksForAgentId(agentId);
+  if (tasks.length === 0) {
+    return undefined;
+  }
+  const active = tasks.filter(
+    (task) => task.status === "queued" || task.status === "running",
+  ).length;
+  return `📌 Tasks: ${active} active · ${tasks.length} total · agent-local`;
 }
 
 export async function buildStatusReply(params: {
@@ -209,6 +220,9 @@ export async function buildStatusReply(params: {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
     taskLine = formatSessionTaskLine(requesterKey);
+    if (!taskLine) {
+      taskLine = formatAgentTaskCountsLine(statusAgentId);
+    }
     const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     if (runs.length > 0) {

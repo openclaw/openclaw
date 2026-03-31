@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/venice-provider",
-  "version": "2026.3.31-beta.1",
+  "version": "2026.3.31",
   "private": true,
   "description": "OpenClaw Venice provider plugin",
   "type": "module",
