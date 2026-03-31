@@ -205,4 +205,32 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total");
     expect(reply?.text).toMatch(/📌 Tasks: 2 active · 2 total · (subagent|cron) · /);
   });
+
+  it("falls back to same-agent task counts without details when the current session has none", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:other",
+      childSessionKey: "agent:main:subagent:status-agent-fallback-running",
+      runId: "run-status-agent-fallback-running",
+      agentId: "main",
+      task: "hidden task title",
+      progressSummary: "hidden progress detail",
+    });
+    createQueuedTaskRun({
+      runtime: "cron",
+      requesterSessionKey: "agent:main:another",
+      childSessionKey: "agent:main:subagent:status-agent-fallback-queued",
+      runId: "run-status-agent-fallback-queued",
+      agentId: "main",
+      task: "another hidden task title",
+    });
+
+    const reply = await buildStatusReplyForTest({ sessionKey: "agent:main:empty-session" });
+
+    expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total · agent-local");
+    expect(reply?.text).not.toContain("hidden task title");
+    expect(reply?.text).not.toContain("hidden progress detail");
+    expect(reply?.text).not.toContain("subagent");
+    expect(reply?.text).not.toContain("cron");
+  });
 });
