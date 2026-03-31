@@ -38,7 +38,8 @@ import {
 import {
   authorizeGatewayHttpRequestOrReply,
   getHeader,
-  resolveTrustedHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
@@ -173,18 +174,10 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
-  if (!requestAuth.trustDeclaredOperatorScopes) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "gateway bearer auth cannot invoke tools over HTTP",
-      },
-    });
-    return true;
-  }
-
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+  // /tools/invoke intentionally uses the same shared-secret HTTP trust model as
+  // the OpenAI-compatible APIs: token/password bearer auth is full operator
+  // access for the gateway, not a narrower per-request scope boundary.
+  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("agent", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {
@@ -334,9 +327,10 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
-  // HTTP bearer auth does not bind a device-owner identity, so owner-only tools
-  // stay unavailable on this surface even when callers assert admin scopes.
-  const ownerFiltered = applyOwnerOnlyToolPolicy(subagentFiltered, false);
+  // Owner semantics intentionally follow the same shared-secret HTTP contract
+  // on this direct tool surface; SECURITY.md documents this as designed-as-is.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
+  const ownerFiltered = applyOwnerOnlyToolPolicy(subagentFiltered, senderIsOwner);
   const gatewayFiltered = ownerFiltered.filter((t) => !gatewayDenySet.has(t.name));
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
