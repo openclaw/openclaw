@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Breaking
+
+- Daemon: increase launchd `ThrottleInterval` from 1s to 10s to prevent gateway process storms when the port isn't released before restart. This prevents 30+ zombie processes from accumulating during rapid restart cycles on macOS. (#58306)
+
 ### Changes
 
 - Android/assistant: auto-send Google Assistant App Actions prompts once chat is healthy and idle, while keeping bare assistant launches as open-only. (#59721) Thanks @obviyus.
